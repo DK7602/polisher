@@ -79,7 +79,10 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                        .withOptionsFrom (bassOnRelay)
                        .withOptionsFrom (bassMonoRelay)
                        .withOptionsFrom (bassTameRelay)
-                       .withOptionsFrom (bassPunchRelay);
+                       .withOptionsFrom (bassPunchRelay)
+                       .withOptionsFrom (amGenreRelay)
+                       .withOptionsFrom (amIntensityRelay)
+                       .withOptionsFrom (amTargetRelay);
     for (auto& r : eqGainRelays) options = options.withOptionsFrom (*r);
     for (auto& r : eqFreqRelays) options = options.withOptionsFrom (*r);
 
@@ -92,6 +95,23 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                                  else
                                      audioProcessor.requestMeterReset();
                                  complete (true);
+                             })
+        .withNativeFunction ("startAutoMaster", [this] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 complete (audioProcessor.autoMaster.start());
+                             })
+        .withNativeFunction ("cancelAutoMaster", [this] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 audioProcessor.autoMaster.cancel();
+                                 complete (true);
+                             })
+        .withNativeFunction ("undoAutoMaster", [this] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 complete (audioProcessor.autoMaster.undo());
+                             })
+        .withNativeFunction ("getAutoMasterReport", [this] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 complete (audioProcessor.autoMaster.getReportJson());
                              })
         .withResourceProvider ([] (const auto& url) { return getResource (url); });
 }
@@ -115,7 +135,10 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
       bassOnAttachment (param (p, "bassOn"), bassOnRelay, nullptr),
       bassMonoAttachment (param (p, "bassMono"), bassMonoRelay, nullptr),
       bassTameAttachment (param (p, "bassTame"), bassTameRelay, nullptr),
-      bassPunchAttachment (param (p, "bassPunch"), bassPunchRelay, nullptr)
+      bassPunchAttachment (param (p, "bassPunch"), bassPunchRelay, nullptr),
+      amGenreAttachment (param (p, "amGenre"), amGenreRelay, nullptr),
+      amIntensityAttachment (param (p, "amIntensity"), amIntensityRelay, nullptr),
+      amTargetAttachment (param (p, "amTarget"), amTargetRelay, nullptr)
 {
     for (int b = 0; b < polisher::kEqBands; ++b)
     {
@@ -246,6 +269,12 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("tame",       roundTo (tameHold, 0.1f));
     frame->setProperty ("punch",      roundTo (punchHold, 0.1f));
     frame->setProperty ("bassWidth",  juce::roundToInt (m.bassWidth.load()));
+    auto& am = audioProcessor.autoMaster;
+    frame->setProperty ("amState",    static_cast<int> (am.getState()));
+    frame->setProperty ("amProgress", roundTo (am.getProgress(), 0.01f));
+    frame->setProperty ("amHearing",  am.isHearingAudio());
+    frame->setProperty ("amUndo",     am.canUndo());
+    frame->setProperty ("amReport",   am.getReportVersion());
     frame->setProperty ("sr",         audioProcessor.getSampleRate());
     frame->setProperty ("inShort",    roundTo (m.inputShortTerm.load(), 0.1f));
     frame->setProperty ("inIntegrated", roundTo (m.inputIntegrated.load(), 0.1f));

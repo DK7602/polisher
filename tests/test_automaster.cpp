@@ -1,0 +1,143 @@
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+
+#include "Signals.h"
+#include "polisher/AutoMaster.h"
+#include "polisher/FilterDesign.h"
+
+#include <chrono>
+#include <cmath>
+#include <numbers>
+
+using namespace polisher;
+using Catch::Matchers::WithinAbs;
+
+namespace {
+
+AudioClip lowPassed (AudioClip c, double hz)
+{
+    for (auto& ch : c.channels)
+    {
+        std::array<Biquad, 4> f {};
+        for (auto& q : f) design::apply (q, design::butterworth (false, hz, c.sampleRate));
+        for (auto& v : ch)
+        {
+            double x = v;
+            for (auto& q : f) x = q.process (x);
+            v = static_cast<float> (x);
+        }
+    }
+    return c;
+}
+
+/** Adds a stereo (side-only) 50 Hz tone: bass that isn't mono. */
+AudioClip withStereoSub (AudioClip c, double db)
+{
+    const double a = std::pow (10.0, db / 20.0);
+    for (int i = 0; i < c.numSamples(); ++i)
+    {
+        const auto s = static_cast<float> (a * std::sin (2.0 * std::numbers::pi * 50.0 * i / c.sampleRate));
+        c.channels[0][static_cast<size_t> (i)] += s;
+        c.channels[1][static_cast<size_t> (i)] -= s;
+    }
+    return c;
+}
+
+void checkWellFormed (const AutoMasterResult& r)
+{
+    REQUIRE (r.ok);
+    CHECK_FALSE (r.summary.empty());
+    for (const char* module : { "eq", "bass", "clip", "max" })
+    {
+        INFO ("module " << module);
+        CHECK (std::any_of (r.reasons.begin(), r.reasons.end(), [&] (const auto& x) { return x.module == module; }));
+    }
+    for (const auto& x : r.reasons)
+    {
+        INFO (x.module << " / " << x.control);
+        CHECK_FALSE (x.why.empty());
+        CHECK_FALSE (x.value.empty());
+    }
+    // What was promised is what the chain delivers.
+    CHECK (r.output.truePeakDbtp <= r.chain.limiter.ceilingDbtp + 0.05);
+}
+
+} // namespace
+
+TEST_CASE ("Auto-Master refuses to guess on silence", "[automaster]")
+{
+    const auto r = autoMaster (testsig::silence (48000.0, 2, 12.0), {});
+    CHECK_FALSE (r.ok);
+    CHECK_FALSE (r.summary.empty());
+}
+
+TEST_CASE ("Auto-Master lands the target and explains every module", "[automaster]")
+{
+    const auto mix = testsig::musicLike (48000.0, 12.0, -14.0);
+    for (auto target : { LoudnessTarget::stream, LoudnessTarget::loud })
+    {
+        AutoMasterSettings s;
+        s.target = target;
+        s.intensity = Intensity::punchy;
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto r = autoMaster (mix, s);
+        const double secs = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+        INFO (r.summary << " (" << secs << " s)");
+        checkWellFormed (r);
+        if (r.reachedTarget)
+            CHECK_THAT (r.output.integratedLufs, WithinAbs (targetLufs (target), 0.3));
+        else
+            CHECK (r.loudnessCostDb <= 5.5 + 0.3);
+
+        // Rendering the chosen settings reproduces the reported result.
+        const auto check = measure (renderMaster (mix, r.chain));
+        CHECK_THAT (check.integratedLufs, WithinAbs (r.output.integratedLufs, 0.05));
+    }
+}
+
+TEST_CASE ("Auto-Master brightens a dull mix and calms a harsh one", "[automaster]")
+{
+    const auto base = testsig::musicLike (48000.0, 12.0, -14.0);
+    const auto dull = autoMaster (lowPassed (base, 2500.0), {});
+    checkWellFormed (dull);
+    CHECK (dull.chain.eq.gainDb[5] > 0.0);   // Presence up
+    CHECK (dull.chain.eq.gainDb[6] > 0.0);   // Air up
+    CHECK (dull.chain.eq.gainDb[5] <= 3.0);  // within the Balanced cap
+
+    // Pink noise is much brighter than music in this view: highs come down.
+    const auto bright = autoMaster (base, {});
+    CHECK (bright.chain.eq.gainDb[6] < 0.0);
+}
+
+TEST_CASE ("Auto-Master makes stereo bass mono and explains why", "[automaster]")
+{
+    AutoMasterSettings s;
+    s.genre = Genre::rock;   // not a bass-heavy default: only acts because the bass is stereo
+    const auto mono = autoMaster (testsig::musicLike (48000.0, 12.0, -14.0), s);
+    CHECK (mono.chain.bass.monoHz < kBassMonoOffHz);
+
+    const auto wide = autoMaster (withStereoSub (testsig::musicLike (48000.0, 12.0, -14.0), -16.0), s);
+    INFO ("width " << wide.analysis.bassWidthPercent);
+    CHECK (wide.analysis.bassWidthPercent > 20.0);
+    CHECK (wide.chain.bass.monoHz >= 80.0);
+    const auto it = std::find_if (wide.reasons.begin(), wide.reasons.end(), [] (const auto& x) { return x.control == "Mono Below"; });
+    REQUIRE (it != wide.reasons.end());
+    CHECK (it->why.find ("stereo") != std::string::npos);
+}
+
+TEST_CASE ("Gentle stops at its limiting budget and says so", "[automaster]")
+{
+    AutoMasterSettings s;
+    s.intensity = Intensity::gentle;
+    s.target = LoudnessTarget::club;
+    const auto r = autoMaster (testsig::musicLike (48000.0, 12.0, -20.0), s);
+    checkWellFormed (r);
+    CHECK_FALSE (r.chain.clipper.enabled);
+    CHECK (r.loudnessCostDb <= 2.0 + 0.3);
+    if (! r.reachedTarget)
+    {
+        const auto it = std::find_if (r.reasons.begin(), r.reasons.end(), [] (const auto& x) { return x.control == "Drive"; });
+        REQUIRE (it != r.reasons.end());
+        CHECK (it->why.find ("stopped") != std::string::npos);
+    }
+}

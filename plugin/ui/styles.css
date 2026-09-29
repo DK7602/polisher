@@ -78,7 +78,7 @@ img { -webkit-user-drag: none; }
 .logo { height: 58px; width: 118px; filter: drop-shadow(0 3px 6px rgba(0,0,0,.6)); }
 .title { height: 70px; width: 344px; border-radius: 10px; }
 .genre { margin-left: 6px; height: 46px; width: 236px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px; }
-.genre button { width: 34px; height: 34px; border: 0; background: transparent; display: flex; align-items: center; justify-content: center; }
+.genre button { width: 34px; height: 34px; border: 0; background: transparent; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .genre span { font-size: 15px; font-weight: 700; }
 .learn-toggle { height: 46px; width: 124px; font-size: 15px; font-weight: 700; letter-spacing: .08em; }
 
@@ -189,7 +189,19 @@ img { -webkit-user-drag: none; }
   filter: drop-shadow(0 0 14px rgba(255,40,50,.55)); }
 .automaster .wm { font-size: 23px; text-shadow: 0 2px 5px rgba(0,0,0,.6); }
 .automaster .sub { font-size: 13px; font-weight: 600; color: #FFE3E4; }
-.automaster.waiting { filter: saturate(.75) drop-shadow(0 0 8px rgba(255,40,50,.35)); }
+.automaster { position: relative; cursor: pointer; }
+.automaster.busy .wm { letter-spacing: .12em; }
+.automaster.busy { animation: am-pulse 1.6s ease-in-out infinite; }
+@keyframes am-pulse { 0%, 100% { filter: drop-shadow(0 0 10px rgba(255,40,50,.45)); } 50% { filter: drop-shadow(0 0 24px rgba(255,70,80,.95)); } }
+.am-progress { position: absolute; left: 44px; right: 44px; bottom: 11px; height: 5px; border-radius: 999px; background: rgba(0,0,0,.35); overflow: hidden; }
+.am-progress[hidden] { display: none; }
+.am-progress i { display: block; height: 100%; width: 0%; border-radius: 999px; background: linear-gradient(90deg,#ffffff,#9CCBF0); transition: width .2s linear; }
+.choice-row .pill { cursor: pointer; }
+#btn-undo:not(.is-disabled) { cursor: pointer; filter: drop-shadow(0 0 8px rgba(120,190,255,.6)); }
+.l-link { display: inline-block; margin: 0 0 8px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .06em;
+  color: #fff; background: rgba(224,20,30,.35); box-shadow: inset 0 0 0 1px rgba(255,120,130,.7); cursor: pointer; border: 0; }
+.l-meta { font-size: 12px; color: var(--dim); margin: -2px 0 6px; }
+.l-changed { font-size: 12px; color: var(--dim); font-style: italic; margin: 2px 0 8px; }
 .choices { display: flex; flex-direction: column; gap: 10px; }
 .choice-row { display: flex; align-items: center; gap: 8px; }
 .choice-row .pill { height: 34px; width: 90px; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center; }

@@ -148,6 +148,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::bassPunch, 1 }, "Bass Punch",
                                                        NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f, percent));
 
+    // Auto-Master choices (saved with the project; not automatable).
+    auto choice = [&] (const char* id, const char* name, StringArray items, int def)
+    {
+        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { id, 1 }, name, items, def,
+                                                            AudioParameterChoiceAttributes().withAutomatable (false)));
+    };
+    choice ("amGenre", "Auto-Master Genre", { "Trap / Hip-Hop", "R&B", "Pop", "EDM", "Rock", "Acoustic" }, 0);
+    choice ("amIntensity", "Auto-Master Intensity", { "Gentle", "Balanced", "Punchy" }, 1);
+    choice ("amTarget", "Auto-Master Target", { "Stream -14", "Loud -9", "Club -7" }, 1);
+
     return layout;
 }
 
@@ -166,6 +176,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     clipper.prepare (channels);
     eq.prepare (sampleRate, channels);
     bass.prepare (sampleRate, channels);
+    autoMaster.prepare (sampleRate);
     outputMeter.prepare (sampleRate, channels);
     inputMeter.prepare (sampleRate, channels);
     updateLimiterParams();
@@ -265,6 +276,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
 
     inputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     inputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
+    autoMaster.capture (buffer);   // the untouched mix, while Auto-Master is listening
 
     eq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     bass.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
@@ -340,14 +352,22 @@ void PolisherAudioProcessor::publishMeters()
 void PolisherAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     if (auto xml = parameters.copyState().createXml())
+    {
+        xml->setAttribute ("amReport", autoMaster.getReportForSaving());
         copyXmlToBinary (*xml, destData);
+    }
 }
 
 void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (parameters.state.getType()))
+        {
+            const auto savedReport = xml->getStringAttribute ("amReport");
+            xml->removeAttribute ("amReport");
             parameters.replaceState (juce::ValueTree::fromXml (*xml));
+            autoMaster.onStateRestored (savedReport);
+        }
 }
 
 juce::AudioProcessorEditor* PolisherAudioProcessor::createEditor()

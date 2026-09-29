@@ -8,12 +8,13 @@
 #include "polisher/TonalEQ.h"
 #include "polisher/BassControl.h"
 #include "SpectrumTap.h"
+#include "AutoMasterController.h"
 
 #include <array>
 #include <atomic>
 
-/** Polisher: Tonal EQ -> Bass Control -> Drive -> Soft Clipper -> Maximizer (true-peak limiter), plus an EBU R128 output meter
-    and spectrum taps. The other modules and Auto-Master plug into this chain in later milestones. */
+/** Polisher: Tonal EQ -> Bass Control -> Drive -> Soft Clipper -> Maximizer (true-peak limiter), plus EBU R128
+    meters, spectrum taps and Auto-Master (which listens to the incoming mix and sets the chain). */
 class PolisherAudioProcessor final : public juce::AudioProcessor
 {
 public:
@@ -78,6 +79,9 @@ public:
 
     /** Recent audio before (mix) and after (master) processing, for the spectrum display. */
     SpectrumTap inputTap, outputTap;
+
+    /** Listens to the mix, decides every module's settings and explains them. */
+    AutoMasterController autoMaster { parameters };
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 

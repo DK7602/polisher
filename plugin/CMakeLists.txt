@@ -41,7 +41,8 @@ set_target_properties(PolisherUIData PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_sources(Polisher PRIVATE
     PluginProcessor.cpp
     PluginEditor.cpp
-    PolisherWebEditor.cpp)
+    PolisherWebEditor.cpp
+    AutoMasterController.cpp)
 
 target_compile_definitions(Polisher PUBLIC
     JUCE_WEB_BROWSER=1

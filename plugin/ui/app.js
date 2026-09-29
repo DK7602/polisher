@@ -38,10 +38,17 @@ const P = {
   bassMono: Juce.getSliderState("bassMono"),
   bassTame: Juce.getSliderState("bassTame"),
   bassPunch: Juce.getSliderState("bassPunch"),
+  amGenre: Juce.getComboBoxState("amGenre"),
+  amIntensity: Juce.getComboBoxState("amIntensity"),
+  amTarget: Juce.getComboBoxState("amTarget"),
   eqGain: [1, 2, 3, 4, 5, 6, 7].map((b) => Juce.getSliderState("eqGain" + b)),
   eqFreq: [1, 2, 3, 4, 5, 6, 7].map((b) => Juce.getSliderState("eqFreq" + b)),
 };
 const resetMeter = Juce.getNativeFunction("resetMeter");
+const amStart = Juce.getNativeFunction("startAutoMaster");
+const amCancel = Juce.getNativeFunction("cancelAutoMaster");
+const amUndo = Juce.getNativeFunction("undoAutoMaster");
+const amGetReport = Juce.getNativeFunction("getAutoMasterReport");
 
 function scaledToNorm(state, v) {
   const { start, end, skew } = state.properties;
@@ -54,6 +61,7 @@ const M = {
   momentary: -100, shortTerm: -100, integrated: -100, range: 0, truePeak: -100,
   peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
   inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
+  amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0,
 };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
 let clipWindow = [];         // ~3 s of clipper peak-reduction samples
@@ -101,6 +109,8 @@ const modules = [
   { id: "max", name: "Maximizer", live: true },
 ];
 let selected = "max";
+let learnView = "module";      // "module" or "report" (the Auto-Master report)
+let amReport = null;           // last Auto-Master report (parsed), or null
 
 // ---------------------------------------------------------------------------------------------
 // Tonal EQ bands. Shapes, widths and ranges match dsp/include/polisher/TonalEQ.h exactly, so the
@@ -180,7 +190,7 @@ function renderChain() {
     btn.innerHTML = `<span class="row-text"><span class="row-name">${m.name}</span>
       <span class="row-read mono" id="read-${m.id}">${m.live ? "" : "Coming soon"}</span></span>
       <span class="row-num mono">${String(i + 1).padStart(2, "0")}</span>`;
-    btn.addEventListener("click", () => { selected = m.id; renderChain(); renderModule(); renderLearn(); });
+    btn.addEventListener("click", () => { selected = m.id; learnView = "module"; renderChain(); renderModule(); renderLearn(); });
     row.appendChild(btn);
     chainRows.appendChild(row);
   });
@@ -541,6 +551,8 @@ function renderLearn() {
     return;
   }
 
+  if (learnView === "report" && amReport) { renderReport(body); return; }
+
   const m = modules.find((x) => x.id === selected);
   if (!m.live) {
     body.appendChild(head("WHAT IT WILL DO"));
@@ -552,9 +564,9 @@ function renderLearn() {
     return;
   }
 
-  if (m.id === "clip") { renderClipperLearn(body); liftWarning(body); return; }
-  if (m.id === "eq") { renderEqLearn(body); liftWarning(body); return; }
-  if (m.id === "bass") { renderBassLearn(body); liftWarning(body); return; }
+  if (m.id === "clip") { renderClipperLearn(body); liftWarning(body); prependAmSection(body, "clip"); return; }
+  if (m.id === "eq") { renderEqLearn(body); liftWarning(body); prependAmSection(body, "eq"); return; }
+  if (m.id === "bass") { renderBassLearn(body); liftWarning(body); prependAmSection(body, "bass"); return; }
 
   const drive = P.drive.getScaledValue();
   const ceiling = P.ceiling.getScaledValue();
@@ -620,6 +632,7 @@ function renderLearn() {
   note.style.cssText = "font-size:12px;color:var(--dim)";
   body.appendChild(note);
   liftWarning(body);
+  prependAmSection(body, "max");
 }
 
 function renderEqLearn(body) {
@@ -889,9 +902,176 @@ function toast(text) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (t.hidden = true), 2600);
 }
-$("btn-automaster").classList.add("waiting");
-$("btn-automaster").addEventListener("click", () =>
-  toast("Auto-Master arrives with the analysis engine in an upcoming build. For now, set Drive by ear and let Learn explain what it's doing."));
+// ---------------------------------------------------------------------------------------------
+// Auto-Master: genre / intensity / target, the listen -> analyse -> apply flow, the report, undo.
+const comboIndex = (st) => { const n = st.properties.choices.length || 3; return clamp(Math.round(st.getChoiceIndex ? st.getChoiceIndex() : st.value * (n - 1)), 0, n - 1); };
+const GENRES = ["Trap / Hip-Hop", "R&B", "Pop", "EDM", "Rock", "Acoustic"];
+function refreshAmChoices() {
+  const g = comboIndex(P.amGenre);
+  $("genre-name").textContent = (P.amGenre.properties.choices[g]) || GENRES[g];
+  for (const [rowId, st] of [["row-intensity", P.amIntensity], ["row-target", P.amTarget]]) {
+    const idx = comboIndex(st);
+    $(rowId).querySelectorAll("button[data-i]").forEach((b) => {
+      const on = Number(b.dataset.i) === idx;
+      b.className = "pill " + (on ? "pill-red" : "pill-blue");
+      b.setAttribute("aria-pressed", String(on));
+    });
+  }
+}
+function stepGenre(d) {
+  const n = P.amGenre.properties.choices.length || GENRES.length;
+  P.amGenre.setChoiceIndex((comboIndex(P.amGenre) + d + n) % n);
+  refreshAmChoices();
+}
+$("genre-prev").addEventListener("click", () => stepGenre(-1));
+$("genre-next").addEventListener("click", () => stepGenre(1));
+for (const [rowId, st] of [["row-intensity", P.amIntensity], ["row-target", P.amTarget]])
+  $(rowId).querySelectorAll("button[data-i]").forEach((b) =>
+    b.addEventListener("click", () => { st.setChoiceIndex(Number(b.dataset.i)); refreshAmChoices(); }));
+for (const st of [P.amGenre, P.amIntensity, P.amTarget]) {
+  st.valueChangedEvent.addListener(refreshAmChoices);
+  st.propertiesChangedEvent.addListener(refreshAmChoices);
+}
+
+let amRequested = false;       // this session pressed Auto-Master (so a new report opens in Learn)
+let amSeenVersion = -1;
+let amOpenedTime = null;       // the report already opened for the user (by its timestamp)
+$("btn-automaster").addEventListener("click", async () => {
+  if (M.amState === 1) { amCancel(); amRequested = false; toast("Auto-Master stopped listening."); return; }
+  if (M.amState === 2) return;
+  const started = await amStart();
+  if (started === false) {
+    toast("Polisher isn't ready yet: press play in your DAW once, then click Auto-Master again.");
+    return;
+  }
+  amRequested = true;
+  M.amState = 1; M.amProgress = 0; M.amHearing = false;
+  updateAmButton();
+});
+function updateAmButton() {
+  const btn = $("btn-automaster"), title = $("am-title"), sub = $("am-sub");
+  const busy = M.amState === 1 || M.amState === 2;
+  btn.classList.toggle("busy", busy);
+  $("am-progress").hidden = M.amState !== 1;
+  $("am-progress-fill").style.width = (clamp(M.amProgress, 0, 1) * 100).toFixed(0) + "%";
+  if (M.amState === 1) {
+    title.textContent = "LISTENING";
+    sub.textContent = M.amHearing ? `${Math.round(M.amProgress * 12)} / 12 s · click to stop` : "Press play: the loudest part of your song";
+  } else if (M.amState === 2) {
+    title.textContent = "THINKING";
+    sub.textContent = "Choosing every setting…";
+  } else {
+    title.textContent = "AUTO-MASTER";
+    sub.textContent = amReport && amReport.ok ? "Done · click to run again" : "Listens to your mix and sets every module";
+  }
+  const undo = $("btn-undo");
+  undo.disabled = !M.amUndo;
+  undo.classList.toggle("is-disabled", !M.amUndo);
+}
+$("btn-undo").addEventListener("click", async () => {
+  if (!M.amUndo) return;
+  await amUndo();
+  toast("Undone: every setting is back to how it was before Auto-Master.");
+  refreshAllCells();
+});
+
+async function fetchReport(openIt) {
+  let text = "";
+  try { text = await amGetReport(); } catch (e) { text = ""; }
+  try { amReport = text ? JSON.parse(text) : null; } catch (e) { amReport = null; }
+  // Open a report only once, and only when it's a new one from a run the user started here.
+  if (openIt && amRequested && amReport && amReport.time !== amOpenedTime) {
+    amOpenedTime = amReport.time;
+    amRequested = false;
+    learnView = "report";
+    toast(amReport.ok ? "Auto-Master set every module. Learn explains each choice." : "Auto-Master couldn't hear enough music. See Learn.");
+  }
+  if (!amReport && learnView === "report") learnView = "module";
+  refreshAllCells();
+  updateAmButton();
+  renderLearn();
+}
+// Knobs show values pushed by the plug-in; after Auto-Master or Undo, redraw them all.
+function refreshAllCells() {
+  for (const c of [...maximizerCells, ...clipperCells, ...eqCells, ...bassCells]) if (c.refresh) c.refresh();
+  onParamsChanged();
+}
+
+const AM_MODULES = [["eq", "TONAL EQ"], ["bass", "BASS CONTROL"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
+function notesAsTips(body) {
+  for (const n of amReport.notes || []) {
+    const cut = n.indexOf(":");
+    const title = cut > 0 && cut < 24 ? n.slice(0, cut) : "HEADS UP";
+    const text = cut > 0 && cut < 24 ? n.slice(cut + 1).trim() : n;
+    body.appendChild(tip(title, text.charAt(0).toUpperCase() + text.slice(1)));
+  }
+}
+function renderReport(body) {
+  const r = amReport;
+  if (!r.ok) {
+    body.appendChild(head("AUTO-MASTER"));
+    body.appendChild(para("l-p", r.summary));
+    body.appendChild(tip("TRY AGAIN", "Start playback on your chorus or drop, then press Auto-Master. The counter only runs while it hears music.", true));
+    return;
+  }
+  body.appendChild(head("AUTO-MASTER REPORT"));
+  const meta = para("l-meta", `${r.genre} · ${r.intensity} · ${r.target}`);
+  body.appendChild(meta);
+  body.appendChild(para("l-p", r.summary));
+  notesAsTips(body);
+  for (const [id, label] of AM_MODULES) {
+    const list = (r.reasons || []).filter((x) => x.module === id);
+    if (!list.length) continue;
+    body.appendChild(sep());
+    body.appendChild(head(label));
+    list.forEach((x) => body.appendChild(item(x.control, x.value, x.why)));
+  }
+  body.appendChild(tip("COMPARE IT", "Press A for your original mix and B for the master. B is louder, so judge the tone, not the volume. The undo arrow at the top puts every setting back.", true));
+}
+
+// Current value of a parameter by id, in the same units the report stores.
+function paramValue(id) {
+  if (id.startsWith("eqGain")) return eqGainAt(Number(id.slice(6)) - 1);
+  if (id.startsWith("eqFreq")) return eqFreqAt(Number(id.slice(6)) - 1);
+  const map = { drive: P.drive, ceiling: P.ceiling, release: P.release, clipLevel: P.clipLevel, clipSoftness: P.clipSoftness,
+                bassMono: P.bassMono, bassTame: P.bassTame, bassPunch: P.bassPunch };
+  if (map[id]) return map[id].getScaledValue();
+  const toggles = { eqOn: P.eqOn, bassOn: P.bassOn, clipOn: P.clipOn, adaptive: P.adaptive, bypass: P.bypass };
+  if (toggles[id]) return toggles[id].getValue() ? 1 : 0;
+  if (id === "clipOversampling") return osIndex();
+  return null;
+}
+const MODULE_PARAMS = { eq: /^eq/, bass: /^bass/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive)$/ };
+function moduleUnchanged(module) {
+  const values = (amReport && amReport.values) || {};
+  return Object.entries(values).every(([id, v]) => {
+    if (!MODULE_PARAMS[module].test(id)) return true;
+    const cur = paramValue(id);
+    if (cur === null) return true;
+    const tol = id.startsWith("eqFreq") ? Math.max(1, v * 0.01) : 0.06;
+    return Math.abs(cur - v) <= tol;
+  });
+}
+function prependAmSection(body, module) {
+  if (!amReport || !amReport.ok) return;
+  const list = (amReport.reasons || []).filter((x) => x.module === module);
+  if (!list.length) return;
+  const frag = document.createDocumentFragment();
+  const link = document.createElement("button");
+  link.type = "button";
+  link.className = "l-link";
+  link.textContent = "\u2190 AUTO-MASTER REPORT";
+  link.addEventListener("click", () => { learnView = "report"; renderLearn(); });
+  frag.appendChild(link);
+  frag.appendChild(head("WHY AUTO-MASTER CHOSE THIS"));
+  if (moduleUnchanged(module)) {
+    list.forEach((x) => frag.appendChild(item(x.control, x.value, x.why)));
+  } else {
+    frag.appendChild(para("l-changed", "You've changed this module since Auto-Master set it, so its reasons no longer describe what you hear. Undo (top) puts Auto-Master's settings back."));
+  }
+  frag.appendChild(sep());
+  body.prepend(frag);
+}
 
 function onParamsChanged() {
   refreshAB();
@@ -1029,8 +1209,15 @@ function updateLiveReadouts() {
 // Meter events from the plug-in (30 per second).
 window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   const srChanged = frame.sr && frame.sr !== M.sr;
+  const wasAm = M.amState;
   Object.assign(M, frame);
   if (srChanged) drawEq();
+  if (M.amReport !== amSeenVersion) {
+    const first = amSeenVersion === -1;
+    amSeenVersion = M.amReport;
+    fetchReport(!first);
+  }
+  if (wasAm !== M.amState || M.amState === 1) updateAmButton();
   if (M.momentary > -70 || M.peakL > -80) lastAudioTime = performance.now();
   grWindow.push(M.gr);
   if (grWindow.length > 90) grWindow.shift();
@@ -1048,7 +1235,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   $("sp-master").setAttribute("d", master);
   $("sp-master-glow").setAttribute("d", master);
 });
-setInterval(() => { if (learnOn && (selected === "max" || selected === "clip")) renderLearn(); }, 1000);
+setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass"].includes(selected)) renderLearn(); }, 1000);
 
 // ---------------------------------------------------------------------------------------------
 buildSpectrumGrid();
@@ -1056,4 +1243,6 @@ buildMeters();
 renderChain();
 renderModule();
 setLearn(true);
+refreshAmChoices();
+updateAmButton();
 onParamsChanged();

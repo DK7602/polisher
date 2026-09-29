@@ -1,46 +1,12 @@
 #include "polisher/BassControl.h"
+#include "polisher/FilterDesign.h"
 
 #include <numbers>
 
 namespace polisher {
 
 namespace {
-    struct Coeffs { double b0, b1, b2, a1, a2; };
-
-    void apply (Biquad& f, const Coeffs& c) noexcept
-    {
-        f.b0 = c.b0; f.b1 = c.b1; f.b2 = c.b2; f.a1 = c.a1; f.a2 = c.a2;
-    }
-
-    // RBJ cookbook designs, normalised (a0 == 1).
-    Coeffs butterworth (bool highPass, double f, double sr) noexcept
-    {
-        const double w0 = 2.0 * std::numbers::pi * std::min (f, 0.45 * sr) / sr;
-        const double cw = std::cos (w0), alpha = std::sin (w0) / (2.0 * std::numbers::sqrt2 / 2.0);
-        const double a0 = 1.0 + alpha;
-        const double b1 = highPass ? -(1.0 + cw) : (1.0 - cw);
-        const double b0 = highPass ? (1.0 + cw) / 2.0 : (1.0 - cw) / 2.0;
-        return { b0 / a0, b1 / a0, b0 / a0, -2.0 * cw / a0, (1.0 - alpha) / a0 };
-    }
-
-    Coeffs lowShelf (double f, double gainDb, double sr) noexcept
-    {
-        const double w0 = 2.0 * std::numbers::pi * f / sr, cw = std::cos (w0);
-        const double A = std::pow (10.0, gainDb / 40.0), alpha = std::sin (w0) / (2.0 * 0.707);
-        const double k = 2.0 * std::sqrt (A) * alpha;
-        const double a0 = (A + 1.0) + (A - 1.0) * cw + k;
-        return { A * ((A + 1.0) - (A - 1.0) * cw + k) / a0, 2.0 * A * ((A - 1.0) - (A + 1.0) * cw) / a0,
-                 A * ((A + 1.0) - (A - 1.0) * cw - k) / a0, -2.0 * ((A - 1.0) + (A + 1.0) * cw) / a0,
-                 ((A + 1.0) + (A - 1.0) * cw - k) / a0 };
-    }
-
-    Coeffs bell (double f, double gainDb, double q, double sr) noexcept
-    {
-        const double w0 = 2.0 * std::numbers::pi * f / sr, cw = std::cos (w0);
-        const double A = std::pow (10.0, gainDb / 40.0), alpha = std::sin (w0) / (2.0 * q);
-        const double a0 = 1.0 + alpha / A;
-        return { (1.0 + alpha * A) / a0, -2.0 * cw / a0, (1.0 - alpha * A) / a0, -2.0 * cw / a0, (1.0 - alpha / A) / a0 };
-    }
+    using namespace design;
 
     double perSample (double seconds, double sr) noexcept { return 1.0 - std::exp (-1.0 / (seconds * sr)); }
     double perUpdate (double seconds, double sr) noexcept

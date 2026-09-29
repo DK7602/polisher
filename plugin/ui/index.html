@@ -32,16 +32,16 @@
     <div class="header-row">
       <img class="logo" src="assets/wave.png" alt="Polisher logo">
       <img class="title fade-x" src="assets/title_band.webp" alt="Polisher">
-      <div class="pill pill-blue genre is-disabled" title="Genre targets arrive with Auto-Master">
-        <button type="button" aria-label="Previous genre" disabled><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <span>Trap / Hip-Hop</span>
-        <button type="button" aria-label="Next genre" disabled><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg></button>
+      <div class="pill pill-blue genre" title="Genre: what Auto-Master compares your mix with">
+        <button type="button" id="genre-prev" aria-label="Previous genre"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <span id="genre-name">Trap / Hip-Hop</span>
+        <button type="button" id="genre-next" aria-label="Next genre"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg></button>
       </div>
       <div class="grow"></div>
       <button type="button" id="learn-toggle" class="pill pill-red learn-toggle" aria-pressed="true">LEARN ON</button>
       <button type="button" id="btn-a" class="imgbtn" aria-label="A: original mix (bypass)" title="A: hear your original mix"><img src="assets/btn_a.png" alt=""></button>
       <button type="button" id="btn-b" class="imgbtn" aria-label="B: master" title="B: hear the master"><img src="assets/btn_b.png" alt=""></button>
-      <button type="button" class="imgbtn is-disabled" aria-label="Undo" title="Undo arrives with Auto-Master" disabled><img src="assets/btn_undo.png" alt=""></button>
+      <button type="button" id="btn-undo" class="imgbtn is-disabled" aria-label="Undo Auto-Master" title="Undo Auto-Master" disabled><img src="assets/btn_undo.png" alt=""></button>
       <button type="button" id="btn-settings" class="imgbtn" aria-label="Settings" title="Settings"><img src="assets/btn_gear.png" alt=""></button>
       <button type="button" id="btn-help" class="imgbtn" aria-label="Help" title="Help"><img src="assets/btn_help.png" alt=""></button>
     </div>
@@ -128,14 +128,15 @@
     <img class="panel-bg" src="assets/panel_footer.png" alt="">
     <div class="footer-row">
       <button type="button" id="btn-automaster" class="pill pill-red automaster">
-        <span class="wm">AUTO-MASTER</span>
-        <span class="sub">Arrives with the analysis engine</span>
+        <span class="wm" id="am-title">AUTO-MASTER</span>
+        <span class="sub" id="am-sub">Listens to your mix and sets every module</span>
+        <span class="am-progress" id="am-progress" hidden><i id="am-progress-fill"></i></span>
       </button>
-      <div class="choices is-disabled" title="Intensity and targets arrive with Auto-Master">
-        <div class="choice-row"><span class="choice-label">INTENSITY</span>
-          <span class="pill pill-blue">Gentle</span><span class="pill pill-red">Balanced</span><span class="pill pill-blue">Punchy</span></div>
-        <div class="choice-row"><span class="choice-label">TARGET</span>
-          <span class="pill pill-blue">Stream −14</span><span class="pill pill-red">Loud −9</span><span class="pill pill-blue">Club −7</span><span class="pill pill-blue">Match ref</span></div>
+      <div class="choices">
+        <div class="choice-row" id="row-intensity"><span class="choice-label">INTENSITY</span>
+          <button type="button" class="pill pill-blue" data-i="0" title="Transparent: small EQ moves, no clipping, little limiting">Gentle</button><button type="button" class="pill pill-red" data-i="1" title="The usual choice: clear, loud and punchy">Balanced</button><button type="button" class="pill pill-blue" data-i="2" title="Louder and denser: more clipping and limiting allowed">Punchy</button></div>
+        <div class="choice-row" id="row-target"><span class="choice-label">TARGET</span>
+          <button type="button" class="pill pill-blue" data-i="0" title="Spotify, Apple Music, YouTube play at about −14 LUFS">Stream −14</button><button type="button" class="pill pill-red" data-i="1" title="Competitive loudness for hip-hop, pop and EDM releases">Loud −9</button><button type="button" class="pill pill-blue" data-i="2" title="Very loud, for DJs and club play">Club −7</button><button type="button" class="pill pill-blue is-disabled" title="Match a reference song: coming in a later build" disabled>Match ref</button></div>
       </div>
       <div class="grow"></div>
       <div class="meters" id="meters"></div>
@@ -148,11 +149,12 @@
     <label class="check"><input type="checkbox" id="chk-autoreset"> Reset loudness meter when playback starts</label>
     <label class="check"><input type="checkbox" id="chk-resetchange"> Restart loudness after you change a control</label>
     <label class="check"><input type="checkbox" id="chk-adaptive"> Adaptive release (Maximizer)</label>
-    <div class="pop-foot mono">Polisher v0.5.0 · EQ · Bass · Clipper · Maximizer</div>
+    <div class="pop-foot mono">Polisher v0.6.0 · Auto-Master · EQ · Bass · Clipper · Maximizer</div>
   </div>
   <div class="popover" id="pop-help" hidden>
     <div class="pop-title wm">QUICK HELP</div>
     <ul>
+      <li><b>Auto-Master:</b> pick your genre (top), an intensity and a target, then play the loudest part of your song and press Auto-Master. It listens for 12 seconds, sets every module and explains why in Learn. The undo arrow puts everything back.</li>
       <li><b>Knobs:</b> drag up/down. Hold Shift for fine control. Double-click to reset. Mouse wheel works too.</li>
       <li><b>A / B:</b> A plays your original mix (bypassed), B plays the master. Level-matched A/B comes later.</li>
       <li><b>Loudness:</b> watch Short-term while you turn Drive (it follows the last 3 seconds). Integrated averages the whole time since it started, so it restarts a moment after you change a control (Settings). True Peak stays at or below the Ceiling.</li>

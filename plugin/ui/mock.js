@@ -22,14 +22,52 @@
   sliders.bassTame = { start: 0, end: 100, skew: 1, interval: 0.1, value: 0, label: "%" };
   sliders.bassPunch = { start: 0, end: 100, skew: 1, interval: 0.1, value: 0, label: "%" };
   const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true, eqOn: true, bassOn: true };
-  const combos = { clipOversampling: { choices: ["1x", "2x", "4x", "8x"], value: 2 / 3 } };
+  const combos = {
+    clipOversampling: { choices: ["1x", "2x", "4x", "8x"], value: 2 / 3 },
+    amGenre: { choices: ["Trap / Hip-Hop", "R&B", "Pop", "EDM", "Rock", "Acoustic"], value: 0 },
+    amIntensity: { choices: ["Gentle", "Balanced", "Punchy"], value: 0.5 },
+    amTarget: { choices: ["Stream -14", "Loud -9", "Club -7"], value: 0.5 },
+  };
+  // Simulated Auto-Master (listening runs 3x faster than the real 12 s).
+  const am = { state: 0, progress: 0, undo: false, version: 0, report: "", snapshot: null };
+  const setSlider = (name, v) => { sliders[name].value = v; send("__juce__slider" + name, { eventType: "valueChanged", value: v }); };
+  const setToggle = (name, v) => { toggles[name] = v; send("__juce__toggle" + name, { eventType: "valueChanged", value: v }); };
+  function amFinish() {
+    am.snapshot = { sliders: JSON.parse(JSON.stringify(sliders)), toggles: { ...toggles } };
+    const values = { eqGain1: 0, eqGain2: 0, eqGain3: -1.4, eqGain4: 0, eqGain5: 0, eqGain6: 0.8, eqGain7: 1.6,
+                     bassMono: 100, bassTame: 40, bassPunch: 25, clipOn: 1, clipLevel: -1, clipSoftness: 50, drive: 9.4, ceiling: -1, release: 120 };
+    for (const [k, v] of Object.entries(values)) (k === "clipOn" ? setToggle(k, !!v) : setSlider(k, v));
+    const R = (module, control, value, why) => ({ module, control, value, why });
+    am.report = JSON.stringify({
+      ok: true, genre: "Trap / Hip-Hop", intensity: "Balanced", target: "Loud \u22129", values,
+      summary: "Listened to 12 s of the loudest part. Your mix measured \u221217.8 LUFS with peaks at \u22120.4 dBTP. The master now measures \u22129.0 LUFS with true peak \u22121.0 dBTP. The full song will read about 1 LU lower than this loud section, which is normal.",
+      notes: ["FIX IT IN THE MIX: your mix is 7.4 dB higher in the low mids (180\u2013600 Hz) than typical Trap / Hip-Hop masters. The master EQ only fixes part of that; adjusting the main source in the mix (often guitars, pads or a boomy vocal) will sound better."],
+      reasons: [
+        R("eq", "Low Mid", "\u22121.4 dB", "Your mix has about 7.4 dB more low mids (180\u2013600 Hz) than typical Trap / Hip-Hop masters, so a 1.4 dB cut closes part of the gap. Less mud and boxiness, so the mix reads clearer."),
+        R("eq", "Presence", "+0.8 dB", "Your mix has about 3.1 dB less presence (3.5\u20138 kHz) than typical Trap / Hip-Hop masters, so a 0.8 dB boost closes part of the gap. More edge and definition on vocals and hi-hats."),
+        R("eq", "Air", "+1.6 dB", "Your mix has about 6.2 dB less air (above 8 kHz) than typical Trap / Hip-Hop masters, so a 1.6 dB boost closes part of the gap. More sheen and openness on top."),
+        R("eq", "Other bands", "0 dB", "Low End, Bass, Mid and Upper Mid are already close to the Trap / Hip-Hop balance, so they stay flat."),
+        R("bass", "Mono Below", "100 Hz", "Your bass is 42 % stereo below 150 Hz. Club systems and phones play bass in mono, so stereo bass partly cancels there. Making it mono below 100 Hz keeps it solid everywhere."),
+        R("bass", "Sub Tame", "40 %", "Your loudest bass moments rise about 6.3 dB above the typical bass level, so some 808 notes leap out. Sub Tame evens those notes out."),
+        R("bass", "Punch", "25 %", "Your low end is fairly sustained, so kicks can get lost under it. Punch adds thump to the start of each kick without turning the sub up."),
+        R("clip", "Soft Clipper", "On", "Your mix has 17.4 dB between its peaks and its average loudness (spiky drums). Shaving the sharpest drum peaks before the Maximizer gets you loud with less limiting."),
+        R("clip", "Clip Level", "\u22121.0 dB", "Clipping starts 1.0 dB below the ceiling for the Loud \u22129 target; the level comes back up so peaks still use the full headroom."),
+        R("max", "Drive", "+9.4 dB", "+9.4 dB of Drive lands this part at \u22129.0 LUFS, your Loud \u22129 target. Holding the peaks down costs about 2.1 dB of loudness, within the Balanced limit of 3.5 dB, so the drums keep their punch."),
+        R("max", "Ceiling", "\u22121.0 dBTP", "Leaves room for the MP3/AAC conversion streaming services do, so the streamed version won't clip."),
+      ],
+    });
+    am.undo = true; am.version++; am.state = 0;
+  }
+  setInterval(() => {
+    if (am.state === 1) { am.progress = Math.min(1, am.progress + 0.1 / 4); if (am.progress >= 1) { am.state = 2; setTimeout(amFinish, 900); } }
+  }, 100);
 
   const send = (id, obj) => setTimeout(() => window.__JUCE__.backend.emitByBackend(id, JSON.stringify(obj)), 0);
 
   window.__JUCE__ = {
     initialisationData: {
       __juce__platform: [],
-      __juce__functions: ["resetMeter"],
+      __juce__functions: ["resetMeter", "startAutoMaster", "cancelAutoMaster", "undoAutoMaster", "getAutoMasterReport"],
       __juce__registeredGlobalEventIds: [],
       __juce__sliders: Object.keys(sliders),
       __juce__toggles: Object.keys(toggles),
@@ -55,8 +93,20 @@
           send(eventId, { eventType: "valueChanged", value: c.value });
         } else if (payload.eventType === "valueChanged") c.value = payload.value;
       } else if (eventId === "__juce__invoke") {
+        let result = true;
         if (payload.name === "resetMeter") integratedAcc = [];   // (the mock has no separate short-term history)
-        send("__juce__complete", { promiseId: payload.resultId, result: true });
+        if (payload.name === "startAutoMaster") { am.state = 1; am.progress = 0; }
+        if (payload.name === "cancelAutoMaster" && am.state === 1) am.state = 0;
+        if (payload.name === "getAutoMasterReport") result = am.report;
+        if (payload.name === "undoAutoMaster") {
+          result = am.undo;
+          if (am.snapshot) {
+            for (const [k, v] of Object.entries(am.snapshot.sliders)) setSlider(k, v.value);
+            for (const [k, v] of Object.entries(am.snapshot.toggles)) setToggle(k, v);
+          }
+          am.undo = false; am.report = ""; am.version++;
+        }
+        send("__juce__complete", { promiseId: payload.resultId, result });
       }
     },
   };
@@ -98,6 +148,7 @@
       tame: toggles.bassOn && sliders.bassTame.value > 0 ? +(-sliders.bassTame.value / 100 * 5 * beat).toFixed(1) : 0,
       punch: toggles.bassOn && sliders.bassPunch.value > 0 ? +(sliders.bassPunch.value / 100 * 4 * beat).toFixed(1) : 0,
       bassWidth: 42,
+      amState: am.state, amProgress: +am.progress.toFixed(2), amHearing: true, amUndo: am.undo, amReport: am.version,
       clip: toggles.clipOn && !bypass ? +(-Math.max(0, drive - 1.5 + sliders.clipLevel.value * -0.5) * 0.5 * (0.3 + 0.7 * beat)).toFixed(1) : 0,
       mix, master,
     };

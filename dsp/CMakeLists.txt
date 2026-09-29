@@ -6,6 +6,7 @@ add_library(polisher_dsp STATIC
     src/SoftClipper.cpp
     src/TonalEQ.cpp
     src/BassControl.cpp
+    src/AutoMaster.cpp
     src/LoudnessTargeting.cpp)
 
 target_include_directories(polisher_dsp PUBLIC include)

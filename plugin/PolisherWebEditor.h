@@ -61,6 +61,7 @@ private:
     juce::WebComboBoxRelay clipOversamplingRelay { "clipOversampling" };
     juce::WebToggleButtonRelay eqOnRelay { "eqOn" }, bassOnRelay { "bassOn" };
     juce::WebSliderRelay bassMonoRelay { "bassMono" }, bassTameRelay { "bassTame" }, bassPunchRelay { "bassPunch" };
+    juce::WebComboBoxRelay amGenreRelay { "amGenre" }, amIntensityRelay { "amIntensity" }, amTargetRelay { "amTarget" };
     std::vector<std::unique_ptr<juce::WebSliderRelay>> eqGainRelays = makeSliderRelays ("eqGain"),
                                                        eqFreqRelays = makeSliderRelays ("eqFreq");
 
@@ -73,6 +74,7 @@ private:
     juce::WebComboBoxParameterAttachment clipOversamplingAttachment;
     juce::WebToggleButtonParameterAttachment eqOnAttachment, bassOnAttachment;
     juce::WebSliderParameterAttachment bassMonoAttachment, bassTameAttachment, bassPunchAttachment;
+    juce::WebComboBoxParameterAttachment amGenreAttachment, amIntensityAttachment, amTargetAttachment;
     std::vector<std::unique_ptr<juce::WebSliderParameterAttachment>> eqAttachments;
 
     juce::dsp::FFT fft { kFftOrder };
