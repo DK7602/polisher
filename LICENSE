@@ -1,0 +1,10 @@
+Copyright (c) 2026 the Polisher authors. All rights reserved.
+
+This source code is proprietary and confidential. No licence is granted to copy, modify or
+distribute it without written permission.
+
+Third-party components fetched at build time keep their own licences:
+- JUCE (https://github.com/juce-framework/JUCE): JUCE 8 licence (Starter tier, free up to
+  US$20k annual revenue) or AGPLv3.
+- Steinberg VST3 SDK (bundled with JUCE): MIT.
+- Catch2 (tests only): Boost Software License 1.0.
