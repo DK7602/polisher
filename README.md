@@ -51,6 +51,8 @@ Engine and tests only (any OS, no JUCE download):
 cmake -S . -B build-tests -DPOLISHER_BUILD_PLUGIN=OFF && cmake --build build-tests && ./build-tests/tests/polisher_tests
 ```
 
+Meter behaviour: the loudness meter resets automatically when the host transport starts ("Reset on play", on by default).
+
 Every push runs the GitHub Actions workflow: builds on macOS (universal arm64 + x86_64) and Windows,
 runs the unit tests, validates the VST3 with pluginval (strictness 5) and the AU with `auval`, and
 uploads the built plug-ins as downloadable artifacts.

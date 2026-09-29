@@ -77,6 +77,8 @@ private:
     std::atomic<float>* releaseParam = nullptr;
     std::atomic<float>* adaptiveParam = nullptr;
     std::atomic<float>* bypassParam = nullptr;
+    std::atomic<float>* autoResetParam = nullptr;
+    bool wasPlaying = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherAudioProcessor)
 };

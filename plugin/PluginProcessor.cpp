@@ -8,6 +8,7 @@ namespace ParamIDs
     inline constexpr const char* release  = "release";
     inline constexpr const char* adaptive = "adaptive";
     inline constexpr const char* bypass   = "bypass";
+    inline constexpr const char* autoReset = "autoreset";
 }
 
 PolisherAudioProcessor::PolisherAudioProcessor()
@@ -21,6 +22,7 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     releaseParam  = parameters.getRawParameterValue (ParamIDs::release);
     adaptiveParam = parameters.getRawParameterValue (ParamIDs::adaptive);
     bypassParam   = parameters.getRawParameterValue (ParamIDs::bypass);
+    autoResetParam = parameters.getRawParameterValue (ParamIDs::autoReset);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::createParameterLayout()
@@ -49,6 +51,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
 
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::adaptive, 1 }, "Adaptive Release", true));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::bypass, 1 }, "Bypass", false));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::autoReset, 1 }, "Reset Meter On Play", true,
+                                                      AudioParameterBoolAttributes().withAutomatable (false)));
 
     return layout;
 }
@@ -95,7 +99,15 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     for (int c = numIn; c < numOut; ++c)
         buffer.clear (c, 0, buffer.getNumSamples());
 
-    if (meterResetRequested.exchange (false))
+    // Fresh loudness measurement each time the host transport starts (optional).
+    bool isPlaying = wasPlaying;
+    if (auto* hostPlayHead = getPlayHead())
+        if (auto position = hostPlayHead->getPosition())
+            isPlaying = position->getIsPlaying();
+    const bool justStarted = isPlaying && ! wasPlaying;
+    wasPlaying = isPlaying;
+
+    if (meterResetRequested.exchange (false) || (justStarted && autoResetParam->load() > 0.5f))
         outputMeter.reset();
 
     updateLimiterParams();

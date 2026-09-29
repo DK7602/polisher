@@ -44,6 +44,7 @@ PolisherAudioProcessorEditor::PolisherAudioProcessorEditor (PolisherAudioProcess
 
     addAndMakeVisible (adaptiveButton);
     addAndMakeVisible (bypassButton);
+    addAndMakeVisible (autoResetButton);
     addAndMakeVisible (resetButton);
     resetButton.onClick = [this] { audioProcessor.requestMeterReset(); };
 
@@ -53,6 +54,7 @@ PolisherAudioProcessorEditor::PolisherAudioProcessorEditor (PolisherAudioProcess
     releaseAttachment  = std::make_unique<SliderAttachment> (apvts, "release", releaseKnob);
     adaptiveAttachment = std::make_unique<ButtonAttachment> (apvts, "adaptive", adaptiveButton);
     bypassAttachment   = std::make_unique<ButtonAttachment> (apvts, "bypass", bypassButton);
+    autoResetAttachment = std::make_unique<ButtonAttachment> (apvts, "autoreset", autoResetButton);
 
     const char* labels[] = { "INTEGRATED", "SHORT-TERM", "MOMENTARY", "TRUE PEAK", "RANGE", "GAIN REDUCTION" };
     for (size_t i = 0; i < readouts.size(); ++i)
@@ -83,7 +85,7 @@ void PolisherAudioProcessorEditor::timerCallback()
     readouts[2].value = formatLufs (m.momentary.load(), "LUFS");
     readouts[3].value = formatLufs (m.truePeakMax.load(), "dBTP");
     readouts[4].value = juce::String (m.loudnessRange.load(), 1) + " LU";
-    readouts[5].value = juce::String (grDisplay, 1) + " dB";
+    readouts[5].value = grDisplay > -0.05f ? juce::String ("0.0 dB") : juce::String (grDisplay, 1) + " dB";
     repaint();
 }
 
@@ -144,7 +146,8 @@ void PolisherAudioProcessorEditor::resized()
     area.reduce (16, 8);
 
     auto knobs = area.removeFromLeft (360);
-    auto toggles = knobs.removeFromBottom (36);
+    auto toggles = knobs.removeFromBottom (64);
+    auto toggleRow2 = toggles.removeFromBottom (32);
 
     const int knobW = knobs.getWidth() / 3;
     auto place = [&] (juce::Slider& s, juce::Label& l)
@@ -159,7 +162,8 @@ void PolisherAudioProcessorEditor::resized()
 
     adaptiveButton.setBounds (toggles.removeFromLeft (150));
     bypassButton.setBounds (toggles.removeFromLeft (90));
-    resetButton.setBounds (toggles.removeFromLeft (110).reduced (0, 4));
+    autoResetButton.setBounds (toggleRow2.removeFromLeft (150));
+    resetButton.setBounds (toggleRow2.removeFromLeft (110).reduced (0, 3));
 
     area.removeFromLeft (16);
     const int cellH = area.getHeight() / 3;

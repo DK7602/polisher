@@ -32,13 +32,14 @@ private:
 
     juce::Slider driveKnob, ceilingKnob, releaseKnob;
     juce::Label driveLabel, ceilingLabel, releaseLabel;
-    juce::ToggleButton adaptiveButton { "Adaptive release" }, bypassButton { "Bypass" };
+    juce::ToggleButton adaptiveButton { "Adaptive release" }, bypassButton { "Bypass" },
+                       autoResetButton { "Reset on play" };
     juce::TextButton resetButton { "Reset meter" };
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     std::unique_ptr<SliderAttachment> driveAttachment, ceilingAttachment, releaseAttachment;
-    std::unique_ptr<ButtonAttachment> adaptiveAttachment, bypassAttachment;
+    std::unique_ptr<ButtonAttachment> adaptiveAttachment, bypassAttachment, autoResetAttachment;
 
     std::array<Readout, 6> readouts;
     float grDisplay = 0.0f, peakDisplay = -100.0f;
