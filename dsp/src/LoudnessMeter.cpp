@@ -38,6 +38,14 @@ void LoudnessMeter::reset() noexcept
     shortTermBlocks.clear();
 }
 
+void LoudnessMeter::resetStatistics() noexcept
+{
+    maxMomentaryEnergy = maxShortTermEnergy = 0.0;
+    samplePeak = truePeakMax = truePeakRecent = 0.0;
+    integratedBlocks.clear();
+    shortTermBlocks.clear();
+}
+
 void LoudnessMeter::finishHop() noexcept
 {
     double energy = 0.0;

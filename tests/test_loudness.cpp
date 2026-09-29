@@ -88,3 +88,24 @@ TEST_CASE ("Loudness range ignores material more than 20 LU down (relative gate)
     testsig::appendSine (clip, 1000.0, -50.0, 20.0);
     CHECK_THAT (measure (clip).loudnessRangeLu, WithinAbs (10.0, 1.0));
 }
+
+TEST_CASE ("Restarting the statistics keeps short-term running", "[loudness]")
+{
+    // 10 s of a -30 dBFS tone, then -10 dBFS. Restart the statistics at the change: short-term
+    // must keep reading, and integrated must describe only the new level.
+    auto clip = testsig::sine (48000.0, 2, 997.0, -30.0, 10.0);
+    testsig::appendSine (clip, 997.0, -10.0, 10.0);
+    polisher::LoudnessMeter m;
+    m.prepare (48000.0, 2);
+    const int half = clip.numSamples() / 2;
+    std::vector<const float*> ptrs { clip.channels[0].data(), clip.channels[1].data() };
+    m.process (ptrs.data(), 2, half);
+    const double shortBefore = m.shortTermLufs();
+    m.resetStatistics();
+    CHECK (m.shortTermLufs() == shortBefore);                  // no gap
+    for (auto& p : ptrs) p += half;
+    m.process (ptrs.data(), 2, clip.numSamples() - half);
+    const double expected = polisher::measure (testsig::sine (48000.0, 2, 997.0, -10.0, 10.0)).integratedLufs;
+    CHECK_THAT (m.integratedLufs(), WithinAbs (expected, 0.15));
+    CHECK (m.truePeakDbtp() > -10.2);
+}

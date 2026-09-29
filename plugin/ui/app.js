@@ -773,6 +773,8 @@ P.resetOnChange.valueChangedEvent.addListener(() => (chkChange.checked = !!P.res
 
 function restartMeasurement() { resetMeter(); grWindow = []; clipWindow = []; }
 $("btn-reset").addEventListener("click", () => { restartMeasurement(); toast("Loudness measurement reset."); });
+// After a control change only the long-term readings start over; Short-term keeps running.
+function restartIntegrated() { resetMeter("stats"); }
 
 // Integrated is an average over everything since it last started. After you change a control,
 // start it over (once the control settles) so it describes the settings you're hearing now.
@@ -780,7 +782,7 @@ let editTimer = null;
 function userEdited() {
   if (!P.resetOnChange.getValue()) return;
   clearTimeout(editTimer);
-  editTimer = setTimeout(restartMeasurement, 700);
+  editTimer = setTimeout(restartIntegrated, 700);
 }
 
 let toastTimer = null;

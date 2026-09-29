@@ -49,6 +49,10 @@ public:
     void prepare (double sampleRate, int numChannels);
     void reset() noexcept;
 
+    /** Starts integrated loudness, LRA and the true-peak/max readings over, but keeps the running
+        momentary and short-term windows, so those keep reading without a gap. */
+    void resetStatistics() noexcept;
+
     template <typename Sample>
     void process (const Sample* const* channels, int numChannels, int numSamples) noexcept
     {

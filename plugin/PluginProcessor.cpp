@@ -220,6 +220,11 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
         outputMeter.reset();
         inputMeter.reset();
     }
+    if (statsResetRequested.exchange (false))
+    {
+        outputMeter.resetStatistics();
+        inputMeter.resetStatistics();
+    }
 
     updateLimiterParams();
 

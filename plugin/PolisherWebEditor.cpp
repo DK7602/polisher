@@ -80,9 +80,13 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
     for (auto& r : eqFreqRelays) options = options.withOptionsFrom (*r);
 
     return options
-        .withNativeFunction ("resetMeter", [this] (const juce::Array<juce::var>&, auto complete)
+        .withNativeFunction ("resetMeter", [this] (const juce::Array<juce::var>& args, auto complete)
                              {
-                                 audioProcessor.requestMeterReset();
+                                 // resetMeter("stats") after a control change; resetMeter() = full reset.
+                                 if (args.size() > 0 && args[0].toString() == "stats")
+                                     audioProcessor.requestStatisticsReset();
+                                 else
+                                     audioProcessor.requestMeterReset();
                                  complete (true);
                              })
         .withResourceProvider ([] (const auto& url) { return getResource (url); });

@@ -66,7 +66,11 @@ public:
     };
     Meters meters;
 
+    /** Full reset (RESET button). */
     void requestMeterReset() noexcept { meterResetRequested.store (true); }
+    /** Restart Integrated / range / true peak only; Momentary and Short-term keep running
+        (used when a control changes, so the readings you watch while adjusting never blank). */
+    void requestStatisticsReset() noexcept { statsResetRequested.store (true); }
 
     /** Recent audio before (mix) and after (master) processing, for the spectrum display. */
     SpectrumTap inputTap, outputTap;
@@ -87,7 +91,7 @@ private:
     double currentDriveGain = 1.0;
     polisher::LoudnessMeter outputMeter;
     polisher::LoudnessMeter inputMeter;   // the incoming mix, so Learn can say how much louder the master is
-    std::atomic<bool> meterResetRequested { false };
+    std::atomic<bool> meterResetRequested { false }, statsResetRequested { false };
 
     std::atomic<float>* driveParam = nullptr;
     std::atomic<float>* ceilingParam = nullptr;

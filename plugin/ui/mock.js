@@ -52,7 +52,7 @@
           send(eventId, { eventType: "valueChanged", value: c.value });
         } else if (payload.eventType === "valueChanged") c.value = payload.value;
       } else if (eventId === "__juce__invoke") {
-        if (payload.name === "resetMeter") integratedAcc = [];
+        if (payload.name === "resetMeter") integratedAcc = [];   // (the mock has no separate short-term history)
         send("__juce__complete", { promiseId: payload.resultId, result: true });
       }
     },
