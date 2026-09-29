@@ -6,12 +6,13 @@
 #include "polisher/TruePeakLimiter.h"
 #include "polisher/SoftClipper.h"
 #include "polisher/TonalEQ.h"
+#include "polisher/BassControl.h"
 #include "SpectrumTap.h"
 
 #include <array>
 #include <atomic>
 
-/** Polisher: Tonal EQ -> Drive -> Soft Clipper -> Maximizer (true-peak limiter), plus an EBU R128 output meter
+/** Polisher: Tonal EQ -> Bass Control -> Drive -> Soft Clipper -> Maximizer (true-peak limiter), plus an EBU R128 output meter
     and spectrum taps. The other modules and Auto-Master plug into this chain in later milestones. */
 class PolisherAudioProcessor final : public juce::AudioProcessor
 {
@@ -63,6 +64,9 @@ public:
         std::atomic<float> clipReduction { 0.0f };   // largest clipper peak reduction since read (dB, <= 0)
         std::atomic<float> inputShortTerm { -100.0f };  // your mix, before Drive (LUFS)
         std::atomic<float> inputIntegrated { -100.0f };
+        std::atomic<float> bassTame { 0.0f };        // deepest Sub Tame cut since read (dB, <= 0)
+        std::atomic<float> bassPunch { 0.0f };       // biggest Punch boost since read (dB, >= 0)
+        std::atomic<float> bassWidth { 0.0f };       // how stereo the incoming bass is (%)
     };
     Meters meters;
 
@@ -86,6 +90,7 @@ private:
     void publishMeters();
 
     polisher::TonalEQ eq;
+    polisher::BassControl bass;
     polisher::SoftClipper clipper;
     polisher::TruePeakLimiter limiter;
     double currentDriveGain = 1.0;
@@ -105,6 +110,10 @@ private:
     std::atomic<float>* clipOversamplingParam = nullptr;
     std::atomic<float>* eqOnParam = nullptr;
     std::array<std::atomic<float>*, polisher::kEqBands> eqGainParams {}, eqFreqParams {};
+    std::atomic<float>* bassOnParam = nullptr;
+    std::atomic<float>* bassMonoParam = nullptr;
+    std::atomic<float>* bassTameParam = nullptr;
+    std::atomic<float>* bassPunchParam = nullptr;
     bool wasPlaying = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherAudioProcessor)

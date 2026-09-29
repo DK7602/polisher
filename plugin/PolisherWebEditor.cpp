@@ -75,7 +75,11 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                        .withOptionsFrom (clipLevelRelay)
                        .withOptionsFrom (clipSoftnessRelay)
                        .withOptionsFrom (clipOversamplingRelay)
-                       .withOptionsFrom (eqOnRelay);
+                       .withOptionsFrom (eqOnRelay)
+                       .withOptionsFrom (bassOnRelay)
+                       .withOptionsFrom (bassMonoRelay)
+                       .withOptionsFrom (bassTameRelay)
+                       .withOptionsFrom (bassPunchRelay);
     for (auto& r : eqGainRelays) options = options.withOptionsFrom (*r);
     for (auto& r : eqFreqRelays) options = options.withOptionsFrom (*r);
 
@@ -107,7 +111,11 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
       clipLevelAttachment (param (p, "clipLevel"), clipLevelRelay, nullptr),
       clipSoftnessAttachment (param (p, "clipSoftness"), clipSoftnessRelay, nullptr),
       clipOversamplingAttachment (param (p, "clipOversampling"), clipOversamplingRelay, nullptr),
-      eqOnAttachment (param (p, "eqOn"), eqOnRelay, nullptr)
+      eqOnAttachment (param (p, "eqOn"), eqOnRelay, nullptr),
+      bassOnAttachment (param (p, "bassOn"), bassOnRelay, nullptr),
+      bassMonoAttachment (param (p, "bassMono"), bassMonoRelay, nullptr),
+      bassTameAttachment (param (p, "bassTame"), bassTameRelay, nullptr),
+      bassPunchAttachment (param (p, "bassPunch"), bassPunchRelay, nullptr)
 {
     for (int b = 0; b < polisher::kEqBands; ++b)
     {
@@ -231,6 +239,13 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("peakR",      roundTo (m.peakRight.exchange (-100.0f), 0.1f));
     frame->setProperty ("gr",         roundTo (grHold, 0.1f));
     frame->setProperty ("clip",       roundTo (clipHold, 0.1f));
+    const float tame = m.bassTame.exchange (0.0f);
+    tameHold = tame < tameHold ? tame : tameHold * 0.8f + tame * 0.2f;
+    const float punch = m.bassPunch.exchange (0.0f);
+    punchHold = punch > punchHold ? punch : punchHold * 0.8f + punch * 0.2f;
+    frame->setProperty ("tame",       roundTo (tameHold, 0.1f));
+    frame->setProperty ("punch",      roundTo (punchHold, 0.1f));
+    frame->setProperty ("bassWidth",  juce::roundToInt (m.bassWidth.load()));
     frame->setProperty ("sr",         audioProcessor.getSampleRate());
     frame->setProperty ("inShort",    roundTo (m.inputShortTerm.load(), 0.1f));
     frame->setProperty ("inIntegrated", roundTo (m.inputIntegrated.load(), 0.1f));

@@ -18,7 +18,10 @@
       const skew = Math.log(0.5) / Math.log((Math.sqrt(lo * hi) - lo) / (hi - lo));
       sliders["eqFreq" + (i + 1)] = { start: lo, end: hi, skew, interval: 0.1, value: def, label: "Hz" };
     });
-  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true, eqOn: true };
+  sliders.bassMono = { start: 0, end: 250, skew: 1, interval: 1, value: 0, label: "Hz" };
+  sliders.bassTame = { start: 0, end: 100, skew: 1, interval: 0.1, value: 0, label: "%" };
+  sliders.bassPunch = { start: 0, end: 100, skew: 1, interval: 0.1, value: 0, label: "%" };
+  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true, eqOn: true, bassOn: true };
   const combos = { clipOversampling: { choices: ["1x", "2x", "4x", "8x"], value: 2 / 3 } };
 
   const send = (id, obj) => setTimeout(() => window.__JUCE__.backend.emitByBackend(id, JSON.stringify(obj)), 0);
@@ -92,6 +95,9 @@
       peakR: +(-7.5 + drive * 0.5 + 5 * beat).toFixed(1),
       gr: +(toggles.clipOn ? gr * 0.55 : gr).toFixed(1),
       inShort: +base.toFixed(1), inIntegrated: -16.5, sr: 48000,
+      tame: toggles.bassOn && sliders.bassTame.value > 0 ? +(-sliders.bassTame.value / 100 * 5 * beat).toFixed(1) : 0,
+      punch: toggles.bassOn && sliders.bassPunch.value > 0 ? +(sliders.bassPunch.value / 100 * 4 * beat).toFixed(1) : 0,
+      bassWidth: 42,
       clip: toggles.clipOn && !bypass ? +(-Math.max(0, drive - 1.5 + sliders.clipLevel.value * -0.5) * 0.5 * (0.3 + 0.7 * beat)).toFixed(1) : 0,
       mix, master,
     };

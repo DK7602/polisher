@@ -22,7 +22,7 @@
     <div id="chain-rows"></div>
     <div class="chain-note">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#DCE8F5" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-      <span id="chain-note-text">Tonal EQ, Soft Clipper and Maximizer are live. More modules arrive in the next builds.</span>
+      <span id="chain-note-text">Tonal EQ, Bass Control, Soft Clipper and Maximizer are live. More modules arrive in the next builds.</span>
     </div>
   </nav>
 
@@ -148,7 +148,7 @@
     <label class="check"><input type="checkbox" id="chk-autoreset"> Reset loudness meter when playback starts</label>
     <label class="check"><input type="checkbox" id="chk-resetchange"> Restart loudness after you change a control</label>
     <label class="check"><input type="checkbox" id="chk-adaptive"> Adaptive release (Maximizer)</label>
-    <div class="pop-foot mono">Polisher v0.4.1 · Tonal EQ + Soft Clipper + Maximizer</div>
+    <div class="pop-foot mono">Polisher v0.5.0 · EQ · Bass · Clipper · Maximizer</div>
   </div>
   <div class="popover" id="pop-help" hidden>
     <div class="pop-title wm">QUICK HELP</div>
@@ -157,6 +157,7 @@
       <li><b>A / B:</b> A plays your original mix (bypassed), B plays the master. Level-matched A/B comes later.</li>
       <li><b>Loudness:</b> watch Short-term while you turn Drive (it follows the last 3 seconds). Integrated averages the whole time since it started, so it restarts a moment after you change a control (Settings). True Peak stays at or below the Ceiling.</li>
       <li><b>Tonal EQ:</b> turn a band's knob, or drag its numbered point on the spectrum: sideways moves the frequency, up/down sets the gain. Double-click a point to reset it. Master EQ moves of 1–3 dB go a long way.</li>
+      <li><b>Bass Control:</b> Mono Below at about 100 Hz makes the bass mono so it hits on club systems and phones. Sub Tame evens out 808 notes that jump out. Punch adds thump to the start of each kick.</li>
       <li><b>Soft Clipper:</b> turn it on, then lower Clip Level until the Clipping meter shows 1–3 dB on the drums. Clip Level is measured from the Maximizer ceiling, so peaks always use the full headroom.</li>
       <li><b>Learn:</b> the right panel explains what each control is doing to your track, live.</li>
     </ul>

@@ -16,6 +16,10 @@ namespace ParamIDs
     inline constexpr const char* clipSoftness  = "clipSoftness";
     inline constexpr const char* clipOversampling = "clipOversampling";
     inline constexpr const char* eqOn = "eqOn";
+    inline constexpr const char* bassOn = "bassOn";
+    inline constexpr const char* bassMono = "bassMono";
+    inline constexpr const char* bassTame = "bassTame";
+    inline constexpr const char* bassPunch = "bassPunch";
     inline juce::String eqGain (int band) { return "eqGain" + juce::String (band + 1); }
     inline juce::String eqFreq (int band) { return "eqFreq" + juce::String (band + 1); }
 }
@@ -47,6 +51,10 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     clipSoftnessParam  = parameters.getRawParameterValue (ParamIDs::clipSoftness);
     clipOversamplingParam = parameters.getRawParameterValue (ParamIDs::clipOversampling);
     eqOnParam = parameters.getRawParameterValue (ParamIDs::eqOn);
+    bassOnParam    = parameters.getRawParameterValue (ParamIDs::bassOn);
+    bassMonoParam  = parameters.getRawParameterValue (ParamIDs::bassMono);
+    bassTameParam  = parameters.getRawParameterValue (ParamIDs::bassTame);
+    bassPunchParam = parameters.getRawParameterValue (ParamIDs::bassPunch);
     for (int b = 0; b < polisher::kEqBands; ++b)
     {
         eqGainParams[static_cast<size_t> (b)] = parameters.getRawParameterValue (ParamIDs::eqGain (b));
@@ -126,6 +134,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
                 .withStringFromValueFunction ([] (float v, int) { return hzText (v); })));
     }
 
+    // Bass Control (after the EQ). On by default with every tool at its neutral setting.
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::bassOn, 1 }, "Bass On", true));
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ParamIDs::bassMono, 1 }, "Bass Mono Below",
+        NormalisableRange<float> (0.0f, static_cast<float> (polisher::kBassMonoMaxHz), 1.0f), 0.0f,
+        AudioParameterFloatAttributes().withLabel ("Hz")
+            .withStringFromValueFunction ([] (float v, int) { return v < polisher::kBassMonoOffHz ? String ("Off") : String (roundToInt (v)) + " Hz"; })));
+    auto percent = AudioParameterFloatAttributes().withLabel ("%")
+                       .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v)) + " %"; });
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::bassTame, 1 }, "Bass Sub Tame",
+                                                       NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f, percent));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::bassPunch, 1 }, "Bass Punch",
+                                                       NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f, percent));
+
     return layout;
 }
 
@@ -143,6 +165,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     limiter.prepare (sampleRate, channels);
     clipper.prepare (channels);
     eq.prepare (sampleRate, channels);
+    bass.prepare (sampleRate, channels);
     outputMeter.prepare (sampleRate, channels);
     inputMeter.prepare (sampleRate, channels);
     updateLimiterParams();
@@ -185,6 +208,15 @@ void PolisherAudioProcessor::updateLimiterParams()
     const auto& ce = eq.getParams();
     if (e.enabled != ce.enabled || e.gainDb != ce.gainDb || e.freqHz != ce.freqHz)
         eq.setParams (e);
+
+    polisher::BassParams bp;
+    bp.enabled = bassOnParam->load() > 0.5f && ! p.bypassed;
+    bp.monoHz  = bassMonoParam->load();
+    bp.tame    = bassTameParam->load() / 100.0;
+    bp.punch   = bassPunchParam->load() / 100.0;
+    const auto& cb = bass.getParams();
+    if (bp.enabled != cb.enabled || bp.monoHz != cb.monoHz || bp.tame != cb.tame || bp.punch != cb.punch)
+        bass.setParams (bp);
 
     const auto& cc = clipper.getParams();
     if (c.enabled != cc.enabled || c.thresholdDb != cc.thresholdDb || c.softness != cc.softness || c.makeupDb != cc.makeupDb
@@ -235,6 +267,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     inputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
 
     eq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+    bass.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
 
     // Drive (ramped per block so knob moves don't click) -> Soft Clipper -> limiter.
     const double newGain = targetDriveGain();
@@ -288,6 +321,14 @@ void PolisherAudioProcessor::publishMeters()
     const float recent = clampDb (outputMeter.takeRecentTruePeakDbtp());
     if (recent > meters.truePeakRecent.load())
         meters.truePeakRecent.store (recent);
+    const float tame = static_cast<float> (bass.takeMaxTameDb());
+    if (tame < meters.bassTame.load())
+        meters.bassTame.store (tame);
+    const float punch = static_cast<float> (bass.takeMaxPunchDb());
+    if (punch > meters.bassPunch.load())
+        meters.bassPunch.store (punch);
+    meters.bassWidth.store (static_cast<float> (bass.bassWidthPercent()));
+
     const float clip = static_cast<float> (clipper.takeMaxClipDb());
     if (clip < meters.clipReduction.load())
         meters.clipReduction.store (clip);

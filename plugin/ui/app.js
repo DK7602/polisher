@@ -34,6 +34,10 @@ const P = {
   clipSoftness: Juce.getSliderState("clipSoftness"),
   clipOs: Juce.getComboBoxState("clipOversampling"),
   eqOn: Juce.getToggleState("eqOn"),
+  bassOn: Juce.getToggleState("bassOn"),
+  bassMono: Juce.getSliderState("bassMono"),
+  bassTame: Juce.getSliderState("bassTame"),
+  bassPunch: Juce.getSliderState("bassPunch"),
   eqGain: [1, 2, 3, 4, 5, 6, 7].map((b) => Juce.getSliderState("eqGain" + b)),
   eqFreq: [1, 2, 3, 4, 5, 6, 7].map((b) => Juce.getSliderState("eqFreq" + b)),
 };
@@ -49,10 +53,12 @@ function scaledToNorm(state, v) {
 const M = {
   momentary: -100, shortTerm: -100, integrated: -100, range: 0, truePeak: -100,
   peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
-  inShort: -100, inIntegrated: -100, sr: 48000,
+  inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
 };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
 let clipWindow = [];         // ~3 s of clipper peak-reduction samples
+let tameWindow = [];         // ~3 s of Sub Tame cuts
+let punchWindow = [];        // ~3 s of Punch boosts
 let lastAudioTime = 0;
 
 // ---------------------------------------------------------------------------------------------
@@ -66,9 +72,9 @@ const modules = [
                ["Low Mid", "Where mud and boxiness build up. Cutting here often reads as clearer and louder."],
                ["Upper Mid / Presence", "Vocal consonants, snare crack and edge. A little goes a long way."],
                ["Air", "Sheen on top. Shelves rather than peaks, so hats get shine instead of bite."]] },
-  { id: "bass", name: "Bass Control", soon: "Next up after the Tonal EQ.",
+  { id: "bass", name: "Bass Control", live: true, soon: "",
     what: "Keeps the low end solid on every system: mono below a crossover, controls 808 level jumps, and adds kick punch.",
-    cells: [["Mono Below", "crossover", "110 Hz", .4], ["Sub Tame", "dynamic", "0.0 dB", .5], ["Punch", "kick attack", "0%", 0]],
+    cells: [],
     controls: [["Mono Below", "Stereo sub wastes headroom and collapses on club systems and phones."],
                ["Sub Tame", "Evens out 808 slides so the limiter doesn't grab the whole mix on long notes."],
                ["Punch", "Adds attack to the start of the kick without turning the sub up."]] },
@@ -353,6 +359,30 @@ function eqKnobCell(b) {
 }
 const eqCells = EQ_BANDS.map((_, b) => eqKnobCell(b));
 
+// Bass Control cells
+const bassMonoHz = () => P.bassMono.getScaledValue();
+const bassMonoOn = () => bassMonoHz() >= 30;
+const fmtMono = (v) => (v < 30 ? "Off" : `${Math.round(v)} Hz`);
+function barCell({ label, sub, minText, maxText, id }) {
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.innerHTML = `<span class="cell-label">${label}</span><span class="cell-sub mono">${sub}</span>
+    <div class="clipmeter screen"><div class="clipmeter-fill" id="${id}-fill"></div></div>
+    <div class="minmax mono"><span>${minText}</span><span>${maxText}</span></div>
+    <span class="cell-value mono" id="${id}-val"></span>`;
+  return cell;
+}
+const bassCells = [
+  liveKnobCell({ label: "Mono Below", sub: "stereo → mono", state: P.bassMono, def: 0, minText: "off", maxText: "250",
+                 fmt: fmtMono }),
+  liveKnobCell({ label: "Sub Tame", sub: "evens 808 jumps", state: P.bassTame, def: 0, minText: "0", maxText: "100",
+                 fmt: (v) => `${Math.round(v)} %` }),
+  liveKnobCell({ label: "Punch", sub: "kick attack", state: P.bassPunch, def: 0, minText: "0", maxText: "100",
+                 fmt: (v) => `${Math.round(v)} %` }),
+  barCell({ label: "Taming", sub: "808 cut", minText: "0", maxText: `${MINUS}12 dB`, id: "tamemeter" }),
+  barCell({ label: "Bass Width", sub: "your mix < 150 Hz", minText: "mono", maxText: "wide", id: "widthmeter" }),
+];
+
 function renderModule() {
   const m = modules.find((x) => x.id === selected);
   const row = $("knob-row");
@@ -362,7 +392,7 @@ function renderModule() {
   $("btn-bypass").hidden = !m.live;
   if (m.live) {
     row.classList.remove("soon");
-    ({ clip: clipperCells, eq: eqCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
+    ({ clip: clipperCells, eq: eqCells, bass: bassCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
     $("module-note").textContent = "Live · drag up/down · Shift = fine · double-click = reset";
     refreshHeadButton();
   } else {
@@ -524,6 +554,7 @@ function renderLearn() {
 
   if (m.id === "clip") { renderClipperLearn(body); liftWarning(body); return; }
   if (m.id === "eq") { renderEqLearn(body); liftWarning(body); return; }
+  if (m.id === "bass") { renderBassLearn(body); liftWarning(body); return; }
 
   const drive = P.drive.getScaledValue();
   const ceiling = P.ceiling.getScaledValue();
@@ -634,6 +665,63 @@ function renderEqLearn(body) {
   }
 }
 
+function renderBassLearn(body) {
+  const bypassed = !!P.bypass.getValue();
+  const on = !!P.bassOn.getValue();
+  const playing = performance.now() - lastAudioTime < 1500;
+  const monoHz = Math.round(bassMonoHz()), monoOn = bassMonoOn();
+  const tame = Math.round(P.bassTame.getScaledValue()), punch = Math.round(P.bassPunch.getScaledValue());
+  const width = Math.round(M.bassWidth || 0);
+  const peakTame = tameWindow.length ? Math.min(...tameWindow) : 0;
+  const avgTame = tameWindow.length ? tameWindow.reduce((a, b) => a + b, 0) / tameWindow.length : 0;
+  const peakPunch = punchWindow.length ? Math.max(...punchWindow) : 0;
+  const peakGr = maxGrRecent();
+  const neutral = !monoOn && tame < 1 && punch < 1;
+
+  body.appendChild(head("WHAT'S HAPPENING"));
+  if (bypassed) body.appendChild(para("l-p", "You're on A: the original mix, untouched. Switch to B to hear the chain."));
+  else if (!on) body.appendChild(para("l-p", "Bass Control is off, so the low end goes through unchanged."));
+  else if (!playing) body.appendChild(para("l-p", "Press play. I'll measure how stereo your bass is and show what each tool is doing to it."));
+  else {
+    const parts = [];
+    parts.push(`Your mix's bass (below 150 Hz) is ${width} % stereo.`);
+    if (monoOn) parts.push(`Below ${monoHz} Hz it's now mono.`);
+    if (tame >= 1) parts.push(peakTame < -0.3 ? `Sub Tame is turning down low notes that jump out, by up to ${fmtNum(-peakTame)} dB.` : "Sub Tame is ready, but no low note is jumping out right now.");
+    if (punch >= 1) parts.push(peakPunch > 0.3 ? `Punch is adding up to ${peakPunch.toFixed(1)} dB of thump to each kick.` : "Punch is on, but it isn't hearing clear kick hits right now.");
+    if (neutral) parts.push("All three tools are at neutral, so the low end passes through untouched.");
+    body.appendChild(para("l-p", parts.join(" ")));
+  }
+
+  body.appendChild(sep());
+  body.appendChild(head("WHAT EACH CONTROL IS DOING"));
+  body.appendChild(item("Mono Below", fmtMono(monoHz),
+    !monoOn ? "Off: the bass keeps whatever stereo width your mix has."
+      : `Everything below ${monoHz} Hz is mono. Club systems and phones play bass in mono anyway, so stereo bass there partly cancels and loses power. ` +
+        (monoHz > 160 ? "Above about 150 Hz this starts narrowing synths and guitars too." : "80–120 Hz is the safe range.")));
+  body.appendChild(item("Sub Tame", `${tame} %`,
+    tame < 1 ? "Off: low notes keep their natural level differences."
+      : `Listens to the low end's own average level. When an 808 note or kick jumps more than ${(6 - 3 * tame / 100).toFixed(1)} dB above it, that note is turned down, so the Maximizer doesn't grab the whole mix on big bass notes.`));
+  body.appendChild(item("Punch", `${punch} %`,
+    punch < 1 ? "Off: kicks stay as they are."
+      : `Adds up to ${(4 * punch / 100).toFixed(1)} dB of thump in the first moments of each kick. The sustained sub stays where it was, so it hits harder without getting boomier.`));
+
+  if (bypassed || !on || !playing) {
+    body.appendChild(tip("TIP", "Start with Mono Below at 100 Hz. It's the safest low-end move in mastering: you'll barely hear it on headphones, but the bass hits harder on big systems.", true));
+  } else if (width > 35 && !monoOn) {
+    body.appendChild(tip("HEADS UP", `Your bass is ${width} % stereo below 150 Hz. On club systems and phones, stereo bass partly cancels and loses power. Set Mono Below to about 100 Hz.`));
+  } else if (monoHz > 180) {
+    body.appendChild(tip("HEADS UP", `Mono Below at ${monoHz} Hz is high: it narrows the low mids too (guitars, synth bodies, reverbs). Try 100–120 Hz unless the whole low end is meant to be dead center.`));
+  } else if (avgTame < -5) {
+    body.appendChild(tip("FIX IT IN THE MIX", `Sub Tame is cutting up to ${fmtNum(-peakTame)} dB: some 808 notes are much louder than others. Even them out in the mix (808 note velocity or volume) so the master doesn't have to.`));
+  } else if (punch >= 1 && peakGr < -6) {
+    body.appendChild(tip("HEADS UP", `The Maximizer is squashing the extra punch (up to ${fmtNum(-peakGr)} dB of limiting). Lower Drive a little, or turn on the Soft Clipper so the kick attacks survive.`));
+  } else if (neutral) {
+    body.appendChild(tip("TRY THIS", "Set Mono Below to 100 Hz first. Then, if your 808 notes jump in level, add Sub Tame until the Taming meter moves 1–3 dB on the loud notes.", true));
+  } else {
+    body.appendChild(tip("SOUNDS SOLID", "The low end is controlled. Check the kick and 808 on phone speakers or earbuds: if they vanish, add a little Bass on the Tonal EQ rather than more Low End.", true));
+  }
+}
+
 // Warnings go right under "What's happening" so they're seen without scrolling; friendly tips stay at the end.
 function liftWarning(body) {
   const warn = body.querySelector(".l-tip:not(.ok)"), firstSep = body.querySelector(".l-sep");
@@ -721,7 +809,13 @@ function refreshAB() {
 // The button in the module header: global bypass for the Maximizer, power for the Soft Clipper.
 function refreshHeadButton() {
   const bp = $("btn-bypass");
-  if (selected === "eq") {
+  if (selected === "bass") {
+    const on = !!P.bassOn.getValue();
+    bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
+    bp.textContent = on ? "BASS ON" : "BASS OFF";
+    bp.setAttribute("aria-pressed", String(on));
+    $("knob-row").classList.toggle("dimmed", !on);
+  } else if (selected === "eq") {
     const on = eqEnabled();
     bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
     bp.textContent = on ? "EQ ON" : "EQ OFF";
@@ -746,6 +840,7 @@ $("btn-b").addEventListener("click", () => { P.bypass.setValue(false); onParamsC
 $("btn-bypass").addEventListener("click", () => {
   if (selected === "clip") P.clipOn.setValue(!P.clipOn.getValue());
   else if (selected === "eq") P.eqOn.setValue(!P.eqOn.getValue());
+  else if (selected === "bass") P.bassOn.setValue(!P.bassOn.getValue());
   else P.bypass.setValue(!P.bypass.getValue());
   onParamsChanged();
   userEdited();
@@ -753,6 +848,7 @@ $("btn-bypass").addEventListener("click", () => {
 P.bypass.valueChangedEvent.addListener(onParamsChanged);
 P.clipOn.valueChangedEvent.addListener(onParamsChanged);
 P.eqOn.valueChangedEvent.addListener(onParamsChanged);
+P.bassOn.valueChangedEvent.addListener(onParamsChanged);
 
 function togglePopover(id) {
   for (const p of ["pop-settings", "pop-help"]) $(p).hidden = p === id ? !$(p).hidden : true;
@@ -771,7 +867,7 @@ const chkChange = $("chk-resetchange");
 chkChange.addEventListener("change", () => P.resetOnChange.setValue(chkChange.checked));
 P.resetOnChange.valueChangedEvent.addListener(() => (chkChange.checked = !!P.resetOnChange.getValue()));
 
-function restartMeasurement() { resetMeter(); grWindow = []; clipWindow = []; }
+function restartMeasurement() { resetMeter(); grWindow = []; clipWindow = []; tameWindow = []; punchWindow = []; }
 $("btn-reset").addEventListener("click", () => { restartMeasurement(); toast("Loudness measurement reset."); });
 // After a control change only the long-term readings start over; Short-term keeps running.
 function restartIntegrated() { resetMeter("stats"); }
@@ -894,9 +990,27 @@ function updateLiveReadouts() {
   chip.hidden = !m.live;
   chip.textContent = selected === "clip" ? (clipOn ? `CLIP ${clipText} dB` : "OFF")
                    : selected === "eq" ? (!eqEnabled() ? "OFF" : eqIsFlat() ? "FLAT" : "SHAPING")
+                   : selected === "bass" ? (!P.bassOn.getValue() ? "OFF" : `WIDTH ${Math.round(M.bassWidth || 0)} %`)
                    : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
   const r = $("read-max");
   if (r) r.textContent = P.bypass.getValue() ? "Bypassed" : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
+  const bassOn = !!P.bassOn.getValue();
+  const tameSet = P.bassTame.getScaledValue() > 0.5, punchSet = P.bassPunch.getScaledValue() > 0.5;
+  const rb = $("read-bass");
+  if (rb) {
+    const parts = [];
+    if (bassMonoOn()) parts.push(parts.length || tameSet || punchSet ? "Mono" : `Mono ${Math.round(bassMonoHz())} Hz`);
+    if (tameSet) parts.push("Tame");
+    if (punchSet) parts.push("Punch");
+    rb.textContent = P.bypass.getValue() ? "Bypassed" : !bassOn ? "Off" : parts.length ? parts.join("\u00b7") : "Neutral";
+  }
+  const tf = $("tamemeter-fill");
+  if (tf) {
+    tf.style.width = (bassOn && tameSet ? clamp(-M.tame / 12, 0, 1) * 100 : 0).toFixed(1) + "%";
+    $("tamemeter-val").textContent = !bassOn || !tameSet ? "off" : `${M.tame < -0.05 ? fmtNum(M.tame) : "0.0"} dB`;
+    $("widthmeter-fill").style.width = clamp(M.bassWidth || 0, 0, 100).toFixed(0) + "%";
+    $("widthmeter-val").textContent = `${Math.round(M.bassWidth || 0)} % stereo`;
+  }
   const re = $("read-eq");
   if (re) {
     const moved = EQ_BANDS.filter((_, b) => Math.abs(eqGainAt(b)) >= 0.05).length;
@@ -922,6 +1036,10 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   if (grWindow.length > 90) grWindow.shift();
   clipWindow.push(M.clip);
   if (clipWindow.length > 90) clipWindow.shift();
+  tameWindow.push(M.tame || 0);
+  if (tameWindow.length > 90) tameWindow.shift();
+  punchWindow.push(M.punch || 0);
+  if (punchWindow.length > 90) punchWindow.shift();
   updateMeters();
   updateOutputMeter();
   updateLiveReadouts();

@@ -77,9 +77,32 @@ AudioClip renderEq (const AudioClip& clip, const TonalEQParams& params)
     return out;
 }
 
+namespace {
+    bool bassIsNeutral (const BassParams& p)
+    {
+        return ! p.enabled || (p.monoHz < kBassMonoOffHz && p.tame <= 0.0 && p.punch <= 0.0);
+    }
+}
+
+AudioClip renderBass (const AudioClip& clip, const BassParams& params)
+{
+    AudioClip out = clip;
+    if (bassIsNeutral (params) || clip.numChannels() == 0)
+        return out;
+    BassControl bass;
+    bass.prepare (clip.sampleRate, clip.numChannels());
+    bass.setParams (params);
+    bass.reset();   // start fully in the requested state
+    std::vector<float*> ptrs;
+    for (auto& ch : out.channels)
+        ptrs.push_back (ch.data());
+    bass.process (ptrs.data(), out.numChannels(), out.numSamples());
+    return out;
+}
+
 AudioClip renderMaster (const AudioClip& input, const MasterChainParams& params)
 {
-    const AudioClip clip = renderEq (input, params.eq);
+    const AudioClip clip = renderBass (renderEq (input, params.eq), params.bass);
     const int nch = clip.numChannels();
     const int n = clip.numSamples();
 
@@ -129,12 +152,13 @@ TargetResult findDriveForTarget (const AudioClip& clip, double targetLufs, Limit
 TargetResult findDriveForTarget (const AudioClip& clip, double targetLufs, MasterChainParams base,
                                  double toleranceLu, double maxDriveDb)
 {
-    if (! eqIsFlat (base.eq))
+    if (! eqIsFlat (base.eq) || ! bassIsNeutral (base.bass))
     {
-        // EQ first, once; then search the rest of the chain on the equalised audio.
-        const AudioClip equalised = renderEq (clip, base.eq);
+        // EQ and Bass Control first, once; then search the rest of the chain on that audio.
+        const AudioClip shaped = renderBass (renderEq (clip, base.eq), base.bass);
         base.eq = TonalEQParams {};
-        return findDriveForTarget (equalised, targetLufs, base, toleranceLu, maxDriveDb);
+        base.bass = BassParams {};
+        return findDriveForTarget (shaped, targetLufs, base, toleranceLu, maxDriveDb);
     }
 
     TargetResult result;

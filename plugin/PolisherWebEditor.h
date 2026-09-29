@@ -59,7 +59,8 @@ private:
     juce::WebToggleButtonRelay clipOnRelay { "clipOn" }, resetOnChangeRelay { "resetOnChange" };
     juce::WebSliderRelay clipLevelRelay { "clipLevel" }, clipSoftnessRelay { "clipSoftness" };
     juce::WebComboBoxRelay clipOversamplingRelay { "clipOversampling" };
-    juce::WebToggleButtonRelay eqOnRelay { "eqOn" };
+    juce::WebToggleButtonRelay eqOnRelay { "eqOn" }, bassOnRelay { "bassOn" };
+    juce::WebSliderRelay bassMonoRelay { "bassMono" }, bassTameRelay { "bassTame" }, bassPunchRelay { "bassPunch" };
     std::vector<std::unique_ptr<juce::WebSliderRelay>> eqGainRelays = makeSliderRelays ("eqGain"),
                                                        eqFreqRelays = makeSliderRelays ("eqFreq");
 
@@ -70,14 +71,15 @@ private:
     juce::WebToggleButtonParameterAttachment clipOnAttachment, resetOnChangeAttachment;
     juce::WebSliderParameterAttachment clipLevelAttachment, clipSoftnessAttachment;
     juce::WebComboBoxParameterAttachment clipOversamplingAttachment;
-    juce::WebToggleButtonParameterAttachment eqOnAttachment;
+    juce::WebToggleButtonParameterAttachment eqOnAttachment, bassOnAttachment;
+    juce::WebSliderParameterAttachment bassMonoAttachment, bassTameAttachment, bassPunchAttachment;
     std::vector<std::unique_ptr<juce::WebSliderParameterAttachment>> eqAttachments;
 
     juce::dsp::FFT fft { kFftOrder };
     juce::dsp::WindowingFunction<float> window { static_cast<size_t> (kFftSize), juce::dsp::WindowingFunction<float>::hann, false };
     std::array<float, 2 * kFftSize> fftBuffer {};
     Analyser mixAnalyser, masterAnalyser;
-    float grHold = 0.0f, clipHold = 0.0f;
+    float grHold = 0.0f, clipHold = 0.0f, tameHold = 0.0f, punchHold = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherWebEditor)
 };

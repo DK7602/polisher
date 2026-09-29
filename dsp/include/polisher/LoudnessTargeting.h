@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BassControl.h"
 #include "SoftClipper.h"
 #include "TonalEQ.h"
 #include "TruePeakLimiter.h"
@@ -35,10 +36,14 @@ AudioClip renderLimited (const AudioClip& clip, const LimiterParams& params);
 /** Renders a clip through the Tonal EQ offline (zero latency). */
 AudioClip renderEq (const AudioClip& clip, const TonalEQParams& params);
 
-/** The mastering chain as the plug-in runs it: Tonal EQ -> drive -> Soft Clipper -> Maximizer. */
+/** Renders a clip through Bass Control offline (zero latency). */
+AudioClip renderBass (const AudioClip& clip, const BassParams& params);
+
+/** The mastering chain as the plug-in runs it: Tonal EQ -> Bass Control -> drive -> Soft Clipper -> Maximizer. */
 struct MasterChainParams
 {
     TonalEQParams eq;           // flat by default
+    BassParams bass;            // all off by default
     double driveDb = 0.0;       // push into the clipper and limiter
     ClipperParams clipper;      // clipper.enabled = false skips it (latency is kept)
     LimiterParams limiter;      // limiter.driveDb is ignored here; driveDb above is used
