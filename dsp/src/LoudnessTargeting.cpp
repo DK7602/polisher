@@ -55,8 +55,31 @@ AudioClip renderLimited (const AudioClip& clip, const LimiterParams& params)
     return out;
 }
 
-AudioClip renderMaster (const AudioClip& clip, const MasterChainParams& params)
+namespace {
+    bool eqIsFlat (const TonalEQParams& p)
+    {
+        return ! p.enabled || std::all_of (p.gainDb.begin(), p.gainDb.end(), [] (double g) { return g == 0.0; });
+    }
+}
+
+AudioClip renderEq (const AudioClip& clip, const TonalEQParams& params)
 {
+    AudioClip out = clip;
+    if (eqIsFlat (params) || clip.numChannels() == 0)
+        return out;
+    TonalEQ eq;
+    eq.prepare (clip.sampleRate, clip.numChannels());
+    eq.setParams (params);
+    std::vector<float*> ptrs;
+    for (auto& ch : out.channels)
+        ptrs.push_back (ch.data());
+    eq.process (ptrs.data(), out.numChannels(), out.numSamples());
+    return out;
+}
+
+AudioClip renderMaster (const AudioClip& input, const MasterChainParams& params)
+{
+    const AudioClip clip = renderEq (input, params.eq);
     const int nch = clip.numChannels();
     const int n = clip.numSamples();
 
@@ -106,6 +129,14 @@ TargetResult findDriveForTarget (const AudioClip& clip, double targetLufs, Limit
 TargetResult findDriveForTarget (const AudioClip& clip, double targetLufs, MasterChainParams base,
                                  double toleranceLu, double maxDriveDb)
 {
+    if (! eqIsFlat (base.eq))
+    {
+        // EQ first, once; then search the rest of the chain on the equalised audio.
+        const AudioClip equalised = renderEq (clip, base.eq);
+        base.eq = TonalEQParams {};
+        return findDriveForTarget (equalised, targetLufs, base, toleranceLu, maxDriveDb);
+    }
+
     TargetResult result;
     const LoudnessStats input = measure (clip);
     if (! std::isfinite (input.integratedLufs))

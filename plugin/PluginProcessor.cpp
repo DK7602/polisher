@@ -15,6 +15,19 @@ namespace ParamIDs
     inline constexpr const char* clipLevel     = "clipLevel";
     inline constexpr const char* clipSoftness  = "clipSoftness";
     inline constexpr const char* clipOversampling = "clipOversampling";
+    inline constexpr const char* eqOn = "eqOn";
+    inline juce::String eqGain (int band) { return "eqGain" + juce::String (band + 1); }
+    inline juce::String eqFreq (int band) { return "eqFreq" + juce::String (band + 1); }
+}
+
+namespace
+{
+    const char* const kEqBandNames[polisher::kEqBands] = { "Low End", "Bass", "Low Mid", "Mid", "Upper Mid", "Presence", "Air" };
+
+    juce::String hzText (float v)
+    {
+        return v >= 1000.0f ? juce::String (v / 1000.0f, v >= 10000.0f ? 1 : 2) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz";
+    }
 }
 
 PolisherAudioProcessor::PolisherAudioProcessor()
@@ -33,6 +46,12 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     clipLevelParam = parameters.getRawParameterValue (ParamIDs::clipLevel);
     clipSoftnessParam  = parameters.getRawParameterValue (ParamIDs::clipSoftness);
     clipOversamplingParam = parameters.getRawParameterValue (ParamIDs::clipOversampling);
+    eqOnParam = parameters.getRawParameterValue (ParamIDs::eqOn);
+    for (int b = 0; b < polisher::kEqBands; ++b)
+    {
+        eqGainParams[static_cast<size_t> (b)] = parameters.getRawParameterValue (ParamIDs::eqGain (b));
+        eqFreqParams[static_cast<size_t> (b)] = parameters.getRawParameterValue (ParamIDs::eqFreq (b));
+    }
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::createParameterLayout()
@@ -87,6 +106,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
         ParameterID { ParamIDs::clipOversampling, 1 }, "Clipper Oversampling",
         StringArray { "1x", "2x", "4x", "8x" }, 2));
 
+    // Tonal EQ (first in the chain). On by default: flat bands are skipped, so it costs nothing.
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::eqOn, 1 }, "EQ On", true));
+    for (int b = 0; b < polisher::kEqBands; ++b)
+    {
+        const auto& spec = polisher::kEqBandSpecs[static_cast<size_t> (b)];
+        const String name = kEqBandNames[b];
+        layout.add (std::make_unique<AudioParameterFloat> (
+            ParameterID { ParamIDs::eqGain (b), 1 }, "EQ " + name + " Gain",
+            NormalisableRange<float> (-static_cast<float> (polisher::kEqMaxGainDb), static_cast<float> (polisher::kEqMaxGainDb), 0.01f), 0.0f,
+            AudioParameterFloatAttributes().withLabel ("dB")
+                .withStringFromValueFunction ([] (float v, int) { return (v > 0 ? "+" : "") + String (v, 1) + " dB"; })));
+
+        NormalisableRange<float> freqRange (static_cast<float> (spec.minHz), static_cast<float> (spec.maxHz), 0.1f);
+        freqRange.setSkewForCentre (static_cast<float> (std::sqrt (spec.minHz * spec.maxHz)));   // feels logarithmic
+        layout.add (std::make_unique<AudioParameterFloat> (
+            ParameterID { ParamIDs::eqFreq (b), 1 }, "EQ " + name + " Freq", freqRange, static_cast<float> (spec.defaultHz),
+            AudioParameterFloatAttributes().withLabel ("Hz")
+                .withStringFromValueFunction ([] (float v, int) { return hzText (v); })));
+    }
+
     return layout;
 }
 
@@ -103,6 +142,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     const int channels = juce::jmax (1, getTotalNumOutputChannels());
     limiter.prepare (sampleRate, channels);
     clipper.prepare (channels);
+    eq.prepare (sampleRate, channels);
     outputMeter.prepare (sampleRate, channels);
     inputMeter.prepare (sampleRate, channels);
     updateLimiterParams();
@@ -134,6 +174,17 @@ void PolisherAudioProcessor::updateLimiterParams()
     c.makeupDb     = juce::jmax (0.0, -clipLevel);
     c.softness     = clipSoftnessParam->load() / 100.0;
     c.oversampling = kOversampling[juce::jlimit (0, 3, juce::roundToInt (clipOversamplingParam->load()))];
+
+    polisher::TonalEQParams e;
+    e.enabled = eqOnParam->load() > 0.5f && ! p.bypassed;
+    for (size_t b = 0; b < static_cast<size_t> (polisher::kEqBands); ++b)
+    {
+        e.gainDb[b] = eqGainParams[b]->load();
+        e.freqHz[b] = eqFreqParams[b]->load();
+    }
+    const auto& ce = eq.getParams();
+    if (e.enabled != ce.enabled || e.gainDb != ce.gainDb || e.freqHz != ce.freqHz)
+        eq.setParams (e);
 
     const auto& cc = clipper.getParams();
     if (c.enabled != cc.enabled || c.thresholdDb != cc.thresholdDb || c.softness != cc.softness || c.makeupDb != cc.makeupDb
@@ -177,6 +228,8 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
 
     inputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     inputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
+
+    eq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
 
     // Drive (ramped per block so knob moves don't click) -> Soft Clipper -> limiter.
     const double newGain = targetDriveGain();

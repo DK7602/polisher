@@ -33,6 +33,9 @@ const P = {
   clipLevel: Juce.getSliderState("clipLevel"),
   clipSoftness: Juce.getSliderState("clipSoftness"),
   clipOs: Juce.getComboBoxState("clipOversampling"),
+  eqOn: Juce.getToggleState("eqOn"),
+  eqGain: [1, 2, 3, 4, 5, 6, 7].map((b) => Juce.getSliderState("eqGain" + b)),
+  eqFreq: [1, 2, 3, 4, 5, 6, 7].map((b) => Juce.getSliderState("eqFreq" + b)),
 };
 const resetMeter = Juce.getNativeFunction("resetMeter");
 
@@ -46,7 +49,7 @@ function scaledToNorm(state, v) {
 const M = {
   momentary: -100, shortTerm: -100, integrated: -100, range: 0, truePeak: -100,
   peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
-  inShort: -100, inIntegrated: -100,
+  inShort: -100, inIntegrated: -100, sr: 48000,
 };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
 let clipWindow = [];         // ~3 s of clipper peak-reduction samples
@@ -55,7 +58,7 @@ let lastAudioTime = 0;
 // ---------------------------------------------------------------------------------------------
 // Module catalogue. Only the Maximizer processes audio in this build.
 const modules = [
-  { id: "eq", name: "Tonal EQ", soon: "Next up after the Soft Clipper.",
+  { id: "eq", name: "Tonal EQ", live: true, soon: "",
     what: "Shapes the overall tone in seven musical bands, from the sub up to the air, and nudges the mix toward your genre's reference balance.",
     cells: [["Low End", "30 Hz", "0.0 dB", .5], ["Bass", "90 Hz", "0.0 dB", .5], ["Low Mid", "350 Hz", "0.0 dB", .5], ["Mid", "1 kHz", "0.0 dB", .5],
             ["Upper Mid", "2.5 kHz", "0.0 dB", .5], ["Presence", "5 kHz", "0.0 dB", .5], ["Air", "12 kHz", "0.0 dB", .5]],
@@ -63,7 +66,7 @@ const modules = [
                ["Low Mid", "Where mud and boxiness build up. Cutting here often reads as clearer and louder."],
                ["Upper Mid / Presence", "Vocal consonants, snare crack and edge. A little goes a long way."],
                ["Air", "Sheen on top. Shelves rather than peaks, so hats get shine instead of bite."]] },
-  { id: "bass", name: "Bass Control", soon: "Planned for an upcoming build.",
+  { id: "bass", name: "Bass Control", soon: "Next up after the Tonal EQ.",
     what: "Keeps the low end solid on every system: mono below a crossover, controls 808 level jumps, and adds kick punch.",
     cells: [["Mono Below", "crossover", "110 Hz", .4], ["Sub Tame", "dynamic", "0.0 dB", .5], ["Punch", "kick attack", "0%", 0]],
     controls: [["Mono Below", "Stereo sub wastes headroom and collapses on club systems and phones."],
@@ -92,6 +95,64 @@ const modules = [
   { id: "max", name: "Maximizer", live: true },
 ];
 let selected = "max";
+
+// ---------------------------------------------------------------------------------------------
+// Tonal EQ bands. Shapes, widths and ranges match dsp/include/polisher/TonalEQ.h exactly, so the
+// curve drawn here is the plug-in's real response.
+const EQ_BANDS = [
+  { name: "Low End", shape: "low", def: 45, q: 0.707,
+    boost: "More sub weight: the 808 and kick tail feel bigger on big speakers. Phones and laptops barely reproduce it.",
+    cut: "Less sub rumble: a cleaner bottom and more headroom, so the Maximizer can make it louder." },
+  { name: "Bass", shape: "bell", def: 100, q: 0.8,
+    boost: "More body in the kick and 808: fuller and warmer. This is the low end most speakers actually play.",
+    cut: "A tighter low end: less boom, so the kick punches through." },
+  { name: "Low Mid", shape: "bell", def: 350, q: 0.9,
+    boost: "More warmth and thickness, but a little too much turns muddy and boxy.",
+    cut: "Clears mud and boxiness. The mix often sounds cleaner, and louder at the same level." },
+  { name: "Mid", shape: "bell", def: 1000, q: 0.8,
+    boost: "Pushes vocals, snares and melodies forward.",
+    cut: "Scoops the middle for a more hyped sound, but the vocal can sink." },
+  { name: "Upper Mid", shape: "bell", def: 2500, q: 0.9,
+    boost: "More vocal clarity and snare crack. Too much sounds harsh on earbuds.",
+    cut: "Smooths harshness and tames bright synths." },
+  { name: "Presence", shape: "bell", def: 5000, q: 0.9,
+    boost: "More edge and definition on vocals and hi-hats.",
+    cut: "Softens sibilance ('s' sounds) and bite." },
+  { name: "Air", shape: "high", def: 12000, q: 0.707,
+    boost: "Sheen on top: hi-hats and vocal breath open up.",
+    cut: "A darker, smoother top; tames fizzy hi-hats." },
+];
+const EQ_MAX = 9, EQ_VIEW = 12;   // knob range, curve display range (dB)
+const fmtHz = (f) => (f >= 1000 ? `${(f / 1000).toFixed(f >= 10000 ? 1 : 2).replace(/\.?0+$/, "")} kHz` : `${Math.round(f)} Hz`);
+const eqGainAt = (b) => P.eqGain[b].getScaledValue();
+const eqFreqAt = (b) => P.eqFreq[b].getScaledValue();
+const eqEnabled = () => !!P.eqOn.getValue();
+const eqIsFlat = () => EQ_BANDS.every((_, b) => Math.abs(eqGainAt(b)) < 0.005);
+
+// RBJ cookbook biquad for one band -> magnitude (dB) at frequency f.
+function eqBandDb(b, gain, freq, f, sr) {
+  const band = EQ_BANDS[b];
+  const f0 = Math.min(freq, 0.45 * sr);
+  const w0 = (2 * Math.PI * f0) / sr, cw = Math.cos(w0), sw = Math.sin(w0);
+  const A = Math.pow(10, gain / 40), alpha = sw / (2 * band.q);
+  let b0, b1, b2, a0, a1, a2;
+  if (band.shape === "bell") {
+    b0 = 1 + alpha * A; b1 = -2 * cw; b2 = 1 - alpha * A; a0 = 1 + alpha / A; a1 = -2 * cw; a2 = 1 - alpha / A;
+  } else {
+    const k = 2 * Math.sqrt(A) * alpha, s = band.shape === "low" ? 1 : -1;
+    b0 = A * ((A + 1) - s * (A - 1) * cw + k); b1 = s * 2 * A * ((A - 1) - s * (A + 1) * cw); b2 = A * ((A + 1) - s * (A - 1) * cw - k);
+    a0 = (A + 1) + s * (A - 1) * cw + k; a1 = -s * 2 * ((A - 1) + s * (A + 1) * cw); a2 = (A + 1) + s * (A - 1) * cw - k;
+  }
+  const w = (2 * Math.PI * f) / sr, c1 = Math.cos(w), s1 = Math.sin(w), c2 = Math.cos(2 * w), s2 = Math.sin(2 * w);
+  const nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2);
+  const dr = a0 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
+  return 10 * Math.log10((nr * nr + ni * ni) / (dr * dr + di * di));
+}
+function eqResponseDb(f, sr) {
+  let total = 0;
+  EQ_BANDS.forEach((_, b) => { const g = eqGainAt(b); if (Math.abs(g) > 1e-4) total += eqBandDb(b, g, eqFreqAt(b), f, sr); });
+  return total;
+}
 let learnOn = true;
 
 // ---------------------------------------------------------------------------------------------
@@ -181,6 +242,7 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   state.valueChangedEvent.addListener(() => { refresh(); onParamsChanged(); });
   state.propertiesChangedEvent.addListener(refresh);
   refresh();
+  cell.refresh = refresh;
   return cell;
 }
 
@@ -275,6 +337,22 @@ const clipperCells = [
   clipMeterCell(),
 ];
 
+function eqKnobCell(b) {
+  const band = EQ_BANDS[b];
+  const cell = liveKnobCell({ label: band.name, sub: fmtHz(band.def), state: P.eqGain[b], def: 0,
+                              minText: `${MINUS}${EQ_MAX}`, maxText: `+${EQ_MAX}`,
+                              fmt: (v) => `${v > 0.049 ? "+" : ""}${fmtNum(v, 1)} dB` });
+  const sub = cell.querySelector(".cell-sub");
+  const refresh = () => (sub.textContent = fmtHz(eqFreqAt(b)));
+  const knobRefresh = cell.refresh;
+  P.eqFreq[b].valueChangedEvent.addListener(() => { refresh(); onParamsChanged(); });
+  P.eqFreq[b].propertiesChangedEvent.addListener(refresh);
+  refresh();
+  cell.refresh = () => { knobRefresh(); refresh(); };   // after the spectrum point moves this band
+  return cell;
+}
+const eqCells = EQ_BANDS.map((_, b) => eqKnobCell(b));
+
 function renderModule() {
   const m = modules.find((x) => x.id === selected);
   const row = $("knob-row");
@@ -284,7 +362,7 @@ function renderModule() {
   $("btn-bypass").hidden = !m.live;
   if (m.live) {
     row.classList.remove("soon");
-    (m.id === "clip" ? clipperCells : maximizerCells).forEach((c) => row.appendChild(c));
+    ({ clip: clipperCells, eq: eqCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
     $("module-note").textContent = "Live · drag up/down · Shift = fine · double-click = reset";
     refreshHeadButton();
   } else {
@@ -294,6 +372,103 @@ function renderModule() {
     $("soon-text").textContent = m.soon;
   }
   updateLiveReadouts();
+  drawEq();
+}
+
+// ---------------------------------------------------------------------------------------------
+// EQ curve and draggable band points on the spectrum.
+const plotWrap = $("plot-wrap"), eqNodes = $("eq-nodes"), eqReadout = $("eq-readout");
+const yForEqDb = (db) => clamp(100 - (db / EQ_VIEW) * 100, 0, 200);
+const nodeEls = EQ_BANDS.map((band, b) => {
+  const n = document.createElement("div");
+  n.className = "eq-node";
+  n.textContent = String(b + 1);
+  n.setAttribute("role", "slider");
+  n.setAttribute("aria-label", band.name);
+  eqNodes.appendChild(n);
+
+  let dragging = false;
+  const setFromPointer = (e) => {
+    const r = plotWrap.getBoundingClientRect();
+    const fx = clamp((e.clientX - r.left) / r.width, 0, 1), fy = clamp((e.clientY - r.top) / r.height, 0, 1);
+    const f = 20 * Math.pow(1000, fx);
+    const g = clamp((0.5 - fy) * 2 * EQ_VIEW, -EQ_MAX, EQ_MAX);
+    const fs = P.eqFreq[b], gs = P.eqGain[b];
+    fs.setNormalisedValue(scaledToNorm(fs, clamp(f, fs.properties.start, fs.properties.end)));
+    gs.setNormalisedValue(scaledToNorm(gs, Math.abs(g) < 0.15 ? 0 : g));   // gentle snap to 0 dB
+    eqCells[b].refresh(); onParamsChanged(); userEdited();
+  };
+  n.addEventListener("pointerdown", (e) => {
+    n.setPointerCapture(e.pointerId); dragging = true; n.classList.add("dragging");
+    P.eqFreq[b].sliderDragStarted(); P.eqGain[b].sliderDragStarted();
+    e.preventDefault(); e.stopPropagation();
+  });
+  n.addEventListener("pointermove", (e) => { if (dragging) setFromPointer(e); });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false; n.classList.remove("dragging"); eqReadout.hidden = true;
+    P.eqFreq[b].sliderDragEnded(); P.eqGain[b].sliderDragEnded();
+  };
+  n.addEventListener("pointerup", end);
+  n.addEventListener("pointercancel", end);
+  n.addEventListener("dblclick", () => {
+    for (const [s, v] of [[P.eqGain[b], 0], [P.eqFreq[b], band.def]]) { s.sliderDragStarted(); s.setNormalisedValue(scaledToNorm(s, v)); s.sliderDragEnded(); }
+    eqCells[b].refresh(); onParamsChanged(); userEdited();
+  });
+  n.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const gs = P.eqGain[b];
+    gs.sliderDragStarted();
+    gs.setNormalisedValue(scaledToNorm(gs, clamp(eqGainAt(b) + (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 0.1 : 0.5), -EQ_MAX, EQ_MAX)));
+    gs.sliderDragEnded();
+    eqCells[b].refresh(); onParamsChanged(); userEdited();
+  }, { passive: false });
+  n.addEventListener("pointerenter", () => { n.dataset.hover = "1"; drawEq(); });
+  n.addEventListener("pointerleave", () => { delete n.dataset.hover; if (!dragging) eqReadout.hidden = true; });
+  return n;
+});
+
+let eqDrawQueued = false;
+function drawEq() {
+  if (eqDrawQueued) return;
+  eqDrawQueued = true;
+  requestAnimationFrame(() => { eqDrawQueued = false; drawEqNow(); });
+}
+function drawEqNow() {
+  const onEqPage = selected === "eq";
+  const active = eqEnabled() && !P.bypass.getValue();
+  const showCurve = onEqPage || (active && !eqIsFlat());
+  $("eq-layer").toggleAttribute("hidden", !showCurve);   // SVG elements have no .hidden property
+  $("legend-eq").hidden = !showCurve;
+  eqNodes.hidden = !onEqPage;
+  if (!showCurve) return;
+
+  const sr = M.sr > 0 ? M.sr : 48000;
+  let d = "";
+  const N = 180;
+  for (let i = 0; i <= N; i++) {
+    const f = 20 * Math.pow(1000, i / N);
+    const y = yForEqDb(active ? eqResponseDb(f, sr) : 0);
+    d += (i ? "L" : "M") + ((i / N) * W).toFixed(1) + "," + y.toFixed(1);
+  }
+  $("eq-curve").setAttribute("d", d);
+  $("eq-fill").setAttribute("d", d + `L${W},100L0,100Z`);
+  $("eq-layer").style.opacity = active ? (onEqPage ? "1" : ".55") : ".35";
+
+  nodeEls.forEach((n, b) => {
+    const f = eqFreqAt(b), g = eqGainAt(b);
+    n.style.left = ((xForFreq(f) / W) * 100).toFixed(2) + "%";
+    n.style.top = ((yForEqDb(g) / 200) * 100).toFixed(2) + "%";
+    n.classList.toggle("flat", Math.abs(g) < 0.05 || !active);
+    const text = `${EQ_BANDS[b].name} · ${fmtHz(f)} · ${g > 0.049 ? "+" : ""}${fmtNum(g, 1)} dB`;
+    n.setAttribute("aria-valuetext", text);
+    if (n.classList.contains("dragging") || n.dataset.hover) {
+      eqReadout.textContent = text;
+      eqReadout.style.left = n.style.left;
+      eqReadout.style.top = n.style.top;
+      eqReadout.hidden = false;
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -348,6 +523,7 @@ function renderLearn() {
   }
 
   if (m.id === "clip") { renderClipperLearn(body); liftWarning(body); return; }
+  if (m.id === "eq") { renderEqLearn(body); liftWarning(body); return; }
 
   const drive = P.drive.getScaledValue();
   const ceiling = P.ceiling.getScaledValue();
@@ -413,6 +589,49 @@ function renderLearn() {
   note.style.cssText = "font-size:12px;color:var(--dim)";
   body.appendChild(note);
   liftWarning(body);
+}
+
+function renderEqLearn(body) {
+  const bypassed = !!P.bypass.getValue();
+  const on = eqEnabled();
+  const moved = EQ_BANDS.map((band, b) => ({ band, b, g: eqGainAt(b), f: eqFreqAt(b) })).filter((x) => Math.abs(x.g) >= 0.05);
+  const sgn = (g) => `${g > 0 ? "+" : MINUS}${Math.abs(g).toFixed(1)} dB`;
+
+  body.appendChild(head("WHAT'S HAPPENING"));
+  if (bypassed) body.appendChild(para("l-p", "You're on A: the original mix, untouched. Switch to B to hear the chain."));
+  else if (!on) body.appendChild(para("l-p", "The Tonal EQ is off, so your mix's tone goes through unchanged. Turn it on to hear your band settings."));
+  else if (!moved.length) body.appendChild(para("l-p", "All seven bands are at 0 dB, so the EQ isn't touching the sound (and uses no CPU). Turn a knob, or drag a numbered point on the spectrum: sideways moves the frequency, up/down sets the gain."));
+  else body.appendChild(para("l-p", "Shaping the tone: " + moved.map((x) => `${sgn(x.g)} ${x.band.name} at ${fmtHz(x.f)}`).join(", ") +
+    ". The blue curve on the spectrum is the change; the red line is the master after the whole chain."));
+
+  body.appendChild(sep());
+  body.appendChild(head("WHAT EACH CONTROL IS DOING"));
+  if (moved.length && on) moved.forEach((x) => body.appendChild(item(`${x.band.name} · ${fmtHz(x.f)}`, sgn(x.g), x.g > 0 ? x.band.boost : x.band.cut)));
+  else modules.find((m) => m.id === "eq").controls.forEach(([n, w]) => body.appendChild(item(n, null, w)));
+
+  if (bypassed || !on) {
+    body.appendChild(tip("TIP", "Cut before you boost: a 1–2 dB Low Mid cut often sounds clearer and louder than boosting the highs.", true));
+    return;
+  }
+  const big = moved.filter((x) => Math.abs(x.g) >= 4.5).sort((a, c) => Math.abs(c.g) - Math.abs(a.g))[0];
+  const lowBoost = Math.max(eqGainAt(0), eqGainAt(1));
+  const bite = Math.max(0, eqGainAt(4)) + Math.max(0, eqGainAt(5));
+  const peakGr = maxGrRecent();
+  if (big) {
+    body.appendChild(tip("FIX IT IN THE MIX",
+      `${sgn(big.g)} of ${big.band.name} is a big move for a master. If one sound needs it (usually the 808, the kick or the vocal), fix that sound in the mix and keep master EQ moves to 1–3 dB.`));
+  } else if (lowBoost > 2 && peakGr < -6) {
+    body.appendChild(tip("HEADS UP",
+      `The low-end boost is making the Maximizer work harder (up to ${fmtNum(-peakGr)} dB). Low end eats headroom, so each dB of boost there costs loudness. Try a smaller boost, or cut Low Mid instead so the bass reads clearer.`));
+  } else if (bite > 4) {
+    body.appendChild(tip("HEADS UP", "That much boost between 2.5 and 5 kHz can get harsh, especially on earbuds. Check it at low volume and on cheap speakers."));
+  } else if (eqGainAt(6) > 4) {
+    body.appendChild(tip("HEADS UP", "Lots of Air can make hi-hats and 's' sounds sizzle. If they poke out, back it off or cut Presence a little."));
+  } else if (!moved.length) {
+    body.appendChild(tip("TRY THIS", "Look at the white line (your mix). A hump that sits above its neighbours, often around 200–400 Hz, is a good place for a 1–2 dB cut.", true));
+  } else {
+    body.appendChild(tip("LISTEN FOR TONE", "Click EQ ON/OFF (top right of this panel) to compare. EQ boosts add level, and louder always sounds \u201cbetter\u201d, so judge the tone, not the volume.", true));
+  }
 }
 
 // Warnings go right under "What's happening" so they're seen without scrolling; friendly tips stay at the end.
@@ -502,7 +721,13 @@ function refreshAB() {
 // The button in the module header: global bypass for the Maximizer, power for the Soft Clipper.
 function refreshHeadButton() {
   const bp = $("btn-bypass");
-  if (selected === "clip") {
+  if (selected === "eq") {
+    const on = eqEnabled();
+    bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
+    bp.textContent = on ? "EQ ON" : "EQ OFF";
+    bp.setAttribute("aria-pressed", String(on));
+    $("knob-row").classList.toggle("dimmed", !on);
+  } else if (selected === "clip") {
     const on = !!P.clipOn.getValue();
     bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
     bp.textContent = on ? "CLIPPER ON" : "CLIPPER OFF";
@@ -520,12 +745,14 @@ $("btn-a").addEventListener("click", () => { P.bypass.setValue(true); onParamsCh
 $("btn-b").addEventListener("click", () => { P.bypass.setValue(false); onParamsChanged(); userEdited(); });
 $("btn-bypass").addEventListener("click", () => {
   if (selected === "clip") P.clipOn.setValue(!P.clipOn.getValue());
+  else if (selected === "eq") P.eqOn.setValue(!P.eqOn.getValue());
   else P.bypass.setValue(!P.bypass.getValue());
   onParamsChanged();
   userEdited();
 });
 P.bypass.valueChangedEvent.addListener(onParamsChanged);
 P.clipOn.valueChangedEvent.addListener(onParamsChanged);
+P.eqOn.valueChangedEvent.addListener(onParamsChanged);
 
 function togglePopover(id) {
   for (const p of ["pop-settings", "pop-help"]) $(p).hidden = p === id ? !$(p).hidden : true;
@@ -570,6 +797,7 @@ $("btn-automaster").addEventListener("click", () =>
 
 function onParamsChanged() {
   refreshAB();
+  drawEq();
   chkAdaptive.checked = !!P.adaptive.getValue();
   chkAuto.checked = !!P.autoreset.getValue();
   chkChange.checked = !!P.resetOnChange.getValue();
@@ -663,9 +891,15 @@ function updateLiveReadouts() {
   const clipText = M.clip > -0.05 ? "0.0" : fmtNum(M.clip);
   chip.hidden = !m.live;
   chip.textContent = selected === "clip" ? (clipOn ? `CLIP ${clipText} dB` : "OFF")
-                                         : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
+                   : selected === "eq" ? (!eqEnabled() ? "OFF" : eqIsFlat() ? "FLAT" : "SHAPING")
+                   : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
   const r = $("read-max");
   if (r) r.textContent = P.bypass.getValue() ? "Bypassed" : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
+  const re = $("read-eq");
+  if (re) {
+    const moved = EQ_BANDS.filter((_, b) => Math.abs(eqGainAt(b)) >= 0.05).length;
+    re.textContent = P.bypass.getValue() ? "Bypassed" : !eqEnabled() ? "Off" : moved ? `${moved} band${moved > 1 ? "s" : ""} shaped` : "Flat";
+  }
   const rc = $("read-clip");
   if (rc) rc.textContent = P.bypass.getValue() ? "Bypassed" : clipOn ? `Clip ${clipText} dB` : "Off";
   const fill = $("clipmeter-fill"), val = $("clipmeter-val");
@@ -678,7 +912,9 @@ function updateLiveReadouts() {
 // ---------------------------------------------------------------------------------------------
 // Meter events from the plug-in (30 per second).
 window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
+  const srChanged = frame.sr && frame.sr !== M.sr;
   Object.assign(M, frame);
+  if (srChanged) drawEq();
   if (M.momentary > -70 || M.peakL > -80) lastAudioTime = performance.now();
   grWindow.push(M.gr);
   if (grWindow.length > 90) grWindow.shift();

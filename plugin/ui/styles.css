@@ -95,7 +95,19 @@ img { -webkit-user-drag: none; }
 .freq-labels span:first-child { transform: none; }
 .freq-labels span:last-child { transform: translateX(-100%); }
 .plot-row { flex-grow: 1; min-height: 0; display: flex; gap: 6px; }
-#spectrum-svg { flex-grow: 1; min-width: 0; height: 100%; }
+.plot-wrap { flex-grow: 1; min-width: 0; position: relative; }
+#spectrum-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#eq-nodes { position: absolute; inset: 0; pointer-events: none; }
+#eq-nodes[hidden], #eq-readout[hidden], #eq-layer[hidden], #legend-eq[hidden] { display: none; }
+.eq-node { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 999px; pointer-events: auto; cursor: grab;
+  display: flex; align-items: center; justify-content: center; font: 700 11px/1 "IBM Plex Mono", monospace; color: #fff; touch-action: none;
+  background: radial-gradient(circle at 35% 30%, #ffffff 0, #ffd3d6 18%, #e0141e 55%, #7a0810 100%);
+  box-shadow: 0 0 0 1.5px rgba(255,255,255,.85), 0 0 10px rgba(255,60,70,.55), 0 3px 6px rgba(0,0,0,.6); text-shadow: 0 1px 1px rgba(0,0,0,.6); }
+.eq-node.flat { background: radial-gradient(circle at 35% 30%, #ffffff 0, #dff0ff 18%, #6fa8d8 55%, #1d4a7a 100%); box-shadow: 0 0 0 1.5px rgba(255,255,255,.7), 0 0 8px rgba(120,190,255,.45), 0 3px 6px rgba(0,0,0,.6); }
+.eq-node:active, .eq-node.dragging { cursor: grabbing; transform: scale(1.15); }
+#eq-readout { position: absolute; padding: 3px 8px; border-radius: 8px; font-size: 11px; white-space: nowrap; pointer-events: none; transform: translate(-50%, -150%);
+  background: rgba(5,15,34,.88); box-shadow: inset 0 0 0 1px rgba(156,203,240,.5); color: #fff; }
+.sw-blue { height: 3px; background: #9CCBF0; }
 .db-scale { width: 24px; display: flex; flex-direction: column; justify-content: space-between; font-size: 10px; color: var(--dim); padding: 0 0 2px; }
 .legend { display: flex; align-items: center; gap: 16px; font-size: 11px; color: var(--muted); }
 .legend span { display: flex; align-items: center; gap: 6px; }

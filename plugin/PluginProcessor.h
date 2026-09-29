@@ -5,11 +5,13 @@
 #include "polisher/LoudnessMeter.h"
 #include "polisher/TruePeakLimiter.h"
 #include "polisher/SoftClipper.h"
+#include "polisher/TonalEQ.h"
 #include "SpectrumTap.h"
 
+#include <array>
 #include <atomic>
 
-/** Polisher: Drive -> Soft Clipper -> Maximizer (true-peak limiter), plus an EBU R128 output meter
+/** Polisher: Tonal EQ -> Drive -> Soft Clipper -> Maximizer (true-peak limiter), plus an EBU R128 output meter
     and spectrum taps. The other modules and Auto-Master plug into this chain in later milestones. */
 class PolisherAudioProcessor final : public juce::AudioProcessor
 {
@@ -79,6 +81,7 @@ private:
     double targetDriveGain() const;
     void publishMeters();
 
+    polisher::TonalEQ eq;
     polisher::SoftClipper clipper;
     polisher::TruePeakLimiter limiter;
     double currentDriveGain = 1.0;
@@ -96,6 +99,8 @@ private:
     std::atomic<float>* clipLevelParam = nullptr;
     std::atomic<float>* clipSoftnessParam = nullptr;
     std::atomic<float>* clipOversamplingParam = nullptr;
+    std::atomic<float>* eqOnParam = nullptr;
+    std::array<std::atomic<float>*, polisher::kEqBands> eqGainParams {}, eqFreqParams {};
     bool wasPlaying = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherAudioProcessor)

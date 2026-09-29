@@ -11,7 +11,14 @@
     clipLevel: { start: -9, end: 3, skew: 1, interval: 0.01, value: 0, label: "dB" },
     clipSoftness:  { start: 0, end: 100, skew: 1, interval: 0.1, value: 50, label: "%" },
   };
-  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true };
+  // Tonal EQ: gain -9..+9 dB; frequency ranges with JUCE's setSkewForCentre(geometric centre).
+  [[45, 20, 120], [100, 50, 250], [350, 150, 800], [1000, 500, 2500], [2500, 1200, 5000], [5000, 2500, 10000], [12000, 6000, 20000]]
+    .forEach(([def, lo, hi], i) => {
+      sliders["eqGain" + (i + 1)] = { start: -9, end: 9, skew: 1, interval: 0.01, value: 0, label: "dB" };
+      const skew = Math.log(0.5) / Math.log((Math.sqrt(lo * hi) - lo) / (hi - lo));
+      sliders["eqFreq" + (i + 1)] = { start: lo, end: hi, skew, interval: 0.1, value: def, label: "Hz" };
+    });
+  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true, eqOn: true };
   const combos = { clipOversampling: { choices: ["1x", "2x", "4x", "8x"], value: 2 / 3 } };
 
   const send = (id, obj) => setTimeout(() => window.__JUCE__.backend.emitByBackend(id, JSON.stringify(obj)), 0);
@@ -84,7 +91,7 @@
       peakL: +(-7 + drive * 0.5 + 5 * beat).toFixed(1),
       peakR: +(-7.5 + drive * 0.5 + 5 * beat).toFixed(1),
       gr: +(toggles.clipOn ? gr * 0.55 : gr).toFixed(1),
-      inShort: +base.toFixed(1), inIntegrated: -16.5,
+      inShort: +base.toFixed(1), inIntegrated: -16.5, sr: 48000,
       clip: toggles.clipOn && !bypass ? +(-Math.max(0, drive - 1.5 + sliders.clipLevel.value * -0.5) * 0.5 * (0.3 + 0.7 * beat)).toFixed(1) : 0,
       mix, master,
     };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SoftClipper.h"
+#include "TonalEQ.h"
 #include "TruePeakLimiter.h"
 
 #include <vector>
@@ -31,15 +32,19 @@ LoudnessStats measure (const AudioClip& clip);
 /** Renders a clip through the limiter offline, compensating the limiter's latency. */
 AudioClip renderLimited (const AudioClip& clip, const LimiterParams& params);
 
-/** The end of the mastering chain as the plug-in runs it: drive -> Soft Clipper -> Maximizer. */
+/** Renders a clip through the Tonal EQ offline (zero latency). */
+AudioClip renderEq (const AudioClip& clip, const TonalEQParams& params);
+
+/** The mastering chain as the plug-in runs it: Tonal EQ -> drive -> Soft Clipper -> Maximizer. */
 struct MasterChainParams
 {
+    TonalEQParams eq;           // flat by default
     double driveDb = 0.0;       // push into the clipper and limiter
     ClipperParams clipper;      // clipper.enabled = false skips it (latency is kept)
     LimiterParams limiter;      // limiter.driveDb is ignored here; driveDb above is used
 };
 
-/** Renders a clip through drive -> clipper -> limiter offline, latency compensated. */
+/** Renders a clip through EQ -> drive -> clipper -> limiter offline, latency compensated. */
 AudioClip renderMaster (const AudioClip& clip, const MasterChainParams& params);
 
 struct TargetResult
@@ -57,7 +62,7 @@ struct TargetResult
 TargetResult findDriveForTarget (const AudioClip& clip, double targetLufs, LimiterParams base,
                                  double toleranceLu = 0.05, double maxDriveDb = 24.0);
 
-/** Same search on the full chain (drive -> clipper -> limiter). */
+/** Same search on the full chain (EQ -> drive -> clipper -> limiter). */
 TargetResult findDriveForTarget (const AudioClip& clip, double targetLufs, MasterChainParams base,
                                  double toleranceLu = 0.05, double maxDriveDb = 24.0);
 

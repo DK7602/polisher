@@ -6,6 +6,8 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include <array>
+#include <memory>
+#include <vector>
 #include <optional>
 
 /** The Polisher liquid-glass interface: an HTML/CSS/JS front end (plugin/ui) embedded in the
@@ -41,9 +43,12 @@ private:
         bool primed = false;
     };
 
+    static std::vector<std::unique_ptr<juce::WebSliderRelay>> makeSliderRelays (const juce::String& prefix);
+
     void timerCallback() override;
     juce::var makeSpectrum (const SpectrumTap& tap, Analyser& state);
     static juce::WebBrowserComponent::Options makeBaseOptions();
+    juce::WebBrowserComponent::Options makeEditorOptions();
     static std::optional<juce::WebBrowserComponent::Resource> getResource (const juce::String& url);
 
     PolisherAudioProcessor& audioProcessor;
@@ -54,6 +59,9 @@ private:
     juce::WebToggleButtonRelay clipOnRelay { "clipOn" }, resetOnChangeRelay { "resetOnChange" };
     juce::WebSliderRelay clipLevelRelay { "clipLevel" }, clipSoftnessRelay { "clipSoftness" };
     juce::WebComboBoxRelay clipOversamplingRelay { "clipOversampling" };
+    juce::WebToggleButtonRelay eqOnRelay { "eqOn" };
+    std::vector<std::unique_ptr<juce::WebSliderRelay>> eqGainRelays = makeSliderRelays ("eqGain"),
+                                                       eqFreqRelays = makeSliderRelays ("eqFreq");
 
     juce::WebBrowserComponent webView;
 
@@ -62,6 +70,8 @@ private:
     juce::WebToggleButtonParameterAttachment clipOnAttachment, resetOnChangeAttachment;
     juce::WebSliderParameterAttachment clipLevelAttachment, clipSoftnessAttachment;
     juce::WebComboBoxParameterAttachment clipOversamplingAttachment;
+    juce::WebToggleButtonParameterAttachment eqOnAttachment;
+    std::vector<std::unique_ptr<juce::WebSliderParameterAttachment>> eqAttachments;
 
     juce::dsp::FFT fft { kFftOrder };
     juce::dsp::WindowingFunction<float> window { static_cast<size_t> (kFftSize), juce::dsp::WindowingFunction<float>::hann, false };

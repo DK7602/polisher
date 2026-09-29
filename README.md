@@ -5,7 +5,7 @@ every setting. Style: red / white / powder-blue liquid glass.
 
 Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 
-## Status — v0.1 (engine milestone)
+## Status — v0.4
 
 | Piece | State |
 | --- | --- |
@@ -16,7 +16,8 @@ Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 | Liquid-glass UI (WebView): live Maximizer knobs, R128 meters, real-time spectrum, live Learn panel | Done (v0.2) |
 | Soft Clipper: 1x–8x linear-phase oversampling, soft knee, constant latency, live UI + Learn | Done (v0.3) |
 | Input loudness meter, "louder than your mix" in Learn, loudness restarts after a control change | Done (v0.3.2) |
-| Tonal EQ, Bass Control, Dynamics, Imager, Saturation | Next |
+| Tonal EQ: 7 musical bands, drag points on the spectrum, click-free glides, bit-exact when flat, live Learn | Done (v0.4) |
+| Bass Control, Dynamics, Imager, Saturation | Next |
 | Analysis engine + Learn explanations | Next |
 
 ## Layout
@@ -28,6 +29,7 @@ dsp/        Framework-free C++20 engine (no JUCE): unit-testable, reusable offli
     TruePeakDetector.h   4x polyphase inter-sample peak detector
     LoudnessMeter.h      R128 meter with gated histograms (never allocates on the audio thread)
     TruePeakLimiter.h    Maximizer core
+    TonalEQ.h            7-band mastering EQ (first in the chain, zero latency)
     SoftClipper.h        Oversampled soft-knee clipper (drive -> clipper -> limiter)
     LoudnessTargeting.h  Offline render + drive search used by Auto-Master
 plugin/     JUCE AudioProcessor, web-view editor (+ basic native fallback editor)

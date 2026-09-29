@@ -53,27 +53,45 @@ bool PolisherWebEditor::isSupported()
     return juce::WebBrowserComponent::areOptionsSupported (makeBaseOptions());
 }
 
+std::vector<std::unique_ptr<juce::WebSliderRelay>> PolisherWebEditor::makeSliderRelays (const juce::String& prefix)
+{
+    std::vector<std::unique_ptr<juce::WebSliderRelay>> relays;
+    for (int b = 1; b <= polisher::kEqBands; ++b)
+        relays.push_back (std::make_unique<juce::WebSliderRelay> (prefix + juce::String (b)));
+    return relays;
+}
+
+juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
+{
+    auto options = makeBaseOptions()
+                       .withOptionsFrom (driveRelay)
+                       .withOptionsFrom (ceilingRelay)
+                       .withOptionsFrom (releaseRelay)
+                       .withOptionsFrom (adaptiveRelay)
+                       .withOptionsFrom (bypassRelay)
+                       .withOptionsFrom (autoResetRelay)
+                       .withOptionsFrom (clipOnRelay)
+                       .withOptionsFrom (resetOnChangeRelay)
+                       .withOptionsFrom (clipLevelRelay)
+                       .withOptionsFrom (clipSoftnessRelay)
+                       .withOptionsFrom (clipOversamplingRelay)
+                       .withOptionsFrom (eqOnRelay);
+    for (auto& r : eqGainRelays) options = options.withOptionsFrom (*r);
+    for (auto& r : eqFreqRelays) options = options.withOptionsFrom (*r);
+
+    return options
+        .withNativeFunction ("resetMeter", [this] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 audioProcessor.requestMeterReset();
+                                 complete (true);
+                             })
+        .withResourceProvider ([] (const auto& url) { return getResource (url); });
+}
+
 PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
     : AudioProcessorEditor (&p),
       audioProcessor (p),
-      webView (makeBaseOptions()
-                   .withOptionsFrom (driveRelay)
-                   .withOptionsFrom (ceilingRelay)
-                   .withOptionsFrom (releaseRelay)
-                   .withOptionsFrom (adaptiveRelay)
-                   .withOptionsFrom (bypassRelay)
-                   .withOptionsFrom (autoResetRelay)
-                   .withOptionsFrom (clipOnRelay)
-                   .withOptionsFrom (resetOnChangeRelay)
-                   .withOptionsFrom (clipLevelRelay)
-                   .withOptionsFrom (clipSoftnessRelay)
-                   .withOptionsFrom (clipOversamplingRelay)
-                   .withNativeFunction ("resetMeter", [this] (const juce::Array<juce::var>&, auto complete)
-                                        {
-                                            audioProcessor.requestMeterReset();
-                                            complete (true);
-                                        })
-                   .withResourceProvider ([] (const auto& url) { return getResource (url); })),
+      webView (makeEditorOptions()),
       driveAttachment    (param (p, "drive"),     driveRelay,     nullptr),
       ceilingAttachment  (param (p, "ceiling"),   ceilingRelay,   nullptr),
       releaseAttachment  (param (p, "release"),   releaseRelay,   nullptr),
@@ -84,8 +102,17 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
       resetOnChangeAttachment (param (p, "resetOnChange"), resetOnChangeRelay, nullptr),
       clipLevelAttachment (param (p, "clipLevel"), clipLevelRelay, nullptr),
       clipSoftnessAttachment (param (p, "clipSoftness"), clipSoftnessRelay, nullptr),
-      clipOversamplingAttachment (param (p, "clipOversampling"), clipOversamplingRelay, nullptr)
+      clipOversamplingAttachment (param (p, "clipOversampling"), clipOversamplingRelay, nullptr),
+      eqOnAttachment (param (p, "eqOn"), eqOnRelay, nullptr)
 {
+    for (int b = 0; b < polisher::kEqBands; ++b)
+    {
+        const auto i = static_cast<size_t> (b);
+        const auto n = juce::String (b + 1);
+        eqAttachments.push_back (std::make_unique<juce::WebSliderParameterAttachment> (param (p, ("eqGain" + n).toRawUTF8()), *eqGainRelays[i], nullptr));
+        eqAttachments.push_back (std::make_unique<juce::WebSliderParameterAttachment> (param (p, ("eqFreq" + n).toRawUTF8()), *eqFreqRelays[i], nullptr));
+    }
+
     addAndMakeVisible (webView);
     webView.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
 
@@ -200,6 +227,7 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("peakR",      roundTo (m.peakRight.exchange (-100.0f), 0.1f));
     frame->setProperty ("gr",         roundTo (grHold, 0.1f));
     frame->setProperty ("clip",       roundTo (clipHold, 0.1f));
+    frame->setProperty ("sr",         audioProcessor.getSampleRate());
     frame->setProperty ("inShort",    roundTo (m.inputShortTerm.load(), 0.1f));
     frame->setProperty ("inIntegrated", roundTo (m.inputIntegrated.load(), 0.1f));
     frame->setProperty ("mix",        makeSpectrum (audioProcessor.inputTap, mixAnalyser));
