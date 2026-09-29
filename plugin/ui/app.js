@@ -440,6 +440,11 @@ function renderClipperLearn(body) {
 
   if (!on || bypassed || !playing) {
     body.appendChild(tip("TIP", "Turn the clipper on at 0 dB, then lower Clip Level until the Clipping meter shows 1–3 dB on the drums. Compare with the clipper off at the same Drive: it should be denser and louder, with the same peak level.", true));
+  } else if (peakClip > -0.1) {
+    const quiet = M.integrated > -99 && M.integrated < -16;
+    body.appendChild(tip("NOT CLIPPING YET",
+      (quiet ? `Your master is still quiet (${fmtNum(M.integrated)} LUFS integrated), so the peaks never reach the clip point. ` : "The peaks aren't reaching the clip point. ") +
+      `Right now Clip Level only adds ${fmtNum(Math.max(0, -level), 1)} dB of level. Raise Drive on the Maximizer until the Clipping meter shows 1–3 dB on the drums.`, true));
   } else if (avgClip < -3) {
     body.appendChild(tip("FIX IT IN THE MIX",
       `That's heavy clipping (about ${fmtNum(-avgClip)} dB on average). Snares and claps can turn crunchy: raise Clip Level or Softness until it's clean. If your drums need this much, clip or limit the drum bus in the mix instead.`));
