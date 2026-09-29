@@ -959,7 +959,7 @@ function updateAmButton() {
     sub.textContent = M.amHearing ? `${Math.round(M.amProgress * 12)} / 12 s · click to stop` : "Press play: the loudest part of your song";
   } else if (M.amState === 2) {
     title.textContent = "THINKING";
-    sub.textContent = "Choosing every setting…";
+    sub.textContent = "Choosing every setting (a few seconds)…";
   } else {
     title.textContent = "AUTO-MASTER";
     sub.textContent = amReport && amReport.ok ? "Done · click to run again" : "Listens to your mix and sets every module";

@@ -68,8 +68,8 @@ const char* const kBandPlain[kEqBands]  = { "sub (below 65 Hz)", "bass (65\xE2\x
                                             "mids (0.6\xE2\x80\x93" "1.6 kHz)", "upper mids (1.6\xE2\x80\x93" "3.5 kHz)",
                                             "presence (3.5\xE2\x80\x93" "8 kHz)", "air (above 8 kHz)" };
 const char* const kBoostEffect[kEqBands] = {
-    "More sub weight under the 808 and kick.",
-    "More body in the kick and 808.",
+    "More sub weight under the kick and bass.",
+    "More body in the kick and bass.",
     "More warmth and thickness.",
     "Vocals, snares and melodies come forward.",
     "More vocal clarity and snare crack.",
@@ -95,18 +95,18 @@ const char* const kCulprit[kEqBands] = {
 struct IntensityRules
 {
     const char* name;
-    double eqStrength, eqMaxDb, budgetDb;
+    double eqStrength, eqMaxDb, budgetDb, peakBudgetDb;   // peakBudget: how deep recurring peaks may be shaved
 };
 
 IntensityRules rulesFor (Intensity i) noexcept
 {
     switch (i)
     {
-        case Intensity::gentle:   return { "Gentle",   0.35, 1.5, 2.0 };
-        case Intensity::balanced: return { "Balanced", 0.5,  3.0, 3.5 };
-        case Intensity::punchy:   return { "Punchy",   0.6,  4.0, 5.5 };
+        case Intensity::gentle:   return { "Gentle",   0.35, 1.5, 2.0, 3.0 };
+        case Intensity::balanced: return { "Balanced", 0.5,  3.0, 3.5, 6.0 };
+        case Intensity::punchy:   return { "Punchy",   0.6,  4.0, 5.5, 9.0 };
     }
-    return { "Balanced", 0.5, 3.0, 3.5 };
+    return { "Balanced", 0.5, 3.0, 3.5, 6.0 };
 }
 
 const char* targetName (LoudnessTarget t) noexcept
@@ -173,6 +173,34 @@ double percentile (std::vector<double> v, double p)
 }
 
 double toDb (double power) { return 10.0 * std::log10 (power + 1.0e-30); }
+
+/** The level of the peaks that keep coming back (99th percentile of 10 ms peaks in the loud parts),
+    in dBFS. One stray spike can be clipped hard unheard; what's audible is how deep the recurring
+    peaks are shaved. */
+double recurringPeakDb (const AudioClip& clip)
+{
+    const int n = clip.numSamples(), block = std::max (1, static_cast<int> (clip.sampleRate * 0.01));
+    std::vector<double> peaks, energy;
+    for (int start = 0; start + block <= n; start += block)
+    {
+        double pk = 0.0, e = 0.0;
+        for (const auto& ch : clip.channels)
+            for (int i = start; i < start + block; ++i)
+            {
+                const double v = ch[static_cast<size_t> (i)];
+                pk = std::max (pk, std::abs (v));
+                e += v * v;
+            }
+        peaks.push_back (20.0 * std::log10 (pk + 1.0e-12));
+        energy.push_back (toDb (e / block));
+    }
+    if (peaks.empty()) return -100.0;
+    const double gate = percentile (energy, 0.95) - 20.0;
+    std::vector<double> loud;
+    for (size_t i = 0; i < peaks.size(); ++i)
+        if (energy[i] >= gate) loud.push_back (peaks[i]);
+    return percentile (loud.empty() ? peaks : loud, 0.99);
+}
 
 } // namespace
 
@@ -322,8 +350,10 @@ MixAnalysis analyseMix (const AudioClip& clip)
     {
         const double loudest = percentile (lowWin, 1.0);
         std::vector<double> present;
-        for (double v : lowWin) if (v > loudest - 40.0) present.push_back (v);
-        a.lowJumpDb = percentile (present, 0.95) - percentile (present, 0.6);
+        // Only windows where the bass is actually playing (within 20 dB of its loudest), so bass that
+        // simply comes and goes isn't mistaken for notes that leap out.
+        for (double v : lowWin) if (v > loudest - 20.0) present.push_back (v);
+        a.lowJumpDb = percentile (present, 0.9) - percentile (present, 0.5);
         a.hasLowEnd = ! crest.empty() && loudest > -60.0;
         a.lowCrestDb = crest.empty() ? 0.0 : percentile (crest, 0.5);
     }
@@ -358,6 +388,9 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
     };
     auto& chain = r.chain;
 
+    // 808-led genres, where the low end is programmed rather than played.
+    const bool bassHeavy = s.genre == Genre::trapHipHop || s.genre == Genre::rnb || s.genre == Genre::edm || s.genre == Genre::pop;
+
     // --- Tonal EQ: move part of the way toward the genre's typical balance --------------------------
     const auto target = genreTargetCurve (s.genre);
     const double tRef = (target[1] + target[2] + target[3] + target[4] + target[5]) / 5.0;
@@ -390,7 +423,8 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
         if (std::abs (diff) > 7.0)
             r.notes.push_back ("FIX IT IN THE MIX: your mix is " + num (std::abs (diff)) + " dB " + (diff > 0 ? "lower" : "higher") +
                                " in the " + kBandPlain[b] + " than typical " + genre + " masters. The master EQ only fixes part of that; "
-                               "adjusting the main source in the mix (" + kCulprit[b] + ") will sound better.");
+                               "adjusting the main source in the mix (" + (b <= 1 && ! bassHeavy ? "usually the bass or the kick" : kCulprit[b]) +
+                               ") will sound better.");
     }
     if (! flat.empty() && flat.size() < static_cast<size_t> (kEqBands))
     {
@@ -407,7 +441,6 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
     }
 
     // --- Bass Control ----------------------------------------------------------------------------
-    const bool bassHeavy = s.genre == Genre::trapHipHop || s.genre == Genre::rnb || s.genre == Genre::edm || s.genre == Genre::pop;
     const double width = a.bassWidthPercent;
     if (bassHeavy || width >= 20.0)
     {
@@ -421,17 +454,24 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
     }
     else
     {
-        reason ("bass", "Mono Below", "Off", "Your bass is already mono (" + pct (width) + " stereo), so there's nothing to fix.");
+        reason ("bass", "Mono Below", "Off", width < 10.0 ? "Your bass is already mono (" + pct (width) + " stereo), so there's nothing to fix."
+                                                        : "Your bass is mostly mono (" + pct (width) + " stereo), which is fine for " + genre + ", so it's left as it is.");
     }
 
-    double tame = a.lowJumpDb >= 8.0 ? 60.0 : a.lowJumpDb >= 6.0 ? 40.0 : a.lowJumpDb >= 4.5 ? 20.0 : 0.0;
-    tame *= s.intensity == Intensity::gentle ? 0.5 : s.intensity == Intensity::punchy ? 1.25 : 1.0;
-    tame = std::min (80.0, std::round (tame));
+    // Sub Tame is an 808 tool: in genres with played bass, level changes are part of the performance.
+    double tame = 0.0;
+    if (bassHeavy)
+    {
+        tame = a.lowJumpDb >= 8.0 ? 60.0 : a.lowJumpDb >= 6.0 ? 40.0 : a.lowJumpDb >= 4.5 ? 20.0 : 0.0;
+        tame *= s.intensity == Intensity::gentle ? 0.5 : s.intensity == Intensity::punchy ? 1.25 : 1.0;
+        tame = std::min (80.0, std::round (tame));
+    }
     chain.bass.tame = tame / 100.0;
     reason ("bass", "Sub Tame", pct (tame),
             tame > 0.0 ? "Your loudest bass moments rise about " + num (a.lowJumpDb) + " dB above the typical bass level, so some 808 notes "
                          "leap out. Sub Tame evens those notes out, so the Maximizer doesn't have to turn the whole mix down for them."
-                       : "Your bass level is steady (the loudest moments rise only " + num (a.lowJumpDb) + " dB above the rest), so it isn't needed.");
+            : ! bassHeavy ? "In " + genre + " the bass is played, so its ups and downs are part of the performance. Sub Tame is for 808s that leap out, so it stays off."
+                          : "Your bass level is steady (the loudest moments rise only " + num (a.lowJumpDb) + " dB above the rest), so it isn't needed.");
 
     double punch = 0.0;
     if (s.intensity != Intensity::gentle && a.hasLowEnd)
@@ -442,61 +482,55 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
     }
     chain.bass.punch = punch / 100.0;
     reason ("bass", "Punch", pct (punch),
-            punch > 0.0 ? "Your low end is " + std::string (a.lowCrestDb < 9.0 ? "mostly sustained (808s)" : "fairly sustained") +
+            punch > 0.0 ? "Your low end is " + std::string (a.lowCrestDb < 9.0 ? (bassHeavy ? "mostly sustained (808s)" : "mostly sustained") : "fairly sustained") +
                           ", so kicks can get lost under it. Punch adds thump to the start of each kick without turning the sub up."
                         : s.intensity == Intensity::gentle ? "Gentle keeps the kick as it is."
                         : ! a.hasLowEnd ? "There's very little low end in what I heard, so there are no kicks to punch up."
                                         : "Your kicks already hit clearly above the bass, so no extra punch is needed.");
 
-    // --- Soft Clipper ------------------------------------------------------------------------------
+    // --- Soft Clipper: on or off ------------------------------------------------------------------------
     const double plr = a.peakToLoudnessDb;
     const bool loudTarget = s.target != LoudnessTarget::stream;
+    const bool punchy = s.intensity == Intensity::punchy;
     chain.clipper.enabled = s.intensity != Intensity::gentle && (loudTarget || plr > 16.0) && plr >= 9.0;
-    if (chain.clipper.enabled)
+    chain.clipper.softness = 0.5;
+    chain.clipper.oversampling = 4;
+
+    // How many dB of the biggest peaks the clipper may take before the Maximizer takes the rest.
+    // Dense, drum-led genres hide clipping well; acoustic and rock expose it.
+    double clipShare = 0.0;
+    switch (s.genre)
     {
-        const bool punchy = s.intensity == Intensity::punchy;
-        double level = s.target == LoudnessTarget::club ? (punchy ? -3.5 : -2.0)
-                     : s.target == LoudnessTarget::loud ? (punchy ? -2.0 : -1.0)
-                                                        : (punchy ? -1.0 : 0.0);
-        chain.clipper.thresholdDb = level;   // relative to the ceiling here; the plug-in stores it as Clip Level
-        chain.clipper.softness = 0.5;
-        chain.clipper.oversampling = 4;
-        reason ("clip", "Soft Clipper", "On", "Your mix has " + num (plr) + " dB between its peaks and its average loudness"
-                + std::string (plr > 14.0 ? " (spiky drums)" : "") + ". Shaving the sharpest drum peaks before the Maximizer "
-                "gets you loud with less limiting, which keeps the punch.");
-        reason ("clip", "Clip Level", num (level, true) + " dB",
-                level == 0.0 ? "Clipping starts right at the ceiling: only the drum spikes are touched."
-                             : "Clipping starts " + num (-level) + " dB below the ceiling for the " + std::string (targetName (s.target)) +
-                               " target; the level comes back up so peaks still use the full headroom.");
-        reason ("clip", "Softness", "50 %", "A medium knee: rounds peaks gently, heard as punch rather than distortion.");
-        reason ("clip", "Oversampling", "4x", "Keeps the clipping clean (no harsh aliasing) at a sensible CPU cost.");
+        case Genre::trapHipHop: case Genre::edm: clipShare = 3.5; break;
+        case Genre::rnb: case Genre::pop:        clipShare = 3.0; break;
+        case Genre::rock:                        clipShare = 2.0; break;
+        case Genre::acoustic:                    clipShare = 1.5; break;
     }
-    else
-    {
-        reason ("clip", "Soft Clipper", "Off",
-                s.intensity == Intensity::gentle ? "Gentle leaves peak control to the Maximizer alone, for the most transparent sound."
-                : plr < 9.0 ? "Your mix is already dense (only " + num (plr) + " dB between peaks and average), so clipping would only add distortion."
-                            : "For a streaming target the Maximizer alone reaches the level cleanly, so no clipping is needed.");
-    }
+    clipShare *= s.target == LoudnessTarget::stream ? 0.6 : s.target == LoudnessTarget::club ? 1.3 : 1.0;
+    if (punchy) clipShare += 1.5;
+    const double minLevel = (punchy || s.target == LoudnessTarget::club) ? -2.0 : 0.0;   // below 0 = extra density
+    const double peakBudget = rules.peakBudgetDb + (s.genre == Genre::acoustic ? -1.5 : s.genre == Genre::rock ? -0.5
+                                                    : (s.genre == Genre::trapHipHop || s.genre == Genre::edm) ? 1.0 : 0.0);
 
     // --- Maximizer ---------------------------------------------------------------------------------
     chain.limiter.ceilingDbtp = s.target == LoudnessTarget::club ? -0.5 : -1.0;
     chain.limiter.releaseMs = 120.0;
     chain.limiter.adaptiveRelease = true;
-    const double ceilingForClip = chain.limiter.ceilingDbtp;
-    if (chain.clipper.enabled)
-    {
-        const double level = chain.clipper.thresholdDb;
-        chain.clipper.thresholdDb = ceilingForClip + level;   // the engine wants the absolute threshold
-        chain.clipper.makeupDb = std::max (0.0, -level);
-    }
+    const double ceiling = chain.limiter.ceilingDbtp;
 
     // Loudness: search on the real chain, then respect the intensity's peak-control budget.
     const AudioClip shaped = renderBass (renderEq (clip, chain.eq), chain.bass);
+    const auto shapedStats = measure (shaped);
+    const double inLufs = shapedStats.integratedLufs;
+    const double recurring = recurringPeakDb (shaped);   // the peaks that keep coming back
     MasterChainParams rest = chain;
     rest.eq = TonalEQParams {};
     rest.bass = BassParams {};
-    const double inLufs = measure (shaped).integratedLufs;
+    auto setClipLevel = [&] (double level)
+    {
+        rest.clipper.thresholdDb = ceiling + level;          // the engine wants the absolute threshold
+        rest.clipper.makeupDb = std::max (0.0, -level);
+    };
     auto evaluate = [&] (double drive)
     {
         rest.driveDb = drive;
@@ -504,12 +538,45 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
     };
     // Loudness given up to peak control: the gain put in (Drive plus the clipper's makeup) minus the
     // loudness that actually came out.
-    const double makeup = rest.clipper.enabled ? rest.clipper.makeupDb : 0.0;
-    auto costOf = [&] (double drive, const LoudnessStats& out) { return std::max (0.0, drive + makeup - (out.integratedLufs - inLufs)); };
+    auto costOf = [&] (double drive, const LoudnessStats& o)
+    {
+        const double makeup = rest.clipper.enabled ? rest.clipper.makeupDb : 0.0;
+        return std::max (0.0, drive + makeup - (o.integratedLufs - inLufs));
+    };
 
-    const auto found = findDriveForTarget (shaped, r.targetLufs, rest);
+    // With the clipper on, set its level so it takes about clipShare dB of the peaks at the drive
+    // the target needs (two refinements: the level changes the drive, the drive changes the level).
+    double clipLevel = 0.0;
+    setClipLevel (clipLevel);
+    auto found = findDriveForTarget (shaped, r.targetLufs, rest);
+    if (rest.clipper.enabled)
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            const double overshoot = recurring + std::max (0.0, found.driveDb) - ceiling;
+            clipLevel = std::round (std::clamp (overshoot - clipShare, minLevel, 3.0) * 10.0) / 10.0;
+            setClipLevel (clipLevel);
+            found = findDriveForTarget (shaped, r.targetLufs, rest);
+        }
+
     double drive = std::max (0.0, found.driveDb);
-    LoudnessStats out = drive == found.driveDb ? found.output : evaluate (drive);
+
+    // Limit 1: how deep the recurring peaks get shaved (clipper + Maximizer together, plus any
+    // clipper makeup). Past this you hear it, whatever the loudness numbers say.
+    bool peakLimited = false;
+    const double peakShave = [&] (double d) { return recurring + d - ceiling + (rest.clipper.enabled ? rest.clipper.makeupDb : 0.0); } (drive);
+    if (peakShave > peakBudget)
+    {
+        drive = std::max (0.0, drive - (peakShave - peakBudget));
+        peakLimited = true;
+        if (rest.clipper.enabled)
+        {
+            clipLevel = std::round (std::clamp (recurring + drive - ceiling - clipShare, minLevel, 3.0) * 10.0) / 10.0;
+            setClipLevel (clipLevel);
+        }
+    }
+
+    // Limit 2: loudness given up to peak control.
+    LoudnessStats out = evaluate (drive);
     double cost = costOf (drive, out);
     bool budgetLimited = false;
     if (cost > rules.budgetDb)
@@ -522,17 +589,50 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
             (costOf (mid, o) > rules.budgetDb ? hi : lo) = mid;
         }
         drive = lo;
-        out = evaluate (drive);
-        cost = costOf (drive, out);
         budgetLimited = true;
     }
     drive = std::round (drive * 10.0) / 10.0;
     out = evaluate (drive);
     cost = costOf (drive, out);
     chain.driveDb = drive;
+    chain.clipper = rest.clipper;
     r.output = out;
     r.loudnessCostDb = cost;
     r.reachedTarget = std::abs (out.integratedLufs - r.targetLufs) <= 0.3;
+
+    // Explain the clipper with the peak work it actually does at this drive (on the recurring peaks).
+    const double peakIn = recurring + drive;
+    if (chain.clipper.enabled)
+    {
+        const double clipDb = std::max (0.0, peakIn - (ceiling + clipLevel));
+        const double limitDb = std::max (0.0, clipLevel);
+        const bool drumsy = s.genre == Genre::trapHipHop || s.genre == Genre::edm || s.genre == Genre::pop || s.genre == Genre::rnb;
+        reason ("clip", "Soft Clipper", "On",
+                "Your mix has " + num (plr) + " dB between its peaks and its average loudness" + std::string (plr > 14.0 ? " (sharp peaks)" : "") +
+                ". The clipper shaves about " + num (clipDb) + " dB off the " + (drumsy ? "drum hits" : "peaks") + " that keep coming back" +
+                (limitDb > 0.05 ? ", and the Maximizer handles the last " + num (limitDb) + " dB" : "") +
+                ". Sharing the work this way gets you loud without either one being heard.");
+        reason ("clip", "Clip Level", num (clipLevel, true) + " dB",
+                clipLevel > 0.05 ? "Clipping starts " + num (clipLevel) + " dB above the ceiling, so only the biggest peaks are touched: about as much clipping as " +
+                                   genre + " hides well (" + num (clipShare) + " dB)."
+                : clipLevel > -0.05 ? "Clipping starts right at the ceiling: the clipper takes the peaks and the Maximizer just polishes what's left."
+                : "Clipping starts " + num (-clipLevel) + " dB below the ceiling for extra density (" + std::string (rules.name) + ", " +
+                  targetName (s.target) + "); the level comes back up so peaks still use the full headroom.");
+        reason ("clip", "Softness", "50 %", "A medium knee: rounds peaks gently, heard as punch rather than distortion.");
+        reason ("clip", "Oversampling", "4x", "Keeps the clipping clean (no harsh aliasing) at a sensible CPU cost.");
+    }
+    else
+    {
+        reason ("clip", "Soft Clipper", "Off",
+                s.intensity == Intensity::gentle ? "Gentle leaves peak control to the Maximizer alone, for the most transparent sound."
+                : plr < 9.0 ? "Your mix is already dense (only " + num (plr) + " dB between peaks and average), so clipping would only add distortion."
+                            : "For a streaming target the Maximizer alone reaches the level cleanly, so no clipping is needed.");
+    }
+
+    if (a.loudness.truePeakDbtp > 0.0)
+        r.notes.push_back ("HEADS UP: your mix peaks at " + num (a.loudness.truePeakDbtp, true) + " dBTP before Polisher. That's fine inside your DAW, "
+                           "but if you export the unmastered mix (for example to send to someone), turn the master fader down so it peaks below "
+                           "\xE2\x88\x92" "1 dB, or the file will clip.");
 
     std::string driveWhy;
     if (found.driveDb < 0.0 && drive == 0.0)
@@ -542,6 +642,12 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
         driveWhy = num (drive, true) + " dB of Drive lands this part at " + num (out.integratedLufs) + " LUFS, your " + targetName (s.target) +
                    " target. Holding the peaks down costs about " + num (cost) + " dB of loudness, within the " + rules.name + " limit of " +
                    num (rules.budgetDb) + " dB, so the drums keep their punch.";
+    else if (peakLimited && ! budgetLimited)
+        driveWhy = "Reaching " + num (r.targetLufs) + " LUFS would mean shaving about " + num (recurring + found.driveDb - ceiling) +
+                   " dB off your recurring peaks, which you'd hear on " + genre + ". I stopped at " + num (out.integratedLufs) +
+                   " LUFS, where the shaving is " + num (peakBudget) + " dB (the " + rules.name + " limit for " + genre + "). " +
+                   (s.intensity == Intensity::punchy ? "To go louder, control the peaks in the mix."
+                                                     : "Choose Punchy to go louder, or control the peaks in the mix.");
     else if (budgetLimited)
         driveWhy = "Reaching " + num (r.targetLufs) + " LUFS would squash this mix too hard for " + std::string (rules.name) +
                    ", so I stopped at " + num (out.integratedLufs) + " LUFS, where holding the peaks down costs " + num (cost) + " dB (the " +
@@ -556,9 +662,14 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
                                              : "Leaves room for the MP3/AAC conversion streaming services do, so the streamed version won't clip.");
     reason ("max", "Release", "120 ms adaptive", "Recovers fast after drum hits and slowly on sustained bass, so the master doesn't pump.");
 
-    if (budgetLimited && s.intensity != Intensity::punchy)
-        r.notes.push_back ("HEADS UP: this mix has big peaks for its loudness (" + num (plr) + " dB). Controlling the drum peaks in the mix "
-                           "(a clipper or limiter on the drum bus) would let the master get louder without losing punch.");
+    if ((budgetLimited || peakLimited) && s.intensity != Intensity::punchy)
+        r.notes.push_back ("HEADS UP: this mix has big peaks for its loudness (" + num (plr) + " dB). " +
+                           std::string (bassHeavy ? "Controlling the drum peaks in the mix (a clipper or limiter on the drum bus)"
+                                                  : "Taming the biggest peaks in the mix (strums, drum hits, vocal peaks: a compressor on those tracks)") +
+                           " would let the master get louder without losing punch.");
+    if (s.genre == Genre::acoustic && s.target != LoudnessTarget::stream)
+        r.notes.push_back ("HEADS UP: acoustic releases usually sit around \xE2\x88\x92" "14 to \xE2\x88\x92" "11 LUFS. "
+                           "Stream \xE2\x88\x92" "14 keeps the most life in the guitars and vocal; streaming services turn louder masters down anyway.");
 
     // --- Summary -------------------------------------------------------------------------------------
     char head[512];

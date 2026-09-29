@@ -141,3 +141,21 @@ TEST_CASE ("Gentle stops at its limiting budget and says so", "[automaster]")
         CHECK (it->why.find ("stopped") != std::string::npos);
     }
 }
+
+TEST_CASE ("Acoustic masters are gentler than trap on the same mix", "[automaster]")
+{
+    const auto mix = testsig::musicLike (48000.0, 12.0, -14.0);
+    AutoMasterSettings acoustic, trap;
+    acoustic.genre = Genre::acoustic;
+    trap.genre = Genre::trapHipHop;
+    const auto a = autoMaster (mix, acoustic);
+    const auto t = autoMaster (mix, trap);
+    checkWellFormed (a);
+    checkWellFormed (t);
+
+    CHECK (a.chain.bass.tame == 0.0);                                   // played bass isn't "tamed"
+    if (a.chain.clipper.enabled)                                        // Balanced: the clipper never adds density...
+        CHECK (a.chain.clipper.makeupDb == 0.0);                        // ...and the Maximizer keeps a share
+    CHECK (a.output.integratedLufs <= t.output.integratedLufs + 0.05);  // acoustic stops earlier, never louder
+    CHECK (std::any_of (a.notes.begin(), a.notes.end(), [] (const auto& n) { return n.find ("acoustic releases") != std::string::npos; }));
+}
