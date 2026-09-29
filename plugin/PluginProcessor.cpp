@@ -10,6 +10,7 @@ namespace ParamIDs
     inline constexpr const char* adaptive = "adaptive";
     inline constexpr const char* bypass   = "bypass";
     inline constexpr const char* autoReset = "autoreset";
+    inline constexpr const char* resetOnChange = "resetOnChange";
     inline constexpr const char* clipOn        = "clipOn";
     inline constexpr const char* clipLevel     = "clipLevel";
     inline constexpr const char* clipSoftness  = "clipSoftness";
@@ -62,6 +63,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::bypass, 1 }, "Bypass", false));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::autoReset, 1 }, "Reset Meter On Play", true,
                                                       AudioParameterBoolAttributes().withAutomatable (false)));
+    // Read by the editor: restart the loudness measurement shortly after you change a control, so
+    // Integrated describes the current settings instead of averaging in the old ones.
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::resetOnChange, 1 }, "Reset Meter On Change", true,
+                                                      AudioParameterBoolAttributes().withAutomatable (false)));
 
     // Soft Clipper (sits between Drive and the Maximizer's limiter).
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::clipOn, 1 }, "Clipper On", false));
@@ -99,6 +104,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     limiter.prepare (sampleRate, channels);
     clipper.prepare (channels);
     outputMeter.prepare (sampleRate, channels);
+    inputMeter.prepare (sampleRate, channels);
     updateLimiterParams();
     currentDriveGain = targetDriveGain();
     // Constant latency whatever the settings: clipper (all oversampling modes) + limiter look-ahead.
@@ -159,7 +165,10 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     wasPlaying = isPlaying;
 
     if (meterResetRequested.exchange (false) || (justStarted && autoResetParam->load() > 0.5f))
+    {
         outputMeter.reset();
+        inputMeter.reset();
+    }
 
     updateLimiterParams();
 
@@ -167,6 +176,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     const int numSamples = buffer.getNumSamples();
 
     inputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
+    inputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
 
     // Drive (ramped per block so knob moves don't click) -> Soft Clipper -> limiter.
     const double newGain = targetDriveGain();
@@ -213,6 +223,8 @@ void PolisherAudioProcessor::publishMeters()
     meters.integrated.store (clampDb (outputMeter.integratedLufs()));
     meters.loudnessRange.store (static_cast<float> (outputMeter.loudnessRangeLu()));
     meters.truePeakMax.store (clampDb (outputMeter.truePeakDbtp()));
+    meters.inputShortTerm.store (clampDb (inputMeter.shortTermLufs()));
+    meters.inputIntegrated.store (clampDb (inputMeter.integratedLufs()));
 
     // Peak-hold style values: keep the largest until the editor reads and clears them.
     const float recent = clampDb (outputMeter.takeRecentTruePeakDbtp());

@@ -136,15 +136,16 @@
   <div class="popover" id="pop-settings" hidden>
     <div class="pop-title wm">SETTINGS</div>
     <label class="check"><input type="checkbox" id="chk-autoreset"> Reset loudness meter when playback starts</label>
+    <label class="check"><input type="checkbox" id="chk-resetchange"> Restart loudness after you change a control</label>
     <label class="check"><input type="checkbox" id="chk-adaptive"> Adaptive release (Maximizer)</label>
-    <div class="pop-foot mono">Polisher v0.3.1 · Soft Clipper + Maximizer</div>
+    <div class="pop-foot mono">Polisher v0.3.2 · Soft Clipper + Maximizer</div>
   </div>
   <div class="popover" id="pop-help" hidden>
     <div class="pop-title wm">QUICK HELP</div>
     <ul>
       <li><b>Knobs:</b> drag up/down. Hold Shift for fine control. Double-click to reset. Mouse wheel works too.</li>
       <li><b>A / B:</b> A plays your original mix (bypassed), B plays the master. Level-matched A/B comes later.</li>
-      <li><b>Loudness:</b> turn up Drive until Integrated reaches your target. True Peak stays at or below the Ceiling.</li>
+      <li><b>Loudness:</b> watch Short-term while you turn Drive (it follows the last 3 seconds). Integrated averages the whole time since it started, so it restarts a moment after you change a control (Settings). True Peak stays at or below the Ceiling.</li>
       <li><b>Soft Clipper:</b> turn it on, then lower Clip Level until the Clipping meter shows 1–3 dB on the drums. Clip Level is measured from the Maximizer ceiling, so peaks always use the full headroom.</li>
       <li><b>Learn:</b> the right panel explains what each control is doing to your track, live.</li>
     </ul>

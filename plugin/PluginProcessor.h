@@ -59,6 +59,8 @@ public:
         std::atomic<float> peakLeft { -100.0f };
         std::atomic<float> peakRight { -100.0f };
         std::atomic<float> clipReduction { 0.0f };   // largest clipper peak reduction since read (dB, <= 0)
+        std::atomic<float> inputShortTerm { -100.0f };  // your mix, before Drive (LUFS)
+        std::atomic<float> inputIntegrated { -100.0f };
     };
     Meters meters;
 
@@ -81,6 +83,7 @@ private:
     polisher::TruePeakLimiter limiter;
     double currentDriveGain = 1.0;
     polisher::LoudnessMeter outputMeter;
+    polisher::LoudnessMeter inputMeter;   // the incoming mix, so Learn can say how much louder the master is
     std::atomic<bool> meterResetRequested { false };
 
     std::atomic<float>* driveParam = nullptr;

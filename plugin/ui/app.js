@@ -28,6 +28,7 @@ const P = {
   adaptive: Juce.getToggleState("adaptive"),
   bypass: Juce.getToggleState("bypass"),
   autoreset: Juce.getToggleState("autoreset"),
+  resetOnChange: Juce.getToggleState("resetOnChange"),
   clipOn: Juce.getToggleState("clipOn"),
   clipLevel: Juce.getSliderState("clipLevel"),
   clipSoftness: Juce.getSliderState("clipSoftness"),
@@ -45,6 +46,7 @@ function scaledToNorm(state, v) {
 const M = {
   momentary: -100, shortTerm: -100, integrated: -100, range: 0, truePeak: -100,
   peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
+  inShort: -100, inIntegrated: -100,
 };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
 let clipWindow = [];         // ~3 s of clipper peak-reduction samples
@@ -143,7 +145,7 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
     value.textContent = fmt(state.getScaledValue());
     knob.setAttribute("aria-valuetext", value.textContent);
   };
-  const setNorm = (n) => { state.setNormalisedValue(clamp(n, 0, 1)); refresh(); onParamsChanged(); };
+  const setNorm = (n) => { state.setNormalisedValue(clamp(n, 0, 1)); refresh(); onParamsChanged(); userEdited(); };
 
   let dragStart = null;
   knob.addEventListener("pointerdown", (e) => {
@@ -206,7 +208,7 @@ function toggleCell({ label, sub, state, onText, offText }) {
     btn.className = "pill cell-toggle " + (on ? "pill-red" : "pill-blue");
     btn.setAttribute("aria-pressed", String(on));
   };
-  btn.addEventListener("click", () => { state.setValue(!state.getValue()); refresh(); onParamsChanged(); });
+  btn.addEventListener("click", () => { state.setValue(!state.getValue()); refresh(); onParamsChanged(); userEdited(); });
   state.valueChangedEvent.addListener(() => { refresh(); onParamsChanged(); });
   refresh();
   return cell;
@@ -235,7 +237,7 @@ function oversamplingCell() {
     const b = document.createElement("button");
     b.type = "button";
     b.textContent = label;
-    b.addEventListener("click", () => { P.clipOs.setChoiceIndex(i); refresh(); onParamsChanged(); });
+    b.addEventListener("click", () => { P.clipOs.setChoiceIndex(i); refresh(); onParamsChanged(); userEdited(); });
     seg.appendChild(b);
     return b;
   });
@@ -317,6 +319,10 @@ function tip(title, text, ok) {
 }
 
 function maxGrRecent() { return grWindow.length ? Math.min(...grWindow) : 0; }
+// How much louder the master is than the incoming mix right now (short-term), or null.
+function louderBy() {
+  return M.shortTerm > -60 && M.inShort > -60 ? M.shortTerm - M.inShort : null;
+}
 function avgGrRecent() { return grWindow.length ? grWindow.reduce((a, b) => a + b, 0) / grWindow.length : 0; }
 
 function renderLearn() {
@@ -341,7 +347,7 @@ function renderLearn() {
     return;
   }
 
-  if (m.id === "clip") { renderClipperLearn(body); return; }
+  if (m.id === "clip") { renderClipperLearn(body); liftWarning(body); return; }
 
   const drive = P.drive.getScaledValue();
   const ceiling = P.ceiling.getScaledValue();
@@ -359,9 +365,11 @@ function renderLearn() {
     body.appendChild(para("l-p", "Press play in your DAW. As the music runs I'll describe what the Maximizer is doing to it."));
   } else {
     const st = M.shortTerm > -99 ? `${fmtNum(M.shortTerm)} LUFS` : "—";
-    const it = M.integrated > -99 ? `${fmtNum(M.integrated)} LUFS` : "still measuring";
+    const it = M.integrated > -99 ? `${fmtNum(M.integrated)} LUFS integrated` : "Integrated is still measuring";
+    const gain = louderBy();
+    const vsMix = gain === null ? "" : `, ${gain >= 0 ? "+" : MINUS}${Math.abs(gain).toFixed(1)} dB ${gain >= 0 ? "louder" : "quieter"} than your mix`;
     const grText = peakGr < -0.2 ? `The limiter is taking up to ${fmtNum(-peakGr)} dB off the loudest moments.` : "The limiter is barely touching it: the peaks already fit under the ceiling.";
-    body.appendChild(para("l-p", `Your master is running at ${st} short-term (${it} integrated). ${grText}`));
+    body.appendChild(para("l-p", `Your master is running at ${st} short-term${vsMix} (${it}). ${grText}`));
   }
 
   body.appendChild(sep());
@@ -381,11 +389,18 @@ function renderLearn() {
       ? `Adaptive around ${release} ms: recovers quickly after single hits (drums) and moves slowly on sustained sound (808s, pads), so it doesn't pump.`
       : `Fixed at ${release} ms. Shorter sounds louder but can distort bass; longer is smoother but can pump on drums.`));
 
+  const gain = louderBy();
   if (bypassed || !playing) {
-    body.appendChild(tip("TIP", "Set Drive by ear while watching Integrated in the footer. Most streaming releases land between −14 and −9 LUFS.", true));
+    body.appendChild(tip("TIP", "Set Drive by ear while watching Short-term in the footer. Most streaming releases land between −14 and −9 LUFS.", true));
+  } else if (gain !== null && drive >= 9 && drive - gain > 6) {
+    body.appendChild(tip("DIMINISHING RETURNS",
+      `Drive is at +${drive.toFixed(1)} dB, but the master is only ${gain.toFixed(1)} dB louder than your mix. The loud hits already reach the ceiling, so the extra Drive is going into squashing them, not into loudness. ` +
+      (P.clipOn.getValue()
+        ? "Back Drive off until Short-term stops climbing; for more, lower Clip Level a little."
+        : "Back Drive off until Short-term stops climbing, and turn on the Soft Clipper: on spiky drums it gets more loudness than the limiter can.")));
   } else if (avgGr < -6 || peakGr < -9) {
     body.appendChild(tip("FIX IT IN THE MIX",
-      `That's heavy limiting (up to ${fmtNum(-peakGr)} dB). If the kick or snare lose punch, back off Drive, or tame the drum peaks in your mix (a clipper on the drum bus). The Soft Clipper coming next will help here too.`));
+      `That's heavy limiting (up to ${fmtNum(-peakGr)} dB). If the kick or snare lose punch, back off Drive, or tame the drum peaks in your mix (a clipper on the drum bus). The Soft Clipper (module 06) can take some of the peaks too.`));
   } else if (M.integrated > -9 && M.integrated > -99) {
     body.appendChild(tip("HEADS UP",
       "This is very loud (above −9 LUFS). Spotify and YouTube play music at about −14 LUFS, so they'll turn it down. Extra loudness buys density, not volume."));
@@ -397,6 +412,13 @@ function renderLearn() {
   const note = para("l-p", "When Auto-Master arrives, this panel will explain its own choices for every module.");
   note.style.cssText = "font-size:12px;color:var(--dim)";
   body.appendChild(note);
+  liftWarning(body);
+}
+
+// Warnings go right under "What's happening" so they're seen without scrolling; friendly tips stay at the end.
+function liftWarning(body) {
+  const warn = body.querySelector(".l-tip:not(.ok)"), firstSep = body.querySelector(".l-sep");
+  if (warn && firstSep) { body.insertBefore(warn, firstSep); warn.style.marginTop = "10px"; }
 }
 
 function renderClipperLearn(body) {
@@ -494,12 +516,13 @@ function refreshHeadButton() {
     $("knob-row").classList.remove("dimmed");
   }
 }
-$("btn-a").addEventListener("click", () => { P.bypass.setValue(true); onParamsChanged(); });
-$("btn-b").addEventListener("click", () => { P.bypass.setValue(false); onParamsChanged(); });
+$("btn-a").addEventListener("click", () => { P.bypass.setValue(true); onParamsChanged(); userEdited(); });
+$("btn-b").addEventListener("click", () => { P.bypass.setValue(false); onParamsChanged(); userEdited(); });
 $("btn-bypass").addEventListener("click", () => {
   if (selected === "clip") P.clipOn.setValue(!P.clipOn.getValue());
   else P.bypass.setValue(!P.bypass.getValue());
   onParamsChanged();
+  userEdited();
 });
 P.bypass.valueChangedEvent.addListener(onParamsChanged);
 P.clipOn.valueChangedEvent.addListener(onParamsChanged);
@@ -515,10 +538,23 @@ document.addEventListener("click", (e) => {
 
 const chkAuto = $("chk-autoreset"), chkAdaptive = $("chk-adaptive");
 chkAuto.addEventListener("change", () => P.autoreset.setValue(chkAuto.checked));
-chkAdaptive.addEventListener("change", () => { P.adaptive.setValue(chkAdaptive.checked); onParamsChanged(); });
+chkAdaptive.addEventListener("change", () => { P.adaptive.setValue(chkAdaptive.checked); onParamsChanged(); userEdited(); });
 P.autoreset.valueChangedEvent.addListener(() => (chkAuto.checked = !!P.autoreset.getValue()));
+const chkChange = $("chk-resetchange");
+chkChange.addEventListener("change", () => P.resetOnChange.setValue(chkChange.checked));
+P.resetOnChange.valueChangedEvent.addListener(() => (chkChange.checked = !!P.resetOnChange.getValue()));
 
-$("btn-reset").addEventListener("click", () => { resetMeter(); grWindow = []; toast("Loudness measurement reset."); });
+function restartMeasurement() { resetMeter(); grWindow = []; clipWindow = []; }
+$("btn-reset").addEventListener("click", () => { restartMeasurement(); toast("Loudness measurement reset."); });
+
+// Integrated is an average over everything since it last started. After you change a control,
+// start it over (once the control settles) so it describes the settings you're hearing now.
+let editTimer = null;
+function userEdited() {
+  if (!P.resetOnChange.getValue()) return;
+  clearTimeout(editTimer);
+  editTimer = setTimeout(restartMeasurement, 700);
+}
 
 let toastTimer = null;
 function toast(text) {
@@ -536,6 +572,7 @@ function onParamsChanged() {
   refreshAB();
   chkAdaptive.checked = !!P.adaptive.getValue();
   chkAuto.checked = !!P.autoreset.getValue();
+  chkChange.checked = !!P.resetOnChange.getValue();
   updateLiveReadouts();
   scheduleLearn();
 }
@@ -593,7 +630,8 @@ function buildMeters() {
 function updateMeters() {
   for (const d of meterDefs) {
     const v = M[d.key];
-    $("mv-" + d.key).textContent = d.plain ? `${v.toFixed(1)} ${d.unit}` : fmtDb(v, d.unit);
+    $("mv-" + d.key).textContent = d.plain ? `${v.toFixed(1)} ${d.unit}`
+      : d.key === "integrated" && v <= -99 ? `— ${d.unit}` : fmtDb(v, d.unit);
     const pct = v <= -99 ? 0 : clamp(((v - d.lo) / (d.hi - d.lo)) * 100, 0, 100);
     const fill = $("mf-" + d.key);
     fill.style.width = pct.toFixed(1) + "%";

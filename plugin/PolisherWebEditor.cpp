@@ -64,6 +64,7 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
                    .withOptionsFrom (bypassRelay)
                    .withOptionsFrom (autoResetRelay)
                    .withOptionsFrom (clipOnRelay)
+                   .withOptionsFrom (resetOnChangeRelay)
                    .withOptionsFrom (clipLevelRelay)
                    .withOptionsFrom (clipSoftnessRelay)
                    .withOptionsFrom (clipOversamplingRelay)
@@ -80,6 +81,7 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
       bypassAttachment   (param (p, "bypass"),    bypassRelay,    nullptr),
       autoResetAttachment (param (p, "autoreset"), autoResetRelay, nullptr),
       clipOnAttachment (param (p, "clipOn"), clipOnRelay, nullptr),
+      resetOnChangeAttachment (param (p, "resetOnChange"), resetOnChangeRelay, nullptr),
       clipLevelAttachment (param (p, "clipLevel"), clipLevelRelay, nullptr),
       clipSoftnessAttachment (param (p, "clipSoftness"), clipSoftnessRelay, nullptr),
       clipOversamplingAttachment (param (p, "clipOversampling"), clipOversamplingRelay, nullptr)
@@ -198,6 +200,8 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("peakR",      roundTo (m.peakRight.exchange (-100.0f), 0.1f));
     frame->setProperty ("gr",         roundTo (grHold, 0.1f));
     frame->setProperty ("clip",       roundTo (clipHold, 0.1f));
+    frame->setProperty ("inShort",    roundTo (m.inputShortTerm.load(), 0.1f));
+    frame->setProperty ("inIntegrated", roundTo (m.inputIntegrated.load(), 0.1f));
     frame->setProperty ("mix",        makeSpectrum (audioProcessor.inputTap, mixAnalyser));
     frame->setProperty ("master",     makeSpectrum (audioProcessor.outputTap, masterAnalyser));
 

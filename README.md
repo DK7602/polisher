@@ -15,6 +15,7 @@ Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 | Plug-in shell (JUCE 8): parameters, state save, latency reporting | Done |
 | Liquid-glass UI (WebView): live Maximizer knobs, R128 meters, real-time spectrum, live Learn panel | Done (v0.2) |
 | Soft Clipper: 1x–8x linear-phase oversampling, soft knee, constant latency, live UI + Learn | Done (v0.3) |
+| Input loudness meter, "louder than your mix" in Learn, loudness restarts after a control change | Done (v0.3.2) |
 | Tonal EQ, Bass Control, Dynamics, Imager, Saturation | Next |
 | Analysis engine + Learn explanations | Next |
 

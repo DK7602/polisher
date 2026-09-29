@@ -11,7 +11,7 @@
     clipLevel: { start: -9, end: 3, skew: 1, interval: 0.01, value: 0, label: "dB" },
     clipSoftness:  { start: 0, end: 100, skew: 1, interval: 0.1, value: 50, label: "%" },
   };
-  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true };
+  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true };
   const combos = { clipOversampling: { choices: ["1x", "2x", "4x", "8x"], value: 2 / 3 } };
 
   const send = (id, obj) => setTimeout(() => window.__JUCE__.backend.emitByBackend(id, JSON.stringify(obj)), 0);
@@ -66,7 +66,7 @@
     const beat = Math.pow(Math.max(0, Math.sin(t * Math.PI * 2 * 1.2)), 8);   // kick every ~0.8 s
     const gr = bypass ? 0 : -Math.max(0, drive - 2.5) * (0.35 + 0.65 * beat);
     const base = -16.5 + 1.5 * Math.sin(t / 6);
-    const loud = base + drive * 0.72;
+    const loud = base + 11 * (1 - Math.exp(-drive / 11));   // diminishing returns, like a real limiter
     integratedAcc.push(loud); if (integratedAcc.length > 3000) integratedAcc.shift();
     const mix = [], master = [];
     for (let i = 0; i < 96; i++) {
@@ -84,6 +84,7 @@
       peakL: +(-7 + drive * 0.5 + 5 * beat).toFixed(1),
       peakR: +(-7.5 + drive * 0.5 + 5 * beat).toFixed(1),
       gr: +(toggles.clipOn ? gr * 0.55 : gr).toFixed(1),
+      inShort: +base.toFixed(1), inIntegrated: -16.5,
       clip: toggles.clipOn && !bypass ? +(-Math.max(0, drive - 1.5 + sliders.clipLevel.value * -0.5) * 0.5 * (0.3 + 0.7 * beat)).toFixed(1) : 0,
       mix, master,
     };
