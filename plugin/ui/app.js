@@ -29,7 +29,7 @@ const P = {
   bypass: Juce.getToggleState("bypass"),
   autoreset: Juce.getToggleState("autoreset"),
   clipOn: Juce.getToggleState("clipOn"),
-  clipThreshold: Juce.getSliderState("clipThreshold"),
+  clipLevel: Juce.getSliderState("clipLevel"),
   clipSoftness: Juce.getSliderState("clipSoftness"),
   clipOs: Juce.getComboBoxState("clipOversampling"),
 };
@@ -265,8 +265,8 @@ function clipMeterCell() {
 }
 
 const clipperCells = [
-  liveKnobCell({ label: "Threshold", sub: "clip level", state: P.clipThreshold, def: -2, minText: `${MINUS}12`, maxText: "0",
-                 fmt: (v) => `${fmtNum(v, 1)} dBFS` }),
+  liveKnobCell({ label: "Clip Level", sub: "vs ceiling", state: P.clipLevel, def: 0, minText: `${MINUS}9`, maxText: "+3",
+                 fmt: (v) => `${v > 0.049 ? "+" : ""}${fmtNum(v, 1)} dB` }),
   liveKnobCell({ label: "Softness", sub: "knee", state: P.clipSoftness, def: 50, minText: "hard", maxText: "soft",
                  fmt: (v) => `${Math.round(v)} %` }),
   oversamplingCell(),
@@ -403,11 +403,14 @@ function renderClipperLearn(body) {
   const on = !!P.clipOn.getValue();
   const bypassed = !!P.bypass.getValue();
   const playing = performance.now() - lastAudioTime < 1500;
-  const thr = P.clipThreshold.getScaledValue();
+  const level = P.clipLevel.getScaledValue();
+  const ceiling = P.ceiling.getScaledValue();
   const soft = Math.round(P.clipSoftness.getScaledValue());
   const os = ["1x", "2x", "4x", "8x"][osIndex()];
   const peakClip = clipWindow.length ? Math.min(...clipWindow) : 0;
+  const avgClip = clipWindow.length ? clipWindow.reduce((a, b) => a + b, 0) / clipWindow.length : 0;
   const peakGr = maxGrRecent();
+  const lvl = `${level > 0.049 ? "+" : ""}${fmtNum(level, 1)} dB`;
 
   body.appendChild(head("WHAT'S HAPPENING"));
   if (bypassed) body.appendChild(para("l-p", "You're on A: the original mix, untouched. Switch to B to hear the chain."));
@@ -416,30 +419,34 @@ function renderClipperLearn(body) {
       : "The Soft Clipper is off. It sits between Drive and the Maximizer and shaves the sharpest peaks, so the limiter has less to do."));
   else if (!playing) body.appendChild(para("l-p", "Press play. I'll show how much the clipper is shaving and how that changes the Maximizer's work."));
   else body.appendChild(para("l-p", peakClip < -0.1
-      ? `Shaving up to ${fmtNum(-peakClip)} dB off the sharpest peaks (kicks, snares, claps) before the Maximizer, which is now taking up to ${fmtNum(-peakGr)} dB.`
-      : `Nothing is reaching the ${fmtNum(thr)} dBFS threshold yet, so the clipper is idle. Turn up Drive or lower Threshold to make it work.`));
+      ? `Shaving the sharpest peaks (kicks, snares, claps) by about ${fmtNum(-avgClip)} dB on average, up to ${fmtNum(-peakClip)} dB on the biggest hits, before the Maximizer, which is now taking up to ${fmtNum(-peakGr)} dB.`
+      : "Nothing is reaching the clip point yet, so the clipper is idle. Lower Clip Level or turn up Drive to make it work."));
 
   body.appendChild(sep());
   body.appendChild(head("WHAT EACH CONTROL IS DOING"));
-  body.appendChild(item("Threshold", `${fmtNum(thr, 1)} dBFS`,
-    `Peaks above ${fmtNum(thr, 1)} dBFS get rounded off. Lower = more clipping and less limiting; the sweet spot is usually 1–3 dB of each.`));
+  body.appendChild(item("Clip Level", lvl,
+    level > 0.05
+      ? `Only peaks more than ${fmtNum(level, 1)} dB over the ${fmtNum(ceiling, 1)} dBTP ceiling get clipped; the Maximizer handles everything below that. Gentle.`
+      : level > -0.05
+        ? `Clipping starts right at the ${fmtNum(ceiling, 1)} dBTP ceiling: the clipper takes the drum spikes and the Maximizer just polishes what's left.`
+        : `Clipping starts ${fmtNum(-level, 1)} dB below the ceiling, then the level comes back up by ${fmtNum(-level, 1)} dB so peaks still reach ${fmtNum(ceiling, 1)} dBTP. Lower = denser and louder, but more distortion.`));
   body.appendChild(item("Softness", `${soft} %`,
     soft < 25 ? "Hard knee: the most transparent on short drum hits, but it can crunch on sustained bass."
-              : soft > 75 ? "Very soft knee: starts bending well below the threshold. Warm and smooth, but it softens the attack of the drums."
+              : soft > 75 ? "Very soft knee: starts bending up to 6 dB before the clip point. Warm and smooth, but it softens the drum attack."
                           : "Medium knee: rounds the peaks gently, so you hear punch rather than distortion."));
   body.appendChild(item("Oversampling", os,
     os === "1x" ? "No oversampling: clipping creates inharmonic 'aliasing' tones that sound harsh and cheap. Use 4x or 8x for masters."
                 : `Runs the clipper at ${os} the sample rate so the new harmonics don't fold back as harsh tones. ${os === "8x" ? "Cleanest, uses the most CPU." : "A good balance of clean and CPU."}`));
 
   if (!on || bypassed || !playing) {
-    body.appendChild(tip("TIP", "Turn the clipper on, set Threshold so it shaves 1–3 dB, then raise Drive. You'll reach a louder master with less pumping than the Maximizer alone.", true));
-  } else if (peakClip < -4) {
+    body.appendChild(tip("TIP", "Turn the clipper on at 0 dB, then lower Clip Level until the Clipping meter shows 1–3 dB on the drums. Compare with the clipper off at the same Drive: it should be denser and louder, with the same peak level.", true));
+  } else if (avgClip < -3) {
     body.appendChild(tip("FIX IT IN THE MIX",
-      `That's a lot of clipping (up to ${fmtNum(-peakClip)} dB). Snares and claps can turn crunchy: raise Threshold or Softness until it's clean. If your drums need this much, clip or limit the drum bus in the mix instead.`));
+      `That's heavy clipping (about ${fmtNum(-avgClip)} dB on average). Snares and claps can turn crunchy: raise Clip Level or Softness until it's clean. If your drums need this much, clip or limit the drum bus in the mix instead.`));
   } else if (os === "1x") {
     body.appendChild(tip("HEADS UP", "At 1x you're adding aliasing. Switch to 4x for a cleaner top end."));
   } else if (peakGr < -6) {
-    body.appendChild(tip("TRY THIS", "The Maximizer is still working hard. Lower Threshold a little so the clipper takes more of the peaks and the limiter less.", true));
+    body.appendChild(tip("TRY THIS", "The Maximizer is still working hard. Lower Clip Level a little so the clipper takes more of the peaks and the limiter less.", true));
   } else {
     body.appendChild(tip("GOOD BALANCE", "The clipper handles the drum spikes, the Maximizer handles the rest. That's how loud masters keep their punch.", true));
   }

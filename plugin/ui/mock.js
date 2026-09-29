@@ -8,7 +8,7 @@
     drive:   { start: 0,  end: 24,   skew: 1,   interval: 0.01, value: 4.5, label: "dB" },
     ceiling: { start: -3, end: 0,    skew: 1,   interval: 0.01, value: -1,  label: "dBTP" },
     release: { start: 10, end: 1000, skew: 0.4, interval: 0.1,  value: 120, label: "ms" },
-    clipThreshold: { start: -12, end: 0, skew: 1, interval: 0.01, value: -2, label: "dBFS" },
+    clipLevel: { start: -9, end: 3, skew: 1, interval: 0.01, value: 0, label: "dB" },
     clipSoftness:  { start: 0, end: 100, skew: 1, interval: 0.1, value: 50, label: "%" },
   };
   const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true };
@@ -84,7 +84,7 @@
       peakL: +(-7 + drive * 0.5 + 5 * beat).toFixed(1),
       peakR: +(-7.5 + drive * 0.5 + 5 * beat).toFixed(1),
       gr: +(toggles.clipOn ? gr * 0.55 : gr).toFixed(1),
-      clip: toggles.clipOn && !bypass ? +(-Math.max(0, drive - 1.5 + sliders.clipThreshold.value * -0.4) * 0.5 * (0.3 + 0.7 * beat)).toFixed(1) : 0,
+      clip: toggles.clipOn && !bypass ? +(-Math.max(0, drive - 1.5 + sliders.clipLevel.value * -0.5) * 0.5 * (0.3 + 0.7 * beat)).toFixed(1) : 0,
       mix, master,
     };
     window.__JUCE__.backend && window.__JUCE__.backend.emitByBackend("polisherMeters", JSON.stringify(frame));

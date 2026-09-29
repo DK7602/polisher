@@ -90,7 +90,7 @@ private:
     std::atomic<float>* bypassParam = nullptr;
     std::atomic<float>* autoResetParam = nullptr;
     std::atomic<float>* clipOnParam = nullptr;
-    std::atomic<float>* clipThresholdParam = nullptr;
+    std::atomic<float>* clipLevelParam = nullptr;
     std::atomic<float>* clipSoftnessParam = nullptr;
     std::atomic<float>* clipOversamplingParam = nullptr;
     bool wasPlaying = false;

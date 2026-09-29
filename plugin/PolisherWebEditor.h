@@ -52,7 +52,7 @@ private:
     juce::WebSliderRelay driveRelay { "drive" }, ceilingRelay { "ceiling" }, releaseRelay { "release" };
     juce::WebToggleButtonRelay adaptiveRelay { "adaptive" }, bypassRelay { "bypass" }, autoResetRelay { "autoreset" };
     juce::WebToggleButtonRelay clipOnRelay { "clipOn" };
-    juce::WebSliderRelay clipThresholdRelay { "clipThreshold" }, clipSoftnessRelay { "clipSoftness" };
+    juce::WebSliderRelay clipLevelRelay { "clipLevel" }, clipSoftnessRelay { "clipSoftness" };
     juce::WebComboBoxRelay clipOversamplingRelay { "clipOversampling" };
 
     juce::WebBrowserComponent webView;
@@ -60,7 +60,7 @@ private:
     juce::WebSliderParameterAttachment driveAttachment, ceilingAttachment, releaseAttachment;
     juce::WebToggleButtonParameterAttachment adaptiveAttachment, bypassAttachment, autoResetAttachment;
     juce::WebToggleButtonParameterAttachment clipOnAttachment;
-    juce::WebSliderParameterAttachment clipThresholdAttachment, clipSoftnessAttachment;
+    juce::WebSliderParameterAttachment clipLevelAttachment, clipSoftnessAttachment;
     juce::WebComboBoxParameterAttachment clipOversamplingAttachment;
 
     juce::dsp::FFT fft { kFftOrder };

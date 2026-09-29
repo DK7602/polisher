@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <vector>
@@ -10,7 +11,8 @@ struct ClipperParams
 {
     bool   enabled       = false;
     double thresholdDb   = -2.0;   // clipping ceiling in dBFS (output never exceeds it before the limiter)
-    double softness      = 0.5;    // 0 = hard clip, 1 = very soft knee (starts bending well below threshold)
+    double softness      = 0.5;    // 0 = hard clip; 1 = the knee starts kKneeDepthDb below the threshold
+    double makeupDb      = 0.0;    // gain after clipping (the plug-in uses it so peaks land at the ceiling)
     int    oversampling  = 4;      // 1, 2, 4 or 8
 };
 
@@ -45,7 +47,7 @@ private:
     Transfer curve (per channel, in the oversampled domain):
       |x| <= knee                 -> unchanged
       knee < |x|                  -> knee + (T - knee) * tanh((|x| - knee) / (T - knee))
-    where T is the threshold and knee = T * (1 - softness). The curve is continuous with slope 1 at
+    where T is the threshold and the knee sits softness * kKneeDepthDb below it. The curve is continuous with slope 1 at
     the knee and never exceeds T, so the clipper output never goes above the threshold (before the
     down-sampling filter).
 
@@ -56,6 +58,13 @@ class SoftClipper
 public:
     static constexpr int kMaxChannels = 8;
     static constexpr int kLatency = 59;   // samples at the base rate
+    static constexpr double kKneeDepthDb = 6.0;   // knee depth at 100 % softness
+
+    /** Where the curve starts to bend for a given threshold and softness (linear). */
+    static double kneeFor (double threshold, double softness) noexcept
+    {
+        return threshold * std::pow (10.0, -std::clamp (softness, 0.0, 1.0) * kKneeDepthDb / 20.0);
+    }
 
     void prepare (int numChannels);
     void reset() noexcept;
@@ -106,7 +115,7 @@ private:
     ClipperParams params;
     int channelCount = 2;
     int activeStages = 2;             // log2(oversampling)
-    double threshold = 1.0;
+    double threshold = 1.0, makeup = 1.0;
     std::vector<Channel> channelState;
     double maxReductionRatio = 1.0;
 };

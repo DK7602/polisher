@@ -59,11 +59,11 @@ TEST_CASE ("Clipper curve: transparent below the knee, never above the threshold
         {
             const double y = SoftClipper::shape (x, 0.5, soft);
             REQUIRE (std::abs (y) <= 0.5 + 1e-12);
-            if (std::abs (x) <= 0.5 * (1.0 - std::min (soft, 0.999)))
+            if (std::abs (x) <= SoftClipper::kneeFor (0.5, soft))
                 REQUIRE (y == x);
         }
     // Continuous at the knee (no step that would click).
-    const double knee = 0.5 * (1.0 - 0.3);
+    const double knee = SoftClipper::kneeFor (0.5, 0.3);
     CHECK_THAT (SoftClipper::shape (knee + 1e-7, 0.5, 0.3), WithinAbs (knee, 1e-6));
 }
 
@@ -159,4 +159,30 @@ TEST_CASE ("Targeting through the full chain reaches a loud target the limiter a
     INFO ("drive " << r.driveDb << " -> " << r.output.integratedLufs << " LUFS, TP " << r.output.truePeakDbtp);
     CHECK (r.reachedTarget);
     CHECK (r.output.truePeakDbtp <= -0.95);
+}
+
+TEST_CASE ("Clip level below the ceiling makes the master louder, not quieter", "[clipper][targeting]")
+{
+    // The plug-in's "Clip Level" is relative to the Maximizer ceiling. Below 0 dB the clipper works
+    // harder and makeup gain brings the clipped peaks back up to the ceiling, so no headroom is lost.
+    const auto mix = testsig::musicLike (44100.0, 20.0, -6.0);
+    const double ceiling = -1.0;
+    auto chainFor = [&] (double clipLevel)
+    {
+        MasterChainParams p;
+        p.driveDb = 6.0;
+        p.limiter.ceilingDbtp = ceiling;
+        p.clipper.enabled = true;
+        p.clipper.softness = 0.5;
+        p.clipper.oversampling = 4;
+        p.clipper.thresholdDb = ceiling + clipLevel;
+        p.clipper.makeupDb = std::max (0.0, -clipLevel);
+        return measure (renderMaster (mix, p));
+    };
+    const auto at0 = chainFor (0.0), atMinus4 = chainFor (-4.0);
+    INFO ("clip level 0: " << at0.integratedLufs << " LUFS, TP " << at0.truePeakDbtp
+          << "; clip level -4: " << atMinus4.integratedLufs << " LUFS, TP " << atMinus4.truePeakDbtp);
+    CHECK (atMinus4.integratedLufs > at0.integratedLufs + 1.5);
+    CHECK (atMinus4.truePeakDbtp <= ceiling + 0.05);
+    CHECK (atMinus4.truePeakDbtp > ceiling - 0.5);   // peaks still use the headroom
 }

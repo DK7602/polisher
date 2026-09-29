@@ -11,7 +11,7 @@ namespace ParamIDs
     inline constexpr const char* bypass   = "bypass";
     inline constexpr const char* autoReset = "autoreset";
     inline constexpr const char* clipOn        = "clipOn";
-    inline constexpr const char* clipThreshold = "clipThreshold";
+    inline constexpr const char* clipLevel     = "clipLevel";
     inline constexpr const char* clipSoftness  = "clipSoftness";
     inline constexpr const char* clipOversampling = "clipOversampling";
 }
@@ -29,7 +29,7 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     bypassParam   = parameters.getRawParameterValue (ParamIDs::bypass);
     autoResetParam = parameters.getRawParameterValue (ParamIDs::autoReset);
     clipOnParam   = parameters.getRawParameterValue (ParamIDs::clipOn);
-    clipThresholdParam = parameters.getRawParameterValue (ParamIDs::clipThreshold);
+    clipLevelParam = parameters.getRawParameterValue (ParamIDs::clipLevel);
     clipSoftnessParam  = parameters.getRawParameterValue (ParamIDs::clipSoftness);
     clipOversamplingParam = parameters.getRawParameterValue (ParamIDs::clipOversampling);
 }
@@ -65,10 +65,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
 
     // Soft Clipper (sits between Drive and the Maximizer's limiter).
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::clipOn, 1 }, "Clipper On", false));
+    // Clip Level is relative to the Maximizer ceiling: 0 = clipping starts at the ceiling,
+    // negative = clip harder (with makeup gain so peaks still reach the ceiling), positive = only
+    // the biggest overs are clipped and the limiter does more.
     layout.add (std::make_unique<AudioParameterFloat> (
-        ParameterID { ParamIDs::clipThreshold, 1 }, "Clipper Threshold",
-        NormalisableRange<float> (-12.0f, 0.0f, 0.01f), -2.0f,
-        AudioParameterFloatAttributes().withLabel ("dBFS").withStringFromValueFunction (dbText)));
+        ParameterID { ParamIDs::clipLevel, 1 }, "Clipper Level",
+        NormalisableRange<float> (-9.0f, 3.0f, 0.01f), 0.0f,
+        AudioParameterFloatAttributes().withLabel ("dB")
+            .withStringFromValueFunction ([] (float v, int) { return (v > 0 ? "+" : "") + String (v, 1) + " dB"; })));
     layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ParamIDs::clipSoftness, 1 }, "Clipper Softness",
         NormalisableRange<float> (0.0f, 100.0f, 0.1f), 50.0f,
@@ -119,12 +123,14 @@ void PolisherAudioProcessor::updateLimiterParams()
     static constexpr int kOversampling[] = { 1, 2, 4, 8 };
     polisher::ClipperParams c;
     c.enabled      = clipOnParam->load() > 0.5f && ! p.bypassed;
-    c.thresholdDb  = clipThresholdParam->load();
+    const double clipLevel = clipLevelParam->load();
+    c.thresholdDb  = p.ceilingDbtp + clipLevel;
+    c.makeupDb     = juce::jmax (0.0, -clipLevel);
     c.softness     = clipSoftnessParam->load() / 100.0;
     c.oversampling = kOversampling[juce::jlimit (0, 3, juce::roundToInt (clipOversamplingParam->load()))];
 
     const auto& cc = clipper.getParams();
-    if (c.enabled != cc.enabled || c.thresholdDb != cc.thresholdDb || c.softness != cc.softness
+    if (c.enabled != cc.enabled || c.thresholdDb != cc.thresholdDb || c.softness != cc.softness || c.makeupDb != cc.makeupDb
         || c.oversampling != cc.oversampling)
         clipper.setParams (c);
 }

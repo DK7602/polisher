@@ -103,7 +103,7 @@ double HalfbandStage::downsample (double in0, double in1) noexcept
 double SoftClipper::shape (double x, double t, double softness) noexcept
 {
     const double ax = std::abs (x);
-    const double knee = t * (1.0 - std::clamp (softness, 0.0, 0.999));
+    const double knee = kneeFor (t, softness);
     if (ax <= knee)
         return x;
     const double range = t - knee;
@@ -136,7 +136,8 @@ void SoftClipper::setParams (const ClipperParams& p) noexcept
 {
     const int oldStages = activeStages;
     params = p;
-    threshold = std::pow (10.0, std::clamp (p.thresholdDb, -24.0, 0.0) / 20.0);
+    threshold = std::pow (10.0, std::clamp (p.thresholdDb, -24.0, 6.0) / 20.0);
+    makeup = std::pow (10.0, std::clamp (p.makeupDb, 0.0, 24.0) / 20.0);
     const int os = p.oversampling;
     activeStages = os >= 8 ? 3 : os >= 4 ? 2 : os >= 2 ? 1 : 0;
     if (activeStages != oldStages)
@@ -175,7 +176,7 @@ void SoftClipper::processFrame (double* frame, int numChannels) noexcept
     for (int c = 0; c < nch; ++c)
     {
         auto& ch = channelState[static_cast<size_t> (c)];
-        double y = params.enabled ? processOversampled (ch, frame[c], activeStages) : frame[c];
+        double y = params.enabled ? processOversampled (ch, frame[c], activeStages) * makeup : frame[c];
 
         // When disabled the signal skips the filters, so pad the full latency instead.
         const int delay = params.enabled ? pad : kLatency;

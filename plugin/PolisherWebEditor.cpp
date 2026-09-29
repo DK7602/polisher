@@ -64,7 +64,7 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
                    .withOptionsFrom (bypassRelay)
                    .withOptionsFrom (autoResetRelay)
                    .withOptionsFrom (clipOnRelay)
-                   .withOptionsFrom (clipThresholdRelay)
+                   .withOptionsFrom (clipLevelRelay)
                    .withOptionsFrom (clipSoftnessRelay)
                    .withOptionsFrom (clipOversamplingRelay)
                    .withNativeFunction ("resetMeter", [this] (const juce::Array<juce::var>&, auto complete)
@@ -80,7 +80,7 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
       bypassAttachment   (param (p, "bypass"),    bypassRelay,    nullptr),
       autoResetAttachment (param (p, "autoreset"), autoResetRelay, nullptr),
       clipOnAttachment (param (p, "clipOn"), clipOnRelay, nullptr),
-      clipThresholdAttachment (param (p, "clipThreshold"), clipThresholdRelay, nullptr),
+      clipLevelAttachment (param (p, "clipLevel"), clipLevelRelay, nullptr),
       clipSoftnessAttachment (param (p, "clipSoftness"), clipSoftnessRelay, nullptr),
       clipOversamplingAttachment (param (p, "clipOversampling"), clipOversamplingRelay, nullptr)
 {
