@@ -28,6 +28,10 @@ const P = {
   adaptive: Juce.getToggleState("adaptive"),
   bypass: Juce.getToggleState("bypass"),
   autoreset: Juce.getToggleState("autoreset"),
+  clipOn: Juce.getToggleState("clipOn"),
+  clipThreshold: Juce.getSliderState("clipThreshold"),
+  clipSoftness: Juce.getSliderState("clipSoftness"),
+  clipOs: Juce.getComboBoxState("clipOversampling"),
 };
 const resetMeter = Juce.getNativeFunction("resetMeter");
 
@@ -40,9 +44,10 @@ function scaledToNorm(state, v) {
 // Latest meter frame from the plug-in.
 const M = {
   momentary: -100, shortTerm: -100, integrated: -100, range: 0, truePeak: -100,
-  peakRecent: -100, peakL: -100, peakR: -100, gr: 0, mix: null, master: null,
+  peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
 };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
+let clipWindow = [];         // ~3 s of clipper peak-reduction samples
 let lastAudioTime = 0;
 
 // ---------------------------------------------------------------------------------------------
@@ -77,7 +82,7 @@ const modules = [
     cells: [["Mode", "character", "Tape", .5], ["Drive", "input", "0.0 dB", 0], ["Mix", "wet / dry", "0%", 0]],
     controls: [["Mode", "Tape = soft and warm. Tube = richer. Clip = aggressive."], ["Drive", "How many harmonics are generated."],
                ["Mix", "Blend keeps transients clean while harmonics fill in underneath."]] },
-  { id: "clip", name: "Soft Clipper", soon: "Coming next. It's how masters go louder than about −9 LUFS without pumping.",
+  { id: "clip", name: "Soft Clipper", live: true, soon: "",
     what: "Shaves the tallest drum peaks before the limiter so the limiter works less. This is how loud modern masters stay punchy.",
     cells: [["Threshold", "dBFS", "0.0 dB", 1], ["Softness", "knee", "70%", .7], ["Oversample", "quality", "8×", .8]],
     controls: [["Threshold", "Where clipping starts. Lower = more peaks shaved."], ["Softness", "Rounded knee: heard as punch, not distortion."],
@@ -218,6 +223,56 @@ const maximizerCells = [
   toggleCell({ label: "Release Mode", sub: "program dependent", state: P.adaptive, onText: "ADAPTIVE", offText: "FIXED" }),
 ];
 
+function oversamplingCell() {
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.innerHTML = `<span class="cell-label">Oversampling</span><span class="cell-sub mono">quality / CPU</span>
+    <div class="seg"></div><span class="cell-value mono os-note"></span>`;
+  const seg = cell.querySelector(".seg");
+  const note = cell.querySelector(".os-note");
+  const labels = ["1x", "2x", "4x", "8x"];
+  const buttons = labels.map((label, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.addEventListener("click", () => { P.clipOs.setChoiceIndex(i); refresh(); onParamsChanged(); });
+    seg.appendChild(b);
+    return b;
+  });
+  function refresh() {
+    const idx = osIndex();
+    buttons.forEach((b, i) => { b.className = "pill " + (i === idx ? "pill-red" : "pill-blue"); b.setAttribute("aria-pressed", String(i === idx)); });
+    note.textContent = ["cheapest · aliasing", "light", "mastering default", "cleanest · most CPU"][idx];
+  }
+  P.clipOs.valueChangedEvent.addListener(() => { refresh(); onParamsChanged(); });
+  P.clipOs.propertiesChangedEvent.addListener(refresh);
+  refresh();
+  return cell;
+}
+function osIndex() {
+  const n = P.clipOs.properties.choices.length || 4;
+  return clamp(Math.round(P.clipOs.value * (n - 1)), 0, 3);
+}
+
+function clipMeterCell() {
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.innerHTML = `<span class="cell-label">Clipping</span><span class="cell-sub mono">peak reduction</span>
+    <div class="clipmeter screen"><div class="clipmeter-fill" id="clipmeter-fill"></div></div>
+    <div class="minmax mono"><span>0</span><span>${MINUS}6 dB</span></div>
+    <span class="cell-value mono" id="clipmeter-val">0.0 dB</span>`;
+  return cell;
+}
+
+const clipperCells = [
+  liveKnobCell({ label: "Threshold", sub: "clip level", state: P.clipThreshold, def: -2, minText: `${MINUS}12`, maxText: "0",
+                 fmt: (v) => `${fmtNum(v, 1)} dBFS` }),
+  liveKnobCell({ label: "Softness", sub: "knee", state: P.clipSoftness, def: 50, minText: "hard", maxText: "soft",
+                 fmt: (v) => `${Math.round(v)} %` }),
+  oversamplingCell(),
+  clipMeterCell(),
+];
+
 function renderModule() {
   const m = modules.find((x) => x.id === selected);
   const row = $("knob-row");
@@ -227,8 +282,9 @@ function renderModule() {
   $("btn-bypass").hidden = !m.live;
   if (m.live) {
     row.classList.remove("soon");
-    maximizerCells.forEach((c) => row.appendChild(c));
+    (m.id === "clip" ? clipperCells : maximizerCells).forEach((c) => row.appendChild(c));
     $("module-note").textContent = "Live · drag up/down · Shift = fine · double-click = reset";
+    refreshHeadButton();
   } else {
     row.classList.add("soon");
     m.cells.forEach((c) => row.appendChild(staticKnobCell(c)));
@@ -285,6 +341,8 @@ function renderLearn() {
     return;
   }
 
+  if (m.id === "clip") { renderClipperLearn(body); return; }
+
   const drive = P.drive.getScaledValue();
   const ceiling = P.ceiling.getScaledValue();
   const release = Math.round(P.release.getScaledValue());
@@ -311,7 +369,9 @@ function renderLearn() {
   body.appendChild(item("Drive", `+${drive.toFixed(1)} dB`,
     drive < 0.05
       ? "No push yet. Turn Drive up to make the master louder; the limiter catches the peaks so nothing clips."
-      : `Pushing the mix ${drive.toFixed(1)} dB into the limiter. The quiet and medium parts come up by that much; the loud hits are held at the ceiling.`));
+      : P.clipOn.getValue()
+        ? `Pushing the mix ${drive.toFixed(1)} dB into the Soft Clipper and then the limiter. The quiet and medium parts come up by that much; the loud hits are shaved and held at the ceiling.`
+        : `Pushing the mix ${drive.toFixed(1)} dB into the limiter. The quiet and medium parts come up by that much; the loud hits are held at the ceiling.`));
   body.appendChild(item("Ceiling", `${fmtNum(ceiling, 1)} dBTP`,
     `Nothing leaves Polisher above ${fmtNum(ceiling, 1)} dBTP, including peaks that fall between samples. ` +
     (ceiling > -0.95 ? "Above −1 dBTP, the MP3/AAC versions streaming services make can clip. −1.0 is the safe choice."
@@ -339,6 +399,52 @@ function renderLearn() {
   body.appendChild(note);
 }
 
+function renderClipperLearn(body) {
+  const on = !!P.clipOn.getValue();
+  const bypassed = !!P.bypass.getValue();
+  const playing = performance.now() - lastAudioTime < 1500;
+  const thr = P.clipThreshold.getScaledValue();
+  const soft = Math.round(P.clipSoftness.getScaledValue());
+  const os = ["1x", "2x", "4x", "8x"][osIndex()];
+  const peakClip = clipWindow.length ? Math.min(...clipWindow) : 0;
+  const peakGr = maxGrRecent();
+
+  body.appendChild(head("WHAT'S HAPPENING"));
+  if (bypassed) body.appendChild(para("l-p", "You're on A: the original mix, untouched. Switch to B to hear the chain."));
+  else if (!on) body.appendChild(para("l-p", playing
+      ? `The Soft Clipper is off, so the Maximizer is doing all the peak control (up to ${fmtNum(-peakGr)} dB right now). Turn it on to let it shave the sharpest drum hits first.`
+      : "The Soft Clipper is off. It sits between Drive and the Maximizer and shaves the sharpest peaks, so the limiter has less to do."));
+  else if (!playing) body.appendChild(para("l-p", "Press play. I'll show how much the clipper is shaving and how that changes the Maximizer's work."));
+  else body.appendChild(para("l-p", peakClip < -0.1
+      ? `Shaving up to ${fmtNum(-peakClip)} dB off the sharpest peaks (kicks, snares, claps) before the Maximizer, which is now taking up to ${fmtNum(-peakGr)} dB.`
+      : `Nothing is reaching the ${fmtNum(thr)} dBFS threshold yet, so the clipper is idle. Turn up Drive or lower Threshold to make it work.`));
+
+  body.appendChild(sep());
+  body.appendChild(head("WHAT EACH CONTROL IS DOING"));
+  body.appendChild(item("Threshold", `${fmtNum(thr, 1)} dBFS`,
+    `Peaks above ${fmtNum(thr, 1)} dBFS get rounded off. Lower = more clipping and less limiting; the sweet spot is usually 1–3 dB of each.`));
+  body.appendChild(item("Softness", `${soft} %`,
+    soft < 25 ? "Hard knee: the most transparent on short drum hits, but it can crunch on sustained bass."
+              : soft > 75 ? "Very soft knee: starts bending well below the threshold. Warm and smooth, but it softens the attack of the drums."
+                          : "Medium knee: rounds the peaks gently, so you hear punch rather than distortion."));
+  body.appendChild(item("Oversampling", os,
+    os === "1x" ? "No oversampling: clipping creates inharmonic 'aliasing' tones that sound harsh and cheap. Use 4x or 8x for masters."
+                : `Runs the clipper at ${os} the sample rate so the new harmonics don't fold back as harsh tones. ${os === "8x" ? "Cleanest, uses the most CPU." : "A good balance of clean and CPU."}`));
+
+  if (!on || bypassed || !playing) {
+    body.appendChild(tip("TIP", "Turn the clipper on, set Threshold so it shaves 1–3 dB, then raise Drive. You'll reach a louder master with less pumping than the Maximizer alone.", true));
+  } else if (peakClip < -4) {
+    body.appendChild(tip("FIX IT IN THE MIX",
+      `That's a lot of clipping (up to ${fmtNum(-peakClip)} dB). Snares and claps can turn crunchy: raise Threshold or Softness until it's clean. If your drums need this much, clip or limit the drum bus in the mix instead.`));
+  } else if (os === "1x") {
+    body.appendChild(tip("HEADS UP", "At 1x you're adding aliasing. Switch to 4x for a cleaner top end."));
+  } else if (peakGr < -6) {
+    body.appendChild(tip("TRY THIS", "The Maximizer is still working hard. Lower Threshold a little so the clipper takes more of the peaks and the limiter less.", true));
+  } else {
+    body.appendChild(tip("GOOD BALANCE", "The clipper handles the drum spikes, the Maximizer handles the rest. That's how loud masters keep their punch.", true));
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Header controls
 function setLearn(on) {
@@ -357,14 +463,34 @@ function refreshAB() {
   $("btn-b").classList.toggle("on", !bypassed);
   $("btn-a").setAttribute("aria-pressed", String(bypassed));
   $("btn-b").setAttribute("aria-pressed", String(!bypassed));
+  refreshHeadButton();
+}
+// The button in the module header: global bypass for the Maximizer, power for the Soft Clipper.
+function refreshHeadButton() {
   const bp = $("btn-bypass");
-  bp.className = "pill bypass " + (bypassed ? "pill-red" : "pill-blue");
-  bp.textContent = bypassed ? "BYPASSED" : "BYPASS";
+  if (selected === "clip") {
+    const on = !!P.clipOn.getValue();
+    bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
+    bp.textContent = on ? "CLIPPER ON" : "CLIPPER OFF";
+    bp.setAttribute("aria-pressed", String(on));
+    $("knob-row").classList.toggle("dimmed", !on);
+  } else {
+    const bypassed = !!P.bypass.getValue();
+    bp.className = "pill bypass " + (bypassed ? "pill-red" : "pill-blue");
+    bp.textContent = bypassed ? "BYPASSED" : "BYPASS";
+    bp.setAttribute("aria-pressed", String(bypassed));
+    $("knob-row").classList.remove("dimmed");
+  }
 }
 $("btn-a").addEventListener("click", () => { P.bypass.setValue(true); onParamsChanged(); });
 $("btn-b").addEventListener("click", () => { P.bypass.setValue(false); onParamsChanged(); });
-$("btn-bypass").addEventListener("click", () => { P.bypass.setValue(!P.bypass.getValue()); onParamsChanged(); });
+$("btn-bypass").addEventListener("click", () => {
+  if (selected === "clip") P.clipOn.setValue(!P.clipOn.getValue());
+  else P.bypass.setValue(!P.bypass.getValue());
+  onParamsChanged();
+});
 P.bypass.valueChangedEvent.addListener(onParamsChanged);
+P.clipOn.valueChangedEvent.addListener(onParamsChanged);
 
 function togglePopover(id) {
   for (const p of ["pop-settings", "pop-help"]) $(p).hidden = p === id ? !$(p).hidden : true;
@@ -483,10 +609,20 @@ function updateLiveReadouts() {
   const gr = M.gr;
   const chip = $("module-chip");
   const m = modules.find((x) => x.id === selected);
+  const clipOn = !!P.clipOn.getValue();
+  const clipText = M.clip > -0.05 ? "0.0" : fmtNum(M.clip);
   chip.hidden = !m.live;
-  chip.textContent = `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
+  chip.textContent = selected === "clip" ? (clipOn ? `CLIP ${clipText} dB` : "OFF")
+                                         : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
   const r = $("read-max");
   if (r) r.textContent = P.bypass.getValue() ? "Bypassed" : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
+  const rc = $("read-clip");
+  if (rc) rc.textContent = P.bypass.getValue() ? "Bypassed" : clipOn ? `Clip ${clipText} dB` : "Off";
+  const fill = $("clipmeter-fill"), val = $("clipmeter-val");
+  if (fill) {
+    fill.style.width = (clipOn ? clamp(-M.clip / 6, 0, 1) * 100 : 0).toFixed(1) + "%";
+    val.textContent = clipOn ? `${clipText} dB` : "off";
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -496,6 +632,8 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   if (M.momentary > -70 || M.peakL > -80) lastAudioTime = performance.now();
   grWindow.push(M.gr);
   if (grWindow.length > 90) grWindow.shift();
+  clipWindow.push(M.clip);
+  if (clipWindow.length > 90) clipWindow.shift();
   updateMeters();
   updateOutputMeter();
   updateLiveReadouts();
@@ -504,7 +642,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   $("sp-master").setAttribute("d", master);
   $("sp-master-glow").setAttribute("d", master);
 });
-setInterval(() => { if (learnOn && selected === "max") renderLearn(); }, 1000);
+setInterval(() => { if (learnOn && (selected === "max" || selected === "clip")) renderLearn(); }, 1000);
 
 // ---------------------------------------------------------------------------------------------
 buildSpectrumGrid();

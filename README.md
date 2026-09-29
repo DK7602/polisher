@@ -14,7 +14,8 @@ Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 | Auto-Master loudness step: finds the drive that lands a mix on a LUFS target | Done, reports unreachable targets honestly |
 | Plug-in shell (JUCE 8): parameters, state save, latency reporting | Done |
 | Liquid-glass UI (WebView): live Maximizer knobs, R128 meters, real-time spectrum, live Learn panel | Done (v0.2) |
-| Tonal EQ, Bass Control, Dynamics, Imager, Saturation, Soft Clipper | Next |
+| Soft Clipper: 1x–8x linear-phase oversampling, soft knee, constant latency, live UI + Learn | Done (v0.3) |
+| Tonal EQ, Bass Control, Dynamics, Imager, Saturation | Next |
 | Analysis engine + Learn explanations | Next |
 
 ## Layout
@@ -26,6 +27,7 @@ dsp/        Framework-free C++20 engine (no JUCE): unit-testable, reusable offli
     TruePeakDetector.h   4x polyphase inter-sample peak detector
     LoudnessMeter.h      R128 meter with gated histograms (never allocates on the audio thread)
     TruePeakLimiter.h    Maximizer core
+    SoftClipper.h        Oversampled soft-knee clipper (drive -> clipper -> limiter)
     LoudnessTargeting.h  Offline render + drive search used by Auto-Master
 plugin/     JUCE AudioProcessor, web-view editor (+ basic native fallback editor)
   ui/       The liquid-glass interface: index.html, styles.css, app.js, images, fonts (OFL).

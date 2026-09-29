@@ -10,6 +10,10 @@ namespace ParamIDs
     inline constexpr const char* adaptive = "adaptive";
     inline constexpr const char* bypass   = "bypass";
     inline constexpr const char* autoReset = "autoreset";
+    inline constexpr const char* clipOn        = "clipOn";
+    inline constexpr const char* clipThreshold = "clipThreshold";
+    inline constexpr const char* clipSoftness  = "clipSoftness";
+    inline constexpr const char* clipOversampling = "clipOversampling";
 }
 
 PolisherAudioProcessor::PolisherAudioProcessor()
@@ -24,6 +28,10 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     adaptiveParam = parameters.getRawParameterValue (ParamIDs::adaptive);
     bypassParam   = parameters.getRawParameterValue (ParamIDs::bypass);
     autoResetParam = parameters.getRawParameterValue (ParamIDs::autoReset);
+    clipOnParam   = parameters.getRawParameterValue (ParamIDs::clipOn);
+    clipThresholdParam = parameters.getRawParameterValue (ParamIDs::clipThreshold);
+    clipSoftnessParam  = parameters.getRawParameterValue (ParamIDs::clipSoftness);
+    clipOversamplingParam = parameters.getRawParameterValue (ParamIDs::clipOversampling);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::createParameterLayout()
@@ -55,6 +63,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::autoReset, 1 }, "Reset Meter On Play", true,
                                                       AudioParameterBoolAttributes().withAutomatable (false)));
 
+    // Soft Clipper (sits between Drive and the Maximizer's limiter).
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::clipOn, 1 }, "Clipper On", false));
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ParamIDs::clipThreshold, 1 }, "Clipper Threshold",
+        NormalisableRange<float> (-12.0f, 0.0f, 0.01f), -2.0f,
+        AudioParameterFloatAttributes().withLabel ("dBFS").withStringFromValueFunction (dbText)));
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ParamIDs::clipSoftness, 1 }, "Clipper Softness",
+        NormalisableRange<float> (0.0f, 100.0f, 0.1f), 50.0f,
+        AudioParameterFloatAttributes().withLabel ("%")
+            .withStringFromValueFunction ([] (float v, int) { return String (juce::roundToInt (v)) + " %"; })));
+    layout.add (std::make_unique<AudioParameterChoice> (
+        ParameterID { ParamIDs::clipOversampling, 1 }, "Clipper Oversampling",
+        StringArray { "1x", "2x", "4x", "8x" }, 2));
+
     return layout;
 }
 
@@ -70,15 +93,19 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
 {
     const int channels = juce::jmax (1, getTotalNumOutputChannels());
     limiter.prepare (sampleRate, channels);
+    clipper.prepare (channels);
     outputMeter.prepare (sampleRate, channels);
     updateLimiterParams();
-    setLatencySamples (limiter.latencySamples());
+    currentDriveGain = targetDriveGain();
+    // Constant latency whatever the settings: clipper (all oversampling modes) + limiter look-ahead.
+    setLatencySamples (polisher::SoftClipper::latencySamples() + limiter.latencySamples());
 }
 
 void PolisherAudioProcessor::updateLimiterParams()
 {
+    // Drive is applied before the clipper (see processAnyPrecision), so the limiter gets none.
     polisher::LimiterParams p;
-    p.driveDb         = driveParam->load();
+    p.driveDb         = 0.0;
     p.ceilingDbtp     = ceilingParam->load();
     p.releaseMs       = releaseParam->load();
     p.adaptiveRelease = adaptiveParam->load() > 0.5f;
@@ -88,6 +115,23 @@ void PolisherAudioProcessor::updateLimiterParams()
     if (p.driveDb != cur.driveDb || p.ceilingDbtp != cur.ceilingDbtp || p.releaseMs != cur.releaseMs
         || p.adaptiveRelease != cur.adaptiveRelease || p.bypassed != cur.bypassed)
         limiter.setParams (p);
+
+    static constexpr int kOversampling[] = { 1, 2, 4, 8 };
+    polisher::ClipperParams c;
+    c.enabled      = clipOnParam->load() > 0.5f && ! p.bypassed;
+    c.thresholdDb  = clipThresholdParam->load();
+    c.softness     = clipSoftnessParam->load() / 100.0;
+    c.oversampling = kOversampling[juce::jlimit (0, 3, juce::roundToInt (clipOversamplingParam->load()))];
+
+    const auto& cc = clipper.getParams();
+    if (c.enabled != cc.enabled || c.thresholdDb != cc.thresholdDb || c.softness != cc.softness
+        || c.oversampling != cc.oversampling)
+        clipper.setParams (c);
+}
+
+double PolisherAudioProcessor::targetDriveGain() const
+{
+    return bypassParam->load() > 0.5f ? 1.0 : juce::Decibels::decibelsToGain (static_cast<double> (driveParam->load()));
 }
 
 template <typename Sample>
@@ -117,6 +161,13 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     const int numSamples = buffer.getNumSamples();
 
     inputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
+
+    // Drive (ramped per block so knob moves don't click) -> Soft Clipper -> limiter.
+    const double newGain = targetDriveGain();
+    buffer.applyGainRamp (0, numSamples, static_cast<Sample> (currentDriveGain), static_cast<Sample> (newGain));
+    currentDriveGain = newGain;
+
+    clipper.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     limiter.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     outputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     outputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
@@ -161,6 +212,9 @@ void PolisherAudioProcessor::publishMeters()
     const float recent = clampDb (outputMeter.takeRecentTruePeakDbtp());
     if (recent > meters.truePeakRecent.load())
         meters.truePeakRecent.store (recent);
+    const float clip = static_cast<float> (clipper.takeMaxClipDb());
+    if (clip < meters.clipReduction.load())
+        meters.clipReduction.store (clip);
     const float gr = static_cast<float> (limiter.takeMaxGainReductionDb());
     if (gr < meters.gainReduction.load())
         meters.gainReduction.store (gr);

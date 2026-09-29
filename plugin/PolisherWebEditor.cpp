@@ -63,6 +63,10 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
                    .withOptionsFrom (adaptiveRelay)
                    .withOptionsFrom (bypassRelay)
                    .withOptionsFrom (autoResetRelay)
+                   .withOptionsFrom (clipOnRelay)
+                   .withOptionsFrom (clipThresholdRelay)
+                   .withOptionsFrom (clipSoftnessRelay)
+                   .withOptionsFrom (clipOversamplingRelay)
                    .withNativeFunction ("resetMeter", [this] (const juce::Array<juce::var>&, auto complete)
                                         {
                                             audioProcessor.requestMeterReset();
@@ -74,7 +78,11 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
       releaseAttachment  (param (p, "release"),   releaseRelay,   nullptr),
       adaptiveAttachment (param (p, "adaptive"),  adaptiveRelay,  nullptr),
       bypassAttachment   (param (p, "bypass"),    bypassRelay,    nullptr),
-      autoResetAttachment (param (p, "autoreset"), autoResetRelay, nullptr)
+      autoResetAttachment (param (p, "autoreset"), autoResetRelay, nullptr),
+      clipOnAttachment (param (p, "clipOn"), clipOnRelay, nullptr),
+      clipThresholdAttachment (param (p, "clipThreshold"), clipThresholdRelay, nullptr),
+      clipSoftnessAttachment (param (p, "clipSoftness"), clipSoftnessRelay, nullptr),
+      clipOversamplingAttachment (param (p, "clipOversampling"), clipOversamplingRelay, nullptr)
 {
     addAndMakeVisible (webView);
     webView.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
@@ -176,6 +184,8 @@ void PolisherWebEditor::timerCallback()
 
     const float gr = m.gainReduction.exchange (0.0f);
     grHold = gr < grHold ? gr : grHold * 0.8f + gr * 0.2f;
+    const float clip = m.clipReduction.exchange (0.0f);
+    clipHold = clip < clipHold ? clip : clipHold * 0.8f + clip * 0.2f;
 
     auto* frame = new juce::DynamicObject();
     frame->setProperty ("momentary",  roundTo (m.momentary.load(), 0.1f));
@@ -187,6 +197,7 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("peakL",      roundTo (m.peakLeft.exchange (-100.0f), 0.1f));
     frame->setProperty ("peakR",      roundTo (m.peakRight.exchange (-100.0f), 0.1f));
     frame->setProperty ("gr",         roundTo (grHold, 0.1f));
+    frame->setProperty ("clip",       roundTo (clipHold, 0.1f));
     frame->setProperty ("mix",        makeSpectrum (audioProcessor.inputTap, mixAnalyser));
     frame->setProperty ("master",     makeSpectrum (audioProcessor.outputTap, masterAnalyser));
 

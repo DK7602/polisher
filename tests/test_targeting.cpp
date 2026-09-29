@@ -42,7 +42,7 @@ TEST_CASE ("An unreachable target is reported honestly, not faked", "[targeting]
 
 TEST_CASE ("Silence is left alone", "[targeting]")
 {
-    const auto r = findDriveForTarget (testsig::silence (48000.0, 2, 3.0), -14.0, {});
+    const auto r = findDriveForTarget (testsig::silence (48000.0, 2, 3.0), -14.0, LimiterParams {});
     CHECK_FALSE (r.reachedTarget);
     CHECK (r.driveDb == 0.0);
 }

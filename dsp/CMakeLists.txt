@@ -3,6 +3,7 @@ add_library(polisher_dsp STATIC
     src/TruePeakDetector.cpp
     src/LoudnessMeter.cpp
     src/TruePeakLimiter.cpp
+    src/SoftClipper.cpp
     src/LoudnessTargeting.cpp)
 
 target_include_directories(polisher_dsp PUBLIC include)

@@ -55,7 +55,55 @@ AudioClip renderLimited (const AudioClip& clip, const LimiterParams& params)
     return out;
 }
 
+AudioClip renderMaster (const AudioClip& clip, const MasterChainParams& params)
+{
+    const int nch = clip.numChannels();
+    const int n = clip.numSamples();
+
+    SoftClipper clipper;
+    clipper.prepare (nch);
+    clipper.setParams (params.clipper);
+
+    TruePeakLimiter limiter;
+    limiter.prepare (clip.sampleRate, nch);
+    auto lp = params.limiter;
+    lp.driveDb = 0.0;
+    limiter.setParams (lp);
+
+    const double drive = std::pow (10.0, params.driveDb / 20.0);
+    const int latency = SoftClipper::latencySamples() + limiter.latencySamples();
+
+    AudioClip out;
+    out.sampleRate = clip.sampleRate;
+    out.channels.assign (static_cast<size_t> (nch), std::vector<float> (static_cast<size_t> (n), 0.0f));
+
+    std::vector<double> frame (static_cast<size_t> (nch)), res (static_cast<size_t> (nch));
+    for (int i = 0; i < n + latency; ++i)
+    {
+        for (int c = 0; c < nch; ++c)
+            frame[static_cast<size_t> (c)] = i < n ? clip.channels[static_cast<size_t> (c)][static_cast<size_t> (i)] * drive : 0.0;
+
+        clipper.processFrame (frame.data(), nch);
+        limiter.processFrame (frame.data(), res.data(), nch);
+
+        const int o = i - latency;
+        if (o >= 0)
+            for (int c = 0; c < nch; ++c)
+                out.channels[static_cast<size_t> (c)][static_cast<size_t> (o)] = static_cast<float> (res[static_cast<size_t> (c)]);
+    }
+    return out;
+}
+
 TargetResult findDriveForTarget (const AudioClip& clip, double targetLufs, LimiterParams base,
+                                 double toleranceLu, double maxDriveDb)
+{
+    MasterChainParams chain;
+    chain.clipper.enabled = false;
+    chain.limiter = base;
+    return findDriveForTarget (clip, targetLufs, chain, toleranceLu, maxDriveDb);
+}
+
+TargetResult findDriveForTarget (const AudioClip& clip, double targetLufs, MasterChainParams base,
                                  double toleranceLu, double maxDriveDb)
 {
     TargetResult result;
@@ -66,9 +114,9 @@ TargetResult findDriveForTarget (const AudioClip& clip, double targetLufs, Limit
     auto evaluate = [&] (double drive)
     {
         base.driveDb = drive;
-        return measure (renderLimited (clip, base));
+        return measure (base.clipper.enabled ? renderMaster (clip, base)
+                                             : renderLimited (clip, [&] { auto l = base.limiter; l.driveDb = drive; return l; }()));
     };
-
     // Initial guess: plain gain difference (ignores limiting, so it undershoots on loud targets).
     double d0 = std::clamp (targetLufs - input.integratedLufs, -24.0, maxDriveDb);
     LoudnessStats s0 = evaluate (d0);

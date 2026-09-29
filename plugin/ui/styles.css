@@ -122,7 +122,7 @@ img { -webkit-user-drag: none; }
 .module-head .wm { font-size: 17px; }
 .chip { font-size: 12px; padding: 5px 14px; }
 .module-note { font-size: 13px; color: var(--muted); }
-.bypass { height: 30px; width: 96px; font-size: 13px; font-weight: 700; letter-spacing: .08em; }
+.bypass { height: 30px; min-width: 96px; padding: 0 16px; white-space: nowrap; font-size: 13px; font-weight: 700; letter-spacing: .08em; }
 .knob-row { flex-grow: 1; min-height: 0; display: flex; justify-content: space-evenly; align-items: center; }
 .knob-row.soon { opacity: .35; filter: saturate(.6); pointer-events: none; }
 .cell { width: 110px; display: flex; flex-direction: column; align-items: center; gap: 3px; }
@@ -207,3 +207,12 @@ img { -webkit-user-drag: none; }
   border-radius: 14px; font-size: 15px; line-height: 1.4; text-align: center; background: rgba(5,15,34,.94);
   box-shadow: 0 0 0 1.5px rgba(255,90,98,.7), 0 0 24px rgba(255,40,50,.35); }
 .toast[hidden] { display: none; }
+
+/* ---------- soft clipper ---------- */
+.seg { display: flex; gap: 4px; margin: 26px 0 18px; }
+.seg button { height: 32px; width: 44px; font-size: 12px; font-weight: 700; }
+.os-note { font-size: 11px !important; font-weight: 500 !important; color: var(--dim); white-space: nowrap; }
+.clipmeter { width: 100px; height: 16px; border-radius: 999px; overflow: hidden; margin: 38px 0 6px; }
+.clipmeter-fill { height: 100%; width: 0%; border-radius: 999px; background: linear-gradient(180deg,#FF7A80,#E0141E 60%,#8E0A10);
+  box-shadow: 0 0 10px rgba(255,40,50,.7); transition: width 80ms linear; }
+.knob-row.dimmed .knob, .knob-row.dimmed .seg, .knob-row.dimmed .clipmeter { opacity: .45; filter: saturate(.6); }

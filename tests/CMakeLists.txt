@@ -9,7 +9,8 @@ add_executable(polisher_tests
     test_loudness.cpp
     test_truepeak.cpp
     test_limiter.cpp
-    test_targeting.cpp)
+    test_targeting.cpp
+    test_clipper.cpp)
 
 target_link_libraries(polisher_tests PRIVATE polisher_dsp Catch2::Catch2WithMain)
 set_target_properties(polisher_tests PROPERTIES FOLDER "Polisher")

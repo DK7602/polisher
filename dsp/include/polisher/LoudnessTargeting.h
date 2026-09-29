@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SoftClipper.h"
 #include "TruePeakLimiter.h"
 
 #include <vector>
@@ -30,6 +31,17 @@ LoudnessStats measure (const AudioClip& clip);
 /** Renders a clip through the limiter offline, compensating the limiter's latency. */
 AudioClip renderLimited (const AudioClip& clip, const LimiterParams& params);
 
+/** The end of the mastering chain as the plug-in runs it: drive -> Soft Clipper -> Maximizer. */
+struct MasterChainParams
+{
+    double driveDb = 0.0;       // push into the clipper and limiter
+    ClipperParams clipper;      // clipper.enabled = false skips it (latency is kept)
+    LimiterParams limiter;      // limiter.driveDb is ignored here; driveDb above is used
+};
+
+/** Renders a clip through drive -> clipper -> limiter offline, latency compensated. */
+AudioClip renderMaster (const AudioClip& clip, const MasterChainParams& params);
+
 struct TargetResult
 {
     double driveDb = 0.0;          // drive that hits the target
@@ -43,6 +55,10 @@ struct TargetResult
     targetLufs (integrated) under the given true-peak ceiling. Uses a secant search on the real
     limiter output, so the answer accounts for exactly how much the limiter squashes this mix. */
 TargetResult findDriveForTarget (const AudioClip& clip, double targetLufs, LimiterParams base,
+                                 double toleranceLu = 0.05, double maxDriveDb = 24.0);
+
+/** Same search on the full chain (drive -> clipper -> limiter). */
+TargetResult findDriveForTarget (const AudioClip& clip, double targetLufs, MasterChainParams base,
                                  double toleranceLu = 0.05, double maxDriveDb = 24.0);
 
 } // namespace polisher

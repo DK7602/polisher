@@ -4,12 +4,13 @@
 
 #include "polisher/LoudnessMeter.h"
 #include "polisher/TruePeakLimiter.h"
+#include "polisher/SoftClipper.h"
 #include "SpectrumTap.h"
 
 #include <atomic>
 
-/** Polisher v0.1: the Maximizer (true-peak limiter) plus an EBU R128 output meter.
-    The other modules and Auto-Master plug into this chain in later milestones. */
+/** Polisher: Drive -> Soft Clipper -> Maximizer (true-peak limiter), plus an EBU R128 output meter
+    and spectrum taps. The other modules and Auto-Master plug into this chain in later milestones. */
 class PolisherAudioProcessor final : public juce::AudioProcessor
 {
 public:
@@ -57,6 +58,7 @@ public:
         std::atomic<float> gainReduction { 0.0f };
         std::atomic<float> peakLeft { -100.0f };
         std::atomic<float> peakRight { -100.0f };
+        std::atomic<float> clipReduction { 0.0f };   // largest clipper peak reduction since read (dB, <= 0)
     };
     Meters meters;
 
@@ -72,9 +74,12 @@ private:
     void processAnyPrecision (juce::AudioBuffer<Sample>& buffer);
 
     void updateLimiterParams();
+    double targetDriveGain() const;
     void publishMeters();
 
+    polisher::SoftClipper clipper;
     polisher::TruePeakLimiter limiter;
+    double currentDriveGain = 1.0;
     polisher::LoudnessMeter outputMeter;
     std::atomic<bool> meterResetRequested { false };
 
@@ -84,6 +89,10 @@ private:
     std::atomic<float>* adaptiveParam = nullptr;
     std::atomic<float>* bypassParam = nullptr;
     std::atomic<float>* autoResetParam = nullptr;
+    std::atomic<float>* clipOnParam = nullptr;
+    std::atomic<float>* clipThresholdParam = nullptr;
+    std::atomic<float>* clipSoftnessParam = nullptr;
+    std::atomic<float>* clipOversamplingParam = nullptr;
     bool wasPlaying = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherAudioProcessor)

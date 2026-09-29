@@ -51,17 +51,23 @@ private:
     // Relays must be constructed before the browser, which takes options from them.
     juce::WebSliderRelay driveRelay { "drive" }, ceilingRelay { "ceiling" }, releaseRelay { "release" };
     juce::WebToggleButtonRelay adaptiveRelay { "adaptive" }, bypassRelay { "bypass" }, autoResetRelay { "autoreset" };
+    juce::WebToggleButtonRelay clipOnRelay { "clipOn" };
+    juce::WebSliderRelay clipThresholdRelay { "clipThreshold" }, clipSoftnessRelay { "clipSoftness" };
+    juce::WebComboBoxRelay clipOversamplingRelay { "clipOversampling" };
 
     juce::WebBrowserComponent webView;
 
     juce::WebSliderParameterAttachment driveAttachment, ceilingAttachment, releaseAttachment;
     juce::WebToggleButtonParameterAttachment adaptiveAttachment, bypassAttachment, autoResetAttachment;
+    juce::WebToggleButtonParameterAttachment clipOnAttachment;
+    juce::WebSliderParameterAttachment clipThresholdAttachment, clipSoftnessAttachment;
+    juce::WebComboBoxParameterAttachment clipOversamplingAttachment;
 
     juce::dsp::FFT fft { kFftOrder };
     juce::dsp::WindowingFunction<float> window { static_cast<size_t> (kFftSize), juce::dsp::WindowingFunction<float>::hann, false };
     std::array<float, 2 * kFftSize> fftBuffer {};
     Analyser mixAnalyser, masterAnalyser;
-    float grHold = 0.0f;
+    float grHold = 0.0f, clipHold = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherWebEditor)
 };
