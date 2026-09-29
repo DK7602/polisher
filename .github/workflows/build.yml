@@ -27,8 +27,18 @@ jobs:
           path: build/_deps
           key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt') }}
 
+      - name: Fetch WebView2 SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $v = "1.0.3485.44"
+          $root = ("$env:RUNNER_TEMP/nuget") -replace '\\','/'
+          Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/$v" -OutFile webview2.zip
+          Expand-Archive webview2.zip -DestinationPath "$root/Microsoft.Web.WebView2.$v"
+          "WEBVIEW2_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release ${{ runner.os == 'Windows' && format('-DJUCE_WEBVIEW2_PACKAGE_LOCATION={0}', env.WEBVIEW2_DIR) || '' }}
 
       - name: Build
         run: cmake --build build --config Release --parallel 4

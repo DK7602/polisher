@@ -1,0 +1,82 @@
+// Browser preview only. Inside the plug-in, JUCE provides window.__JUCE__ before this runs and
+// this file does nothing. Opened in a normal browser, it simulates the plug-in so the UI can be
+// designed and tested without a DAW.
+(function () {
+  if (typeof window.__JUCE__ !== "undefined") return;
+
+  const sliders = {
+    drive:   { start: 0,  end: 24,   skew: 1,   interval: 0.01, value: 4.5, label: "dB" },
+    ceiling: { start: -3, end: 0,    skew: 1,   interval: 0.01, value: -1,  label: "dBTP" },
+    release: { start: 10, end: 1000, skew: 0.4, interval: 0.1,  value: 120, label: "ms" },
+  };
+  const toggles = { adaptive: true, bypass: false, autoreset: true };
+
+  const send = (id, obj) => setTimeout(() => window.__JUCE__.backend.emitByBackend(id, JSON.stringify(obj)), 0);
+
+  window.__JUCE__ = {
+    initialisationData: {
+      __juce__platform: [],
+      __juce__functions: ["resetMeter"],
+      __juce__registeredGlobalEventIds: [],
+      __juce__sliders: Object.keys(sliders),
+      __juce__toggles: Object.keys(toggles),
+      __juce__comboBoxes: [],
+    },
+    postMessage(message) {
+      const { eventId, payload } = JSON.parse(message);
+      if (eventId.startsWith("__juce__slider")) {
+        const name = eventId.slice("__juce__slider".length), s = sliders[name];
+        if (payload.eventType === "requestInitialUpdate") {
+          send(eventId, { eventType: "propertiesChanged", start: s.start, end: s.end, skew: s.skew, name, label: s.label,
+                          numSteps: 1000, interval: s.interval, parameterIndex: 0 });
+          send(eventId, { eventType: "valueChanged", value: s.value });
+        } else if (payload.eventType === "valueChanged") s.value = payload.value;
+      } else if (eventId.startsWith("__juce__toggle")) {
+        const name = eventId.slice("__juce__toggle".length);
+        if (payload.eventType === "requestInitialUpdate") send(eventId, { eventType: "valueChanged", value: toggles[name] });
+        else if (payload.eventType === "valueChanged") toggles[name] = payload.value;
+      } else if (eventId === "__juce__invoke") {
+        if (payload.name === "resetMeter") integratedAcc = [];
+        send("__juce__complete", { promiseId: payload.resultId, result: true });
+      }
+    },
+  };
+
+  // --- fake audio -------------------------------------------------------------------------
+  let t = 0, integratedAcc = [];
+  const shape = (i, n) => {           // a plausible tilted mix spectrum
+    const f = 20 * Math.pow(1000, i / (n - 1));
+    const lo = f < 40 ? -10 * Math.log2(40 / f) : 0;
+    const hi = f > 12000 ? -14 * Math.log2(f / 12000) : 0;
+    return -38 + lo + hi + 3 * Math.sin(i / 7) + (f > 60 && f < 120 ? 5 : 0);
+  };
+  setInterval(() => {
+    t += 1 / 30;
+    const bypass = toggles.bypass;
+    const drive = bypass ? 0 : sliders.drive.value;
+    const beat = Math.pow(Math.max(0, Math.sin(t * Math.PI * 2 * 1.2)), 8);   // kick every ~0.8 s
+    const gr = bypass ? 0 : -Math.max(0, drive - 2.5) * (0.35 + 0.65 * beat);
+    const base = -16.5 + 1.5 * Math.sin(t / 6);
+    const loud = base + drive * 0.72;
+    integratedAcc.push(loud); if (integratedAcc.length > 3000) integratedAcc.shift();
+    const mix = [], master = [];
+    for (let i = 0; i < 96; i++) {
+      const v = shape(i, 96) + (Math.random() - 0.5) * 2.5 + 4 * beat * (i < 20 ? 1 : 0.2);
+      mix.push(+v.toFixed(1));
+      master.push(+(v + drive * 0.72).toFixed(1));
+    }
+    const frame = {
+      momentary: +(loud + 2 * beat).toFixed(1),
+      shortTerm: +loud.toFixed(1),
+      integrated: +(integratedAcc.reduce((a, b) => a + b, 0) / integratedAcc.length).toFixed(1),
+      range: 6.8,
+      truePeak: bypass ? -0.4 : +Math.min(sliders.ceiling.value, -3 + drive).toFixed(1),
+      peakRecent: bypass ? -0.6 : +Math.min(sliders.ceiling.value, -4 + drive + 2 * beat).toFixed(1),
+      peakL: +(-7 + drive * 0.5 + 5 * beat).toFixed(1),
+      peakR: +(-7.5 + drive * 0.5 + 5 * beat).toFixed(1),
+      gr: +gr.toFixed(1),
+      mix, master,
+    };
+    window.__JUCE__.backend && window.__JUCE__.backend.emitByBackend("polisherMeters", JSON.stringify(frame));
+  }, 1000 / 30);
+})();

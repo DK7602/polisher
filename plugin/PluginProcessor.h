@@ -4,6 +4,7 @@
 
 #include "polisher/LoudnessMeter.h"
 #include "polisher/TruePeakLimiter.h"
+#include "SpectrumTap.h"
 
 #include <atomic>
 
@@ -54,10 +55,15 @@ public:
         std::atomic<float> truePeakMax { -100.0f };
         std::atomic<float> truePeakRecent { -100.0f };
         std::atomic<float> gainReduction { 0.0f };
+        std::atomic<float> peakLeft { -100.0f };
+        std::atomic<float> peakRight { -100.0f };
     };
     Meters meters;
 
     void requestMeterReset() noexcept { meterResetRequested.store (true); }
+
+    /** Recent audio before (mix) and after (master) processing, for the spectrum display. */
+    SpectrumTap inputTap, outputTap;
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 

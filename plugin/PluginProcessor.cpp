@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "PolisherWebEditor.h"
 
 namespace ParamIDs
 {
@@ -115,8 +116,23 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     const int numChannels = buffer.getNumChannels();
     const int numSamples = buffer.getNumSamples();
 
+    inputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     limiter.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     outputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
+    outputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
+
+    // Output channel peaks for the L/R meter (held until the editor reads them).
+    auto channelPeakDb = [&] (int ch)
+    {
+        const auto mag = static_cast<double> (buffer.getMagnitude (juce::jmin (ch, numChannels - 1), 0, numSamples));
+        return static_cast<float> (mag > 1.0e-5 ? 20.0 * std::log10 (mag) : -100.0);
+    };
+    if (numChannels > 0)
+    {
+        const float l = channelPeakDb (0), r = channelPeakDb (1);
+        if (l > meters.peakLeft.load())  meters.peakLeft.store (l);
+        if (r > meters.peakRight.load()) meters.peakRight.store (r);
+    }
 
     publishMeters();
 }
@@ -165,6 +181,10 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
 
 juce::AudioProcessorEditor* PolisherAudioProcessor::createEditor()
 {
+    // The liquid-glass web UI; falls back to the basic native editor if no web view is available
+    // (for example a Windows machine without the WebView2 runtime).
+    if (PolisherWebEditor::isSupported())
+        return new PolisherWebEditor (*this);
     return new PolisherAudioProcessorEditor (*this);
 }
 

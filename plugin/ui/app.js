@@ -1,0 +1,515 @@
+// Polisher liquid-glass UI.
+// Talks to the plug-in through JUCE's web relays (parameters) and the "polisherMeters" event.
+
+import * as Juce from "./juce/index.js";
+
+const $ = (id) => document.getElementById(id);
+const MINUS = "−";
+const fmtNum = (v, digits = 1) => (v < 0 ? MINUS : "") + Math.abs(v).toFixed(digits);
+const fmtDb = (v, unit, digits = 1) => (v <= -99 ? `${MINUS}inf ${unit}` : `${fmtNum(v, digits)} ${unit}`);
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+// ---------------------------------------------------------------------------------------------
+// Scale the fixed 1600x900 design to the window.
+const stage = $("stage");
+function fit() {
+  const s = Math.min(window.innerWidth / 1600, window.innerHeight / 900);
+  stage.style.transform = `scale(${s})`;
+}
+window.addEventListener("resize", fit);
+fit();
+
+// ---------------------------------------------------------------------------------------------
+// Parameters (live in this build: the Maximizer).
+const P = {
+  drive: Juce.getSliderState("drive"),
+  ceiling: Juce.getSliderState("ceiling"),
+  release: Juce.getSliderState("release"),
+  adaptive: Juce.getToggleState("adaptive"),
+  bypass: Juce.getToggleState("bypass"),
+  autoreset: Juce.getToggleState("autoreset"),
+};
+const resetMeter = Juce.getNativeFunction("resetMeter");
+
+function scaledToNorm(state, v) {
+  const { start, end, skew } = state.properties;
+  return Math.pow(clamp((v - start) / (end - start), 0, 1), skew);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Latest meter frame from the plug-in.
+const M = {
+  momentary: -100, shortTerm: -100, integrated: -100, range: 0, truePeak: -100,
+  peakRecent: -100, peakL: -100, peakR: -100, gr: 0, mix: null, master: null,
+};
+let grWindow = [];           // ~3 s of gain-reduction samples for Learn
+let lastAudioTime = 0;
+
+// ---------------------------------------------------------------------------------------------
+// Module catalogue. Only the Maximizer processes audio in this build.
+const modules = [
+  { id: "eq", name: "Tonal EQ", soon: "Next up after the Soft Clipper.",
+    what: "Shapes the overall tone in seven musical bands, from the sub up to the air, and nudges the mix toward your genre's reference balance.",
+    cells: [["Low End", "30 Hz", "0.0 dB", .5], ["Bass", "90 Hz", "0.0 dB", .5], ["Low Mid", "350 Hz", "0.0 dB", .5], ["Mid", "1 kHz", "0.0 dB", .5],
+            ["Upper Mid", "2.5 kHz", "0.0 dB", .5], ["Presence", "5 kHz", "0.0 dB", .5], ["Air", "12 kHz", "0.0 dB", .5]],
+    controls: [["Low End / Bass", "Weight of the kick and 808. Small moves here change how big the record feels."],
+               ["Low Mid", "Where mud and boxiness build up. Cutting here often reads as clearer and louder."],
+               ["Upper Mid / Presence", "Vocal consonants, snare crack and edge. A little goes a long way."],
+               ["Air", "Sheen on top. Shelves rather than peaks, so hats get shine instead of bite."]] },
+  { id: "bass", name: "Bass Control", soon: "Planned for an upcoming build.",
+    what: "Keeps the low end solid on every system: mono below a crossover, controls 808 level jumps, and adds kick punch.",
+    cells: [["Mono Below", "crossover", "110 Hz", .4], ["Sub Tame", "dynamic", "0.0 dB", .5], ["Punch", "kick attack", "0%", 0]],
+    controls: [["Mono Below", "Stereo sub wastes headroom and collapses on club systems and phones."],
+               ["Sub Tame", "Evens out 808 slides so the limiter doesn't grab the whole mix on long notes."],
+               ["Punch", "Adds attack to the start of the kick without turning the sub up."]] },
+  { id: "dyn", name: "Dynamics", soon: "Planned for an upcoming build.",
+    what: "Multiband compression that controls the low end without ducking the vocal, and evens out section jumps gently.",
+    cells: [["Crossovers", "3 bands", "120/2k/8k", .5], ["Low Ratio", "low band", "1:1", 0], ["Mid Attack", "mid band", "30 ms", .45], ["Release", "all bands", "Auto", .5]],
+    controls: [["Crossovers", "Split points between the bands."], ["Ratio", "How firmly each band is held down."],
+               ["Attack", "Slow lets drum hits through, fast catches vocal peaks."], ["Release", "Auto follows the tempo so it recovers between hits."]] },
+  { id: "img", name: "Stereo Imager", soon: "Planned for an upcoming build.",
+    what: "Controls width per band: keeps the low end centred and opens up hats, reverbs and ad-libs.",
+    cells: [["Lows", "< 250 Hz", "0%", .5], ["Mids", "250 Hz–5 kHz", "0%", .5], ["Highs", "> 5 kHz", "0%", .5]],
+    controls: [["Lows", "Kept centred. Wide bass smears and costs headroom."], ["Mids", "Small moves only, so the lead vocal stays locked in."],
+               ["Highs", "Where width sounds best: hats, reverbs, ad-libs."]] },
+  { id: "sat", name: "Saturation", soon: "Planned for an upcoming build.",
+    what: "Adds harmonics (tape, tube or clip styles) so bass translates on small speakers and the master feels denser.",
+    cells: [["Mode", "character", "Tape", .5], ["Drive", "input", "0.0 dB", 0], ["Mix", "wet / dry", "0%", 0]],
+    controls: [["Mode", "Tape = soft and warm. Tube = richer. Clip = aggressive."], ["Drive", "How many harmonics are generated."],
+               ["Mix", "Blend keeps transients clean while harmonics fill in underneath."]] },
+  { id: "clip", name: "Soft Clipper", soon: "Coming next. It's how masters go louder than about −9 LUFS without pumping.",
+    what: "Shaves the tallest drum peaks before the limiter so the limiter works less. This is how loud modern masters stay punchy.",
+    cells: [["Threshold", "dBFS", "0.0 dB", 1], ["Softness", "knee", "70%", .7], ["Oversample", "quality", "8×", .8]],
+    controls: [["Threshold", "Where clipping starts. Lower = more peaks shaved."], ["Softness", "Rounded knee: heard as punch, not distortion."],
+               ["Oversampling", "Stops harsh aliasing that clipping otherwise adds."]] },
+  { id: "max", name: "Maximizer", live: true },
+];
+let selected = "max";
+let learnOn = true;
+
+// ---------------------------------------------------------------------------------------------
+// Signal chain rows (positions match the rendered panel image).
+const chainRows = $("chain-rows");
+function renderChain() {
+  chainRows.innerHTML = "";
+  modules.forEach((m, i) => {
+    const row = document.createElement("div");
+    row.className = "row" + (m.live ? "" : " soon");
+    row.style.top = (110.2 + i * 69.55).toFixed(1) + "px";
+    if (m.id === selected) row.appendChild(img("assets/row_red.png"));
+    else if (i === 6) row.appendChild(img("assets/row_blue.png"));   // the panel art has row 7 lit red
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "row-btn";
+    btn.setAttribute("aria-pressed", String(m.id === selected));
+    btn.innerHTML = `<span class="row-text"><span class="row-name">${m.name}</span>
+      <span class="row-read mono" id="read-${m.id}">${m.live ? "" : "Coming soon"}</span></span>
+      <span class="row-num mono">${String(i + 1).padStart(2, "0")}</span>`;
+    btn.addEventListener("click", () => { selected = m.id; renderChain(); renderModule(); renderLearn(); });
+    row.appendChild(btn);
+    chainRows.appendChild(row);
+  });
+  updateLiveReadouts();
+}
+function img(src) { const i = document.createElement("img"); i.src = src; i.alt = ""; return i; }
+
+// ---------------------------------------------------------------------------------------------
+// Knobs
+function knobMarkup(angle) {
+  return `<img src="assets/knob.png" alt=""><div class="pointer" style="transform: rotate(${angle}deg)"><span></span></div>`;
+}
+const angleFor = (norm) => -135 + 270 * clamp(norm, 0, 1);
+
+function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.innerHTML = `<span class="cell-label">${label}</span><span class="cell-sub mono">${sub}</span>
+    <div class="knob" tabindex="0" role="slider" aria-label="${label}">${knobMarkup(0)}</div>
+    <div class="minmax mono"><span>${minText}</span><span>${maxText}</span></div>
+    <span class="cell-value mono"></span>`;
+  const knob = cell.querySelector(".knob");
+  const pointer = cell.querySelector(".pointer");
+  const value = cell.querySelector(".cell-value");
+
+  const refresh = () => {
+    const n = state.getNormalisedValue();
+    pointer.style.transform = `rotate(${angleFor(n)}deg)`;
+    value.textContent = fmt(state.getScaledValue());
+    knob.setAttribute("aria-valuetext", value.textContent);
+  };
+  const setNorm = (n) => { state.setNormalisedValue(clamp(n, 0, 1)); refresh(); onParamsChanged(); };
+
+  let dragStart = null;
+  knob.addEventListener("pointerdown", (e) => {
+    knob.setPointerCapture(e.pointerId);
+    dragStart = { y: e.clientY, n: state.getNormalisedValue() };
+    state.sliderDragStarted();
+    e.preventDefault();
+  });
+  knob.addEventListener("pointermove", (e) => {
+    if (!dragStart) return;
+    const scale = stage.getBoundingClientRect().height / 900;
+    const pixels = (dragStart.y - e.clientY) / scale;
+    setNorm(dragStart.n + pixels / (e.shiftKey ? 1200 : 240));
+  });
+  const end = () => { if (dragStart) { dragStart = null; state.sliderDragEnded(); } };
+  knob.addEventListener("pointerup", end);
+  knob.addEventListener("pointercancel", end);
+  knob.addEventListener("dblclick", () => { state.sliderDragStarted(); setNorm(scaledToNorm(state, def)); state.sliderDragEnded(); });
+  knob.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    state.sliderDragStarted();
+    setNorm(state.getNormalisedValue() + (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 0.002 : 0.01));
+    state.sliderDragEnded();
+  }, { passive: false });
+  knob.addEventListener("keydown", (e) => {
+    const step = e.shiftKey ? 0.002 : 0.01;
+    if (e.key === "ArrowUp" || e.key === "ArrowRight") setNorm(state.getNormalisedValue() + step);
+    else if (e.key === "ArrowDown" || e.key === "ArrowLeft") setNorm(state.getNormalisedValue() - step);
+    else return;
+    e.preventDefault();
+  });
+
+  state.valueChangedEvent.addListener(() => { refresh(); onParamsChanged(); });
+  state.propertiesChangedEvent.addListener(refresh);
+  refresh();
+  return cell;
+}
+
+function staticKnobCell([label, sub, valueText, norm]) {
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.innerHTML = `<span class="cell-label">${label}</span><span class="cell-sub mono">${sub}</span>
+    <div class="knob">${knobMarkup(angleFor(norm))}</div>
+    <div class="minmax mono"><span></span><span></span></div>
+    <span class="cell-value mono">${valueText}</span>
+    <button type="button" class="imgbtn power" tabindex="-1" aria-hidden="true"><img src="assets/btn_power.png" alt=""></button>`;
+  return cell;
+}
+
+function toggleCell({ label, sub, state, onText, offText }) {
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.innerHTML = `<span class="cell-label">${label}</span><span class="cell-sub mono">${sub}</span>
+    <button type="button" class="pill cell-toggle"></button>
+    <span class="cell-value mono" style="color: var(--dim); font-size: 12px; font-weight: 500">click to switch</span>`;
+  const btn = cell.querySelector("button");
+  const refresh = () => {
+    const on = !!state.getValue();
+    btn.textContent = on ? onText : offText;
+    btn.className = "pill cell-toggle " + (on ? "pill-red" : "pill-blue");
+    btn.setAttribute("aria-pressed", String(on));
+  };
+  btn.addEventListener("click", () => { state.setValue(!state.getValue()); refresh(); onParamsChanged(); });
+  state.valueChangedEvent.addListener(() => { refresh(); onParamsChanged(); });
+  refresh();
+  return cell;
+}
+
+// Build the Maximizer cells once; they stay bound to the parameters.
+const maximizerCells = [
+  liveKnobCell({ label: "Drive", sub: "push into limiter", state: P.drive, def: 0, minText: "0", maxText: "+24",
+                 fmt: (v) => `+${v.toFixed(1)} dB` }),
+  liveKnobCell({ label: "Ceiling", sub: "true peak", state: P.ceiling, def: -1, minText: `${MINUS}3`, maxText: "0",
+                 fmt: (v) => `${fmtNum(v, 1)} dBTP` }),
+  liveKnobCell({ label: "Release", sub: "base time", state: P.release, def: 120, minText: "10", maxText: "1000",
+                 fmt: (v) => `${Math.round(v)} ms` }),
+  toggleCell({ label: "Release Mode", sub: "program dependent", state: P.adaptive, onText: "ADAPTIVE", offText: "FIXED" }),
+];
+
+function renderModule() {
+  const m = modules.find((x) => x.id === selected);
+  const row = $("knob-row");
+  row.innerHTML = "";
+  $("module-name").textContent = m.name.toUpperCase();
+  $("soon-badge").hidden = !!m.live;
+  $("btn-bypass").hidden = !m.live;
+  if (m.live) {
+    row.classList.remove("soon");
+    maximizerCells.forEach((c) => row.appendChild(c));
+    $("module-note").textContent = "Live · drag up/down · Shift = fine · double-click = reset";
+  } else {
+    row.classList.add("soon");
+    m.cells.forEach((c) => row.appendChild(staticKnobCell(c)));
+    $("module-note").textContent = "Designed · not active in this build";
+    $("soon-text").textContent = m.soon;
+  }
+  updateLiveReadouts();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Learn panel
+function para(cls, text) { const p = document.createElement("p"); p.className = cls; p.textContent = text; return p; }
+function head(text) { const s = document.createElement("span"); s.className = "l-h"; s.textContent = text; return s; }
+function sep() { const d = document.createElement("div"); d.className = "l-sep"; return d; }
+function item(name, value, why) {
+  const d = document.createElement("div");
+  d.className = "l-item";
+  d.innerHTML = `<div class="l-item-head"><span class="l-item-name"></span>${value ? '<span class="pill pill-red mono l-item-val"></span>' : ""}</div><p class="l-item-why"></p>`;
+  d.querySelector(".l-item-name").textContent = name;
+  if (value) d.querySelector(".l-item-val").textContent = value;
+  d.querySelector(".l-item-why").textContent = why;
+  return d;
+}
+function tip(title, text, ok) {
+  const d = document.createElement("div");
+  d.className = "l-tip" + (ok ? " ok" : "");
+  d.appendChild(head(title));
+  d.appendChild(para("l-p", text));
+  return d;
+}
+
+function maxGrRecent() { return grWindow.length ? Math.min(...grWindow) : 0; }
+function avgGrRecent() { return grWindow.length ? grWindow.reduce((a, b) => a + b, 0) / grWindow.length : 0; }
+
+function renderLearn() {
+  const body = $("learn-body");
+  body.innerHTML = "";
+  if (!learnOn) {
+    const off = document.createElement("div");
+    off.className = "l-off";
+    off.innerHTML = `<span class="wm">LEARN IS OFF</span><p>Turn it on to see what each control is doing to your track, in plain producer language.</p>`;
+    body.appendChild(off);
+    return;
+  }
+
+  const m = modules.find((x) => x.id === selected);
+  if (!m.live) {
+    body.appendChild(head("WHAT IT WILL DO"));
+    body.appendChild(para("l-p", m.what));
+    body.appendChild(sep());
+    body.appendChild(head("THE CONTROLS"));
+    m.controls.forEach(([n, w]) => body.appendChild(item(n, null, w)));
+    body.appendChild(tip("ARRIVING SOON", m.soon + " When Auto-Master sets it, this panel will explain the exact reason for every value.", true));
+    return;
+  }
+
+  const drive = P.drive.getScaledValue();
+  const ceiling = P.ceiling.getScaledValue();
+  const release = Math.round(P.release.getScaledValue());
+  const adaptive = !!P.adaptive.getValue();
+  const bypassed = !!P.bypass.getValue();
+  const playing = performance.now() - lastAudioTime < 1500;
+  const peakGr = maxGrRecent();
+  const avgGr = avgGrRecent();
+
+  body.appendChild(head("WHAT'S HAPPENING"));
+  if (bypassed) {
+    body.appendChild(para("l-p", "You're on A: the original mix, untouched. Switch to B to hear the Maximizer."));
+  } else if (!playing) {
+    body.appendChild(para("l-p", "Press play in your DAW. As the music runs I'll describe what the Maximizer is doing to it."));
+  } else {
+    const st = M.shortTerm > -99 ? `${fmtNum(M.shortTerm)} LUFS` : "—";
+    const it = M.integrated > -99 ? `${fmtNum(M.integrated)} LUFS` : "still measuring";
+    const grText = peakGr < -0.2 ? `The limiter is taking up to ${fmtNum(-peakGr)} dB off the loudest moments.` : "The limiter is barely touching it: the peaks already fit under the ceiling.";
+    body.appendChild(para("l-p", `Your master is running at ${st} short-term (${it} integrated). ${grText}`));
+  }
+
+  body.appendChild(sep());
+  body.appendChild(head("WHAT EACH CONTROL IS DOING"));
+  body.appendChild(item("Drive", `+${drive.toFixed(1)} dB`,
+    drive < 0.05
+      ? "No push yet. Turn Drive up to make the master louder; the limiter catches the peaks so nothing clips."
+      : `Pushing the mix ${drive.toFixed(1)} dB into the limiter. The quiet and medium parts come up by that much; the loud hits are held at the ceiling.`));
+  body.appendChild(item("Ceiling", `${fmtNum(ceiling, 1)} dBTP`,
+    `Nothing leaves Polisher above ${fmtNum(ceiling, 1)} dBTP, including peaks that fall between samples. ` +
+    (ceiling > -0.95 ? "Above −1 dBTP, the MP3/AAC versions streaming services make can clip. −1.0 is the safe choice."
+                     : "That leaves room for the MP3/AAC conversion streaming services do, so the streamed version won't clip.")));
+  body.appendChild(item("Release", `${release} ms`,
+    adaptive
+      ? `Adaptive around ${release} ms: recovers quickly after single hits (drums) and moves slowly on sustained sound (808s, pads), so it doesn't pump.`
+      : `Fixed at ${release} ms. Shorter sounds louder but can distort bass; longer is smoother but can pump on drums.`));
+
+  if (bypassed || !playing) {
+    body.appendChild(tip("TIP", "Set Drive by ear while watching Integrated in the footer. Most streaming releases land between −14 and −9 LUFS.", true));
+  } else if (avgGr < -6 || peakGr < -9) {
+    body.appendChild(tip("FIX IT IN THE MIX",
+      `That's heavy limiting (up to ${fmtNum(-peakGr)} dB). If the kick or snare lose punch, back off Drive, or tame the drum peaks in your mix (a clipper on the drum bus). The Soft Clipper coming next will help here too.`));
+  } else if (M.integrated > -9 && M.integrated > -99) {
+    body.appendChild(tip("HEADS UP",
+      "This is very loud (above −9 LUFS). Spotify and YouTube play music at about −14 LUFS, so they'll turn it down. Extra loudness buys density, not volume."));
+  } else if (M.integrated > -99 && M.integrated < -16) {
+    body.appendChild(tip("SOUNDS CLEAN", "Plenty of dynamics left. For a streaming release, you can push Drive until Integrated reaches around −14 to −10 LUFS.", true));
+  } else {
+    body.appendChild(tip("SOUNDS HEALTHY", "Limiting is moderate, so transients should stay intact. When you A/B, remember B is louder: louder always sounds \u201cbetter\u201d, so judge tone, not volume.", true));
+  }
+  const note = para("l-p", "When Auto-Master arrives, this panel will explain its own choices for every module.");
+  note.style.cssText = "font-size:12px;color:var(--dim)";
+  body.appendChild(note);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Header controls
+function setLearn(on) {
+  learnOn = on;
+  const b = $("learn-toggle");
+  b.textContent = on ? "LEARN ON" : "LEARN OFF";
+  b.className = "pill learn-toggle " + (on ? "pill-red" : "pill-blue");
+  b.setAttribute("aria-pressed", String(on));
+  renderLearn();
+}
+$("learn-toggle").addEventListener("click", () => setLearn(!learnOn));
+
+function refreshAB() {
+  const bypassed = !!P.bypass.getValue();
+  $("btn-a").classList.toggle("on", bypassed);
+  $("btn-b").classList.toggle("on", !bypassed);
+  $("btn-a").setAttribute("aria-pressed", String(bypassed));
+  $("btn-b").setAttribute("aria-pressed", String(!bypassed));
+  const bp = $("btn-bypass");
+  bp.className = "pill bypass " + (bypassed ? "pill-red" : "pill-blue");
+  bp.textContent = bypassed ? "BYPASSED" : "BYPASS";
+}
+$("btn-a").addEventListener("click", () => { P.bypass.setValue(true); onParamsChanged(); });
+$("btn-b").addEventListener("click", () => { P.bypass.setValue(false); onParamsChanged(); });
+$("btn-bypass").addEventListener("click", () => { P.bypass.setValue(!P.bypass.getValue()); onParamsChanged(); });
+P.bypass.valueChangedEvent.addListener(onParamsChanged);
+
+function togglePopover(id) {
+  for (const p of ["pop-settings", "pop-help"]) $(p).hidden = p === id ? !$(p).hidden : true;
+}
+$("btn-settings").addEventListener("click", (e) => { e.stopPropagation(); togglePopover("pop-settings"); });
+$("btn-help").addEventListener("click", (e) => { e.stopPropagation(); togglePopover("pop-help"); });
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".popover")) togglePopover(null);
+});
+
+const chkAuto = $("chk-autoreset"), chkAdaptive = $("chk-adaptive");
+chkAuto.addEventListener("change", () => P.autoreset.setValue(chkAuto.checked));
+chkAdaptive.addEventListener("change", () => { P.adaptive.setValue(chkAdaptive.checked); onParamsChanged(); });
+P.autoreset.valueChangedEvent.addListener(() => (chkAuto.checked = !!P.autoreset.getValue()));
+
+$("btn-reset").addEventListener("click", () => { resetMeter(); grWindow = []; toast("Loudness measurement reset."); });
+
+let toastTimer = null;
+function toast(text) {
+  const t = $("toast");
+  t.textContent = text;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), 2600);
+}
+$("btn-automaster").classList.add("waiting");
+$("btn-automaster").addEventListener("click", () =>
+  toast("Auto-Master arrives with the analysis engine in an upcoming build. For now, set Drive by ear and let Learn explain what it's doing."));
+
+function onParamsChanged() {
+  refreshAB();
+  chkAdaptive.checked = !!P.adaptive.getValue();
+  chkAuto.checked = !!P.autoreset.getValue();
+  updateLiveReadouts();
+  scheduleLearn();
+}
+let learnQueued = false;
+function scheduleLearn() {
+  if (learnQueued) return;
+  learnQueued = true;
+  requestAnimationFrame(() => { learnQueued = false; renderLearn(); });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Spectrum
+const W = 860, H = 200, POINTS = 96, DB_TOP = -12, DB_BOTTOM = -84;
+const xForFreq = (f) => (Math.log10(f / 20) / 3) * W;
+function buildSpectrumGrid() {
+  const g = $("grid");
+  const freqs = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
+  let lines = "";
+  for (let i = 1; i < 4; i++) lines += `<line x1="0" y1="${(H * i) / 4}" x2="${W}" y2="${(H * i) / 4}"/>`;
+  freqs.slice(1, -1).forEach((f) => { const x = xForFreq(f).toFixed(1); lines += `<line x1="${x}" y1="0" x2="${x}" y2="${H}"/>`; });
+  g.innerHTML = lines;
+
+  $("freq-labels").innerHTML = freqs.map((f) =>
+    `<span style="left:${(xForFreq(f) / W * 100).toFixed(2)}%">${f >= 1000 ? f / 1000 + "k" : f}</span>`).join("");
+  // Label centres (Hz), spaced so the names don't collide.
+  const bands = [["SUB BASS", 36], ["BASS", 115], ["LOW MID", 360], ["MID", 950], ["UPPER MID", 2300], ["PRESENCE", 5600], ["AIR", 13000]];
+  $("band-labels").innerHTML = bands.map(([n, f]) =>
+    `<span style="left:${(xForFreq(f) / W * 100).toFixed(2)}%">${n}</span>`).join("");
+  $("db-scale").innerHTML = [0, 1, 2, 3, 4].map((i) => `<span>${fmtNum(DB_TOP + ((DB_BOTTOM - DB_TOP) * i) / 4, 0)}</span>`).join("");
+}
+function spectrumPath(values) {
+  if (!values || !values.length) return "";
+  let d = "";
+  for (let i = 0; i < values.length; i++) {
+    const x = (i / (values.length - 1)) * W;
+    const y = clamp(((DB_TOP - values[i]) / (DB_TOP - DB_BOTTOM)) * H, 0, H);
+    d += (i ? "L" : "M") + x.toFixed(1) + "," + y.toFixed(1);
+  }
+  return d;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Meters
+const meterDefs = [
+  { key: "integrated", label: "INTEGRATED", unit: "LUFS", lo: -40, hi: 0 },
+  { key: "shortTerm", label: "SHORT-TERM", unit: "LUFS", lo: -40, hi: 0 },
+  { key: "truePeak", label: "TRUE PEAK", unit: "dBTP", lo: -30, hi: 0, hot: (v) => v > P.ceiling.getScaledValue() + 0.05 },
+  { key: "range", label: "RANGE", unit: "LU", lo: 0, hi: 20, plain: true },
+];
+function buildMeters() {
+  $("meters").innerHTML = meterDefs.map((d) => `
+    <div class="meter"><div class="meter-top"><span class="meter-label">${d.label}</span><span class="meter-val mono" id="mv-${d.key}"></span></div>
+    <div class="screen meter-track"><div class="meter-fill" id="mf-${d.key}"></div></div></div>`).join("");
+}
+function updateMeters() {
+  for (const d of meterDefs) {
+    const v = M[d.key];
+    $("mv-" + d.key).textContent = d.plain ? `${v.toFixed(1)} ${d.unit}` : fmtDb(v, d.unit);
+    const pct = v <= -99 ? 0 : clamp(((v - d.lo) / (d.hi - d.lo)) * 100, 0, 100);
+    const fill = $("mf-" + d.key);
+    fill.style.width = pct.toFixed(1) + "%";
+    fill.classList.toggle("hot", !!(d.hot && d.hot(v)));
+  }
+}
+
+const hold = { l: -100, r: -100, lT: 0, rT: 0, peak: -100, peakT: 0 };
+function updateOutputMeter() {
+  const now = performance.now();
+  const levelPct = (db) => (db <= -60 ? 0 : clamp(((db + 60) / 60) * 100, 0, 100));
+  for (const [ch, val] of [["l", M.peakL], ["r", M.peakR]]) {
+    const cur = hold[ch + "Disp"] ?? -100;
+    const disp = val > cur ? val : Math.max(val, cur - 1.2);   // smooth fall
+    hold[ch + "Disp"] = disp;
+    $("bar-" + ch).style.height = (100 - levelPct(disp)).toFixed(1) + "%";
+    if (val > hold[ch] || now - hold[ch + "T"] > 1500) { hold[ch] = val; hold[ch + "T"] = now; }
+    $("hold-" + ch).style.bottom = levelPct(hold[ch]).toFixed(1) + "%";
+  }
+  if (M.peakRecent > hold.peak || now - hold.peakT > 2000) { hold.peak = M.peakRecent; hold.peakT = now; }
+  $("out-peak").textContent = hold.peak <= -99 ? `${MINUS}inf` : fmtNum(hold.peak, 1);
+}
+
+function updateLiveReadouts() {
+  const gr = M.gr;
+  const chip = $("module-chip");
+  const m = modules.find((x) => x.id === selected);
+  chip.hidden = !m.live;
+  chip.textContent = `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
+  const r = $("read-max");
+  if (r) r.textContent = P.bypass.getValue() ? "Bypassed" : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Meter events from the plug-in (30 per second).
+window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
+  Object.assign(M, frame);
+  if (M.momentary > -70 || M.peakL > -80) lastAudioTime = performance.now();
+  grWindow.push(M.gr);
+  if (grWindow.length > 90) grWindow.shift();
+  updateMeters();
+  updateOutputMeter();
+  updateLiveReadouts();
+  $("sp-mix").setAttribute("d", spectrumPath(M.mix));
+  const master = spectrumPath(M.master);
+  $("sp-master").setAttribute("d", master);
+  $("sp-master-glow").setAttribute("d", master);
+});
+setInterval(() => { if (learnOn && selected === "max") renderLearn(); }, 1000);
+
+// ---------------------------------------------------------------------------------------------
+buildSpectrumGrid();
+buildMeters();
+renderChain();
+renderModule();
+setLearn(true);
+onParamsChanged();

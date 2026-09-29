@@ -6,3 +6,4 @@ out/
 .idea/
 *.user
 .DS_Store
+plugin/ui/juce/

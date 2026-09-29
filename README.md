@@ -12,8 +12,8 @@ Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 | Loudness meter (ITU-R BS.1770-4 / EBU R128): momentary, short-term, integrated, LRA, true peak | Done, tested against EBU Tech 3341/3342 cases |
 | Maximizer: 4x oversampled true-peak look-ahead limiter, adaptive release | Done, ceiling verified under heavy drive |
 | Auto-Master loudness step: finds the drive that lands a mix on a LUFS target | Done, reports unreachable targets honestly |
-| Plug-in shell (JUCE 8): parameters, state save, latency reporting, engineering UI | Done |
-| Liquid-glass UI (WebView) | Next |
+| Plug-in shell (JUCE 8): parameters, state save, latency reporting | Done |
+| Liquid-glass UI (WebView): live Maximizer knobs, R128 meters, real-time spectrum, live Learn panel | Done (v0.2) |
 | Tonal EQ, Bass Control, Dynamics, Imager, Saturation, Soft Clipper | Next |
 | Analysis engine + Learn explanations | Next |
 
@@ -27,7 +27,11 @@ dsp/        Framework-free C++20 engine (no JUCE): unit-testable, reusable offli
     LoudnessMeter.h      R128 meter with gated histograms (never allocates on the audio thread)
     TruePeakLimiter.h    Maximizer core
     LoudnessTargeting.h  Offline render + drive search used by Auto-Master
-plugin/     JUCE AudioProcessor + editor
+plugin/     JUCE AudioProcessor, web-view editor (+ basic native fallback editor)
+  ui/       The liquid-glass interface: index.html, styles.css, app.js, images, fonts (OFL).
+            Browser preview: copy JUCE's modules/juce_gui_extra/native/javascript/*.js into
+            plugin/ui/juce/, run `python3 -m http.server` in plugin/ui and open
+            http://localhost:8000 (mock.js simulates the plug-in and audio).
 tests/      Catch2 unit tests for the engine
 .github/workflows/build.yml   macOS + Windows build, tests, pluginval, auval, artifacts
 ```
