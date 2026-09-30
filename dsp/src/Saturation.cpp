@@ -130,7 +130,7 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
             ch.hpX = 0.0;
         }
 
-        resEnergy += ch.hpY * ch.hpY;
+        resEnergy += mix * mix * ch.hpY * ch.hpY;   // what is actually added at this Mix
         sigEnergy += dry * dry;
         frame[c] = dry + mix * ch.hpY;
     }

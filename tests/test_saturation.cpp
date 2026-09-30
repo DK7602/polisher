@@ -246,7 +246,7 @@ TEST_CASE ("Saturation Drive is calibrated for a mix peaking near full scale", "
         auto c = mix;
         float* ch[2] = { c.channels[0].data(), c.channels[1].data() };
         s.process (ch, 2, c.numSamples());
-        return s.takeHarmonicsDb() + 20.0 * std::log10 (p.mix / 100.0);   // the meter shows the full-wet level
+        return s.takeHarmonicsDb();   // what is added at this Mix
     };
     const double light = harmonics (with (SaturationMode::tape, 6.0, 50.0));
     const double medium = harmonics (with (SaturationMode::tape, 12.0, 100.0));

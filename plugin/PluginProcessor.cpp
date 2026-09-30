@@ -413,8 +413,10 @@ void PolisherAudioProcessor::publishMeters()
         if (d < slot.load())
             slot.store (d);
     }
-    const float harm = static_cast<float> (saturation.takeHarmonicsDb());
-    meters.satHarmonics.store (saturation.getParams().enabled ? harm : -100.0f);
+    double satRes = 0.0, satSig = 0.0;
+    saturation.takeEnergies (satRes, satSig);
+    meters.satResidual.store (meters.satResidual.load() + static_cast<float> (satRes));
+    meters.satSignal.store (meters.satSignal.load() + static_cast<float> (satSig));
 
     const float clip = static_cast<float> (clipper.takeMaxClipDb());
     if (clip < meters.clipReduction.load())

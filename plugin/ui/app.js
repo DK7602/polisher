@@ -951,7 +951,7 @@ function renderSatLearn(body) {
   if (on && !bypassed && playing && harm > -18)
     body.appendChild(tip("HEADS UP", "The harmonics are strong. That's a sound, not a mistake, but on most masters it reads as distortion. Lower Drive or Mix, and compare with MATCH on."));
   else
-    body.appendChild(tip("TRY THIS", "Tape, Drive +6 dB, Mix 50 %: a little density you feel more than hear. For thin bass on phones, try Tube instead. Always compare with MATCH on.", true));
+    body.appendChild(tip("TRY THIS", "Tape, Drive +9 dB, Mix 50 %: a little density you feel more than hear (the Harmonics meter around −35 dB). For thin bass on phones, try Tube instead. Always compare with MATCH on.", true));
 }
 
 // Warnings go right under "What's happening" so they're seen without scrolling; friendly tips stay at the end.

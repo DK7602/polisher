@@ -83,6 +83,15 @@ public:
 
     /** Level of the added harmonics relative to the signal since the last call (dB; -100 when
         nothing was added). */
+    /** Energy of the added harmonics and of the signal since the last call (for meters that
+        average over their own window: average energies, never dB, or quiet gaps drag it down). */
+    void takeEnergies (double& residual, double& signal) noexcept
+    {
+        residual = resEnergy;
+        signal = sigEnergy;
+        resEnergy = sigEnergy = 0.0;
+    }
+
     double takeHarmonicsDb() noexcept
     {
         const double r = sigEnergy > 1e-20 ? resEnergy / sigEnergy : 0.0;

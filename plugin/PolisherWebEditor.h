@@ -101,7 +101,7 @@ private:
     Analyser mixAnalyser, masterAnalyser;
     float grHold = 0.0f, clipHold = 0.0f, tameHold = 0.0f, punchHold = 0.0f;
     std::array<float, polisher::kDynBands> dynHold {};
-    float satHold = -100.0f;
+    double satResHold = 0.0, satSigHold = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherWebEditor)
 };

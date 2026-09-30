@@ -312,9 +312,11 @@ void PolisherWebEditor::timerCallback()
         dynGr.add (roundTo (dynHold[b], 0.1f));
     }
     frame->setProperty ("dynGr",      dynGr);
-    const float harm = m.satHarmonics.load();
-    satHold = satHold * 0.85f + harm * 0.15f;
-    frame->setProperty ("satHarm",    roundTo (satHold, 0.1f));
+    // Average energies over ~0.3 s (never dB values, or the quiet gaps between hits drag it down).
+    satResHold = satResHold * 0.9 + m.satResidual.exchange (0.0f);
+    satSigHold = satSigHold * 0.9 + m.satSignal.exchange (0.0f);
+    const double ratio = satSigHold > 1.0e-12 ? satResHold / satSigHold : 0.0;
+    frame->setProperty ("satHarm",    roundTo (ratio > 1.0e-10 ? static_cast<float> (10.0 * std::log10 (ratio)) : -100.0f, 0.1f));
     frame->setProperty ("matchDb",    roundTo (m.matchDb.load(), 0.1f));
     frame->setProperty ("sr",         audioProcessor.getSampleRate());
     frame->setProperty ("inShort",    roundTo (m.inputShortTerm.load(), 0.1f));

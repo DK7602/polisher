@@ -76,7 +76,7 @@ public:
         std::atomic<float> matchDb { 0.0f };          // MATCH gain for the side playing now, A or B (dB, <= 0)
         std::atomic<float> correlation { 1.0f };      // output L/R correlation (+1 mono ... -1 out of phase)
         std::array<std::atomic<float>, polisher::kDynBands> dynGr {};   // deepest Dynamics gain reduction per band since read (dB, <= 0)
-        std::atomic<float> satHarmonics { -100.0f };  // level of the harmonics Saturation adds, vs the signal (dB)
+        std::atomic<float> satResidual { 0.0f }, satSignal { 0.0f };   // Saturation energies since read (harmonics, signal)
     };
     Meters meters;
 
