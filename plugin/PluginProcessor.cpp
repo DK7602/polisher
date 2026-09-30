@@ -53,6 +53,7 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     clipOversamplingParam = parameters.getRawParameterValue (ParamIDs::clipOversampling);
     eqOnParam = parameters.getRawParameterValue (ParamIDs::eqOn);
     levelMatchParam = parameters.getRawParameterValue (ParamIDs::levelMatch);
+    moduleParams.attach (parameters);
     imgOnParam   = parameters.getRawParameterValue ("imgOn");
     imgLowParam  = parameters.getRawParameterValue ("imgLow");
     imgMidParam  = parameters.getRawParameterValue ("imgMid");
@@ -166,6 +167,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
                                                            AudioParameterFloatAttributes().withLabel ("%")
                                                                .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v)) + " %"; })));
 
+    // Dynamics (after Bass Control) and Saturation (after the Imager).
+    ModuleParams::addTo (layout);
+
     // Auto-Master choices (saved with the project; not automatable).
     auto choice = [&] (const char* id, const char* name, StringArray items, int def)
     {
@@ -194,7 +198,9 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     clipper.prepare (channels);
     eq.prepare (sampleRate, channels);
     bass.prepare (sampleRate, channels);
+    dynamics.prepare (sampleRate, channels);
     imager.prepare (sampleRate);
+    saturation.prepare (sampleRate, channels);
     autoMaster.prepare (sampleRate);
     levelMatch.prepare (sampleRate);
     currentMatchGain = 1.0;
@@ -202,8 +208,8 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     inputMeter.prepare (sampleRate, channels);
     updateLimiterParams();
     currentDriveGain = targetDriveGain();
-    // Constant latency whatever the settings: clipper (all oversampling modes) + limiter look-ahead.
-    setLatencySamples (polisher::SoftClipper::latencySamples() + limiter.latencySamples());
+    // Constant latency whatever the settings: saturation + clipper (all oversampling modes) + limiter look-ahead.
+    setLatencySamples (polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples() + limiter.latencySamples());
 }
 
 void PolisherAudioProcessor::updateLimiterParams()
@@ -256,6 +262,9 @@ void PolisherAudioProcessor::updateLimiterParams()
     ip.midWidth = imgMidParam->load();
     ip.highWidth = imgHighParam->load();
     imager.setParams (ip);
+
+    dynamics.setParams (moduleParams.dynamics (p.bypassed));
+    saturation.setParams (moduleParams.saturation (p.bypassed));
 
     const auto& cc = clipper.getParams();
     if (c.enabled != cc.enabled || c.thresholdDb != cc.thresholdDb || c.softness != cc.softness || c.makeupDb != cc.makeupDb
@@ -317,7 +326,9 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
 
     eq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     bass.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+    dynamics.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     imager.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+    saturation.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
 
     // Drive (ramped per block so knob moves don't click) -> Soft Clipper -> limiter.
     const double newGain = targetDriveGain();
@@ -394,6 +405,16 @@ void PolisherAudioProcessor::publishMeters()
     if (punch > meters.bassPunch.load())
         meters.bassPunch.store (punch);
     meters.bassWidth.store (static_cast<float> (bass.bassWidthPercent()));
+
+    for (int b = 0; b < polisher::kDynBands; ++b)
+    {
+        const float d = static_cast<float> (dynamics.takeMaxGrDb (b));
+        auto& slot = meters.dynGr[static_cast<size_t> (b)];
+        if (d < slot.load())
+            slot.store (d);
+    }
+    const float harm = static_cast<float> (saturation.takeHarmonicsDb());
+    meters.satHarmonics.store (saturation.getParams().enabled ? harm : -100.0f);
 
     const float clip = static_cast<float> (clipper.takeMaxClipDb());
     if (clip < meters.clipReduction.load())

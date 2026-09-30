@@ -45,6 +45,15 @@ private:
 
     static std::vector<std::unique_ptr<juce::WebSliderRelay>> makeSliderRelays (const juce::String& prefix);
 
+    template <typename Relay>
+    static std::vector<std::unique_ptr<Relay>> makeRelays (const juce::StringArray& ids)
+    {
+        std::vector<std::unique_ptr<Relay>> relays;
+        for (const auto& id : ids)
+            relays.push_back (std::make_unique<Relay> (id));
+        return relays;
+    }
+
     void timerCallback() override;
     juce::var makeSpectrum (const SpectrumTap& tap, Analyser& state);
     static juce::WebBrowserComponent::Options makeBaseOptions();
@@ -65,6 +74,10 @@ private:
     juce::WebComboBoxRelay amGenreRelay { "amGenre" }, amIntensityRelay { "amIntensity" }, amTargetRelay { "amTarget" };
     std::vector<std::unique_ptr<juce::WebSliderRelay>> eqGainRelays = makeSliderRelays ("eqGain"),
                                                        eqFreqRelays = makeSliderRelays ("eqFreq");
+    // Dynamics and Saturation (see ModuleParams.h).
+    std::vector<std::unique_ptr<juce::WebSliderRelay>> moduleSliderRelays = makeRelays<juce::WebSliderRelay> (ModuleParams::sliderIds());
+    std::vector<std::unique_ptr<juce::WebToggleButtonRelay>> moduleToggleRelays = makeRelays<juce::WebToggleButtonRelay> (ModuleParams::toggleIds());
+    std::vector<std::unique_ptr<juce::WebComboBoxRelay>> moduleComboRelays = makeRelays<juce::WebComboBoxRelay> (ModuleParams::comboIds());
 
     juce::WebBrowserComponent webView;
 
@@ -78,12 +91,17 @@ private:
     juce::WebSliderParameterAttachment bassMonoAttachment, bassTameAttachment, bassPunchAttachment;
     juce::WebComboBoxParameterAttachment amGenreAttachment, amIntensityAttachment, amTargetAttachment;
     std::vector<std::unique_ptr<juce::WebSliderParameterAttachment>> eqAttachments;
+    std::vector<std::unique_ptr<juce::WebSliderParameterAttachment>> moduleSliderAttachments;
+    std::vector<std::unique_ptr<juce::WebToggleButtonParameterAttachment>> moduleToggleAttachments;
+    std::vector<std::unique_ptr<juce::WebComboBoxParameterAttachment>> moduleComboAttachments;
 
     juce::dsp::FFT fft { kFftOrder };
     juce::dsp::WindowingFunction<float> window { static_cast<size_t> (kFftSize), juce::dsp::WindowingFunction<float>::hann, false };
     std::array<float, 2 * kFftSize> fftBuffer {};
     Analyser mixAnalyser, masterAnalyser;
     float grHold = 0.0f, clipHold = 0.0f, tameHold = 0.0f, punchHold = 0.0f;
+    std::array<float, polisher::kDynBands> dynHold {};
+    float satHold = -100.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherWebEditor)
 };

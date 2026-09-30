@@ -90,6 +90,9 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                        .withOptionsFrom (amTargetRelay);
     for (auto& r : eqGainRelays) options = options.withOptionsFrom (*r);
     for (auto& r : eqFreqRelays) options = options.withOptionsFrom (*r);
+    for (auto& r : moduleSliderRelays) options = options.withOptionsFrom (*r);
+    for (auto& r : moduleToggleRelays) options = options.withOptionsFrom (*r);
+    for (auto& r : moduleComboRelays) options = options.withOptionsFrom (*r);
 
     return options
         .withNativeFunction ("resetMeter", [this] (const juce::Array<juce::var>& args, auto complete)
@@ -157,6 +160,17 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
         eqAttachments.push_back (std::make_unique<juce::WebSliderParameterAttachment> (param (p, ("eqGain" + n).toRawUTF8()), *eqGainRelays[i], nullptr));
         eqAttachments.push_back (std::make_unique<juce::WebSliderParameterAttachment> (param (p, ("eqFreq" + n).toRawUTF8()), *eqFreqRelays[i], nullptr));
     }
+
+    const auto sliders = ModuleParams::sliderIds(), toggles = ModuleParams::toggleIds(), combos = ModuleParams::comboIds();
+    for (int i = 0; i < sliders.size(); ++i)
+        moduleSliderAttachments.push_back (std::make_unique<juce::WebSliderParameterAttachment> (
+            param (p, sliders[i].toRawUTF8()), *moduleSliderRelays[static_cast<size_t> (i)], nullptr));
+    for (int i = 0; i < toggles.size(); ++i)
+        moduleToggleAttachments.push_back (std::make_unique<juce::WebToggleButtonParameterAttachment> (
+            param (p, toggles[i].toRawUTF8()), *moduleToggleRelays[static_cast<size_t> (i)], nullptr));
+    for (int i = 0; i < combos.size(); ++i)
+        moduleComboAttachments.push_back (std::make_unique<juce::WebComboBoxParameterAttachment> (
+            param (p, combos[i].toRawUTF8()), *moduleComboRelays[static_cast<size_t> (i)], nullptr));
 
     addAndMakeVisible (webView);
     webView.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
@@ -290,6 +304,17 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("amUndo",     am.canUndo());
     frame->setProperty ("amReport",   am.getReportVersion());
     frame->setProperty ("corr",       roundTo (m.correlation.load(), 0.01f));
+    juce::Array<juce::var> dynGr;
+    for (size_t b = 0; b < dynHold.size(); ++b)
+    {
+        const float d = m.dynGr[b].exchange (0.0f);
+        dynHold[b] = d < dynHold[b] ? d : dynHold[b] * 0.8f + d * 0.2f;
+        dynGr.add (roundTo (dynHold[b], 0.1f));
+    }
+    frame->setProperty ("dynGr",      dynGr);
+    const float harm = m.satHarmonics.load();
+    satHold = satHold * 0.85f + harm * 0.15f;
+    frame->setProperty ("satHarm",    roundTo (satHold, 0.1f));
     frame->setProperty ("matchDb",    roundTo (m.matchDb.load(), 0.1f));
     frame->setProperty ("sr",         audioProcessor.getSampleRate());
     frame->setProperty ("inShort",    roundTo (m.inputShortTerm.load(), 0.1f));

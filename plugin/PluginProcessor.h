@@ -9,6 +9,9 @@
 #include "polisher/BassControl.h"
 #include "polisher/StereoImager.h"
 #include "polisher/LevelMatch.h"
+#include "polisher/MultibandDynamics.h"
+#include "polisher/Saturation.h"
+#include "ModuleParams.h"
 #include "SpectrumTap.h"
 #include "AutoMasterController.h"
 
@@ -72,6 +75,8 @@ public:
         std::atomic<float> bassWidth { 0.0f };       // how stereo the incoming bass is (%)
         std::atomic<float> matchDb { 0.0f };          // MATCH gain for the side playing now, A or B (dB, <= 0)
         std::atomic<float> correlation { 1.0f };      // output L/R correlation (+1 mono ... -1 out of phase)
+        std::array<std::atomic<float>, polisher::kDynBands> dynGr {};   // deepest Dynamics gain reduction per band since read (dB, <= 0)
+        std::atomic<float> satHarmonics { -100.0f };  // level of the harmonics Saturation adds, vs the signal (dB)
     };
     Meters meters;
 
@@ -99,7 +104,10 @@ private:
 
     polisher::TonalEQ eq;
     polisher::BassControl bass;
+    polisher::MultibandDynamics dynamics;
     polisher::StereoImager imager;
+    polisher::Saturation saturation;
+    ModuleParams::Reader moduleParams;
     polisher::SoftClipper clipper;
     polisher::TruePeakLimiter limiter;
     double currentDriveGain = 1.0;

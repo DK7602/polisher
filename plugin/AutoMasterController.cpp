@@ -1,4 +1,5 @@
 #include "AutoMasterController.h"
+#include "ModuleParams.h"
 
 namespace
 {
@@ -118,6 +119,12 @@ void AutoMasterController::launchAnalysis()
     settings.genre = static_cast<polisher::Genre> (juce::jlimit (0, polisher::kNumGenres - 1, choice ("amGenre")));
     settings.intensity = static_cast<polisher::Intensity> (juce::jlimit (0, 2, choice ("amIntensity")));
     settings.target = static_cast<polisher::LoudnessTarget> (juce::jlimit (0, 2, choice ("amTarget")));
+    // Modules Auto-Master doesn't set yet: master with them as they are.
+    ModuleParams::Reader current;
+    current.attach (state);
+    settings.dynamics = current.dynamics (false);
+    settings.imager = current.imager (false);
+    settings.saturation = current.saturation (false);
     pendingSettings = settings;
 
     const int thisSession = session;
