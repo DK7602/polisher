@@ -68,6 +68,7 @@ public:
         std::atomic<float> bassTame { 0.0f };        // deepest Sub Tame cut since read (dB, <= 0)
         std::atomic<float> bassPunch { 0.0f };       // biggest Punch boost since read (dB, >= 0)
         std::atomic<float> bassWidth { 0.0f };       // how stereo the incoming bass is (%)
+        std::atomic<float> matchDb { 0.0f };         // level-match gain for B (dB, <= 0 when the master is louder)
     };
     Meters meters;
 
@@ -119,6 +120,10 @@ private:
     std::atomic<float>* bassTameParam = nullptr;
     std::atomic<float>* bassPunchParam = nullptr;
     bool wasPlaying = false;
+    std::atomic<float>* levelMatchParam = nullptr;
+    double matchDb = 0.0;          // smoothed loudness difference, original minus master (dB)
+    double currentMatchGain = 1.0;
+    double sampleRateHz = 48000.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherAudioProcessor)
 };

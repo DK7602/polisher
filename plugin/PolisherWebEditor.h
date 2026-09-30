@@ -56,7 +56,7 @@ private:
     // Relays must be constructed before the browser, which takes options from them.
     juce::WebSliderRelay driveRelay { "drive" }, ceilingRelay { "ceiling" }, releaseRelay { "release" };
     juce::WebToggleButtonRelay adaptiveRelay { "adaptive" }, bypassRelay { "bypass" }, autoResetRelay { "autoreset" };
-    juce::WebToggleButtonRelay clipOnRelay { "clipOn" }, resetOnChangeRelay { "resetOnChange" };
+    juce::WebToggleButtonRelay clipOnRelay { "clipOn" }, resetOnChangeRelay { "resetOnChange" }, levelMatchRelay { "levelMatch" };
     juce::WebSliderRelay clipLevelRelay { "clipLevel" }, clipSoftnessRelay { "clipSoftness" };
     juce::WebComboBoxRelay clipOversamplingRelay { "clipOversampling" };
     juce::WebToggleButtonRelay eqOnRelay { "eqOn" }, bassOnRelay { "bassOn" };
@@ -69,7 +69,7 @@ private:
 
     juce::WebSliderParameterAttachment driveAttachment, ceilingAttachment, releaseAttachment;
     juce::WebToggleButtonParameterAttachment adaptiveAttachment, bypassAttachment, autoResetAttachment;
-    juce::WebToggleButtonParameterAttachment clipOnAttachment, resetOnChangeAttachment;
+    juce::WebToggleButtonParameterAttachment clipOnAttachment, resetOnChangeAttachment, levelMatchAttachment;
     juce::WebSliderParameterAttachment clipLevelAttachment, clipSoftnessAttachment;
     juce::WebComboBoxParameterAttachment clipOversamplingAttachment;
     juce::WebToggleButtonParameterAttachment eqOnAttachment, bassOnAttachment;

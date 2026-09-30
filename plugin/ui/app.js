@@ -29,6 +29,7 @@ const P = {
   bypass: Juce.getToggleState("bypass"),
   autoreset: Juce.getToggleState("autoreset"),
   resetOnChange: Juce.getToggleState("resetOnChange"),
+  levelMatch: Juce.getToggleState("levelMatch"),
   clipOn: Juce.getToggleState("clipOn"),
   clipLevel: Juce.getSliderState("clipLevel"),
   clipSoftness: Juce.getSliderState("clipSoftness"),
@@ -61,7 +62,7 @@ const M = {
   momentary: -100, shortTerm: -100, integrated: -100, range: 0, truePeak: -100,
   peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
   inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
-  amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0,
+  amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0, matchDb: 0,
 };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
 let clipWindow = [];         // ~3 s of clipper peak-reduction samples
@@ -626,7 +627,7 @@ function renderLearn() {
   } else if (M.integrated > -99 && M.integrated < -16) {
     body.appendChild(tip("SOUNDS CLEAN", "Plenty of dynamics left. For a streaming release, you can push Drive until Integrated reaches around −14 to −10 LUFS.", true));
   } else {
-    body.appendChild(tip("SOUNDS HEALTHY", "Limiting is moderate, so transients should stay intact. When you A/B, remember B is louder: louder always sounds \u201cbetter\u201d, so judge tone, not volume.", true));
+    body.appendChild(tip("SOUNDS HEALTHY", "Limiting is moderate, so transients should stay intact. When you A/B, turn on MATCH so B isn't simply louder: louder always sounds \u201cbetter\u201d.", true));
   }
   const note = para("l-p", "When Auto-Master arrives, this panel will explain its own choices for every module.");
   note.style.cssText = "font-size:12px;color:var(--dim)";
@@ -810,6 +811,23 @@ function setLearn(on) {
   renderLearn();
 }
 $("learn-toggle").addEventListener("click", () => setLearn(!learnOn));
+
+// Level-matched A/B
+function refreshMatch() {
+  const on = !!P.levelMatch.getValue();
+  const b = $("btn-match");
+  b.className = "pill match " + (on ? "pill-red" : "pill-blue");
+  b.setAttribute("aria-pressed", String(on));
+  b.textContent = on ? `MATCH ${M.matchDb < -0.05 ? fmtNum(M.matchDb) : "0.0"}` : "MATCH";
+}
+$("btn-match").addEventListener("click", () => {
+  const on = !P.levelMatch.getValue();
+  P.levelMatch.setValue(on);
+  refreshMatch();
+  toast(on ? "MATCH on: the master plays at your original's loudness, so A/B compares tone and punch, not volume."
+           : "MATCH off: B plays the master at its real loudness.");
+});
+P.levelMatch.valueChangedEvent.addListener(refreshMatch);
 
 function refreshAB() {
   const bypassed = !!P.bypass.getValue();
@@ -1026,7 +1044,7 @@ function renderReport(body) {
     body.appendChild(head(label));
     list.forEach((x) => body.appendChild(item(x.control, x.value, x.why)));
   }
-  body.appendChild(tip("COMPARE IT", "Press A for your original mix and B for the master. B is louder, so judge the tone, not the volume. The undo arrow at the top puts every setting back.", true));
+  body.appendChild(tip("COMPARE IT", "Turn on MATCH, then press A for your original mix and B for the master: both play at the same loudness, so you hear only what the master changed. The undo arrow at the top puts every setting back.", true));
 }
 
 // Current value of a parameter by id, in the same units the report stores.
@@ -1218,6 +1236,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
     fetchReport(!first);
   }
   if (wasAm !== M.amState || M.amState === 1) updateAmButton();
+  if (P.levelMatch.getValue()) refreshMatch();
   if (M.momentary > -70 || M.peakL > -80) lastAudioTime = performance.now();
   grWindow.push(M.gr);
   if (grWindow.length > 90) grWindow.shift();
@@ -1245,4 +1264,5 @@ renderModule();
 setLearn(true);
 refreshAmChoices();
 updateAmButton();
+refreshMatch();
 onParamsChanged();

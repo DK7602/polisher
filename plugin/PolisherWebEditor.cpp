@@ -72,6 +72,7 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                        .withOptionsFrom (autoResetRelay)
                        .withOptionsFrom (clipOnRelay)
                        .withOptionsFrom (resetOnChangeRelay)
+                       .withOptionsFrom (levelMatchRelay)
                        .withOptionsFrom (clipLevelRelay)
                        .withOptionsFrom (clipSoftnessRelay)
                        .withOptionsFrom (clipOversamplingRelay)
@@ -128,6 +129,7 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
       autoResetAttachment (param (p, "autoreset"), autoResetRelay, nullptr),
       clipOnAttachment (param (p, "clipOn"), clipOnRelay, nullptr),
       resetOnChangeAttachment (param (p, "resetOnChange"), resetOnChangeRelay, nullptr),
+      levelMatchAttachment (param (p, "levelMatch"), levelMatchRelay, nullptr),
       clipLevelAttachment (param (p, "clipLevel"), clipLevelRelay, nullptr),
       clipSoftnessAttachment (param (p, "clipSoftness"), clipSoftnessRelay, nullptr),
       clipOversamplingAttachment (param (p, "clipOversampling"), clipOversamplingRelay, nullptr),
@@ -164,6 +166,10 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
 PolisherWebEditor::~PolisherWebEditor()
 {
     stopTimer();
+    // Level match is a listening aid: switch it off when the window closes so it can't end up in a bounce.
+    if (auto* p = audioProcessor.parameters.getParameter ("levelMatch"))
+        if (p->getValue() > 0.5f)
+            p->setValueNotifyingHost (0.0f);
 }
 
 void PolisherWebEditor::paint (juce::Graphics& g)
@@ -275,6 +281,7 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("amHearing",  am.isHearingAudio());
     frame->setProperty ("amUndo",     am.canUndo());
     frame->setProperty ("amReport",   am.getReportVersion());
+    frame->setProperty ("matchDb",    roundTo (m.matchDb.load(), 0.1f));
     frame->setProperty ("sr",         audioProcessor.getSampleRate());
     frame->setProperty ("inShort",    roundTo (m.inputShortTerm.load(), 0.1f));
     frame->setProperty ("inIntegrated", roundTo (m.inputIntegrated.load(), 0.1f));

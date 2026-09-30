@@ -11,6 +11,7 @@ namespace ParamIDs
     inline constexpr const char* bypass   = "bypass";
     inline constexpr const char* autoReset = "autoreset";
     inline constexpr const char* resetOnChange = "resetOnChange";
+    inline constexpr const char* levelMatch = "levelMatch";
     inline constexpr const char* clipOn        = "clipOn";
     inline constexpr const char* clipLevel     = "clipLevel";
     inline constexpr const char* clipSoftness  = "clipSoftness";
@@ -51,6 +52,7 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     clipSoftnessParam  = parameters.getRawParameterValue (ParamIDs::clipSoftness);
     clipOversamplingParam = parameters.getRawParameterValue (ParamIDs::clipOversampling);
     eqOnParam = parameters.getRawParameterValue (ParamIDs::eqOn);
+    levelMatchParam = parameters.getRawParameterValue (ParamIDs::levelMatch);
     bassOnParam    = parameters.getRawParameterValue (ParamIDs::bassOn);
     bassMonoParam  = parameters.getRawParameterValue (ParamIDs::bassMono);
     bassTameParam  = parameters.getRawParameterValue (ParamIDs::bassTame);
@@ -92,6 +94,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
                                                       AudioParameterBoolAttributes().withAutomatable (false)));
     // Read by the editor: restart the loudness measurement shortly after you change a control, so
     // Integrated describes the current settings instead of averaging in the old ones.
+    // Level-matched A/B: while on, B (the master) is turned down to the original's loudness so a
+    // comparison is about tone and punch, not volume. Off during offline export and when the editor
+    // closes, so it can't end up in a bounce by accident.
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::levelMatch, 1 }, "Level Match", false,
+                                                      AudioParameterBoolAttributes().withAutomatable (false)));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::resetOnChange, 1 }, "Reset Meter On Change", true,
                                                       AudioParameterBoolAttributes().withAutomatable (false)));
 
@@ -177,6 +184,8 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     eq.prepare (sampleRate, channels);
     bass.prepare (sampleRate, channels);
     autoMaster.prepare (sampleRate);
+    sampleRateHz = sampleRate;
+    currentMatchGain = 1.0;
     outputMeter.prepare (sampleRate, channels);
     inputMeter.prepare (sampleRate, channels);
     updateLimiterParams();
@@ -305,6 +314,25 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     }
 
     publishMeters();
+
+    // Level-matched A/B. Learn the loudness gap while the master plays (both readings are taken
+    // before this gain, so the meters and spectrum always show the real master)...
+    const bool bypassed = bypassParam->load() > 0.5f;
+    const double inShort = inputMeter.shortTermLufs(), outShort = outputMeter.shortTermLufs();
+    if (! bypassed && std::isfinite (inShort) && std::isfinite (outShort) && inShort > -60.0 && outShort > -60.0)
+    {
+        const double k = 1.0 - std::exp (-numSamples / (3.0 * sampleRateHz));   // ~3 s smoothing
+        matchDb += ((inShort - outShort) - matchDb) * k;
+    }
+    matchDb = juce::jlimit (-24.0, 6.0, matchDb);
+    meters.matchDb.store (static_cast<float> (matchDb));
+
+    // ...and while MATCH is on, play B at the original's loudness (never during offline export).
+    const bool matching = levelMatchParam->load() > 0.5f && ! bypassed && ! isNonRealtime();
+    const double targetGain = matching ? juce::Decibels::decibelsToGain (matchDb) : 1.0;
+    if (targetGain != 1.0 || currentMatchGain != 1.0)
+        buffer.applyGainRamp (0, numSamples, static_cast<Sample> (currentMatchGain), static_cast<Sample> (targetGain));
+    currentMatchGain = targetGain;
 }
 
 void PolisherAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
