@@ -1,7 +1,10 @@
 #pragma once
 
 #include "BassControl.h"
+#include "MultibandDynamics.h"
+#include "Saturation.h"
 #include "SoftClipper.h"
+#include "StereoImager.h"
 #include "TonalEQ.h"
 #include "TruePeakLimiter.h"
 
@@ -39,17 +42,25 @@ AudioClip renderEq (const AudioClip& clip, const TonalEQParams& params);
 /** Renders a clip through Bass Control offline (zero latency). */
 AudioClip renderBass (const AudioClip& clip, const BassParams& params);
 
-/** The mastering chain as the plug-in runs it: Tonal EQ -> Bass Control -> drive -> Soft Clipper -> Maximizer. */
+/** The mastering chain as the plug-in runs it: Tonal EQ -> Bass Control -> Dynamics -> Stereo Imager
+    -> Saturation -> drive -> Soft Clipper -> Maximizer. */
 struct MasterChainParams
 {
     TonalEQParams eq;           // flat by default
     BassParams bass;            // all off by default
+    DynamicsParams dynamics;    // 1:1 in every band by default (pass-through)
+    ImagerParams imager;        // 100 % everywhere by default
+    SaturationParams saturation;  // Drive 0 by default (pass-through, latency kept)
     double driveDb = 0.0;       // push into the clipper and limiter
     ClipperParams clipper;      // clipper.enabled = false skips it (latency is kept)
     LimiterParams limiter;      // limiter.driveDb is ignored here; driveDb above is used
 };
 
-/** Renders a clip through EQ -> drive -> clipper -> limiter offline, latency compensated. */
+/** Renders a clip through everything before the drive (EQ -> Bass -> Dynamics -> Imager ->
+    Saturation), latency compensated. */
+AudioClip renderPreDrive (const AudioClip& clip, const MasterChainParams& params);
+
+/** Renders a clip through the whole chain offline, latency compensated. */
 AudioClip renderMaster (const AudioClip& clip, const MasterChainParams& params);
 
 struct TargetResult

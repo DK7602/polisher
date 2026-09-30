@@ -48,6 +48,10 @@ struct AutoMasterSettings
     Genre genre = Genre::trapHipHop;
     Intensity intensity = Intensity::balanced;
     LoudnessTarget target = LoudnessTarget::loud;
+    // Modules Auto-Master doesn't decide yet: it keeps your settings and masters with them on.
+    DynamicsParams dynamics;
+    ImagerParams imager;
+    SaturationParams saturation;
 };
 
 struct AutoMasterResult

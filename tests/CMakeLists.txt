@@ -16,7 +16,8 @@ add_executable(polisher_tests
     test_automaster.cpp
     test_imager.cpp
     test_dynamics.cpp
-    test_levelmatch.cpp)
+    test_levelmatch.cpp
+    test_saturation.cpp)
 
 target_link_libraries(polisher_tests PRIVATE polisher_dsp Catch2::Catch2WithMain)
 set_target_properties(polisher_tests PROPERTIES FOLDER "Polisher")

@@ -100,9 +100,58 @@ AudioClip renderBass (const AudioClip& clip, const BassParams& params)
     return out;
 }
 
+AudioClip renderPreDrive (const AudioClip& input, const MasterChainParams& params)
+{
+    AudioClip out = renderBass (renderEq (input, params.eq), params.bass);
+    const int nch = out.numChannels(), n = out.numSamples();
+    if (nch == 0)
+        return out;
+    std::vector<float*> ptrs;
+    for (auto& ch : out.channels)
+        ptrs.push_back (ch.data());
+
+    if (! MultibandDynamics::isNeutral (params.dynamics))
+    {
+        MultibandDynamics dyn;
+        dyn.prepare (out.sampleRate, nch);
+        dyn.setParams (params.dynamics);
+        dyn.reset();
+        dyn.process (ptrs.data(), nch, n);
+    }
+    const auto& im = params.imager;
+    if (im.enabled && (im.lowWidth != 100.0 || im.midWidth != 100.0 || im.highWidth != 100.0) && nch >= 2)
+    {
+        StereoImager imager;
+        imager.prepare (out.sampleRate);
+        imager.setParams (im);
+        imager.reset();
+        imager.process (ptrs.data(), nch, n);
+    }
+    if (! Saturation::isNeutral (params.saturation))
+    {
+        // Run the tail through too, then drop the latency so the result lines up with the input.
+        Saturation sat;
+        sat.prepare (out.sampleRate, nch);
+        sat.setParams (params.saturation);
+        sat.reset();
+        const int lat = Saturation::latencySamples();
+        std::vector<double> frame (static_cast<size_t> (nch));
+        for (int i = 0; i < n + lat; ++i)
+        {
+            for (int c = 0; c < nch; ++c)
+                frame[static_cast<size_t> (c)] = i < n ? out.channels[static_cast<size_t> (c)][static_cast<size_t> (i)] : 0.0;
+            sat.processFrame (frame.data(), nch);
+            if (i >= lat)
+                for (int c = 0; c < nch; ++c)
+                    out.channels[static_cast<size_t> (c)][static_cast<size_t> (i - lat)] = static_cast<float> (frame[static_cast<size_t> (c)]);
+        }
+    }
+    return out;
+}
+
 AudioClip renderMaster (const AudioClip& input, const MasterChainParams& params)
 {
-    const AudioClip clip = renderBass (renderEq (input, params.eq), params.bass);
+    const AudioClip clip = renderPreDrive (input, params);
     const int nch = clip.numChannels();
     const int n = clip.numSamples();
 

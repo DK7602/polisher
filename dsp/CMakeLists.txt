@@ -8,6 +8,7 @@ add_library(polisher_dsp STATIC
     src/BassControl.cpp
     src/StereoImager.cpp
     src/MultibandDynamics.cpp
+    src/Saturation.cpp
     src/AutoMaster.cpp
     src/LoudnessTargeting.cpp)
 

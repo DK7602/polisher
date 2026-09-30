@@ -423,6 +423,10 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
         r.reasons.push_back ({ module, std::move (control), std::move (value), std::move (why) });
     };
     auto& chain = r.chain;
+    // Not set by Auto-Master yet: kept as you set them, and included in the loudness search.
+    chain.dynamics = s.dynamics;
+    chain.imager = s.imager;
+    chain.saturation = s.saturation;
 
     // 808-led genres, where the low end is programmed rather than played.
     const bool bassHeavy = s.genre == Genre::trapHipHop || s.genre == Genre::rnb || s.genre == Genre::edm || s.genre == Genre::pop;
@@ -555,13 +559,16 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
     const double ceiling = chain.limiter.ceilingDbtp;
 
     // Loudness: search on the real chain, then respect the intensity's peak-control budget.
-    const AudioClip shaped = renderBass (renderEq (clip, chain.eq), chain.bass);
+    const AudioClip shaped = renderPreDrive (clip, chain);   // EQ, Bass, and your Dynamics / Imager / Saturation
     const auto shapedStats = measure (shaped);
     const double inLufs = shapedStats.integratedLufs;
     const double recurring = recurringPeakDb (shaped);   // the peaks that keep coming back
     MasterChainParams rest = chain;
     rest.eq = TonalEQParams {};
     rest.bass = BassParams {};
+    rest.dynamics = DynamicsParams {};
+    rest.imager = ImagerParams {};
+    rest.saturation = SaturationParams {};
     auto setClipLevel = [&] (double level)
     {
         rest.clipper.thresholdDb = ceiling + level;          // the engine wants the absolute threshold
@@ -708,6 +715,18 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
     if (s.genre == Genre::acoustic && s.target != LoudnessTarget::stream)
         r.notes.push_back ("HEADS UP: acoustic releases usually sit around \xE2\x88\x92" "14 to \xE2\x88\x92" "11 LUFS. "
                            "Stream \xE2\x88\x92" "14 keeps the most life in the guitars and vocal; streaming services turn louder masters down anyway.");
+
+    {
+        std::string kept;
+        if (! MultibandDynamics::isNeutral (s.dynamics)) kept = "Dynamics";
+        if (! Saturation::isNeutral (s.saturation)) kept += std::string (kept.empty() ? "" : " and ") + "Saturation";
+        const auto& im = s.imager;
+        if (im.enabled && (im.lowWidth != 100.0 || im.midWidth != 100.0 || im.highWidth != 100.0))
+            kept += std::string (kept.empty() ? "" : ", ") + "Stereo Imager";
+        if (! kept.empty())
+            r.notes.push_back ("YOUR SETTINGS: " + kept + " stay as you set them (Auto-Master doesn't choose those yet), and the loudness "
+                               "above was found with them on.");
+    }
 
     // --- Summary -------------------------------------------------------------------------------------
     char head[512];

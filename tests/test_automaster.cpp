@@ -206,3 +206,26 @@ TEST_CASE ("A honky or muddy mix is still a mix", "[automaster]")
         checkWellFormed (r);
     }
 }
+
+TEST_CASE ("Auto-Master keeps your Dynamics and Saturation and still lands the target", "[automaster]")
+{
+    const auto mix = testsig::musicLike (48000.0, 12.0, -14.0);
+    AutoMasterSettings s;
+    s.target = LoudnessTarget::stream;
+    s.saturation.driveDb = 9.0;
+    s.saturation.mode = SaturationMode::tube;
+    s.dynamics.bands[0].thresholdDb = -30.0;
+    s.dynamics.bands[0].ratio = 3.0;
+    const auto r = autoMaster (mix, s);
+    INFO (r.summary);
+    checkWellFormed (r);
+    CHECK (r.chain.saturation.driveDb == 9.0);
+    CHECK (r.chain.dynamics.bands[0].ratio == 3.0);
+    CHECK (std::any_of (r.notes.begin(), r.notes.end(), [] (const auto& n) { return n.find ("YOUR SETTINGS") != std::string::npos; }));
+    if (r.reachedTarget)
+        CHECK_THAT (r.output.integratedLufs, WithinAbs (-14.0, 0.3));
+    // What the plug-in will play (the whole chain) measures what Auto-Master promised.
+    const auto check = measure (renderMaster (mix, r.chain));
+    CHECK_THAT (check.integratedLufs, WithinAbs (r.output.integratedLufs, 0.05));
+    CHECK (check.truePeakDbtp <= r.chain.limiter.ceilingDbtp + 0.05);
+}
