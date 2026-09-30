@@ -478,7 +478,7 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
     {
         if (bassHeavy) punch = a.lowCrestDb < 9.0 ? 40.0 : a.lowCrestDb < 12.0 ? 25.0 : 0.0;
         else if (s.intensity == Intensity::punchy && a.lowCrestDb < 9.0) punch = 20.0;
-        if (s.intensity == Intensity::punchy && punch > 0.0) punch = std::min (70.0, punch + 20.0);
+        if (s.intensity == Intensity::punchy && punch > 0.0 && bassHeavy) punch = std::min (70.0, punch + 20.0);
     }
     chain.bass.punch = punch / 100.0;
     reason ("bass", "Punch", pct (punch),
@@ -640,8 +640,10 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
                    " target. Polisher doesn't turn masters down; streaming services will do that for you.";
     else if (r.reachedTarget)
         driveWhy = num (drive, true) + " dB of Drive lands this part at " + num (out.integratedLufs) + " LUFS, your " + targetName (s.target) +
-                   " target. Holding the peaks down costs about " + num (cost) + " dB of loudness, within the " + rules.name + " limit of " +
-                   num (rules.budgetDb) + " dB, so the drums keep their punch.";
+                   " target. " + (cost < 0.3 ? std::string ("At this level the peaks barely need controlling, so the master stays completely clean.")
+                                             : "Holding the peaks down costs about " + num (cost) + " dB of loudness, within the " + rules.name +
+                                               " limit of " + num (rules.budgetDb) + " dB, so " +
+                                               (bassHeavy ? "the drums keep their punch." : "the attacks stay natural."));
     else if (peakLimited && ! budgetLimited)
         driveWhy = "Reaching " + num (r.targetLufs) + " LUFS would mean shaving about " + num (recurring + found.driveDb - ceiling) +
                    " dB off your recurring peaks, which you'd hear on " + genre + ". I stopped at " + num (out.integratedLufs) +
