@@ -106,7 +106,7 @@ const modules = [
                ["Punch", "Adds attack to the start of the kick without turning the sub up."]] },
   { id: "dyn", name: "Dynamics", live: true, soon: "",
     what: "Four-band compression: steadies the low end without ducking the vocal, and evens out section jumps gently.",
-    cells: [["Crossovers", "3 bands", "120/2k/8k", .5], ["Low Ratio", "low band", "1:1", 0], ["Mid Attack", "mid band", "30 ms", .45], ["Release", "all bands", "Auto", .5]],
+    cells: [["Crossovers", "3 splits", "120/1k/6k", .5], ["Low Ratio", "low band", "1:1", 0], ["Mid Attack", "mid band", "30 ms", .45], ["Release", "all bands", "Auto", .5]],
     controls: [["Crossovers", "Split points between the bands."], ["Ratio", "How firmly each band is held down."],
                ["Attack", "Slow lets drum hits through, fast catches vocal peaks."], ["Release", "Auto follows the tempo so it recovers between hits."]] },
   { id: "img", name: "Stereo Imager", live: true, soon: "",

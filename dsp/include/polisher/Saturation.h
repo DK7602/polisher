@@ -30,10 +30,10 @@ struct SaturationParams
       of Drive, so quiet material always passes at unity gain and only the louder moments are
       shaped. Level therefore stays put as you add Drive.
     - Only what the curve adds (harmonics and peak rounding) goes through the oversampling filters
-      and a 10 Hz high-pass (removes the DC the tube curve creates); it is mixed back onto the dry
-      signal, so the clean signal is never filtered and Mix is a true parallel blend.
+      (and, for tube only, a 1 Hz high-pass that removes the DC its asymmetry creates); it is mixed
+      back onto the dry signal, so the clean signal is never filtered and Mix is a true parallel blend.
     - Constant latency (kLatency) in every state; exact pass-through (delayed) when off, at Drive 0
-      or Mix 0, with 20 ms cross-fades. Drive glides, so moves never zipper.
+      or Mix 0, with 20 ms cross-fades (after reset() it starts fully in the set state). Drive glides, so moves never zipper.
 
     prepare() allocates; process() does not. */
 class Saturation

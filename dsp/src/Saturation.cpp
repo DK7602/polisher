@@ -33,7 +33,7 @@ void Saturation::prepare (double sampleRate, int numChannels)
         ch.dry.assign (kLatency + 1, 0.0);
     glideCoeff = 1.0 - std::exp (-1.0 / (0.030 * sampleRate));
     mixCoeff = 1.0 - std::exp (-4.0 / (0.020 * sampleRate));   // settles within ~20 ms
-    hpCoeff = std::exp (-2.0 * std::numbers::pi * 10.0 / sampleRate);
+    hpCoeff = std::exp (-2.0 * std::numbers::pi * 1.0 / sampleRate);
     reset();
 }
 
@@ -48,9 +48,10 @@ void Saturation::reset() noexcept
     }
     bendTarget = std::pow (10.0, (kHeadroomDb - std::clamp (params.driveDb, 0.0, kMaxDriveDb)) / 20.0);
     bend = bendTarget;
-    mix = 0.0;
+    // Start fully in the requested state (offline renders and a fresh prepare): no fade-in.
+    running = ! isNeutral (params);
+    mix = running ? std::clamp (params.mix, 0.0, 100.0) / 100.0 : 0.0;
     warmup = 0;
-    running = false;
     resEnergy = sigEnergy = 0.0;
 }
 
@@ -116,8 +117,18 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
         const double ra = ch.stages[1].downsample (u[0], u[1]);
         const double rb = ch.stages[1].downsample (u[2], u[3]);
         const double res = ch.stages[0].downsample (ra, rb);
-        ch.hpY = hpCoeff * (ch.hpY + res - ch.hpX);
-        ch.hpX = res;
+        // Only the tube curve is asymmetric and makes DC; a 1 Hz high-pass removes it without
+        // shifting the bass part of the residual against the dry signal.
+        if (params.mode == SaturationMode::tube)
+        {
+            ch.hpY = hpCoeff * (ch.hpY + res - ch.hpX);
+            ch.hpX = res;
+        }
+        else
+        {
+            ch.hpY = res;
+            ch.hpX = 0.0;
+        }
 
         resEnergy += ch.hpY * ch.hpY;
         sigEnergy += dry * dry;
