@@ -7,6 +7,7 @@ add_library(polisher_dsp STATIC
     src/TonalEQ.cpp
     src/BassControl.cpp
     src/StereoImager.cpp
+    src/MultibandDynamics.cpp
     src/AutoMaster.cpp
     src/LoudnessTargeting.cpp)
 
