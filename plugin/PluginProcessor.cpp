@@ -53,6 +53,10 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     clipOversamplingParam = parameters.getRawParameterValue (ParamIDs::clipOversampling);
     eqOnParam = parameters.getRawParameterValue (ParamIDs::eqOn);
     levelMatchParam = parameters.getRawParameterValue (ParamIDs::levelMatch);
+    imgOnParam   = parameters.getRawParameterValue ("imgOn");
+    imgLowParam  = parameters.getRawParameterValue ("imgLow");
+    imgMidParam  = parameters.getRawParameterValue ("imgMid");
+    imgHighParam = parameters.getRawParameterValue ("imgHigh");
     bassOnParam    = parameters.getRawParameterValue (ParamIDs::bassOn);
     bassMonoParam  = parameters.getRawParameterValue (ParamIDs::bassMono);
     bassTameParam  = parameters.getRawParameterValue (ParamIDs::bassTame);
@@ -155,6 +159,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::bassPunch, 1 }, "Bass Punch",
                                                        NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f, percent));
 
+    // Stereo Imager (after Bass Control): width per band, 100 % = unchanged.
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { "imgOn", 1 }, "Imager On", true));
+    for (auto [id, name] : { std::pair { "imgLow", "Imager Low Width" }, std::pair { "imgMid", "Imager Mid Width" }, std::pair { "imgHigh", "Imager High Width" } })
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { id, 1 }, name, NormalisableRange<float> (0.0f, 200.0f, 0.1f), 100.0f,
+                                                           AudioParameterFloatAttributes().withLabel ("%")
+                                                               .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v)) + " %"; })));
+
     // Auto-Master choices (saved with the project; not automatable).
     auto choice = [&] (const char* id, const char* name, StringArray items, int def)
     {
@@ -183,6 +194,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     clipper.prepare (channels);
     eq.prepare (sampleRate, channels);
     bass.prepare (sampleRate, channels);
+    imager.prepare (sampleRate);
     autoMaster.prepare (sampleRate);
     sampleRateHz = sampleRate;
     currentMatchGain = 1.0;
@@ -238,6 +250,13 @@ void PolisherAudioProcessor::updateLimiterParams()
     if (bp.enabled != cb.enabled || bp.monoHz != cb.monoHz || bp.tame != cb.tame || bp.punch != cb.punch)
         bass.setParams (bp);
 
+    polisher::ImagerParams ip;
+    ip.enabled = imgOnParam->load() > 0.5f && ! p.bypassed;
+    ip.lowWidth = imgLowParam->load();
+    ip.midWidth = imgMidParam->load();
+    ip.highWidth = imgHighParam->load();
+    imager.setParams (ip);
+
     const auto& cc = clipper.getParams();
     if (c.enabled != cc.enabled || c.thresholdDb != cc.thresholdDb || c.softness != cc.softness || c.makeupDb != cc.makeupDb
         || c.oversampling != cc.oversampling)
@@ -289,6 +308,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
 
     eq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     bass.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+    imager.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
 
     // Drive (ramped per block so knob moves don't click) -> Soft Clipper -> limiter.
     const double newGain = targetDriveGain();
@@ -326,6 +346,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     }
     matchDb = juce::jlimit (-24.0, 6.0, matchDb);
     meters.matchDb.store (static_cast<float> (matchDb));
+    meters.correlation.store (static_cast<float> (imager.correlation()));
 
     // ...and while MATCH is on, play B at the original's loudness (never during offline export).
     const bool matching = levelMatchParam->load() > 0.5f && ! bypassed && ! isNonRealtime();

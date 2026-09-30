@@ -59,7 +59,8 @@ private:
     juce::WebToggleButtonRelay clipOnRelay { "clipOn" }, resetOnChangeRelay { "resetOnChange" }, levelMatchRelay { "levelMatch" };
     juce::WebSliderRelay clipLevelRelay { "clipLevel" }, clipSoftnessRelay { "clipSoftness" };
     juce::WebComboBoxRelay clipOversamplingRelay { "clipOversampling" };
-    juce::WebToggleButtonRelay eqOnRelay { "eqOn" }, bassOnRelay { "bassOn" };
+    juce::WebToggleButtonRelay eqOnRelay { "eqOn" }, bassOnRelay { "bassOn" }, imgOnRelay { "imgOn" };
+    juce::WebSliderRelay imgLowRelay { "imgLow" }, imgMidRelay { "imgMid" }, imgHighRelay { "imgHigh" };
     juce::WebSliderRelay bassMonoRelay { "bassMono" }, bassTameRelay { "bassTame" }, bassPunchRelay { "bassPunch" };
     juce::WebComboBoxRelay amGenreRelay { "amGenre" }, amIntensityRelay { "amIntensity" }, amTargetRelay { "amTarget" };
     std::vector<std::unique_ptr<juce::WebSliderRelay>> eqGainRelays = makeSliderRelays ("eqGain"),
@@ -72,7 +73,8 @@ private:
     juce::WebToggleButtonParameterAttachment clipOnAttachment, resetOnChangeAttachment, levelMatchAttachment;
     juce::WebSliderParameterAttachment clipLevelAttachment, clipSoftnessAttachment;
     juce::WebComboBoxParameterAttachment clipOversamplingAttachment;
-    juce::WebToggleButtonParameterAttachment eqOnAttachment, bassOnAttachment;
+    juce::WebToggleButtonParameterAttachment eqOnAttachment, bassOnAttachment, imgOnAttachment;
+    juce::WebSliderParameterAttachment imgLowAttachment, imgMidAttachment, imgHighAttachment;
     juce::WebSliderParameterAttachment bassMonoAttachment, bassTameAttachment, bassPunchAttachment;
     juce::WebComboBoxParameterAttachment amGenreAttachment, amIntensityAttachment, amTargetAttachment;
     std::vector<std::unique_ptr<juce::WebSliderParameterAttachment>> eqAttachments;

@@ -78,6 +78,10 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                        .withOptionsFrom (clipOversamplingRelay)
                        .withOptionsFrom (eqOnRelay)
                        .withOptionsFrom (bassOnRelay)
+                       .withOptionsFrom (imgOnRelay)
+                       .withOptionsFrom (imgLowRelay)
+                       .withOptionsFrom (imgMidRelay)
+                       .withOptionsFrom (imgHighRelay)
                        .withOptionsFrom (bassMonoRelay)
                        .withOptionsFrom (bassTameRelay)
                        .withOptionsFrom (bassPunchRelay)
@@ -135,6 +139,10 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
       clipOversamplingAttachment (param (p, "clipOversampling"), clipOversamplingRelay, nullptr),
       eqOnAttachment (param (p, "eqOn"), eqOnRelay, nullptr),
       bassOnAttachment (param (p, "bassOn"), bassOnRelay, nullptr),
+      imgOnAttachment (param (p, "imgOn"), imgOnRelay, nullptr),
+      imgLowAttachment (param (p, "imgLow"), imgLowRelay, nullptr),
+      imgMidAttachment (param (p, "imgMid"), imgMidRelay, nullptr),
+      imgHighAttachment (param (p, "imgHigh"), imgHighRelay, nullptr),
       bassMonoAttachment (param (p, "bassMono"), bassMonoRelay, nullptr),
       bassTameAttachment (param (p, "bassTame"), bassTameRelay, nullptr),
       bassPunchAttachment (param (p, "bassPunch"), bassPunchRelay, nullptr),
@@ -281,6 +289,7 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("amHearing",  am.isHearingAudio());
     frame->setProperty ("amUndo",     am.canUndo());
     frame->setProperty ("amReport",   am.getReportVersion());
+    frame->setProperty ("corr",       roundTo (m.correlation.load(), 0.01f));
     frame->setProperty ("matchDb",    roundTo (m.matchDb.load(), 0.1f));
     frame->setProperty ("sr",         audioProcessor.getSampleRate());
     frame->setProperty ("inShort",    roundTo (m.inputShortTerm.load(), 0.1f));

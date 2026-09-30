@@ -7,6 +7,7 @@
 #include "polisher/SoftClipper.h"
 #include "polisher/TonalEQ.h"
 #include "polisher/BassControl.h"
+#include "polisher/StereoImager.h"
 #include "SpectrumTap.h"
 #include "AutoMasterController.h"
 
@@ -68,7 +69,8 @@ public:
         std::atomic<float> bassTame { 0.0f };        // deepest Sub Tame cut since read (dB, <= 0)
         std::atomic<float> bassPunch { 0.0f };       // biggest Punch boost since read (dB, >= 0)
         std::atomic<float> bassWidth { 0.0f };       // how stereo the incoming bass is (%)
-        std::atomic<float> matchDb { 0.0f };         // level-match gain for B (dB, <= 0 when the master is louder)
+        std::atomic<float> matchDb { 0.0f };
+        std::atomic<float> correlation { 1.0f };      // output L/R correlation (+1 mono ... -1 out of phase)         // level-match gain for B (dB, <= 0 when the master is louder)
     };
     Meters meters;
 
@@ -96,6 +98,7 @@ private:
 
     polisher::TonalEQ eq;
     polisher::BassControl bass;
+    polisher::StereoImager imager;
     polisher::SoftClipper clipper;
     polisher::TruePeakLimiter limiter;
     double currentDriveGain = 1.0;
@@ -121,6 +124,10 @@ private:
     std::atomic<float>* bassPunchParam = nullptr;
     bool wasPlaying = false;
     std::atomic<float>* levelMatchParam = nullptr;
+    std::atomic<float>* imgOnParam = nullptr;
+    std::atomic<float>* imgLowParam = nullptr;
+    std::atomic<float>* imgMidParam = nullptr;
+    std::atomic<float>* imgHighParam = nullptr;
     double matchDb = 0.0;          // smoothed loudness difference, original minus master (dB)
     double currentMatchGain = 1.0;
     double sampleRateHz = 48000.0;

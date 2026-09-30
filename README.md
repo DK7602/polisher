@@ -5,7 +5,7 @@ every setting. Style: red / white / powder-blue liquid glass.
 
 Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 
-## Status — v0.7
+## Status — v0.8
 
 | Piece | State |
 | --- | --- |
@@ -20,7 +20,8 @@ Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 | Bass Control: Mono Below, Sub Tame (dynamic 808 leveller), Punch, bass-width meter, live Learn | Done (v0.5) |
 | Auto-Master: listens 12 s, analyses tone vs genre, bass width, 808 jumps, kick punch and loudness; sets every module; explains each choice; undo | Done (v0.6) |
 | Level-matched A/B (MATCH): the master plays at the original's loudness; off during export and when the window closes | Done (v0.7) |
-| Dynamics, Imager, Saturation, Match ref | Planned |
+| Stereo Imager: width for lows / mids / highs (side only, LR4 crossovers), correlation meter, Learn | Done (v0.8) |
+| Dynamics, Saturation, Match ref | Planned |
 
 ## Layout
 

@@ -36,6 +36,10 @@ const P = {
   clipOs: Juce.getComboBoxState("clipOversampling"),
   eqOn: Juce.getToggleState("eqOn"),
   bassOn: Juce.getToggleState("bassOn"),
+  imgOn: Juce.getToggleState("imgOn"),
+  imgLow: Juce.getSliderState("imgLow"),
+  imgMid: Juce.getSliderState("imgMid"),
+  imgHigh: Juce.getSliderState("imgHigh"),
   bassMono: Juce.getSliderState("bassMono"),
   bassTame: Juce.getSliderState("bassTame"),
   bassPunch: Juce.getSliderState("bassPunch"),
@@ -62,7 +66,7 @@ const M = {
   momentary: -100, shortTerm: -100, integrated: -100, range: 0, truePeak: -100,
   peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
   inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
-  amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0, matchDb: 0,
+  amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0, matchDb: 0, corr: 1,
 };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
 let clipWindow = [];         // ~3 s of clipper peak-reduction samples
@@ -92,7 +96,7 @@ const modules = [
     cells: [["Crossovers", "3 bands", "120/2k/8k", .5], ["Low Ratio", "low band", "1:1", 0], ["Mid Attack", "mid band", "30 ms", .45], ["Release", "all bands", "Auto", .5]],
     controls: [["Crossovers", "Split points between the bands."], ["Ratio", "How firmly each band is held down."],
                ["Attack", "Slow lets drum hits through, fast catches vocal peaks."], ["Release", "Auto follows the tempo so it recovers between hits."]] },
-  { id: "img", name: "Stereo Imager", soon: "Planned for an upcoming build.",
+  { id: "img", name: "Stereo Imager", live: true, soon: "",
     what: "Controls width per band: keeps the low end centred and opens up hats, reverbs and ad-libs.",
     cells: [["Lows", "< 250 Hz", "0%", .5], ["Mids", "250 Hz–5 kHz", "0%", .5], ["Highs", "> 5 kHz", "0%", .5]],
     controls: [["Lows", "Kept centred. Wide bass smears and costs headroom."], ["Mids", "Small moves only, so the lead vocal stays locked in."],
@@ -394,6 +398,24 @@ const bassCells = [
   barCell({ label: "Bass Width", sub: "your mix < 150 Hz", minText: "mono", maxText: "wide", id: "widthmeter" }),
 ];
 
+// Stereo Imager cells
+const fmtWidth = (v) => `${Math.round(v)} %`;
+function corrCell() {
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.innerHTML = `<span class="cell-label">Correlation</span><span class="cell-sub mono">mono safety</span>
+    <div class="clipmeter screen"><div class="clipmeter-fill" id="corr-fill"></div></div>
+    <div class="minmax mono"><span>${MINUS}1</span><span>+1</span></div>
+    <span class="cell-value mono" id="corr-val"></span>`;
+  return cell;
+}
+const imagerCells = [
+  liveKnobCell({ label: "Lows", sub: "< 250 Hz", state: P.imgLow, def: 100, minText: "mono", maxText: "200", fmt: fmtWidth }),
+  liveKnobCell({ label: "Mids", sub: "250 Hz–5 kHz", state: P.imgMid, def: 100, minText: "mono", maxText: "200", fmt: fmtWidth }),
+  liveKnobCell({ label: "Highs", sub: "> 5 kHz", state: P.imgHigh, def: 100, minText: "mono", maxText: "200", fmt: fmtWidth }),
+  corrCell(),
+];
+
 function renderModule() {
   const m = modules.find((x) => x.id === selected);
   const row = $("knob-row");
@@ -403,7 +425,7 @@ function renderModule() {
   $("btn-bypass").hidden = !m.live;
   if (m.live) {
     row.classList.remove("soon");
-    ({ clip: clipperCells, eq: eqCells, bass: bassCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
+    ({ clip: clipperCells, eq: eqCells, bass: bassCells, img: imagerCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
     $("module-note").textContent = "Live · drag up/down · Shift = fine · double-click = reset";
     refreshHeadButton();
   } else {
@@ -568,6 +590,7 @@ function renderLearn() {
   if (m.id === "clip") { renderClipperLearn(body); liftWarning(body); prependAmSection(body, "clip"); return; }
   if (m.id === "eq") { renderEqLearn(body); liftWarning(body); prependAmSection(body, "eq"); return; }
   if (m.id === "bass") { renderBassLearn(body); liftWarning(body); prependAmSection(body, "bass"); return; }
+  if (m.id === "img") { renderImagerLearn(body); liftWarning(body); return; }
 
   const drive = P.drive.getScaledValue();
   const ceiling = P.ceiling.getScaledValue();
@@ -736,6 +759,29 @@ function renderBassLearn(body) {
   }
 }
 
+function renderImagerLearn(body) {
+  const on = !!P.imgOn.getValue(), bypassed = !!P.bypass.getValue();
+  const [lo, mi, hi] = [P.imgLow, P.imgMid, P.imgHigh].map((x) => Math.round(x.getScaledValue()));
+  const corr = M.corr;
+  body.appendChild(head("WHAT'S HAPPENING"));
+  body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched."
+    : !on ? "The Stereo Imager is off, so the stereo picture is unchanged."
+    : lo === 100 && mi === 100 && hi === 100 ? "All three bands are at 100 %, so the stereo picture is untouched."
+    : `Width is ${lo} % in the lows, ${mi} % in the mids and ${hi} % in the highs. Only the stereo (side) part is changed; anything in the center (vocal, kick, bass) stays exactly where it is.`));
+  body.appendChild(sep());
+  body.appendChild(head("WHAT EACH CONTROL IS DOING"));
+  body.appendChild(item("Lows", `${lo} %`, lo < 100 ? "Narrower low end: tighter bass that translates to club systems and phones." : lo > 100 ? "Wider low end: rarely a good idea on a master; bass loses focus and power in mono." : "Unchanged. For mono bass use Mono Below in Bass Control."));
+  body.appendChild(item("Mids", `${mi} %`, mi > 100 ? "Wider mids: guitars, synths and backing vocals spread out. Small moves only (up to about 120 %), or the lead vocal can feel detached." : mi < 100 ? "Narrower mids: a more focused, centered sound." : "Unchanged."));
+  body.appendChild(item("Highs", `${hi} %`, hi > 100 ? "Wider highs: hi-hats, reverbs and ad-libs open up. This is where width sounds best." : hi < 100 ? "Narrower highs: a more focused top." : "Unchanged."));
+  body.appendChild(item("Correlation", `${corr < 0 ? MINUS : "+"}${Math.abs(corr).toFixed(2)}`, "How mono-safe the master is: +1 is mono, around +0.3 to +0.7 is a healthy wide mix, below 0 means parts cancel when played on one speaker (phones, club PAs)."));
+  if (on && !bypassed && corr < 0.1 && performance.now() - lastAudioTime < 1500)
+    body.appendChild(tip("HEADS UP", "Correlation is near or below zero: parts of the mix will cancel on mono speakers. Lower Mids or Highs width, or check for out-of-phase stereo effects in the mix."));
+  else if (on && lo > 100)
+    body.appendChild(tip("HEADS UP", "Widening the lows on a master usually costs punch and mono compatibility. Keep Lows at 100 % or below."));
+  else
+    body.appendChild(tip("TRY THIS", "Highs to about 115 % and Mids to 105 %: a subtle lift in width that stays mono-safe. Watch Correlation stay above +0.3.", true));
+}
+
 // Warnings go right under "What's happening" so they're seen without scrolling; friendly tips stay at the end.
 function liftWarning(body) {
   const warn = body.querySelector(".l-tip:not(.ok)"), firstSep = body.querySelector(".l-sep");
@@ -840,7 +886,13 @@ function refreshAB() {
 // The button in the module header: global bypass for the Maximizer, power for the Soft Clipper.
 function refreshHeadButton() {
   const bp = $("btn-bypass");
-  if (selected === "bass") {
+  if (selected === "img") {
+    const on = !!P.imgOn.getValue();
+    bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
+    bp.textContent = on ? "IMAGER ON" : "IMAGER OFF";
+    bp.setAttribute("aria-pressed", String(on));
+    $("knob-row").classList.toggle("dimmed", !on);
+  } else if (selected === "bass") {
     const on = !!P.bassOn.getValue();
     bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
     bp.textContent = on ? "BASS ON" : "BASS OFF";
@@ -872,6 +924,7 @@ $("btn-bypass").addEventListener("click", () => {
   if (selected === "clip") P.clipOn.setValue(!P.clipOn.getValue());
   else if (selected === "eq") P.eqOn.setValue(!P.eqOn.getValue());
   else if (selected === "bass") P.bassOn.setValue(!P.bassOn.getValue());
+  else if (selected === "img") P.imgOn.setValue(!P.imgOn.getValue());
   else P.bypass.setValue(!P.bypass.getValue());
   onParamsChanged();
   userEdited();
@@ -880,6 +933,7 @@ P.bypass.valueChangedEvent.addListener(onParamsChanged);
 P.clipOn.valueChangedEvent.addListener(onParamsChanged);
 P.eqOn.valueChangedEvent.addListener(onParamsChanged);
 P.bassOn.valueChangedEvent.addListener(onParamsChanged);
+P.imgOn.valueChangedEvent.addListener(onParamsChanged);
 
 function togglePopover(id) {
   for (const p of ["pop-settings", "pop-help"]) $(p).hidden = p === id ? !$(p).hidden : true;
@@ -1188,6 +1242,7 @@ function updateLiveReadouts() {
   chip.hidden = !m.live;
   chip.textContent = selected === "clip" ? (clipOn ? `CLIP ${clipText} dB` : "OFF")
                    : selected === "eq" ? (!eqEnabled() ? "OFF" : eqIsFlat() ? "FLAT" : "SHAPING")
+ : selected === "img" ? (!P.imgOn.getValue() ? "OFF" : `CORR ${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`)
                    : selected === "bass" ? (!P.bassOn.getValue() ? "OFF" : `WIDTH ${Math.round(M.bassWidth || 0)} %`)
                    : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
   const r = $("read-max");
@@ -1208,6 +1263,15 @@ function updateLiveReadouts() {
     $("tamemeter-val").textContent = !bassOn || !tameSet ? "off" : `${M.tame < -0.05 ? fmtNum(M.tame) : "0.0"} dB`;
     $("widthmeter-fill").style.width = clamp(M.bassWidth || 0, 0, 100).toFixed(0) + "%";
     $("widthmeter-val").textContent = `${Math.round(M.bassWidth || 0)} % stereo`;
+  }
+  const ri = $("read-img");
+  const imgW = [P.imgLow, P.imgMid, P.imgHigh].map((x) => x.getScaledValue());
+  const imgNeutral = imgW.every((v) => Math.abs(v - 100) < 0.5);
+  if (ri) ri.textContent = P.bypass.getValue() ? "Bypassed" : !P.imgOn.getValue() ? "Off" : imgNeutral ? "Neutral" : imgW.map((v) => Math.round(v)).join("/") + " %";
+  const cf = $("corr-fill");
+  if (cf) {
+    cf.style.width = (((clamp(M.corr, -1, 1) + 1) / 2) * 100).toFixed(0) + "%";
+    $("corr-val").textContent = `${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`;
   }
   const re = $("read-eq");
   if (re) {
@@ -1254,7 +1318,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   $("sp-master").setAttribute("d", master);
   $("sp-master-glow").setAttribute("d", master);
 });
-setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass"].includes(selected)) renderLearn(); }, 1000);
+setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img"].includes(selected)) renderLearn(); }, 1000);
 
 // ---------------------------------------------------------------------------------------------
 buildSpectrumGrid();
