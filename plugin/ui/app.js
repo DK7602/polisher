@@ -870,7 +870,7 @@ $("btn-match").addEventListener("click", () => {
   const on = !P.levelMatch.getValue();
   P.levelMatch.setValue(on);
   refreshMatch();
-  toast(on ? "MATCH on: the master plays at your original's loudness, so A/B compares tone and punch, not volume."
+  toast(on ? "MATCH on: A and B play at the same loudness (the louder one is turned down), so you compare tone and punch, not volume."
            : "MATCH off: B plays the master at its real loudness.");
 });
 P.levelMatch.valueChangedEvent.addListener(refreshMatch);

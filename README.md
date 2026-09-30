@@ -5,7 +5,7 @@ every setting. Style: red / white / powder-blue liquid glass.
 
 Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 
-## Status — v0.8.1
+## Status — v0.8.2
 
 | Piece | State |
 | --- | --- |
@@ -22,6 +22,7 @@ Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 | Level-matched A/B (MATCH): the master plays at the original's loudness; off during export and when the window closes | Done (v0.7) |
 | Stereo Imager: width for lows / mids / highs (side only, LR4 crossovers), correlation meter, Learn | Done (v0.8) |
 | Auto-Master recognises a single instrument (one band far above any genre balance), changes nothing and says to put Polisher on the master | Done (v0.8.1) |
+| MATCH never boosts (the louder side is turned down) and gives a clipping original headroom, so A doesn't distort the interface | Done (v0.8.2) |
 | Dynamics: 4-band compressor engine (LR4, zero latency, exact pass-through, tested) | Engine done, not yet in the plug-in |
 | Saturation, Match ref | Planned |
 
@@ -39,6 +40,7 @@ dsp/        Framework-free C++20 engine (no JUCE): unit-testable, reusable offli
     AutoMaster.h         Mix analysis + decisions + plain-language reasons (framework-free, tested)
     SoftClipper.h        Oversampled soft-knee clipper (drive -> clipper -> limiter)
     LoudnessTargeting.h  Offline render + drive search used by Auto-Master
+    LevelMatch.h         MATCH: loudness-matched, clip-free A/B gains
 plugin/     JUCE AudioProcessor, web-view editor (+ basic native fallback editor)
   ui/       The liquid-glass interface: index.html, styles.css, app.js, images, fonts (OFL).
             Browser preview: copy JUCE's modules/juce_gui_extra/native/javascript/*.js into

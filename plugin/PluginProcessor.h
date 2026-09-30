@@ -8,6 +8,7 @@
 #include "polisher/TonalEQ.h"
 #include "polisher/BassControl.h"
 #include "polisher/StereoImager.h"
+#include "polisher/LevelMatch.h"
 #include "SpectrumTap.h"
 #include "AutoMasterController.h"
 
@@ -69,8 +70,8 @@ public:
         std::atomic<float> bassTame { 0.0f };        // deepest Sub Tame cut since read (dB, <= 0)
         std::atomic<float> bassPunch { 0.0f };       // biggest Punch boost since read (dB, >= 0)
         std::atomic<float> bassWidth { 0.0f };       // how stereo the incoming bass is (%)
-        std::atomic<float> matchDb { 0.0f };
-        std::atomic<float> correlation { 1.0f };      // output L/R correlation (+1 mono ... -1 out of phase)         // level-match gain for B (dB, <= 0 when the master is louder)
+        std::atomic<float> matchDb { 0.0f };          // MATCH gain for the side playing now, A or B (dB, <= 0)
+        std::atomic<float> correlation { 1.0f };      // output L/R correlation (+1 mono ... -1 out of phase)
     };
     Meters meters;
 
@@ -128,9 +129,8 @@ private:
     std::atomic<float>* imgLowParam = nullptr;
     std::atomic<float>* imgMidParam = nullptr;
     std::atomic<float>* imgHighParam = nullptr;
-    double matchDb = 0.0;          // smoothed loudness difference, original minus master (dB)
+    polisher::LevelMatch levelMatch;
     double currentMatchGain = 1.0;
-    double sampleRateHz = 48000.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherAudioProcessor)
 };

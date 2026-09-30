@@ -196,7 +196,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     bass.prepare (sampleRate, channels);
     imager.prepare (sampleRate);
     autoMaster.prepare (sampleRate);
-    sampleRateHz = sampleRate;
+    levelMatch.prepare (sampleRate);
     currentMatchGain = 1.0;
     outputMeter.prepare (sampleRate, channels);
     inputMeter.prepare (sampleRate, channels);
@@ -286,11 +286,16 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     const bool justStarted = isPlaying && ! wasPlaying;
     wasPlaying = isPlaying;
 
-    if (meterResetRequested.exchange (false) || (justStarted && autoResetParam->load() > 0.5f))
+    const bool resetPressed = meterResetRequested.exchange (false);
+    if (resetPressed || (justStarted && autoResetParam->load() > 0.5f))
     {
         outputMeter.reset();
         inputMeter.reset();
     }
+    // MATCH remembers the original's loudest peak across playback passes (so A never clips at the
+    // start of a pass); RESET forgets it, e.g. after the mix was turned down.
+    if (resetPressed)
+        levelMatch.resetPeak();
     if (statsResetRequested.exchange (false))
     {
         outputMeter.resetStatistics();
@@ -301,6 +306,10 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
 
     const int numChannels = buffer.getNumChannels();
     const int numSamples = buffer.getNumSamples();
+
+    double inputPeak = 0.0;
+    for (int c = 0; c < juce::jmin (numIn, numChannels); ++c)
+        inputPeak = juce::jmax (inputPeak, static_cast<double> (buffer.getMagnitude (c, 0, numSamples)));
 
     inputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     inputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
@@ -338,19 +347,15 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     // Level-matched A/B. Learn the loudness gap while the master plays (both readings are taken
     // before this gain, so the meters and spectrum always show the real master)...
     const bool bypassed = bypassParam->load() > 0.5f;
-    const double inShort = inputMeter.shortTermLufs(), outShort = outputMeter.shortTermLufs();
-    if (! bypassed && std::isfinite (inShort) && std::isfinite (outShort) && inShort > -60.0 && outShort > -60.0)
-    {
-        const double k = 1.0 - std::exp (-numSamples / (3.0 * sampleRateHz));   // ~3 s smoothing
-        matchDb += ((inShort - outShort) - matchDb) * k;
-    }
-    matchDb = juce::jlimit (-24.0, 6.0, matchDb);
-    meters.matchDb.store (static_cast<float> (matchDb));
+    levelMatch.update (inputMeter.shortTermLufs(), outputMeter.shortTermLufs(), inputPeak, numSamples, ! bypassed);
+    const double sideGainDb = bypassed ? levelMatch.gainForADb() : levelMatch.gainForBDb();
+    meters.matchDb.store (static_cast<float> (sideGainDb));
     meters.correlation.store (static_cast<float> (imager.correlation()));
 
-    // ...and while MATCH is on, play B at the original's loudness (never during offline export).
-    const bool matching = levelMatchParam->load() > 0.5f && ! bypassed && ! isNonRealtime();
-    const double targetGain = matching ? juce::Decibels::decibelsToGain (matchDb) : 1.0;
+    // ...and while MATCH is on, turn the louder side down to the quieter one, with headroom so A
+    // doesn't clip the interface (never during offline export).
+    const bool matching = levelMatchParam->load() > 0.5f && ! isNonRealtime();
+    const double targetGain = matching ? juce::Decibels::decibelsToGain (sideGainDb) : 1.0;
     if (targetGain != 1.0 || currentMatchGain != 1.0)
         buffer.applyGainRamp (0, numSamples, static_cast<Sample> (currentMatchGain), static_cast<Sample> (targetGain));
     currentMatchGain = targetGain;
