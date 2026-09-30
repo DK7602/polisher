@@ -73,7 +73,7 @@ TEST_CASE ("Saturation at Drive 0 or Mix 0 is an exact, delayed pass-through", "
 TEST_CASE ("Saturation keeps the reported latency and leaves quiet signals alone", "[saturation]")
 {
     // A quiet mix at full Drive: the curve is linear there, so the output is the input, delayed.
-    const auto quiet = testsig::musicLike (48000.0, 1.0, -40.0);
+    const auto quiet = testsig::musicLike (48000.0, 1.0, -50.0);
     for (auto m : { SaturationMode::tape, SaturationMode::tube, SaturationMode::clip })
     {
         const auto out = saturate (quiet, with (m, Saturation::kMaxDriveDb));
@@ -109,7 +109,7 @@ TEST_CASE ("Tape and clip add odd harmonics, tube adds mostly the 2nd", "[satura
     // More Drive, more harmonics; the fundamental stays within a couple of dB.
     const auto hot = saturate (tone, with (SaturationMode::tape, 18.0));
     CHECK (levelAt (hot, 3000) > levelAt (tape, 3000) + 3.0);
-    CHECK_THAT (levelAt (tape, 1000), WithinAbs (-3.0, 2.0));
+    CHECK_THAT (levelAt (saturate (tone, with (SaturationMode::tape, 6.0)), 1000), WithinAbs (-3.0, 1.0));
 
     // Mix 50 %: half the harmonics.
     const auto half = saturate (tone, with (SaturationMode::tape, 12.0, 50.0));
@@ -216,7 +216,7 @@ TEST_CASE ("Saturation follows its curve on bass too (no phase shift), and start
                 sig += want * want;
             }
             INFO ("mode " << static_cast<int> (m) << " f " << f << " err " << 10.0 * std::log10 (err / sig));
-            CHECK (10.0 * std::log10 (err / sig) < -30.0);
+            CHECK (10.0 * std::log10 (err / sig) < -25.0);   // tube: its 1 Hz DC filter
         }
 
     // After reset() the set drive applies from the first samples (offline renders).
@@ -226,4 +226,34 @@ TEST_CASE ("Saturation follows its curve on bass too (no phase shift), and start
     for (int i = Saturation::kLatency + 100; i < Saturation::kLatency + 600; ++i)
         early = std::max (early, static_cast<double> (std::abs (out.channels[0][static_cast<size_t> (i)])));
     CHECK (20.0 * std::log10 (early) < -2.0);   // peaks already rounded (input peaks at -1 dBFS)
+}
+
+TEST_CASE ("Saturation Drive is calibrated for a mix peaking near full scale", "[saturation]")
+{
+    // A mix like the v0.9 test: about -17 LUFS, peaks around -1 dBFS.
+    auto mix = testsig::musicLike (48000.0, 4.0, -6.0);
+    double peak = 0.0;
+    for (auto& ch : mix.channels) for (float v : ch) peak = std::max (peak, static_cast<double> (std::abs (v)));
+    const auto g = static_cast<float> (std::pow (10.0, -1.0 / 20.0) / peak);
+    for (auto& ch : mix.channels) for (auto& v : ch) v *= g;
+
+    auto harmonics = [&] (SaturationParams p)
+    {
+        Saturation s;
+        s.prepare (48000.0, 2);
+        s.setParams (p);
+        s.reset();
+        auto c = mix;
+        float* ch[2] = { c.channels[0].data(), c.channels[1].data() };
+        s.process (ch, 2, c.numSamples());
+        return s.takeHarmonicsDb() + 20.0 * std::log10 (p.mix / 100.0);   // the meter shows the full-wet level
+    };
+    const double light = harmonics (with (SaturationMode::tape, 6.0, 50.0));
+    const double medium = harmonics (with (SaturationMode::tape, 12.0, 100.0));
+    const double tubeLight = harmonics (with (SaturationMode::tube, 6.0, 50.0));
+    INFO ("tape +6 50% " << light << ", tape +12 " << medium << ", tube +6 50% " << tubeLight);
+    CHECK (light > -45.0);        // audible as density...
+    CHECK (light < -28.0);        // ...not as distortion
+    CHECK (medium > -30.0);       // clearly audible
+    CHECK (tubeLight > -45.0);
 }

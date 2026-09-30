@@ -26,9 +26,11 @@ struct SaturationParams
         tape  y = S tanh(x / S)                          smooth, odd harmonics
         tube  asymmetric tanh (bias 0.35), slope 1 at 0   warm, mostly 2nd harmonic
         clip  y = x / (1 + |x/S|^4)^(1/4)                firmer knee, brighter odd harmonics
-      S (where the curve bends) starts 12 dB above full scale at Drive 0 and comes down 1 dB per dB
+      S (where the curve bends) starts 7.5 dB above full scale at Drive 0 and comes down 1 dB per dB
       of Drive, so quiet material always passes at unity gain and only the louder moments are
-      shaped. Level therefore stays put as you add Drive.
+      shaped; the effect fades in over the first 3 dB of Drive, so leaving 0 never jumps. Level
+      stays put as you add Drive. Calibrated on a mix peaking near 0 dBFS: Tape at +6 dB, Mix
+      50 % adds harmonics around -35 dB (felt more than heard); +12 dB is clearly audible.
     - Only what the curve adds (harmonics and peak rounding) goes through the oversampling filters
       (and, for tube only, a 1 Hz high-pass that removes the DC its asymmetry creates); it is mixed
       back onto the dry signal, so the clean signal is never filtered and Mix is a true parallel blend.
@@ -42,7 +44,8 @@ public:
     static constexpr int kMaxChannels = 8;
     static constexpr int kLatency = 55;          // 2x (95 taps) + 4x (33 taps) round trip
     static constexpr double kMaxDriveDb = 18.0;
-    static constexpr double kHeadroomDb = 12.0;  // S at Drive 0, above full scale
+    static constexpr double kHeadroomDb = 7.5;   // S at Drive 0, above full scale
+    static constexpr double kFadeInDb = 3.0;     // the effect fades in over the first dB of Drive
     static constexpr double kTubeBias = 0.35;
 
     void prepare (double sampleRate, int numChannels);
@@ -52,6 +55,11 @@ public:
     static bool isNeutral (const SaturationParams& p) noexcept
     {
         return ! p.enabled || p.driveDb < 0.05 || p.mix < 0.05;
+    }
+    /** The blend actually used: Mix, faded in over the first kFadeInDb of Drive (0 when neutral). */
+    static double effectiveMix (const SaturationParams& p) noexcept
+    {
+        return isNeutral (p) ? 0.0 : std::clamp (p.mix, 0.0, 100.0) / 100.0 * std::min (1.0, p.driveDb / kFadeInDb);
     }
     static constexpr int latencySamples() noexcept { return kLatency; }
 

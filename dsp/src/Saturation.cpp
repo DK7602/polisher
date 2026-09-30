@@ -50,7 +50,7 @@ void Saturation::reset() noexcept
     bend = bendTarget;
     // Start fully in the requested state (offline renders and a fresh prepare): no fade-in.
     running = ! isNeutral (params);
-    mix = running ? std::clamp (params.mix, 0.0, 100.0) / 100.0 : 0.0;
+    mix = effectiveMix (params);
     warmup = 0;
     resEnergy = sigEnergy = 0.0;
 }
@@ -58,7 +58,7 @@ void Saturation::reset() noexcept
 void Saturation::processFrame (double* frame, int numChannels) noexcept
 {
     const int nch = std::min (numChannels, channelCount);
-    const double mixTarget = isNeutral (params) ? 0.0 : std::clamp (params.mix, 0.0, 100.0) / 100.0;
+    const double mixTarget = effectiveMix (params);
     bendTarget = std::pow (10.0, (kHeadroomDb - std::clamp (params.driveDb, 0.0, kMaxDriveDb)) / 20.0);
 
     const bool idle = mix < 1.0e-6 && mixTarget == 0.0 && warmup == 0;
