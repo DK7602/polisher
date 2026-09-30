@@ -1056,7 +1056,9 @@ async function fetchReport(openIt) {
     amOpenedTime = amReport.time;
     amRequested = false;
     learnView = "report";
-    toast(amReport.ok ? "Auto-Master set every module. Learn explains each choice." : "Auto-Master couldn't hear enough music. See Learn.");
+    toast(amReport.ok ? "Auto-Master set every module. Learn explains each choice."
+      : amReport.notAFullMix ? "That sounds like one track, not a full mix. Nothing was changed. See Learn."
+      : "Auto-Master couldn't hear enough music. See Learn.");
   }
   if (!amReport && learnView === "report") learnView = "module";
   refreshAllCells();
@@ -1083,7 +1085,7 @@ function renderReport(body) {
   if (!r.ok) {
     body.appendChild(head("AUTO-MASTER"));
     body.appendChild(para("l-p", r.summary));
-    body.appendChild(tip("TRY AGAIN", "Start playback on your chorus or drop, then press Auto-Master. The counter only runs while it hears music.", true));
+    body.appendChild(tip(r.tipTitle || "TRY AGAIN", r.tip || "Start playback on your chorus or drop, then press Auto-Master. The counter only runs while it hears music.", true));
     return;
   }
   body.appendChild(head("AUTO-MASTER REPORT"));

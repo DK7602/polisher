@@ -92,6 +92,10 @@ const char* const kCulprit[kEqBands] = {
     "often hi-hats or vocal sibilance",
     "often hi-hats or a bright reverb" };
 
+// How far one band may rise above a genre's balance before the audio reads as a single instrument.
+// Finished mixes stay within about 6 dB of it; a lone synth or vocal measures 20 dB and more.
+constexpr double kNotAMixExcessDb = 14.0;
+
 struct IntensityRules
 {
     const char* name;
@@ -379,7 +383,39 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
     {
         r.summary = "I couldn't hear enough music to master. Press play on the loudest part of your song "
                     "(the chorus or the drop), then press Auto-Master and let it listen for the whole count.";
+        r.tipTitle = "TRY AGAIN";
+        r.tip = "Start playback on your chorus or drop, then press Auto-Master. The counter only runs while it hears music.";
         return r;
+    }
+
+    // --- One instrument, not a mix -------------------------------------------------------------------
+    // A finished mix spreads its energy across the bands; even a muddy or honky one sits within a
+    // few dB of a genre's balance. When one band towers far above it, Polisher is almost certainly on
+    // a single track (a synth, a vocal, an 808), and mastering that to a genre curve would do harm.
+    {
+        const auto target = genreTargetCurve (s.genre);
+        const double tRef = (target[1] + target[2] + target[3] + target[4] + target[5]) / 5.0;
+        int worst = -1;
+        double excess = 0.0;
+        for (int b = 1; b < kEqBands - 1; ++b)
+        {
+            const auto i = static_cast<size_t> (b);
+            const double over = a.bandDb[i] - (target[i] - tRef);
+            if (over > excess) { excess = over; worst = b; }
+        }
+        if (worst >= 0 && excess >= kNotAMixExcessDb)
+        {
+            r.notAFullMix = true;
+            r.summary = "This doesn't sound like a full mix. Almost all of its energy is in the " + std::string (kBandPlain[worst]) +
+                        ", " + (excess > 30.0 ? std::string ("more than 30") : "about " + num (excess)) + " dB above the balance of a finished " + genre + " song. That's what a "
+                        "single instrument or vocal sounds like. Mastering one track would pile on EQ it doesn't need, so I haven't "
+                        "changed anything.";
+            r.tipTitle = "PUT POLISHER ON THE MASTER";
+            r.tip = "Polisher belongs on the channel every track flows into. In Cubase: open the MixConsole (F3), find Stereo Out "
+                    "on the far right, and load Polisher in its last insert slot. Remove it from this track, then press play on "
+                    "the chorus and run Auto-Master again.";
+            return r;
+        }
     }
 
     auto reason = [&] (const char* module, std::string control, std::string value, std::string why)

@@ -157,6 +157,9 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
     auto* doc = new juce::DynamicObject();
     doc->setProperty ("ok", r.ok);
     doc->setProperty ("summary", juce::String::fromUTF8 (r.summary.c_str()));
+    doc->setProperty ("notAFullMix", r.notAFullMix);
+    doc->setProperty ("tipTitle", juce::String::fromUTF8 (r.tipTitle.c_str()));
+    doc->setProperty ("tip", juce::String::fromUTF8 (r.tip.c_str()));
     doc->setProperty ("genre", juce::String (polisher::genreName (s.genre)));
     doc->setProperty ("intensity", juce::String (kIntensityNames[static_cast<int> (s.intensity)]));
     doc->setProperty ("target", juce::String::fromUTF8 (kTargetNames[static_cast<int> (s.target)]));

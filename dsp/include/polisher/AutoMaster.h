@@ -53,7 +53,9 @@ struct AutoMasterSettings
 struct AutoMasterResult
 {
     bool ok = false;
+    bool notAFullMix = false;                   // one instrument or stem: nothing is applied
     std::string summary;                        // one paragraph for the top of the report
+    std::string tipTitle, tip;                  // when !ok: what to do next
     std::vector<std::string> notes;             // extra advice (fix-it-in-the-mix, honesty notes)
     std::vector<AutoMasterReason> reasons;
     MixAnalysis analysis;

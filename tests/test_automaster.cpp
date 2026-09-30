@@ -159,3 +159,50 @@ TEST_CASE ("Acoustic masters are gentler than trap on the same mix", "[automaste
     CHECK (a.output.integratedLufs <= t.output.integratedLufs + 0.05);  // acoustic stops earlier, never louder
     CHECK (std::any_of (a.notes.begin(), a.notes.end(), [] (const auto& n) { return n.find ("acoustic releases") != std::string::npos; }));
 }
+
+TEST_CASE ("Auto-Master won't master a single instrument", "[automaster]")
+{
+    // A lone synth line (what Auto-Master heard when Polisher sat on a HALion track): harmonics
+    // between 500 Hz and 2 kHz, nothing below or above.
+    AudioClip synth = testsig::silence (48000.0, 2, 12.0);
+    for (int i = 0; i < synth.numSamples(); ++i)
+    {
+        const double t = i / synth.sampleRate;
+        const double env = 0.6 + 0.4 * std::sin (2.0 * std::numbers::pi * 2.0 * t);
+        double x = 0.0;
+        for (double f : { 660.0, 990.0, 1320.0, 1650.0 })
+            x += std::sin (2.0 * std::numbers::pi * f * t) / (f / 660.0);
+        synth.channels[0][static_cast<size_t> (i)] = synth.channels[1][static_cast<size_t> (i)] = static_cast<float> (0.2 * env * x);
+    }
+    for (auto genre : { Genre::trapHipHop, Genre::acoustic })
+    {
+        AutoMasterSettings s;
+        s.genre = genre;
+        const auto r = autoMaster (synth, s);
+        INFO (r.summary);
+        CHECK_FALSE (r.ok);                 // nothing gets applied
+        CHECK (r.notAFullMix);
+        CHECK (r.analysis.usable);
+        CHECK (r.summary.find ("full mix") != std::string::npos);
+        CHECK (r.tip.find ("Stereo Out") != std::string::npos);
+    }
+}
+
+TEST_CASE ("A honky or muddy mix is still a mix", "[automaster]")
+{
+    // Real mixes can be badly balanced: +8 dB of honk at 1 kHz or of mud at 300 Hz gets fixed, not refused.
+    for (double hz : { 1000.0, 300.0 })
+    {
+        auto mix = testsig::musicLike (48000.0, 12.0, -14.0);
+        for (auto& ch : mix.channels)
+        {
+            Biquad f;
+            design::apply (f, design::bell (hz, 8.0, 0.7, mix.sampleRate));
+            for (auto& v : ch) v = static_cast<float> (f.process (v));
+        }
+        const auto r = autoMaster (mix, {});
+        INFO (hz << " Hz: " << r.summary);
+        CHECK_FALSE (r.notAFullMix);
+        checkWellFormed (r);
+    }
+}
