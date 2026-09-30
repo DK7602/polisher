@@ -48,6 +48,18 @@ const P = {
   amTarget: Juce.getComboBoxState("amTarget"),
   eqGain: [1, 2, 3, 4, 5, 6, 7].map((b) => Juce.getSliderState("eqGain" + b)),
   eqFreq: [1, 2, 3, 4, 5, 6, 7].map((b) => Juce.getSliderState("eqFreq" + b)),
+  dynOn: Juce.getToggleState("dynOn"),
+  dynAdaptive: Juce.getToggleState("dynAdaptive"),
+  dynX: [1, 2, 3].map((x) => Juce.getSliderState("dynX" + x)),
+  dynThr: [1, 2, 3, 4].map((b) => Juce.getSliderState("dynThr" + b)),
+  dynRatio: [1, 2, 3, 4].map((b) => Juce.getSliderState("dynRatio" + b)),
+  dynAtk: [1, 2, 3, 4].map((b) => Juce.getSliderState("dynAtk" + b)),
+  dynRel: [1, 2, 3, 4].map((b) => Juce.getSliderState("dynRel" + b)),
+  dynGain: [1, 2, 3, 4].map((b) => Juce.getSliderState("dynGain" + b)),
+  satOn: Juce.getToggleState("satOn"),
+  satMode: Juce.getComboBoxState("satMode"),
+  satDrive: Juce.getSliderState("satDrive"),
+  satMix: Juce.getSliderState("satMix"),
 };
 const resetMeter = Juce.getNativeFunction("resetMeter");
 const amStart = Juce.getNativeFunction("startAutoMaster");
@@ -67,6 +79,7 @@ const M = {
   peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
   inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
   amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0, matchDb: 0, corr: 1,
+  dynGr: [0, 0, 0, 0], satHarm: -100,
 };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
 let clipWindow = [];         // ~3 s of clipper peak-reduction samples
@@ -91,8 +104,8 @@ const modules = [
     controls: [["Mono Below", "Stereo sub wastes headroom and collapses on club systems and phones."],
                ["Sub Tame", "Evens out 808 slides so the limiter doesn't grab the whole mix on long notes."],
                ["Punch", "Adds attack to the start of the kick without turning the sub up."]] },
-  { id: "dyn", name: "Dynamics", soon: "Planned for an upcoming build.",
-    what: "Multiband compression that controls the low end without ducking the vocal, and evens out section jumps gently.",
+  { id: "dyn", name: "Dynamics", live: true, soon: "",
+    what: "Four-band compression: steadies the low end without ducking the vocal, and evens out section jumps gently.",
     cells: [["Crossovers", "3 bands", "120/2k/8k", .5], ["Low Ratio", "low band", "1:1", 0], ["Mid Attack", "mid band", "30 ms", .45], ["Release", "all bands", "Auto", .5]],
     controls: [["Crossovers", "Split points between the bands."], ["Ratio", "How firmly each band is held down."],
                ["Attack", "Slow lets drum hits through, fast catches vocal peaks."], ["Release", "Auto follows the tempo so it recovers between hits."]] },
@@ -101,7 +114,7 @@ const modules = [
     cells: [["Lows", "< 250 Hz", "0%", .5], ["Mids", "250 Hz–5 kHz", "0%", .5], ["Highs", "> 5 kHz", "0%", .5]],
     controls: [["Lows", "Kept centred. Wide bass smears and costs headroom."], ["Mids", "Small moves only, so the lead vocal stays locked in."],
                ["Highs", "Where width sounds best: hats, reverbs, ad-libs."]] },
-  { id: "sat", name: "Saturation", soon: "Planned for an upcoming build.",
+  { id: "sat", name: "Saturation", live: true, soon: "",
     what: "Adds harmonics (tape, tube or clip styles) so bass translates on small speakers and the master feels denser.",
     cells: [["Mode", "character", "Tape", .5], ["Drive", "input", "0.0 dB", 0], ["Mix", "wet / dry", "0%", 0]],
     controls: [["Mode", "Tape = soft and warm. Tube = richer. Clip = aggressive."], ["Drive", "How many harmonics are generated."],
@@ -416,6 +429,101 @@ const imagerCells = [
   corrCell(),
 ];
 
+// Dynamics cells: a band picker (with each band's gain reduction) and the picked band's controls.
+const DYN_BANDS = [
+  { name: "Low", short: "LOW", holds: "kick and 808" },
+  { name: "Low Mid", short: "LO-MID", holds: "body, snare and vocal warmth" },
+  { name: "High Mid", short: "HI-MID", holds: "vocal presence, snare crack and synth edges" },
+  { name: "High", short: "HIGH", holds: "hi-hats, cymbals, air and sibilance" },
+];
+let dynBand = 0;
+const fmtMs = (v) => `${v < 10 ? v.toFixed(1) : Math.round(v)} ms`;
+const fmtSigned = (v) => `${v > 0.049 ? "+" : ""}${fmtNum(v, 1)} dB`;
+const dynRatioAt = (b) => P.dynRatio[b].getScaledValue();
+const dynGainAt = (b) => P.dynGain[b].getScaledValue();
+const dynBandActive = (b) => dynRatioAt(b) > 1.005 || Math.abs(dynGainAt(b)) >= 0.05;
+const dynIsNeutral = () => ![0, 1, 2, 3].some(dynBandActive);
+function dynRangeText(b) {
+  const x = P.dynX.map((s) => s.getScaledValue());
+  return b === 0 ? `below ${fmtHz(x[0])}` : b === 3 ? `above ${fmtHz(x[2])}` : `${fmtHz(x[b - 1])}\u2013${fmtHz(x[b])}`;
+}
+function dynBandCell() {
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.innerHTML = `<span class="cell-label">Band</span><span class="cell-sub mono">pick · reduction</span><div class="band-pick"></div>`;
+  const wrap = cell.querySelector(".band-pick");
+  const buttons = DYN_BANDS.map((band, b) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.addEventListener("click", () => { dynBand = b; renderModule(); renderLearn(); });
+    wrap.appendChild(btn);
+    return btn;
+  });
+  cell.refresh = () => buttons.forEach((btn, b) => {
+    btn.className = "pill mono " + (b === dynBand ? "pill-red" : "pill-blue");
+    btn.setAttribute("aria-pressed", String(b === dynBand));
+    const gr = M.dynGr[b] || 0;
+    btn.textContent = `${DYN_BANDS[b].short} ${dynBandActive(b) && gr < -0.05 ? fmtNum(gr) : ""}`.trim();
+  });
+  cell.refresh();
+  return cell;
+}
+const dynPicker = dynBandCell();
+function dynBandCells(b) {
+  const split = b < 3
+    ? liveKnobCell({ label: "Split", sub: "upper edge", state: P.dynX[b], def: [120, 1000, 6000][b], minText: fmtHz([40, 300, 3000][b]),
+                     maxText: fmtHz([300, 3000, 12000][b]), fmt: fmtHz })
+    : liveKnobCell({ label: "Split", sub: "lower edge", state: P.dynX[2], def: 6000, minText: "3 kHz", maxText: "12 kHz", fmt: fmtHz });
+  return [
+    liveKnobCell({ label: "Threshold", sub: "starts at", state: P.dynThr[b], def: -20, minText: `${MINUS}48`, maxText: "0", fmt: (v) => `${fmtNum(v, 1)} dB` }),
+    liveKnobCell({ label: "Ratio", sub: "how firm", state: P.dynRatio[b], def: 1, minText: "1:1", maxText: "10:1", fmt: (v) => `${v.toFixed(1)}:1` }),
+    liveKnobCell({ label: "Attack", sub: "grab speed", state: P.dynAtk[b], def: [30, 20, 10, 5][b], minText: "0.5", maxText: "100", fmt: fmtMs }),
+    liveKnobCell({ label: "Release", sub: "let go", state: P.dynRel[b], def: [200, 150, 120, 100][b], minText: "20", maxText: "1000", fmt: fmtMs }),
+    liveKnobCell({ label: "Gain", sub: "band level", state: P.dynGain[b], def: 0, minText: `${MINUS}12`, maxText: "+12", fmt: fmtSigned }),
+    split,
+  ];
+}
+const dynCellsByBand = [0, 1, 2, 3].map(dynBandCells);
+const dynCells = () => [dynPicker, ...dynCellsByBand[dynBand]];
+
+// Saturation cells
+const SAT_MODES = ["Tape", "Tube", "Clip"];
+const satModeIndex = () => clamp(Math.round(P.satMode.value * 2), 0, 2);
+const satDriveAt = () => P.satDrive.getScaledValue();
+const satMixAt = () => P.satMix.getScaledValue();
+const satIsNeutral = () => satDriveAt() < 0.05 || satMixAt() < 0.05;
+function satModeCell() {
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.innerHTML = `<span class="cell-label">Mode</span><span class="cell-sub mono">character</span>
+    <div class="seg"></div><span class="cell-value mono os-note"></span>`;
+  const seg = cell.querySelector(".seg"), note = cell.querySelector(".os-note");
+  const buttons = SAT_MODES.map((label, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label.toUpperCase();
+    b.addEventListener("click", () => { P.satMode.setChoiceIndex(i); refresh(); onParamsChanged(); userEdited(); });
+    seg.appendChild(b);
+    return b;
+  });
+  function refresh() {
+    const idx = satModeIndex();
+    buttons.forEach((b, i) => { b.className = "pill " + (i === idx ? "pill-red" : "pill-blue"); b.setAttribute("aria-pressed", String(i === idx)); });
+    note.textContent = ["smooth · warm", "rich · 2nd harmonic", "firm · bright"][idx];
+  }
+  P.satMode.valueChangedEvent.addListener(() => { refresh(); onParamsChanged(); });
+  P.satMode.propertiesChangedEvent.addListener(refresh);
+  cell.refresh = refresh;
+  refresh();
+  return cell;
+}
+const satCells = [
+  satModeCell(),
+  liveKnobCell({ label: "Drive", sub: "harmonics", state: P.satDrive, def: 0, minText: "0", maxText: "+18", fmt: (v) => `+${v.toFixed(1)} dB` }),
+  liveKnobCell({ label: "Mix", sub: "wet / dry", state: P.satMix, def: 100, minText: "dry", maxText: "wet", fmt: (v) => `${Math.round(v)} %` }),
+  barCell({ label: "Harmonics", sub: "added vs signal", minText: `${MINUS}60`, maxText: `${MINUS}10 dB`, id: "harmmeter" }),
+];
+
 function renderModule() {
   const m = modules.find((x) => x.id === selected);
   const row = $("knob-row");
@@ -425,7 +533,7 @@ function renderModule() {
   $("btn-bypass").hidden = !m.live;
   if (m.live) {
     row.classList.remove("soon");
-    ({ clip: clipperCells, eq: eqCells, bass: bassCells, img: imagerCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
+    ({ clip: clipperCells, eq: eqCells, bass: bassCells, dyn: dynCells(), img: imagerCells, sat: satCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
     $("module-note").textContent = "Live · drag up/down · Shift = fine · double-click = reset";
     refreshHeadButton();
   } else {
@@ -591,6 +699,8 @@ function renderLearn() {
   if (m.id === "eq") { renderEqLearn(body); liftWarning(body); prependAmSection(body, "eq"); return; }
   if (m.id === "bass") { renderBassLearn(body); liftWarning(body); prependAmSection(body, "bass"); return; }
   if (m.id === "img") { renderImagerLearn(body); liftWarning(body); return; }
+  if (m.id === "dyn") { renderDynLearn(body); liftWarning(body); return; }
+  if (m.id === "sat") { renderSatLearn(body); liftWarning(body); return; }
 
   const drive = P.drive.getScaledValue();
   const ceiling = P.ceiling.getScaledValue();
@@ -782,6 +892,68 @@ function renderImagerLearn(body) {
     body.appendChild(tip("TRY THIS", "Highs to about 115 % and Mids to 105 %: a subtle lift in width that stays mono-safe. Watch Correlation stay above +0.3.", true));
 }
 
+function renderDynLearn(body) {
+  const on = !!P.dynOn.getValue(), bypassed = !!P.bypass.getValue();
+  const playing = performance.now() - lastAudioTime < 1500;
+  const b = dynBand, band = DYN_BANDS[b];
+  const thr = P.dynThr[b].getScaledValue(), ratio = dynRatioAt(b), atk = P.dynAtk[b].getScaledValue(),
+        rel = P.dynRel[b].getScaledValue(), gain = dynGainAt(b);
+  body.appendChild(head("WHAT'S HAPPENING"));
+  if (bypassed) body.appendChild(para("l-p", "You're on A: the original mix, untouched. Switch to B to hear the chain."));
+  else if (!on) body.appendChild(para("l-p", "Dynamics is off, so every band passes through unchanged."));
+  else if (dynIsNeutral()) body.appendChild(para("l-p", "Every band is at 1:1 with no gain change, so Dynamics isn't touching the sound. Raise a band's Ratio to start holding it down."));
+  else {
+    const parts = [0, 1, 2, 3].filter(dynBandActive).map((k) => {
+      const gr = M.dynGr[k] || 0;
+      const r = dynRatioAt(k);
+      return `${DYN_BANDS[k].name} (${dynRangeText(k)}): ${r > 1.005 ? `${r.toFixed(1)}:1` : "no compression"}${Math.abs(dynGainAt(k)) >= 0.05 ? `, ${fmtSigned(dynGainAt(k))}` : ""}${r > 1.005 && playing ? `, pulling down ${gr < -0.05 ? fmtNum(-gr) : "0.0"} dB right now` : ""}.`;
+    });
+    body.appendChild(para("l-p", parts.join(" ")));
+  }
+  body.appendChild(sep());
+  body.appendChild(head(`${band.name.toUpperCase()} BAND (${dynRangeText(b)})`));
+  body.appendChild(para("l-p", `Holds the ${band.holds}.`));
+  body.appendChild(item("Threshold", `${fmtNum(thr, 1)} dB`, "Where the band starts being held down. Lower = more of the music is compressed. Set it so the reduction only moves on the loudest hits."));
+  body.appendChild(item("Ratio", `${ratio.toFixed(1)}:1`, ratio <= 1.005 ? "1:1: this band isn't compressed." : ratio <= 2.5 ? "A gentle mastering ratio: evens the band out without flattening it." : ratio <= 4 ? "Firm: the band gets noticeably steadier. Check the punch with MATCH." : "Heavy for a master: the band will sound squashed. 1.5:1 to 3:1 is typical."));
+  body.appendChild(item("Attack", fmtMs(atk), atk >= 20 ? "Slow: the start of each hit gets through before the band is turned down, so drums keep their punch." : atk >= 5 ? "Medium: catches most of each hit, a little of the snap stays." : "Fast: catches peaks almost instantly, smoother but less punchy."));
+  body.appendChild(item("Release", fmtMs(rel), (rel <= 80 ? "Fast: recovers between hits; too fast can sound like fluttering on bass." : rel <= 300 ? "Medium: recovers between beats, the usual choice for a master." : "Slow: smooth and steady, evens out whole phrases.") + (P.dynAdaptive.getValue() ? " Adaptive release is on: quick after short hits, this setting on sustained notes." : "")));
+  body.appendChild(item("Gain", fmtSigned(gain), Math.abs(gain) < 0.05 ? "The band's level after compression is unchanged." : gain > 0 ? "Turns the band up after compression: makes up what it lost, or brings it forward." : "Turns the band down after compression."));
+  body.appendChild(item("Split", fmtHz(P.dynX[Math.min(b, 2)].getScaledValue()), b < 3 ? "Where this band ends and the next begins." : "Where this band starts."));
+  const worst = Math.min(...[0, 1, 2, 3].map((k) => (dynRatioAt(k) > 1.005 ? M.dynGr[k] || 0 : 0)));
+  if (on && !bypassed && playing && worst < -6)
+    body.appendChild(tip("HEADS UP", `One band is being pulled down ${fmtNum(-worst)} dB. On a master, 1 to 3 dB of reduction is usually plenty; more starts to sound squashed. Raise the Threshold or lower the Ratio.`));
+  else if (on && [0, 1, 2, 3].some((k) => dynRatioAt(k) > 4))
+    body.appendChild(tip("HEADS UP", "A band is above 4:1. That's heavy for a master; 1.5:1 to 3:1 keeps it natural."));
+  else
+    body.appendChild(tip("TRY THIS", "On the LOW band: Ratio 2:1, Attack 30 ms, then lower the Threshold until the band pulls 1 to 2 dB on the kick and 808. The low end gets steadier without ducking the vocal. Compare with MATCH on.", true));
+}
+
+function renderSatLearn(body) {
+  const on = !!P.satOn.getValue(), bypassed = !!P.bypass.getValue();
+  const playing = performance.now() - lastAudioTime < 1500;
+  const mode = SAT_MODES[satModeIndex()], drive = satDriveAt(), mix = satMixAt(), harm = M.satHarm;
+  body.appendChild(head("WHAT'S HAPPENING"));
+  body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
+    : !on ? "Saturation is off, so nothing is added."
+    : drive < 0.05 ? "Drive is at 0, so Saturation passes the sound untouched. Turn Drive up to add harmonics."
+    : mix < 0.05 ? "Mix is at 0 %, so you only hear the dry signal."
+    : !playing ? "Press play to see how much Saturation is adding."
+    : harm <= -60 ? `${mode} is on, but the mix is too quiet for it to add much yet.`
+    : `${mode} is adding harmonics about ${fmtNum(-harm, 0)} dB below the music${harm > -25 ? ": clearly audible, the master is getting denser" : harm > -40 ? ": felt more than heard, the usual sweet spot" : ": very subtle"}.`));
+  body.appendChild(sep());
+  body.appendChild(head("WHAT EACH CONTROL IS DOING"));
+  body.appendChild(item("Mode", mode, mode === "Tape" ? "Smooth and warm: rounds off the loudest moments and adds odd harmonics. The safest choice on a full mix."
+    : mode === "Tube" ? "Rich: mostly the 2nd harmonic, which makes bass and vocals sound fuller and helps an 808 show up on phone speakers."
+    : "Firm and bright: a harder knee with more upper harmonics. Adds edge and bite; use less Drive."));
+  body.appendChild(item("Drive", `+${drive.toFixed(1)} dB`, drive < 0.05 ? "Off." : drive <= 6 ? "Light: only the loudest moments are shaped." : drive <= 12 ? "Medium: the master gets noticeably denser." : "Heavy: obvious color. Pull Mix back if it gets harsh."));
+  body.appendChild(item("Mix", `${Math.round(mix)} %`, mix >= 99.5 ? "Fully saturated signal." : `Blends ${Math.round(mix)} % of the harmonics in and keeps the rest clean, so transients stay sharp while the harmonics fill in underneath.`));
+  body.appendChild(item("Level", "", "Quiet parts pass at the same level, so turning Drive up changes color, not volume. It reacts to how hot your mix is: louder mixes saturate more at the same Drive."));
+  if (on && !bypassed && playing && harm > -18)
+    body.appendChild(tip("HEADS UP", "The harmonics are strong. That's a sound, not a mistake, but on most masters it reads as distortion. Lower Drive or Mix, and compare with MATCH on."));
+  else
+    body.appendChild(tip("TRY THIS", "Tape, Drive +6 dB, Mix 50 %: a little density you feel more than hear. For thin bass on phones, try Tube instead. Always compare with MATCH on.", true));
+}
+
 // Warnings go right under "What's happening" so they're seen without scrolling; friendly tips stay at the end.
 function liftWarning(body) {
   const warn = body.querySelector(".l-tip:not(.ok)"), firstSep = body.querySelector(".l-sep");
@@ -886,7 +1058,13 @@ function refreshAB() {
 // The button in the module header: global bypass for the Maximizer, power for the Soft Clipper.
 function refreshHeadButton() {
   const bp = $("btn-bypass");
-  if (selected === "img") {
+  if (selected === "dyn" || selected === "sat") {
+    const on = !!(selected === "dyn" ? P.dynOn : P.satOn).getValue();
+    bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
+    bp.textContent = (selected === "dyn" ? "DYNAMICS " : "SAT ") + (on ? "ON" : "OFF");
+    bp.setAttribute("aria-pressed", String(on));
+    $("knob-row").classList.toggle("dimmed", !on);
+  } else if (selected === "img") {
     const on = !!P.imgOn.getValue();
     bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
     bp.textContent = on ? "IMAGER ON" : "IMAGER OFF";
@@ -925,6 +1103,8 @@ $("btn-bypass").addEventListener("click", () => {
   else if (selected === "eq") P.eqOn.setValue(!P.eqOn.getValue());
   else if (selected === "bass") P.bassOn.setValue(!P.bassOn.getValue());
   else if (selected === "img") P.imgOn.setValue(!P.imgOn.getValue());
+  else if (selected === "dyn") P.dynOn.setValue(!P.dynOn.getValue());
+  else if (selected === "sat") P.satOn.setValue(!P.satOn.getValue());
   else P.bypass.setValue(!P.bypass.getValue());
   onParamsChanged();
   userEdited();
@@ -934,6 +1114,9 @@ P.clipOn.valueChangedEvent.addListener(onParamsChanged);
 P.eqOn.valueChangedEvent.addListener(onParamsChanged);
 P.bassOn.valueChangedEvent.addListener(onParamsChanged);
 P.imgOn.valueChangedEvent.addListener(onParamsChanged);
+P.dynOn.valueChangedEvent.addListener(onParamsChanged);
+P.satOn.valueChangedEvent.addListener(onParamsChanged);
+for (const s of [...P.dynX, ...P.dynRatio, ...P.dynGain]) s.valueChangedEvent.addListener(() => { dynPicker.refresh(); updateLiveReadouts(); });
 
 function togglePopover(id) {
   for (const p of ["pop-settings", "pop-help"]) $(p).hidden = p === id ? !$(p).hidden : true;
@@ -1067,7 +1250,7 @@ async function fetchReport(openIt) {
 }
 // Knobs show values pushed by the plug-in; after Auto-Master or Undo, redraw them all.
 function refreshAllCells() {
-  for (const c of [...maximizerCells, ...clipperCells, ...eqCells, ...bassCells]) if (c.refresh) c.refresh();
+  for (const c of [...maximizerCells, ...clipperCells, ...eqCells, ...bassCells, ...imagerCells, dynPicker, ...dynCellsByBand.flat(), ...satCells]) if (c.refresh) c.refresh();
   onParamsChanged();
 }
 
@@ -1235,6 +1418,7 @@ function updateOutputMeter() {
   $("out-peak").textContent = hold.peak <= -99 ? `${MINUS}inf` : fmtNum(hold.peak, 1);
 }
 
+const dynWorst = () => Math.min(0, ...[0, 1, 2, 3].map((k) => (dynRatioAt(k) > 1.005 ? M.dynGr[k] || 0 : 0)));
 function updateLiveReadouts() {
   const gr = M.gr;
   const chip = $("module-chip");
@@ -1245,6 +1429,8 @@ function updateLiveReadouts() {
   chip.textContent = selected === "clip" ? (clipOn ? `CLIP ${clipText} dB` : "OFF")
                    : selected === "eq" ? (!eqEnabled() ? "OFF" : eqIsFlat() ? "FLAT" : "SHAPING")
  : selected === "img" ? (!P.imgOn.getValue() ? "OFF" : `CORR ${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`)
+                   : selected === "dyn" ? (!P.dynOn.getValue() ? "OFF" : dynIsNeutral() ? "1:1" : `GR ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`)
+                   : selected === "sat" ? (!P.satOn.getValue() ? "OFF" : satIsNeutral() ? "CLEAN" : SAT_MODES[satModeIndex()].toUpperCase())
                    : selected === "bass" ? (!P.bassOn.getValue() ? "OFF" : `WIDTH ${Math.round(M.bassWidth || 0)} %`)
                    : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
   const r = $("read-max");
@@ -1274,6 +1460,18 @@ function updateLiveReadouts() {
   if (cf) {
     cf.style.width = (((clamp(M.corr, -1, 1) + 1) / 2) * 100).toFixed(0) + "%";
     $("corr-val").textContent = `${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`;
+  }
+  const rd = $("read-dyn");
+  if (rd) rd.textContent = P.bypass.getValue() ? "Bypassed" : !P.dynOn.getValue() ? "Off" : dynIsNeutral() ? "Neutral"
+    : `${[0, 1, 2, 3].filter(dynBandActive).length} band${[0, 1, 2, 3].filter(dynBandActive).length > 1 ? "s" : ""} \u00b7 ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`;
+  if (selected === "dyn") dynPicker.refresh();
+  const rs = $("read-sat");
+  if (rs) rs.textContent = P.bypass.getValue() ? "Bypassed" : !P.satOn.getValue() ? "Off" : satIsNeutral() ? "Neutral" : `${SAT_MODES[satModeIndex()]} +${satDriveAt().toFixed(1)} dB`;
+  const hf = $("harmmeter-fill");
+  if (hf) {
+    const active = P.satOn.getValue() && !satIsNeutral() && !P.bypass.getValue();
+    hf.style.width = (active ? clamp((M.satHarm + 60) / 50, 0, 1) * 100 : 0).toFixed(1) + "%";
+    $("harmmeter-val").textContent = !active ? "off" : M.satHarm <= -60 ? `< ${MINUS}60 dB` : `${fmtNum(M.satHarm, 0)} dB`;
   }
   const re = $("read-eq");
   if (re) {
@@ -1320,7 +1518,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   $("sp-master").setAttribute("d", master);
   $("sp-master-glow").setAttribute("d", master);
 });
-setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img"].includes(selected)) renderLearn(); }, 1000);
+setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "dyn", "sat"].includes(selected)) renderLearn(); }, 1000);
 
 // ---------------------------------------------------------------------------------------------
 buildSpectrumGrid();

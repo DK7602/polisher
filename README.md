@@ -5,7 +5,7 @@ every setting. Style: red / white / powder-blue liquid glass.
 
 Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 
-## Status — v0.8.2
+## Status — v0.9
 
 | Piece | State |
 | --- | --- |
@@ -23,8 +23,9 @@ Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 | Stereo Imager: width for lows / mids / highs (side only, LR4 crossovers), correlation meter, Learn | Done (v0.8) |
 | Auto-Master recognises a single instrument (one band far above any genre balance), changes nothing and says to put Polisher on the master | Done (v0.8.1) |
 | MATCH never boosts (the louder side is turned down) and gives a clipping original headroom, so A doesn't distort the interface | Done (v0.8.2) |
-| Dynamics: 4-band compressor engine (LR4, zero latency, exact pass-through, tested) | Engine done, not yet in the plug-in |
-| Saturation, Match ref | Planned |
+| Dynamics: 4-band compressor (LR4 splits, zero latency, per-band threshold / ratio / attack / release / gain, program-dependent release, per-band reduction meters, Learn) | Done (v0.9) |
+| Saturation: tape / tube / clip, 4x oversampled (aliasing 119 dB down), Drive, Mix, harmonics meter, exact pass-through at Drive 0, Learn | Done (v0.9) |
+| Auto-Master sets Dynamics, Imager and Saturation (today it keeps your settings and masters with them on); Match ref | Planned |
 
 ## Layout
 
@@ -38,6 +39,9 @@ dsp/        Framework-free C++20 engine (no JUCE): unit-testable, reusable offli
     TonalEQ.h            7-band mastering EQ (first in the chain, zero latency)
     BassControl.h        Mono Below, Sub Tame, Punch, bass-width measurement
     AutoMaster.h         Mix analysis + decisions + plain-language reasons (framework-free, tested)
+    MultibandDynamics.h  4-band mastering compressor
+    StereoImager.h       3-band width (side only)
+    Saturation.h         Oversampled tape / tube / clip saturation
     SoftClipper.h        Oversampled soft-knee clipper (drive -> clipper -> limiter)
     LoudnessTargeting.h  Offline render + drive search used by Auto-Master
     LevelMatch.h         MATCH: loudness-matched, clip-free A/B gains

@@ -19,12 +19,27 @@
       sliders["eqFreq" + (i + 1)] = { start: lo, end: hi, skew, interval: 0.1, value: def, label: "Hz" };
     });
   for (const k of ["imgLow", "imgMid", "imgHigh"]) sliders[k] = { start: 0, end: 200, skew: 1, interval: 0.1, value: 100, label: "%" };
+  [[120, 40, 300], [1000, 300, 3000], [6000, 3000, 12000]].forEach(([def, lo, hi], i) => {
+    const skew = Math.log(0.5) / Math.log((Math.sqrt(lo * hi) - lo) / (hi - lo));
+    sliders["dynX" + (i + 1)] = { start: lo, end: hi, skew, interval: 1, value: def, label: "Hz" };
+  });
+  [30, 20, 10, 5].forEach((atk, i) => {
+    const b = i + 1;
+    sliders["dynThr" + b] = { start: -48, end: 0, skew: 1, interval: 0.1, value: -20, label: "dB" };
+    sliders["dynRatio" + b] = { start: 1, end: 10, skew: 0.5, interval: 0.01, value: 1, label: "" };
+    sliders["dynAtk" + b] = { start: 0.5, end: 100, skew: 0.4, interval: 0.1, value: atk, label: "ms" };
+    sliders["dynRel" + b] = { start: 20, end: 1000, skew: 0.4, interval: 1, value: [200, 150, 120, 100][i], label: "ms" };
+    sliders["dynGain" + b] = { start: -12, end: 12, skew: 1, interval: 0.1, value: 0, label: "dB" };
+  });
+  sliders.satDrive = { start: 0, end: 18, skew: 1, interval: 0.1, value: 0, label: "dB" };
+  sliders.satMix = { start: 0, end: 100, skew: 1, interval: 0.1, value: 100, label: "%" };
   sliders.bassMono = { start: 0, end: 250, skew: 1, interval: 1, value: 0, label: "Hz" };
   sliders.bassTame = { start: 0, end: 100, skew: 1, interval: 0.1, value: 0, label: "%" };
   sliders.bassPunch = { start: 0, end: 100, skew: 1, interval: 0.1, value: 0, label: "%" };
-  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true, eqOn: true, bassOn: true, levelMatch: false, imgOn: true };
+  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true, eqOn: true, bassOn: true, levelMatch: false, imgOn: true, dynOn: true, dynAdaptive: true, satOn: true };
   const combos = {
     clipOversampling: { choices: ["1x", "2x", "4x", "8x"], value: 2 / 3 },
+    satMode: { choices: ["Tape", "Tube", "Clip"], value: 0 },
     amGenre: { choices: ["Trap / Hip-Hop", "R&B", "Pop", "EDM", "Rock", "Acoustic"], value: 0 },
     amIntensity: { choices: ["Gentle", "Balanced", "Punchy"], value: 0.5 },
     amTarget: { choices: ["Stream -14", "Loud -9", "Club -7"], value: 0.5 },
@@ -151,6 +166,13 @@
       bassWidth: 42, corr: +(0.55 - (sliders.imgMid.value + sliders.imgHigh.value - 200) / 400).toFixed(2), matchDb: +(-(11 * (1 - Math.exp(-drive / 11)))).toFixed(1),
       amState: am.state, amProgress: +am.progress.toFixed(2), amHearing: true, amUndo: am.undo, amReport: am.version,
       clip: toggles.clipOn && !bypass ? +(-Math.max(0, drive - 1.5 + sliders.clipLevel.value * -0.5) * 0.5 * (0.3 + 0.7 * beat)).toFixed(1) : 0,
+      dynGr: [1, 2, 3, 4].map((b) => {
+        const r = sliders["dynRatio" + b].value;
+        const over = Math.max(0, base + 8 + 6 * beat - sliders["dynThr" + b].value - 6 * b);
+        return toggles.dynOn && !bypass && r > 1.005 ? +(-over * (1 - 1 / r) * 0.5).toFixed(1) : 0;
+      }),
+      satHarm: toggles.satOn && !bypass && sliders.satDrive.value > 0.05 && sliders.satMix.value > 0.05
+        ? +(-62 + sliders.satDrive.value * 2.4 + 20 * Math.log10(sliders.satMix.value / 100 + 1e-3) + 3 * beat).toFixed(1) : -100,
       mix, master,
     };
     window.__JUCE__.backend && window.__JUCE__.backend.emitByBackend("polisherMeters", JSON.stringify(frame));
