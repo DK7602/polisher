@@ -656,11 +656,29 @@ function item(name, value, why) {
   d.querySelector(".l-item-why").textContent = why;
   return d;
 }
-function tip(title, text, ok) {
+// A Learn box. Warnings always carry a plan: fix = { need: "Do I need to fix it? …", steps: ["…", …] }.
+function tip(title, text, ok, fix) {
   const d = document.createElement("div");
   d.className = "l-tip" + (ok ? " ok" : "");
   d.appendChild(head(title));
   d.appendChild(para("l-p", text));
+  if (fix) {
+    const need = document.createElement("p");
+    need.className = "l-p l-need";
+    need.innerHTML = "<b>Do I need to fix it?</b> ";
+    need.appendChild(document.createTextNode(fix.need));
+    d.appendChild(need);
+    if (fix.steps && fix.steps.length) {
+      const how = document.createElement("p");
+      how.className = "l-p l-how";
+      how.innerHTML = "<b>How:</b>";
+      d.appendChild(how);
+      const ol = document.createElement("ol");
+      ol.className = "l-steps";
+      for (const st of fix.steps) { const li = document.createElement("li"); li.textContent = st; ol.appendChild(li); }
+      d.appendChild(ol);
+    }
+  }
   return d;
 }
 
@@ -748,15 +766,25 @@ function renderLearn() {
   } else if (gain !== null && drive >= 9 && drive - gain > 6) {
     body.appendChild(tip("DIMINISHING RETURNS",
       `Drive is at +${drive.toFixed(1)} dB, but the master is only ${gain.toFixed(1)} dB louder than your mix. The loud hits already reach the ceiling, so the extra Drive is going into squashing them, not into loudness. ` +
-      (P.clipOn.getValue()
-        ? "Back Drive off until Short-term stops climbing; for more, lower Clip Level a little."
-        : "Back Drive off until Short-term stops climbing, and turn on the Soft Clipper: on spiky drums it gets more loudness than the limiter can.")));
+      "", false, { need: "Yes. The extra Drive only adds squashing, not loudness.",
+        steps: ["Turn Drive down slowly while watching Short-term in the footer.",
+                "Stop where Short-term starts to drop, then go back up about 0.5 dB.",
+                P.clipOn.getValue() ? "For more loudness, lower Clip Level (Soft Clipper, module 06) by 1 dB." : "For more loudness, turn on the Soft Clipper (module 06): on spiky drums it gets loudness the limiter can't."] }));
   } else if (avgGr < -6 || peakGr < -9) {
     body.appendChild(tip("FIX IT IN THE MIX",
-      `That's heavy limiting (up to ${fmtNum(-peakGr)} dB). If the kick or snare lose punch, back off Drive, or tame the drum peaks in your mix (a clipper on the drum bus). The Soft Clipper (module 06) can take some of the peaks too.`));
-  } else if (M.integrated > -9 && M.integrated > -99) {
+      `That's heavy limiting (up to ${fmtNum(-peakGr)} dB).`, false,
+      { need: "Only if the kick or snare sound weaker than in your mix.",
+        steps: ["Turn on MATCH and flip A/B, listening only to the kick and snare.",
+                "If they lost punch: turn Drive down 1–2 dB, or turn on the Soft Clipper (module 06) so it takes some of the peaks.",
+                "Best fix, in the mix: put a clipper or limiter on the drum bus taking 2–3 dB off the hits, then run Auto-Master again."] }));
+  } else if (M.integrated > -99 && M.integrated > [-14, -9, -7][clamp(Math.round(P.amTarget.value * 2), 0, 2)] + 1) {
+    const tgt = [-14, -9, -7][clamp(Math.round(P.amTarget.value * 2), 0, 2)];
     body.appendChild(tip("HEADS UP",
-      "This is very loud (above −9 LUFS). Spotify and YouTube play music at about −14 LUFS, so they'll turn it down. Extra loudness buys density, not volume."));
+      `Your master is at ${fmtNum(M.integrated)} LUFS, louder than your ${["Stream", "Loud", "Club"][clamp(Math.round(P.amTarget.value * 2), 0, 2)]} ${fmtNum(tgt, 0)} target. Spotify and YouTube play everything at about −14 LUFS, so extra loudness is turned down there: it buys density, not volume.`, false,
+      { need: "Only if it sounds squashed. Loud is a style choice (common in Trap), not a mistake.",
+        steps: ["Turn on MATCH and flip A/B. If B sounds flatter or the drums weaker, it's too loud.",
+                "To bring it down: lower Drive (above) until Integrated reads your target, or click Auto-Master again.",
+                "For streaming only, choose Stream −14 or Loud −9 as the Target and run Auto-Master again."] }));
   } else if (M.integrated > -99 && M.integrated < -16) {
     body.appendChild(tip("SOUNDS CLEAN", "Plenty of dynamics left. For a streaming release, you can push Drive until Integrated reaches around −14 to −10 LUFS.", true));
   } else {
@@ -797,14 +825,23 @@ function renderEqLearn(body) {
   const peakGr = maxGrRecent();
   if (big) {
     body.appendChild(tip("FIX IT IN THE MIX",
-      `${sgn(big.g)} of ${big.band.name} is a big move for a master. If one sound needs it (usually the 808, the kick or the vocal), fix that sound in the mix and keep master EQ moves to 1–3 dB.`));
+      `${sgn(big.g)} of ${big.band.name} is a big move for a master: it changes every sound in that range, not just the one that needs it.`, false,
+      { need: "Recommended, but the master still works as it is.",
+        steps: [`In your mix, solo the main sound in the ${big.band.name} range (usually the 808, the kick or the vocal).`,
+                "Turn that one sound up or down (or EQ just that track) by about the same amount.",
+                "Bring this band back toward 0 and run Auto-Master again; master EQ moves of 1–3 dB sound most natural."] }));
   } else if (lowBoost > 2 && peakGr < -6) {
     body.appendChild(tip("HEADS UP",
-      `The low-end boost is making the Maximizer work harder (up to ${fmtNum(-peakGr)} dB). Low end eats headroom, so each dB of boost there costs loudness. Try a smaller boost, or cut Low Mid instead so the bass reads clearer.`));
+      `The low-end boost is making the Maximizer work harder (up to ${fmtNum(-peakGr)} dB). Low end eats headroom, so each dB of boost there costs loudness.`, false,
+      { need: "Optional. Do it if the master sounds squashed or the kick loses punch.",
+        steps: ["Lower Low End or Bass by 1 dB.", "Or leave the bass and cut Low Mid by 1 dB instead: the bass reads clearer without using headroom.",
+                "Watch the Maximizer's GR: under about 4 dB is comfortable."] }));
   } else if (bite > 4) {
-    body.appendChild(tip("HEADS UP", "That much boost between 2.5 and 5 kHz can get harsh, especially on earbuds. Check it at low volume and on cheap speakers."));
+    body.appendChild(tip("HEADS UP", "That much boost between 2.5 and 5 kHz can get harsh, especially on earbuds.", false,
+      { need: "Check first: it depends on your song.", steps: ["Listen at low volume, and on earbuds or a phone.", "If vocals or hats sting, lower Upper Mid or Presence by 1–2 dB."] }));
   } else if (eqGainAt(6) > 4) {
-    body.appendChild(tip("HEADS UP", "Lots of Air can make hi-hats and 's' sounds sizzle. If they poke out, back it off or cut Presence a little."));
+    body.appendChild(tip("HEADS UP", "Lots of Air can make hi-hats and 's' sounds sizzle.", false,
+      { need: "Only if hats or 's' sounds poke out.", steps: ["Listen to the hats and the vocal's 's' sounds.", "If they sizzle, lower Air by 1–2 dB, or cut Presence by 1 dB."] }));
   } else if (!moved.length) {
     body.appendChild(tip("TRY THIS", "Look at the white line (your mix). A hump that sits above its neighbours, often around 200–400 Hz, is a good place for a 1–2 dB cut.", true));
   } else {
@@ -855,13 +892,18 @@ function renderBassLearn(body) {
   if (bypassed || !on || !playing) {
     body.appendChild(tip("TIP", "Start with Mono Below at 100 Hz. It's the safest low-end move in mastering: you'll barely hear it on headphones, but the bass hits harder on big systems.", true));
   } else if (width > 35 && !monoOn) {
-    body.appendChild(tip("HEADS UP", `Your bass is ${width} % stereo below 150 Hz. On club systems and phones, stereo bass partly cancels and loses power. Set Mono Below to about 100 Hz.`));
+    body.appendChild(tip("HEADS UP", `Your bass is ${width} % stereo below 150 Hz. On club systems and phones, stereo bass partly cancels and loses power.`, false,
+      { need: "Yes. It's safe and you'll barely hear the change on headphones.", steps: ["Set Mono Below (above) to 100 Hz.", "Or run Auto-Master: it sets this for you."] }));
   } else if (monoHz > 180) {
-    body.appendChild(tip("HEADS UP", `Mono Below at ${monoHz} Hz is high: it narrows the low mids too (guitars, synth bodies, reverbs). Try 100–120 Hz unless the whole low end is meant to be dead center.`));
+    body.appendChild(tip("HEADS UP", `Mono Below at ${monoHz} Hz is high: it narrows the low mids too (guitars, synth bodies, reverbs).`, false,
+      { need: "Only if the mix sounds narrower than you want.", steps: ["Lower Mono Below to 100–120 Hz.", "Flip A/B with MATCH on to compare the width."] }));
   } else if (avgTame < -5) {
-    body.appendChild(tip("FIX IT IN THE MIX", `Sub Tame is cutting up to ${fmtNum(-peakTame)} dB: some 808 notes are much louder than others. Even them out in the mix (808 note velocity or volume) so the master doesn't have to.`));
+    body.appendChild(tip("FIX IT IN THE MIX", `Sub Tame is cutting up to ${fmtNum(-peakTame)} dB: some 808 notes are much louder than others.`, false,
+      { need: "Optional. Sub Tame is already handling it; fixing it in the mix just sounds more natural.",
+        steps: ["In your 808 track, find the notes that jump out (usually the lowest or longest ones).", "Lower their velocity or volume by a few dB.", "Run Auto-Master again: it will use less Sub Tame."] }));
   } else if (punch >= 1 && peakGr < -6) {
-    body.appendChild(tip("HEADS UP", `The Maximizer is squashing the extra punch (up to ${fmtNum(-peakGr)} dB of limiting). Lower Drive a little, or turn on the Soft Clipper so the kick attacks survive.`));
+    body.appendChild(tip("HEADS UP", `The Maximizer is squashing the extra punch (up to ${fmtNum(-peakGr)} dB of limiting).`, false,
+      { need: "Only if the kick doesn't hit harder with Punch on.", steps: ["Lower Drive on the Maximizer by 1 dB.", "Or turn on the Soft Clipper (module 06) so the kick attacks survive."] }));
   } else if (neutral) {
     body.appendChild(tip("TRY THIS", "Set Mono Below to 100 Hz first. Then, if your 808 notes jump in level, add Sub Tame until the Taming meter moves 1–3 dB on the loud notes.", true));
   } else {
@@ -885,9 +927,11 @@ function renderImagerLearn(body) {
   body.appendChild(item("Highs", `${hi} %`, hi > 100 ? "Wider highs: hi-hats, reverbs and ad-libs open up. This is where width sounds best." : hi < 100 ? "Narrower highs: a more focused top." : "Unchanged."));
   body.appendChild(item("Correlation", `${corr < 0 ? MINUS : "+"}${Math.abs(corr).toFixed(2)}`, "How mono-safe the master is: +1 is mono, around +0.3 to +0.7 is a healthy wide mix, below 0 means parts cancel when played on one speaker (phones, club PAs)."));
   if (on && !bypassed && corr < 0.1 && performance.now() - lastAudioTime < 1500)
-    body.appendChild(tip("HEADS UP", "Correlation is near or below zero: parts of the mix will cancel on mono speakers. Lower Mids or Highs width, or check for out-of-phase stereo effects in the mix."));
+    body.appendChild(tip("HEADS UP", "Correlation is near or below zero: parts of the mix will cancel on mono speakers (phones, club PAs).", false,
+      { need: "Yes.", steps: ["Set Mids and Highs back to 100 %.", "If Correlation is still low, check the mix for stereo wideners or out-of-phase effects: press Cubase's Mono button on the Stereo Out and listen for parts that disappear."] }));
   else if (on && lo > 100)
-    body.appendChild(tip("HEADS UP", "Widening the lows on a master usually costs punch and mono compatibility. Keep Lows at 100 % or below."));
+    body.appendChild(tip("HEADS UP", "Widening the lows on a master usually costs punch and mono compatibility.", false,
+      { need: "Yes.", steps: ["Set Lows back to 100 %.", "For width, use Highs (about 110–115 %) instead."] }));
   else
     body.appendChild(tip("TRY THIS", "Highs to about 115 % and Mids to 105 %: a subtle lift in width that stays mono-safe. Watch Correlation stay above +0.3.", true));
 }
@@ -921,9 +965,11 @@ function renderDynLearn(body) {
   body.appendChild(item("Split", fmtHz(P.dynX[Math.min(b, 2)].getScaledValue()), b < 3 ? "Where this band ends and the next begins." : "Where this band starts."));
   const worst = Math.min(...[0, 1, 2, 3].map((k) => (dynRatioAt(k) > 1.005 ? M.dynGr[k] || 0 : 0)));
   if (on && !bypassed && playing && worst < -6)
-    body.appendChild(tip("HEADS UP", `One band is being pulled down ${fmtNum(-worst)} dB. On a master, 1 to 3 dB of reduction is usually plenty; more starts to sound squashed. Raise the Threshold or lower the Ratio.`));
+    body.appendChild(tip("HEADS UP", `One band is being pulled down ${fmtNum(-worst)} dB. On a master, 1 to 3 dB of reduction is usually plenty; more starts to sound squashed.`, false,
+      { need: "Yes, unless you want an obviously compressed sound.", steps: ["Click the band whose button shows the biggest number.", "Raise its Threshold until that number stays under about 3 dB.", "Or lower its Ratio to 2:1."] }));
   else if (on && [0, 1, 2, 3].some((k) => dynRatioAt(k) > 4))
-    body.appendChild(tip("HEADS UP", "A band is above 4:1. That's heavy for a master; 1.5:1 to 3:1 keeps it natural."));
+    body.appendChild(tip("HEADS UP", "A band is above 4:1. That's heavy for a master.", false,
+      { need: "Optional. Check with MATCH whether it sounds squashed.", steps: ["Set that band's Ratio to 2:1.", "Lower its Threshold a little if you still want the same control."] }));
   else
     body.appendChild(tip("TRY THIS", "On the LOW band: Ratio 2:1, Attack 30 ms, then lower the Threshold until the band pulls 1 to 2 dB on the kick and 808. The low end gets steadier without ducking the vocal. Compare with MATCH on.", true));
 }
@@ -949,7 +995,8 @@ function renderSatLearn(body) {
   body.appendChild(item("Mix", `${Math.round(mix)} %`, mix >= 99.5 ? "Fully saturated signal." : `Blends ${Math.round(mix)} % of the harmonics in and keeps the rest clean, so transients stay sharp while the harmonics fill in underneath.`));
   body.appendChild(item("Level", "", "Quiet parts pass at the same level, so turning Drive up changes color, not volume. It reacts to how hot your mix is: louder mixes saturate more at the same Drive."));
   if (on && !bypassed && playing && harm > -18)
-    body.appendChild(tip("HEADS UP", "The harmonics are strong. That's a sound, not a mistake, but on most masters it reads as distortion. Lower Drive or Mix, and compare with MATCH on."));
+    body.appendChild(tip("HEADS UP", "The harmonics are strong. That's a sound, not a mistake, but on most masters it reads as distortion.", false,
+      { need: "Only if it sounds harsh or crunchy to you.", steps: ["Turn on MATCH and flip A/B.", "If B sounds distorted: lower Drive by 3 dB, or Mix to about 30 %.", "Aim for the Harmonics meter around −25 to −35 dB."] }));
   else
     body.appendChild(tip("TRY THIS", "Tape, Drive +9 dB, Mix 50 %: a little density you feel more than hear (the Harmonics meter around −35 dB). For thin bass on phones, try Tube instead. Always compare with MATCH on.", true));
 }
@@ -1008,9 +1055,11 @@ function renderClipperLearn(body) {
       `Right now Clip Level only adds ${fmtNum(Math.max(0, -level), 1)} dB of level. Raise Drive on the Maximizer until the Clipping meter shows 1–3 dB on the drums.`, true));
   } else if (avgClip < -3) {
     body.appendChild(tip("FIX IT IN THE MIX",
-      `That's heavy clipping (about ${fmtNum(-avgClip)} dB on average). Snares and claps can turn crunchy: raise Clip Level or Softness until it's clean. If your drums need this much, clip or limit the drum bus in the mix instead.`));
+      `That's heavy clipping (about ${fmtNum(-avgClip)} dB on average). Snares and claps can turn crunchy.`, false,
+      { need: "Only if the snare or claps sound crunchy.", steps: ["Raise Clip Level by 1–2 dB, or raise Softness.", "Best fix, in the mix: clip or limit the drum bus by 2–3 dB, then run Auto-Master again."] }));
   } else if (os === "1x") {
-    body.appendChild(tip("HEADS UP", "At 1x you're adding aliasing. Switch to 4x for a cleaner top end."));
+    body.appendChild(tip("HEADS UP", "At 1x the clipper adds aliasing (harsh tones that weren't in your mix).", false,
+      { need: "Yes.", steps: ["Click 4x under Oversampling."] }));
   } else if (peakGr < -6) {
     body.appendChild(tip("TRY THIS", "The Maximizer is still working hard. Lower Clip Level a little so the clipper takes more of the peaks and the limiter less.", true));
   } else {
@@ -1256,11 +1305,17 @@ function refreshAllCells() {
 
 const AM_MODULES = [["eq", "TONAL EQ"], ["bass", "BASS CONTROL"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
 function notesAsTips(body) {
-  for (const n of amReport.notes || []) {
+  for (const raw of amReport.notes || []) {
+    // "TITLE: text" plus optional lines "NEED: …" and "STEP: …" (the plan).
+    const lines = raw.split("\n");
+    const n = lines[0];
     const cut = n.indexOf(":");
     const title = cut > 0 && cut < 24 ? n.slice(0, cut) : "HEADS UP";
     const text = cut > 0 && cut < 24 ? n.slice(cut + 1).trim() : n;
-    body.appendChild(tip(title, text.charAt(0).toUpperCase() + text.slice(1)));
+    const need = lines.find((l) => l.startsWith("NEED:"));
+    const steps = lines.filter((l) => l.startsWith("STEP:")).map((l) => l.slice(5).trim());
+    body.appendChild(tip(title, text.charAt(0).toUpperCase() + text.slice(1), false,
+                         need ? { need: need.slice(5).trim(), steps } : undefined));
   }
 }
 function renderReport(body) {

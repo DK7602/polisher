@@ -244,3 +244,9 @@ img { -webkit-user-drag: none; }
 .band-pick { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
 .band-pick button { height: 27px; width: 106px; font-size: 11px; font-weight: 700; letter-spacing: .04em; cursor: pointer; }
 .knob-row.dimmed .band-pick { opacity: .45; filter: saturate(.6); }
+.l-tip .l-need { margin-top: 6px; }
+.l-tip .l-need b, .l-tip .l-how b { color: #FFD2D4; font-weight: 700; }
+.l-tip.ok .l-need b, .l-tip.ok .l-how b { color: #CFE6FF; }
+.l-tip .l-how { margin-top: 4px; margin-bottom: 0; }
+.l-steps { margin: 2px 0 0; padding-left: 20px; }
+.l-steps li { font-size: 13px; line-height: 1.45; margin: 2px 0; color: var(--text, #DCE8F5); }

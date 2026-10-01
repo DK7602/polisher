@@ -58,6 +58,13 @@ void checkWellFormed (const AutoMasterResult& r)
         CHECK_FALSE (x.why.empty());
         CHECK_FALSE (x.value.empty());
     }
+    // Every warning carries a plan: whether to act, and how.
+    for (const auto& n : r.notes)
+    {
+        INFO (n);
+        CHECK (n.find ("\nNEED: ") != std::string::npos);
+        CHECK (n.find ("\nSTEP: ") != std::string::npos);
+    }
     // What was promised is what the chain delivers.
     CHECK (r.output.truePeakDbtp <= r.chain.limiter.ceilingDbtp + 0.05);
 }

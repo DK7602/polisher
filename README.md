@@ -28,6 +28,12 @@ Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 | Auto-Master sets Dynamics (per-band glue, thresholds found by running the compressor on your mix), Stereo Imager (opens narrow highs, never the lows, mono-safe) and Saturation (mode by genre, Drive found by measuring the harmonics against a target) | Done (v0.10) |
 | Match ref (reference-track matching) | Planned |
 
+## Learn rule
+
+Every warning in Learn and in the Auto-Master report carries a plan: what is happening, **Do I need
+to fix it?** (a straight answer: yes, only if..., optional, or no) and **How** (numbered steps naming
+the exact control and value). Auto-Master notes encode it as `NEED:` / `STEP:` lines; a test enforces it.
+
 ## Layout
 
 ```

@@ -486,7 +486,12 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
             r.notes.push_back ("FIX IT IN THE MIX: your mix is " + num (std::abs (diff)) + " dB " + (diff > 0 ? "lower" : "higher") +
                                " in the " + kBandPlain[b] + " than typical " + genre + " masters. The master EQ only fixes part of that; "
                                "adjusting the main source in the mix (" + (b <= 1 && ! bassHeavy ? "usually the bass or the kick" : kCulprit[b]) +
-                               ") will sound better.");
+                               ") will sound better."
+                               "\nNEED: Optional. The master EQ already corrects part of it, and the master works as it is."
+                               "\nSTEP: In your mix, solo the main sound in the " + std::string (kBandPlain[b]) + " (" +
+                               (b <= 1 && ! bassHeavy ? "usually the bass or the kick" : kCulprit[b]) + ")."
+                               "\nSTEP: Turn it " + (diff > 0 ? "up" : "down") + " a few dB, or EQ just that track in this range."
+                               "\nSTEP: Run Auto-Master again: its EQ move here will get smaller.");
     }
     if (! flat.empty() && flat.size() < static_cast<size_t> (kEqBands))
     {
@@ -912,7 +917,10 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
     if (a.loudness.truePeakDbtp > 0.0)
         r.notes.push_back ("HEADS UP: your mix peaks at " + num (a.loudness.truePeakDbtp, true) + " dBTP before Polisher. That's fine inside your DAW, "
                            "but if you export the unmastered mix (for example to send to someone), turn the master fader down so it peaks below "
-                           "\xE2\x88\x92" "1 dB, or the file will clip.");
+                           "\xE2\x88\x92" "1 dB, or the file will clip."
+                           "\nNEED: Not for the master: Polisher handles it. Only before exporting the unmastered mix."
+                           "\nSTEP: Put a gain plug-in (or lower every track fader) before Polisher by about " + num (std::ceil (a.loudness.truePeakDbtp + 1.0), false, 0) + " dB."
+                           "\nSTEP: Run Auto-Master again; the master comes out the same.");
 
     std::string driveWhy;
     if (found.driveDb < 0.0 && drive == 0.0)
@@ -948,10 +956,18 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
         r.notes.push_back ("HEADS UP: this mix has big peaks for its loudness (" + num (plr) + " dB). " +
                            std::string (bassHeavy ? "Controlling the drum peaks in the mix (a clipper or limiter on the drum bus)"
                                                   : "Taming the biggest peaks in the mix (strums, drum hits, vocal peaks: a compressor on those tracks)") +
-                           " would let the master get louder without losing punch.");
+                           " would let the master get louder without losing punch."
+                           "\nNEED: No. The master is fine as it is; this is only how to get louder without losing punch."
+                           "\nSTEP: " + std::string (bassHeavy ? "In your mix, put a clipper or limiter on the drum bus that takes 2\xE2\x80\x93" "3 dB off the hits."
+                                                               : "In your mix, put a compressor on the peakiest tracks (strums, drums or vocal) taking 2\xE2\x80\x93" "3 dB off.") +
+                           "\nSTEP: Run Auto-Master again: it will get closer to your target."
+                           "\nSTEP: Or choose Punchy (it allows more peak control) and run Auto-Master again.");
     if (s.genre == Genre::acoustic && s.target != LoudnessTarget::stream)
         r.notes.push_back ("HEADS UP: acoustic releases usually sit around \xE2\x88\x92" "14 to \xE2\x88\x92" "11 LUFS. "
-                           "Stream \xE2\x88\x92" "14 keeps the most life in the guitars and vocal; streaming services turn louder masters down anyway.");
+                           "Stream \xE2\x88\x92" "14 keeps the most life in the guitars and vocal; streaming services turn louder masters down anyway."
+                           "\nNEED: Your choice. Louder is fine if that's the sound you want."
+                           "\nSTEP: For a more natural sound, click Stream \xE2\x88\x92" "14 as the Target."
+                           "\nSTEP: Run Auto-Master again and compare with MATCH on.");
 
     // --- Summary -------------------------------------------------------------------------------------
     char head[512];
