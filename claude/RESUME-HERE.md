@@ -4,7 +4,7 @@ Read this first in a new chat. Code: github.com/DK7602/polisher, branch `claude/
 (merge to `main` when ready). Every push builds Mac + Windows; download Polisher-Windows from the
 latest green Actions run.
 
-## Status: v0.10.5 — all seven modules live, Auto-Master sets every one
+## Status: v0.10.6 — all seven modules live, Auto-Master sets every one
 Chain: Tonal EQ -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
 -> Maximizer (+ MATCH gain at the very end). Engine tests: 73 cases
 (`cmake -S . -B build-tests -DPOLISHER_BUILD_PLUGIN=OFF && cmake --build build-tests && ./build-tests/tests/polisher_tests`).
@@ -32,6 +32,15 @@ peaks about -1 dBTP); Auto-Master lands about -9.7 LUFS (stops short of -9 to pr
 Measured (tests), clean internals (double precision, oversampled nonlinearities, no audio-thread
 allocation), fresh-eyes review by a separate agent before shipping anything significant, heard
 (user test with MATCH), and later proven in blind loudness-matched shoot-outs vs Ozone 12 and others.
+
+## Stem EQ (requested 2026-10-01; UI slot added in v0.10.6, DSP not started)
+Module 02 in the chain (after Tonal EQ): AI source separation (vocals / drums / bass / other), per-stem
+level (about +/-6 dB) and tone, parts summed back. Panel and Learn are designed; shown as "Coming soon".
+Plan: (1) feasibility spike on the user's song - quality, CPU real-time factor, latency - with an
+MIT-licensed model (Demucs / HT-Demucs from Meta; Spleeter as the light fallback); blocked until the
+environment allows huggingface.co and dl.fbaipublicfiles.com. (2) Engine: ONNX Runtime in the plug-in,
+look-ahead buffer (reported latency), background thread, residual summing so untouched stems stay
+bit-close to the input. (3) UI + Learn + Auto-Master hooks (e.g. vocal level vs genre).
 
 ## Next, when the user asks (paused 2026-10-01: "good for now until bugs or add-ons")
 1. Pro EQ: mid/side per band, linear-phase mode, dynamic EQ bands (harsh 3-5 kHz, boomy lows).

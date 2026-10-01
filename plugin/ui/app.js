@@ -98,6 +98,13 @@ const modules = [
                ["Low Mid", "Where mud and boxiness build up. Cutting here often reads as clearer and louder."],
                ["Upper Mid / Presence", "Vocal consonants, snare crack and edge. A little goes a long way."],
                ["Air", "Sheen on top. Shelves rather than peaks, so hats get shine instead of bite."]] },
+  { id: "stem", name: "Stem EQ", soon: "In development: needs an AI separation model. Polisher's other modules are unaffected.",
+    what: "Your Tonal EQ changes the whole mix at once. Stem EQ will use AI source separation to isolate just the vocal, the drums or the bass inside your finished stereo track, so you can turn each one up or down, or brighten or warm it, without touching the other instruments.",
+    cells: [["Vocals", "level", "0.0 dB", .5], ["Drums", "level", "0.0 dB", .5], ["Bass", "level", "0.0 dB", .5], ["Other", "level", "0.0 dB", .5], ["Tone", "picked stem", "0.0 dB", .5]],
+    controls: [["Vocals / Drums / Bass / Other", "Turns that part of the mix up or down (about ±6 dB), the way you would with its fader in the mix."],
+               ["Tone", "Brightens or warms just the picked part: a brighter vocal, warmer bass, crisper drums."],
+               ["How it works", "An AI model splits the stereo master into vocals, drums, bass and everything else, the level and tone changes are applied, and the parts are summed back. Untouched parts come back unchanged."],
+               ["Trade-offs", "Separation adds a short delay (Cubase compensates it) and uses more CPU than the other modules. Large moves (beyond about 3 dB) can let a little of one part bleed into another."]] },
   { id: "bass", name: "Bass Control", live: true, soon: "",
     what: "Keeps the low end solid on every system: mono below a crossover, controls 808 level jumps, and adds kick punch.",
     cells: [],
@@ -199,7 +206,7 @@ function renderChain() {
     row.className = "row" + (m.live ? "" : " soon");
     row.style.top = (110.2 + i * 69.55).toFixed(1) + "px";
     if (m.id === selected) row.appendChild(img("assets/row_red.png"));
-    else if (i === 6) row.appendChild(img("assets/row_blue.png"));   // the panel art has row 7 lit red
+    else if (i >= 6) row.appendChild(img("assets/row_blue.png"));   // the panel art has row 7 lit red and only 7 slots
 
     const btn = document.createElement("button");
     btn.type = "button";
@@ -771,13 +778,13 @@ function renderLearn() {
       "", false, { need: "Yes. The extra Drive only adds squashing, not loudness.",
         steps: ["Turn Drive down slowly while watching Short-term in the footer.",
                 "Stop where Short-term starts to drop, then go back up about 0.5 dB.",
-                P.clipOn.getValue() ? "For more loudness, lower Clip Level (Soft Clipper, module 06) by 1 dB." : "For more loudness, turn on the Soft Clipper (module 06): on spiky drums it gets loudness the limiter can't."] }));
+                P.clipOn.getValue() ? "For more loudness, lower Clip Level (Soft Clipper, in the chain on the left) by 1 dB." : "For more loudness, turn on the Soft Clipper (chain, left): on spiky drums it gets loudness the limiter can't."] }));
   } else if (avgGr < -6 || peakGr < -9) {
     body.appendChild(tip("FIX IT IN THE MIX",
       `That's heavy limiting (up to ${fmtNum(-peakGr)} dB).`, false,
       { need: "Only if the kick or snare sound weaker than in your mix.",
         steps: ["Turn on MATCH and flip A/B, listening only to the kick and snare.",
-                "If they lost punch: turn Drive down 1–2 dB, or turn on the Soft Clipper (module 06) so it takes some of the peaks.",
+                "If they lost punch: turn Drive down 1–2 dB, or turn on the Soft Clipper (chain, left) so it takes some of the peaks.",
                 "Best fix, in the mix: put a clipper or limiter on the drum bus taking 2–3 dB off the hits, then run Auto-Master again."] }));
   } else if (M.integrated > -99 && M.integrated > [-14, -9, -7][clamp(Math.round(P.amTarget.value * 2), 0, 2)] + 1) {
     const tgt = [-14, -9, -7][clamp(Math.round(P.amTarget.value * 2), 0, 2)];
@@ -905,7 +912,7 @@ function renderBassLearn(body) {
         steps: ["In your 808 track, find the notes that jump out (usually the lowest or longest ones).", "Lower their velocity or volume by a few dB.", "Run Auto-Master again: it will use less Sub Tame."] }));
   } else if (punch >= 1 && peakGr < -6) {
     body.appendChild(tip("HEADS UP", `The Maximizer is squashing the extra punch (up to ${fmtNum(-peakGr)} dB of limiting).`, false,
-      { need: "Only if the kick doesn't hit harder with Punch on.", steps: ["Lower Drive on the Maximizer by 1 dB.", "Or turn on the Soft Clipper (module 06) so the kick attacks survive."] }));
+      { need: "Only if the kick doesn't hit harder with Punch on.", steps: ["Lower Drive on the Maximizer by 1 dB.", "Or turn on the Soft Clipper (chain, left) so the kick attacks survive."] }));
   } else if (neutral) {
     body.appendChild(tip("TRY THIS", "Set Mono Below to 100 Hz first. Then, if your 808 notes jump in level, add Sub Tame until the Taming meter moves 1–3 dB on the loud notes.", true));
   } else {
