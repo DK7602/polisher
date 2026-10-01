@@ -7,3 +7,4 @@ out/
 *.user
 .DS_Store
 plugin/ui/juce/
+stems-preview/
