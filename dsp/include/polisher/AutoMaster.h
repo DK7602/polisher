@@ -32,12 +32,15 @@ struct MixAnalysis
     double lowJumpDb = 0.0;                     // how far the loudest bass moments rise above typical ones
     double lowCrestDb = 0.0;                    // peak vs average of the low band (kick punch)
     bool hasLowEnd = false;                     // enough bass/kick energy to judge punch
+    double midSideDb = -100.0;                  // side vs mid energy, 250 Hz - 5 kHz (stereo width of the mids)
+    double highSideDb = -100.0;                 // side vs mid energy above 5 kHz
+    double correlation = 1.0;                   // L/R correlation of the loud parts (+1 mono, 0 wide, < 0 out of phase)
     bool usable = false;                        // false: silent or too short
 };
 
 MixAnalysis analyseMix (const AudioClip& clip);
 
-/** One explained decision. module: "eq", "bass", "clip" or "max". */
+/** One explained decision. module: "eq", "bass", "dyn", "img", "sat", "clip" or "max". */
 struct AutoMasterReason
 {
     std::string module, control, value, why;
@@ -48,10 +51,6 @@ struct AutoMasterSettings
     Genre genre = Genre::trapHipHop;
     Intensity intensity = Intensity::balanced;
     LoudnessTarget target = LoudnessTarget::loud;
-    // Modules Auto-Master doesn't decide yet: it keeps your settings and masters with them on.
-    DynamicsParams dynamics;
-    ImagerParams imager;
-    SaturationParams saturation;
 };
 
 struct AutoMasterResult

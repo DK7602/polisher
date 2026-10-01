@@ -5,7 +5,7 @@ every setting. Style: red / white / powder-blue liquid glass.
 
 Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 
-## Status — v0.9
+## Status — v0.10
 
 | Piece | State |
 | --- | --- |
@@ -25,7 +25,8 @@ Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 | MATCH never boosts (the louder side is turned down) and gives a clipping original headroom, so A doesn't distort the interface | Done (v0.8.2) |
 | Dynamics: 4-band compressor (LR4 splits, zero latency, per-band threshold / ratio / attack / release / gain, program-dependent release, per-band reduction meters, Learn) | Done (v0.9) |
 | Saturation: tape / tube / clip, 4x oversampled (aliasing 119 dB down), Drive, Mix, harmonics meter, exact pass-through at Drive 0, Learn | Done (v0.9) |
-| Auto-Master sets Dynamics, Imager and Saturation (today it keeps your settings and masters with them on); Match ref | Planned |
+| Auto-Master sets Dynamics (per-band glue, thresholds found by running the compressor on your mix), Stereo Imager (opens narrow highs, never the lows, mono-safe) and Saturation (mode by genre, Drive found by measuring the harmonics against a target) | Done (v0.10) |
+| Match ref (reference-track matching) | Planned |
 
 ## Layout
 

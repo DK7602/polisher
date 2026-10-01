@@ -66,6 +66,10 @@ public:
     /** The static curve at a given bend point S (exposed for tests and the UI). */
     static double shape (double x, SaturationMode mode, double s) noexcept;
 
+    /** Quick estimate of the harmonics level (dB, at the set Mix) a clip would get, without
+        oversampling: for choosing a Drive offline, where speed matters more than the last dB. */
+    static double estimateHarmonicsDb (const std::vector<std::vector<float>>& channels, const SaturationParams& p);
+
     void processFrame (double* frame, int numChannels) noexcept;
 
     template <typename Sample>

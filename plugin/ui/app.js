@@ -698,9 +698,9 @@ function renderLearn() {
   if (m.id === "clip") { renderClipperLearn(body); liftWarning(body); prependAmSection(body, "clip"); return; }
   if (m.id === "eq") { renderEqLearn(body); liftWarning(body); prependAmSection(body, "eq"); return; }
   if (m.id === "bass") { renderBassLearn(body); liftWarning(body); prependAmSection(body, "bass"); return; }
-  if (m.id === "img") { renderImagerLearn(body); liftWarning(body); return; }
-  if (m.id === "dyn") { renderDynLearn(body); liftWarning(body); return; }
-  if (m.id === "sat") { renderSatLearn(body); liftWarning(body); return; }
+  if (m.id === "img") { renderImagerLearn(body); liftWarning(body); prependAmSection(body, "img"); return; }
+  if (m.id === "dyn") { renderDynLearn(body); liftWarning(body); prependAmSection(body, "dyn"); return; }
+  if (m.id === "sat") { renderSatLearn(body); liftWarning(body); prependAmSection(body, "sat"); return; }
 
   const drive = P.drive.getScaledValue();
   const ceiling = P.ceiling.getScaledValue();
@@ -1254,7 +1254,7 @@ function refreshAllCells() {
   onParamsChanged();
 }
 
-const AM_MODULES = [["eq", "TONAL EQ"], ["bass", "BASS CONTROL"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
+const AM_MODULES = [["eq", "TONAL EQ"], ["bass", "BASS CONTROL"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
 function notesAsTips(body) {
   for (const n of amReport.notes || []) {
     const cut = n.indexOf(":");
@@ -1291,21 +1291,26 @@ function paramValue(id) {
   if (id.startsWith("eqGain")) return eqGainAt(Number(id.slice(6)) - 1);
   if (id.startsWith("eqFreq")) return eqFreqAt(Number(id.slice(6)) - 1);
   const map = { drive: P.drive, ceiling: P.ceiling, release: P.release, clipLevel: P.clipLevel, clipSoftness: P.clipSoftness,
-                bassMono: P.bassMono, bassTame: P.bassTame, bassPunch: P.bassPunch };
+                bassMono: P.bassMono, bassTame: P.bassTame, bassPunch: P.bassPunch,
+                imgLow: P.imgLow, imgMid: P.imgMid, imgHigh: P.imgHigh, satDrive: P.satDrive, satMix: P.satMix };
+  const band = /^dyn(X|Thr|Ratio|Atk|Rel|Gain)(\d)$/.exec(id);
+  if (band) return P["dyn" + band[1]][Number(band[2]) - 1].getScaledValue();
+  if (id === "satMode") return satModeIndex();
   if (map[id]) return map[id].getScaledValue();
-  const toggles = { eqOn: P.eqOn, bassOn: P.bassOn, clipOn: P.clipOn, adaptive: P.adaptive, bypass: P.bypass };
+  const toggles = { eqOn: P.eqOn, bassOn: P.bassOn, clipOn: P.clipOn, adaptive: P.adaptive, bypass: P.bypass,
+                    dynOn: P.dynOn, dynAdaptive: P.dynAdaptive, imgOn: P.imgOn, satOn: P.satOn };
   if (toggles[id]) return toggles[id].getValue() ? 1 : 0;
   if (id === "clipOversampling") return osIndex();
   return null;
 }
-const MODULE_PARAMS = { eq: /^eq/, bass: /^bass/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive)$/ };
+const MODULE_PARAMS = { eq: /^eq/, bass: /^bass/, dyn: /^dyn/, img: /^img/, sat: /^sat/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive)$/ };
 function moduleUnchanged(module) {
   const values = (amReport && amReport.values) || {};
   return Object.entries(values).every(([id, v]) => {
     if (!MODULE_PARAMS[module].test(id)) return true;
     const cur = paramValue(id);
     if (cur === null) return true;
-    const tol = id.startsWith("eqFreq") ? Math.max(1, v * 0.01) : 0.06;
+    const tol = id.startsWith("eqFreq") || id.startsWith("dynX") ? Math.max(1, v * 0.01) : 0.06;
     return Math.abs(cur - v) <= tol;
   });
 }

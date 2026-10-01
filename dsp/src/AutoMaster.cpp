@@ -298,9 +298,21 @@ MixAnalysis analyseMix (const AudioClip& clip)
     for (auto& f : lpM) design::apply (f, design::butterworth (false, kBassWidthHz, sr));
     for (auto& f : lpS) design::apply (f, design::butterworth (false, kBassWidthHz, sr));
     for (auto& f : lpLow) design::apply (f, design::butterworth (false, kBassDetectHz, sr));
+    // Width of the mids (250 Hz - 5 kHz) and highs (above 5 kHz), the Stereo Imager's bands.
+    std::array<Biquad, 4> midM {}, midS {};
+    std::array<Biquad, 2> highM {}, highS {};
+    for (auto* f : { &midM, &midS })
+    {
+        design::apply ((*f)[0], design::butterworth (true, 250.0, sr));
+        design::apply ((*f)[1], design::butterworth (true, 250.0, sr));
+        design::apply ((*f)[2], design::butterworth (false, 5000.0, sr));
+        design::apply ((*f)[3], design::butterworth (false, 5000.0, sr));
+    }
+    for (auto* f : { &highM, &highS })
+        for (auto& q : *f) design::apply (q, design::butterworth (true, 5000.0, sr));
 
     const int block = static_cast<int> (sr * 0.1);
-    struct Block { double full, mid, side, low, lowPeak; };
+    struct Block { double full, mid, side, low, lowPeak, mM, mS, hM, hS, lr, ll, rr; };
     std::vector<Block> blocks;
     Block cur {};
     for (int i = 0; i < n; ++i)
@@ -311,6 +323,15 @@ MixAnalysis analyseMix (const AudioClip& clip)
         const double s = lpS[1].process (lpS[0].process (0.5 * (l - r)));
         const double lo = lpLow[1].process (lpLow[0].process (0.5 * (l + r)));
         cur.full += 0.5 * (l * l + r * r);
+        {
+            double vm = 0.5 * (l + r), vs = 0.5 * (l - r), hm = vm, hs = vs;
+            for (auto& f : midM) vm = f.process (vm);
+            for (auto& f : midS) vs = f.process (vs);
+            for (auto& f : highM) hm = f.process (hm);
+            for (auto& f : highS) hs = f.process (hs);
+            cur.mM += vm * vm; cur.mS += vs * vs; cur.hM += hm * hm; cur.hS += hs * hs;
+            cur.lr += l * r; cur.ll += l * l; cur.rr += r * r;
+        }
         cur.mid += m * m;
         cur.side += s * s;
         cur.low += lo * lo;
@@ -325,15 +346,20 @@ MixAnalysis analyseMix (const AudioClip& clip)
     for (const auto& b : blocks) fullDb.push_back (toDb (b.full / block));
     const double blockGate = percentile (fullDb, 0.95) - 15.0;
 
-    double em = 0.0, es = 0.0;
+    double em = 0.0, es = 0.0, wmM = 0.0, wmS = 0.0, whM = 0.0, whS = 0.0, clr = 0.0, cll = 0.0, crr = 0.0;
     std::vector<double> lowDb, crest;
     for (size_t i = 0; i < blocks.size(); ++i)
     {
         if (fullDb[i] < blockGate) continue;
         em += blocks[i].mid;
+        wmM += blocks[i].mM; wmS += blocks[i].mS; whM += blocks[i].hM; whS += blocks[i].hS;
+        clr += blocks[i].lr; cll += blocks[i].ll; crr += blocks[i].rr;
         es += blocks[i].side;
         lowDb.push_back (toDb (blocks[i].low / block));
     }
+    if (wmM > 0.0) a.midSideDb = toDb (wmS / wmM);
+    if (whM > 0.0) a.highSideDb = toDb (whS / whM);
+    if (cll > 0.0 && crr > 0.0) a.correlation = clr / std::sqrt (cll * crr);
     if (em + es > 0.0)
         a.bassWidthPercent = std::min (100.0, 200.0 * es / (em + es));
 
@@ -423,10 +449,6 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
         r.reasons.push_back ({ module, std::move (control), std::move (value), std::move (why) });
     };
     auto& chain = r.chain;
-    // Not set by Auto-Master yet: kept as you set them, and included in the loudness search.
-    chain.dynamics = s.dynamics;
-    chain.imager = s.imager;
-    chain.saturation = s.saturation;
 
     // 808-led genres, where the low end is programmed rather than played.
     const bool bassHeavy = s.genre == Genre::trapHipHop || s.genre == Genre::rnb || s.genre == Genre::edm || s.genre == Genre::pop;
@@ -528,6 +550,218 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
                         : ! a.hasLowEnd ? "There's very little low end in what I heard, so there are no kicks to punch up."
                                         : "Your kicks already hit clearly above the bass, so no extra punch is needed.");
 
+    // --- Dynamics: gentle per-band glue ----------------------------------------------------------------
+    // Each band is held down by a set amount on its loud moments (the threshold is found by running
+    // the real compressor on what Auto-Master heard), and what the band loses on average is given
+    // back, so the tone stays put while the loud moments get steadier.
+    const AudioClip toneShaped = renderBass (renderEq (clip, chain.eq), chain.bass);
+    // The compressor's thresholds are found on the loudest 6 s (quicker, and that's what it must hold).
+    const AudioClip loudest = [&]
+    {
+        const int n = toneShaped.numSamples(), len = std::min (n, static_cast<int> (toneShaped.sampleRate * 6.0));
+        const int hopLen = std::max (1, static_cast<int> (toneShaped.sampleRate * 0.5));
+        int best = 0;
+        double bestE = -1.0;
+        for (int start = 0; start + len <= n; start += hopLen)
+        {
+            double e = 0.0;
+            for (const auto& ch : toneShaped.channels)
+                for (int i = start; i < start + len; i += 16) e += static_cast<double> (ch[static_cast<size_t> (i)]) * ch[static_cast<size_t> (i)];
+            if (e > bestE) { bestE = e; best = start; }
+        }
+        AudioClip out;
+        out.sampleRate = toneShaped.sampleRate;
+        for (const auto& ch : toneShaped.channels)
+            out.channels.emplace_back (ch.begin() + best, ch.begin() + best + len);
+        return out;
+    }();
+    {
+        const bool dense = a.peakToLoudnessDb < 9.0;
+        const bool acoustic = s.genre == Genre::acoustic;
+        double ratio = s.intensity == Intensity::gentle ? 1.5 : s.intensity == Intensity::punchy ? 2.5 : 2.0;
+        double targetGr = s.intensity == Intensity::gentle ? 1.0 : s.intensity == Intensity::punchy ? 2.5 : 1.5;
+        if (acoustic) { ratio -= 0.25; targetGr *= 0.7; }
+
+        auto& dyn = chain.dynamics;
+        dyn = DynamicsParams {};
+        std::array<bool, kDynBands> use { true, true, true, true };
+        if (tame > 0.0) use[0] = false;   // Sub Tame already steadies the 808
+        if (dense) use = { false, false, false, false };
+
+        std::array<double, kDynBands> lo {}, hi {}, thr {}, medianGr {};
+        for (size_t k = 0; k < kDynBands; ++k) { lo[k] = -48.0; hi[k] = 0.0; }   // the plug-in's threshold range
+
+        // Runs the compressor with the given thresholds; returns each band's 90th-percentile and
+        // median reduction over the moments the band is actually playing.
+        auto run = [&] (const std::array<double, kDynBands>& thresholds, std::array<double, kDynBands>& p90)
+        {
+            DynamicsParams p = dyn;
+            for (size_t k = 0; k < kDynBands; ++k)
+                p.bands[k] = { thresholds[k], use[k] ? ratio : 1.0, p.bands[k].attackMs, p.bands[k].releaseMs, 0.0 };
+            MultibandDynamics engine;
+            engine.prepare (loudest.sampleRate, loudest.numChannels());
+            engine.setParams (p);
+            engine.reset();
+            AudioClip work = loudest;
+            std::vector<float*> ptrs;
+            for (auto& ch : work.channels) ptrs.push_back (ch.data());
+            const int n = work.numSamples(), step = std::max (1, static_cast<int> (work.sampleRate * 0.005));
+            std::array<std::vector<double>, kDynBands> gr, level;
+            for (int start = 0; start < n; start += step)
+            {
+                const int len = std::min (step, n - start);
+                std::vector<float*> at;
+                for (auto* q : ptrs) at.push_back (q + start);
+                engine.process (at.data(), work.numChannels(), len);
+                for (int k = 0; k < kDynBands; ++k)
+                {
+                    gr[static_cast<size_t> (k)].push_back (engine.currentGrDb (k));
+                    level[static_cast<size_t> (k)].push_back (engine.currentLevelDb (k));
+                }
+            }
+            for (size_t k = 0; k < kDynBands; ++k)
+            {
+                const double top = percentile (level[k], 0.99);
+                std::vector<double> playing;
+                for (size_t i = 0; i < gr[k].size(); ++i)
+                    if (level[k][i] > top - 20.0) playing.push_back (-gr[k][i]);
+                p90[k] = playing.empty() ? 0.0 : percentile (playing, 0.9);
+                medianGr[k] = playing.empty() ? 0.0 : percentile (playing, 0.5);
+            }
+        };
+
+        if (use[0] || use[1] || use[2] || use[3])
+        {
+            std::array<double, kDynBands> p90 {};
+            for (int it = 0; it < 9; ++it)
+            {
+                for (size_t k = 0; k < kDynBands; ++k) thr[k] = 0.5 * (lo[k] + hi[k]);
+                run (thr, p90);
+                for (size_t k = 0; k < kDynBands; ++k)
+                    (p90[k] > targetGr ? lo[k] : hi[k]) = thr[k];   // too much reduction: raise the threshold
+            }
+            for (size_t k = 0; k < kDynBands; ++k) thr[k] = std::round (0.5 * (lo[k] + hi[k]) * 10.0) / 10.0;
+            run (thr, p90);
+            for (size_t k = 0; k < kDynBands; ++k)
+            {
+                if (! use[k]) continue;
+                dyn.bands[k].thresholdDb = thr[k];
+                dyn.bands[k].ratio = ratio;
+                dyn.bands[k].gainDb = std::round (std::min (3.0, medianGr[k]) * 10.0) / 10.0;   // give back the average loss
+            }
+            const char* names[] = { "Low", "Low Mid", "High Mid", "High" };
+            const char* holds[] = { bassHeavy ? "kick and 808" : "kick and bass", "body, snare and vocal warmth", "vocal presence and snare crack", "hats, cymbals and air" };
+            for (size_t k = 0; k < kDynBands; ++k)
+            {
+                if (! use[k])
+                {
+                    if (k == 0)
+                        reason ("dyn", names[k], "1:1", "Sub Tame in Bass Control already evens out the 808, so the low band isn't compressed twice.");
+                    continue;
+                }
+                reason ("dyn", names[k], num (ratio) + ":1 at " + num (thr[k]) + " dB",
+                        "Holds the " + std::string (holds[k]) + " down by up to about " + num (p90[k]) + " dB on the loudest moments, and gives back " +
+                        num (dyn.bands[k].gainDb) + " dB so the band's level stays where it was. The loud moments get steadier without changing the tone.");
+            }
+            reason ("dyn", "Attack / Release", "per band", "Slow attack in the lows (30 ms) lets kicks through; faster in the highs (5 ms) catches harsh hits. "
+                    "Adaptive release recovers quickly after short hits, so nothing pumps.");
+        }
+        else
+        {
+            reason ("dyn", "All bands", "1:1",
+                    dense ? "Your mix is already dense (only " + num (a.peakToLoudnessDb) + " dB between its peaks and its average), so more compression would only flatten it."
+                          : "Nothing to hold down.");
+        }
+    }
+
+    // --- Stereo Imager: open up narrow highs, never touch the lows ------------------------------------
+    {
+        auto& im = chain.imager;
+        im = ImagerParams {};
+        const double scale = s.intensity == Intensity::gentle ? 0.5 : s.intensity == Intensity::punchy ? 1.3 : 1.0;
+        const double genreScale = s.genre == Genre::acoustic ? 0.6 : s.genre == Genre::rock ? 0.8 : 1.0;
+        const bool risky = a.correlation < 0.25;
+        auto widen = [&] (double sideDb, double narrowDb, double maxPct)
+        {
+            // How far below "already wide" this band sits decides how much it opens (0 .. maxPct).
+            const double room = std::clamp ((narrowDb - sideDb) / 9.0, 0.0, 1.0);
+            return std::round (100.0 + maxPct * room * scale * genreScale);
+        };
+        if (! risky)
+        {
+            im.highWidth = widen (a.highSideDb, -6.0, 18.0);
+            im.midWidth = widen (a.midSideDb, -12.0, 8.0);
+            if (a.midSideDb > -3.0) im.midWidth = 92.0;   // very wide mids: pull the center back together
+        }
+        const auto sideText = [] (double db) { return db <= -40.0 ? std::string ("almost mono") : num (-db) + " dB below the center"; };
+        reason ("img", "Lows", "100 %", "The lows stay as they are: wide bass costs punch and cancels on mono speakers (Mono Below in Bass Control handles the sub).");
+        reason ("img", "Mids", pct (im.midWidth),
+                risky ? "Your mix's correlation is low (" + num (a.correlation) + "), so widening could make parts cancel on phones and club systems. Left alone."
+                : im.midWidth > 100.0 ? "The stereo part of your mids is " + sideText (a.midSideDb) + ", fairly narrow, so a small lift adds space around the vocal without loosening it."
+                : im.midWidth < 100.0 ? "Your mids are already very wide (stereo part only " + num (-a.midSideDb) + " dB below the center), so they're pulled in a little to keep the vocal solid."
+                                      : "Your mids already have a healthy width, so they stay as they are.");
+        reason ("img", "Highs", pct (im.highWidth),
+                risky ? "Left alone for mono safety (low correlation)."
+                : im.highWidth > 100.0 ? "The stereo part of your highs is " + sideText (a.highSideDb) + ". Opening them to " + pct (im.highWidth) +
+                                         " spreads hats, reverbs and ad-libs, where width sounds best and stays mono-safe."
+                                       : "Your highs are already wide, so they stay as they are.");
+    }
+
+    // --- Saturation: harmonics for density and small-speaker bass ------------------------------------
+    {
+        auto& sat = chain.saturation;
+        sat = SaturationParams {};
+        const bool tubeGenre = s.genre == Genre::trapHipHop || s.genre == Genre::rnb || s.genre == Genre::edm || s.genre == Genre::pop;
+        sat.mode = tubeGenre ? SaturationMode::tube : SaturationMode::tape;
+        sat.mix = 50.0;
+        // Harmonics level to land on (dB below the music, at this Mix). Trap / Balanced is set by ear:
+        // Tube at about -25 dB was the favourite in testing.
+        double harmTarget = 0.0;
+        switch (s.genre)
+        {
+            case Genre::trapHipHop: case Genre::edm: harmTarget = -25.0; break;
+            case Genre::rnb: case Genre::pop:        harmTarget = -28.0; break;
+            case Genre::rock:                        harmTarget = -28.0; break;
+            case Genre::acoustic:                    harmTarget = -37.0; break;
+        }
+        harmTarget += s.intensity == Intensity::gentle ? -7.0 : s.intensity == Intensity::punchy ? 3.0 : 0.0;
+        const bool dense = a.peakToLoudnessDb < 9.0;
+        if (dense) harmTarget -= 4.0;
+
+        MasterChainParams pre {};
+        pre.dynamics = chain.dynamics;
+        pre.imager = chain.imager;
+        const AudioClip beforeSat = renderPreDrive (toneShaped, pre);
+        auto harmonicsAt = [&] (double drive)
+        {
+            SaturationParams p = sat;
+            p.driveDb = drive;
+            return Saturation::estimateHarmonicsDb (beforeSat.channels, p);
+        };
+        double dlo = 0.0, dhi = Saturation::kMaxDriveDb;
+        if (harmonicsAt (dhi) < harmTarget)
+            sat.driveDb = dhi;
+        else
+        {
+            for (int it = 0; it < 9; ++it)
+            {
+                const double mid = 0.5 * (dlo + dhi);
+                (harmonicsAt (mid) < harmTarget ? dlo : dhi) = mid;
+            }
+            sat.driveDb = std::round (0.5 * (dlo + dhi) * 10.0) / 10.0;
+        }
+        const double got = harmonicsAt (sat.driveDb);
+        const std::string modeName = sat.mode == SaturationMode::tube ? "Tube" : "Tape";
+        reason ("sat", "Mode", modeName,
+                sat.mode == SaturationMode::tube ? "Tube adds mostly the 2nd harmonic: the 808 and vocals sound fuller and the bass shows up on phone speakers, which " + genre + " needs."
+                                                 : "Tape rounds off the loudest moments and adds smooth odd harmonics: warmth without changing the character of " + genre + ".");
+        reason ("sat", "Drive", num (sat.driveDb, true) + " dB",
+                "Set by measuring your mix: at this Drive the harmonics sit about " + num (-got) + " dB below your music" +
+                (got > -30.0 ? ", enough to make the master denser without sounding distorted." : ", density you feel more than hear.") +
+                (dense ? " Your mix is already dense, so it's kept lighter." : ""));
+        reason ("sat", "Mix", "50 %", "Half the harmonics are blended in and the rest stays clean, so drum hits keep their snap while the harmonics fill in underneath.");
+    }
+
     // --- Soft Clipper: on or off ------------------------------------------------------------------------
     const double plr = a.peakToLoudnessDb;
     const bool loudTarget = s.target != LoudnessTarget::stream;
@@ -559,7 +793,7 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
     const double ceiling = chain.limiter.ceilingDbtp;
 
     // Loudness: search on the real chain, then respect the intensity's peak-control budget.
-    const AudioClip shaped = renderPreDrive (clip, chain);   // EQ, Bass, and your Dynamics / Imager / Saturation
+    const AudioClip shaped = renderPreDrive (clip, chain);   // EQ, Bass, Dynamics, Imager, Saturation
     const auto shapedStats = measure (shaped);
     const double inLufs = shapedStats.integratedLufs;
     const double recurring = recurringPeakDb (shaped);   // the peaks that keep coming back
@@ -715,18 +949,6 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
     if (s.genre == Genre::acoustic && s.target != LoudnessTarget::stream)
         r.notes.push_back ("HEADS UP: acoustic releases usually sit around \xE2\x88\x92" "14 to \xE2\x88\x92" "11 LUFS. "
                            "Stream \xE2\x88\x92" "14 keeps the most life in the guitars and vocal; streaming services turn louder masters down anyway.");
-
-    {
-        std::string kept;
-        if (! MultibandDynamics::isNeutral (s.dynamics)) kept = "Dynamics";
-        if (! Saturation::isNeutral (s.saturation)) kept += std::string (kept.empty() ? "" : " and ") + "Saturation";
-        const auto& im = s.imager;
-        if (im.enabled && (im.lowWidth != 100.0 || im.midWidth != 100.0 || im.highWidth != 100.0))
-            kept += std::string (kept.empty() ? "" : ", ") + "Stereo Imager";
-        if (! kept.empty())
-            r.notes.push_back ("YOUR SETTINGS: " + kept + " stay as you set them (Auto-Master doesn't choose those yet), and the loudness "
-                               "above was found with them on.");
-    }
 
     // --- Summary -------------------------------------------------------------------------------------
     char head[512];

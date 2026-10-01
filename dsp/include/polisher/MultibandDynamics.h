@@ -135,6 +135,14 @@ public:
 
     bool isActive() const noexcept { return running; }
 
+    /** The band's gain reduction right now (dB, <= 0) and its detector level (dB, sine-peak
+        calibrated). For offline analysis (Auto-Master); read between process() calls. */
+    double currentGrDb (int bandIndex) const noexcept { return det[static_cast<size_t> (bandIndex)].grDb; }
+    double currentLevelDb (int bandIndex) const noexcept
+    {
+        return 10.0 * std::log10 (2.0 * det[static_cast<size_t> (bandIndex)].meanSquare + 1.0e-30);
+    }
+
 private:
     struct Channel
     {

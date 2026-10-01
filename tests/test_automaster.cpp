@@ -47,7 +47,7 @@ void checkWellFormed (const AutoMasterResult& r)
 {
     REQUIRE (r.ok);
     CHECK_FALSE (r.summary.empty());
-    for (const char* module : { "eq", "bass", "clip", "max" })
+    for (const char* module : { "eq", "bass", "dyn", "img", "sat", "clip", "max" })
     {
         INFO ("module " << module);
         CHECK (std::any_of (r.reasons.begin(), r.reasons.end(), [&] (const auto& x) { return x.module == module; }));
@@ -136,8 +136,9 @@ TEST_CASE ("Gentle stops at its limiting budget and says so", "[automaster]")
     CHECK (r.loudnessCostDb <= 2.0 + 0.3);
     if (! r.reachedTarget)
     {
-        const auto it = std::find_if (r.reasons.begin(), r.reasons.end(), [] (const auto& x) { return x.control == "Drive"; });
+        const auto it = std::find_if (r.reasons.begin(), r.reasons.end(), [] (const auto& x) { return x.module == "max" && x.control == "Drive"; });
         REQUIRE (it != r.reasons.end());
+        INFO (it->why);
         CHECK (it->why.find ("stopped") != std::string::npos);
     }
 }
@@ -207,25 +208,58 @@ TEST_CASE ("A honky or muddy mix is still a mix", "[automaster]")
     }
 }
 
-TEST_CASE ("Auto-Master keeps your Dynamics and Saturation and still lands the target", "[automaster]")
+TEST_CASE ("Auto-Master sets Dynamics, Stereo Imager and Saturation and explains them", "[automaster]")
 {
     const auto mix = testsig::musicLike (48000.0, 12.0, -14.0);
-    AutoMasterSettings s;
-    s.target = LoudnessTarget::stream;
-    s.saturation.driveDb = 9.0;
-    s.saturation.mode = SaturationMode::tube;
-    s.dynamics.bands[0].thresholdDb = -30.0;
-    s.dynamics.bands[0].ratio = 3.0;
-    const auto r = autoMaster (mix, s);
-    INFO (r.summary);
-    checkWellFormed (r);
-    CHECK (r.chain.saturation.driveDb == 9.0);
-    CHECK (r.chain.dynamics.bands[0].ratio == 3.0);
-    CHECK (std::any_of (r.notes.begin(), r.notes.end(), [] (const auto& n) { return n.find ("YOUR SETTINGS") != std::string::npos; }));
-    if (r.reachedTarget)
-        CHECK_THAT (r.output.integratedLufs, WithinAbs (-14.0, 0.3));
-    // What the plug-in will play (the whole chain) measures what Auto-Master promised.
-    const auto check = measure (renderMaster (mix, r.chain));
-    CHECK_THAT (check.integratedLufs, WithinAbs (r.output.integratedLufs, 0.05));
-    CHECK (check.truePeakDbtp <= r.chain.limiter.ceilingDbtp + 0.05);
+    for (auto genre : { Genre::trapHipHop, Genre::acoustic })
+    {
+        AutoMasterSettings s;
+        s.genre = genre;
+        const auto r = autoMaster (mix, s);
+        INFO (genreName (genre) << ": " << r.summary);
+        for (const auto& x : r.reasons) if (x.module == "dyn" || x.module == "img" || x.module == "sat") INFO (x.module << " " << x.control << " " << x.value << ": " << x.why);
+        checkWellFormed (r);
+        for (const char* module : { "dyn", "img", "sat" })
+            CHECK (std::any_of (r.reasons.begin(), r.reasons.end(), [&] (const auto& x) { return x.module == module; }));
+
+        // Saturation: the mode fits the genre and the drive lands near the genre's harmonics target.
+        CHECK (r.chain.saturation.mode == (genre == Genre::trapHipHop ? SaturationMode::tube : SaturationMode::tape));
+        CHECK (r.chain.saturation.driveDb > 0.0);
+        CHECK (r.chain.saturation.mix == 50.0);
+
+        // Imager never widens the lows, and keeps widening modest.
+        CHECK (r.chain.imager.lowWidth == 100.0);
+        CHECK (r.chain.imager.highWidth <= 125.0);
+        CHECK (r.chain.imager.midWidth <= 110.0);
+
+        // Dynamics: gentle ratios, levels given back within a few dB.
+        for (const auto& b : r.chain.dynamics.bands)
+        {
+            CHECK (b.ratio <= 2.5);
+            CHECK (b.gainDb >= 0.0);
+            CHECK (b.gainDb <= 3.0);
+        }
+
+        // What the plug-in will play (the whole chain) measures what Auto-Master promised.
+        const auto check = measure (renderMaster (mix, r.chain));
+        CHECK_THAT (check.integratedLufs, WithinAbs (r.output.integratedLufs, 0.05));
+        CHECK (check.truePeakDbtp <= r.chain.limiter.ceilingDbtp + 0.05);
+    }
+}
+
+TEST_CASE ("Auto-Master widens a narrow mix's highs but leaves a wide one alone", "[automaster]")
+{
+    auto narrow = testsig::musicLike (48000.0, 12.0, -14.0);
+    for (int i = 0; i < narrow.numSamples(); ++i)   // nearly mono
+    {
+        const auto m = 0.5f * (narrow.channels[0][static_cast<size_t> (i)] + narrow.channels[1][static_cast<size_t> (i)]);
+        narrow.channels[0][static_cast<size_t> (i)] = narrow.channels[1][static_cast<size_t> (i)] = m;
+    }
+    const auto n = autoMaster (narrow, {});
+    INFO ("narrow: high side " << n.analysis.highSideDb << " corr " << n.analysis.correlation);
+    CHECK (n.chain.imager.highWidth > 105.0);
+
+    const auto wide = autoMaster (testsig::musicLike (48000.0, 12.0, -14.0), {});   // independent L/R noise: very wide
+    INFO ("wide: high side " << wide.analysis.highSideDb << " mid side " << wide.analysis.midSideDb << " corr " << wide.analysis.correlation);
+    CHECK (wide.chain.imager.highWidth <= 100.0);
 }

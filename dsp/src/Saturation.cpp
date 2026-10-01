@@ -25,6 +25,30 @@ double Saturation::shape (double x, SaturationMode mode, double s) noexcept
     return x;
 }
 
+double Saturation::estimateHarmonicsDb (const std::vector<std::vector<float>>& channels, const SaturationParams& p)
+{
+    const double m = effectiveMix (p);
+    if (m <= 0.0)
+        return -100.0;
+    const double s = std::pow (10.0, (kHeadroomDb - std::clamp (p.driveDb, 0.0, kMaxDriveDb)) / 20.0);
+    double res = 0.0, sig = 0.0;
+    for (const auto& ch : channels)
+    {
+        double sum = 0.0, sumSq = 0.0;
+        for (float v : ch)
+        {
+            const double x = v, r = shape (x, p.mode, s) - x;
+            sum += r;
+            sumSq += r * r;
+            sig += x * x;
+        }
+        const double n = std::max<double> (1.0, static_cast<double> (ch.size()));
+        res += sumSq - sum * sum / n;   // without the DC the tube curve makes (removed in the plug-in)
+    }
+    const double ratio = sig > 0.0 ? m * m * res / sig : 0.0;
+    return ratio > 1.0e-10 ? 10.0 * std::log10 (ratio) : -100.0;
+}
+
 void Saturation::prepare (double sampleRate, int numChannels)
 {
     channelCount = std::clamp (numChannels, 1, kMaxChannels);

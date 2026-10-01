@@ -119,12 +119,6 @@ void AutoMasterController::launchAnalysis()
     settings.genre = static_cast<polisher::Genre> (juce::jlimit (0, polisher::kNumGenres - 1, choice ("amGenre")));
     settings.intensity = static_cast<polisher::Intensity> (juce::jlimit (0, 2, choice ("amIntensity")));
     settings.target = static_cast<polisher::LoudnessTarget> (juce::jlimit (0, 2, choice ("amTarget")));
-    // Modules Auto-Master doesn't set yet: master with them as they are.
-    ModuleParams::Reader current;
-    current.attach (state);
-    settings.dynamics = current.dynamics (false);
-    settings.imager = current.imager (false);
-    settings.saturation = current.saturation (false);
     pendingSettings = settings;
 
     const int thisSession = session;
@@ -198,6 +192,27 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         set ("bassMono", static_cast<float> (c.bass.monoHz >= polisher::kBassMonoOffHz ? c.bass.monoHz : 0.0));
         set ("bassTame", static_cast<float> (c.bass.tame * 100.0));
         set ("bassPunch", static_cast<float> (c.bass.punch * 100.0));
+        set ("dynOn", 1.0f);
+        set ("dynAdaptive", c.dynamics.adaptiveRelease ? 1.0f : 0.0f);
+        for (int x = 0; x < polisher::kDynBands - 1; ++x)
+            set (ModuleParams::band ("dynX", x), static_cast<float> (c.dynamics.crossoverHz[static_cast<size_t> (x)]));
+        for (int b = 0; b < polisher::kDynBands; ++b)
+        {
+            const auto& d = c.dynamics.bands[static_cast<size_t> (b)];
+            set (ModuleParams::band ("dynThr", b), static_cast<float> (d.thresholdDb));
+            set (ModuleParams::band ("dynRatio", b), static_cast<float> (d.ratio));
+            set (ModuleParams::band ("dynAtk", b), static_cast<float> (d.attackMs));
+            set (ModuleParams::band ("dynRel", b), static_cast<float> (d.releaseMs));
+            set (ModuleParams::band ("dynGain", b), static_cast<float> (d.gainDb));
+        }
+        set ("imgOn", 1.0f);
+        set ("imgLow", static_cast<float> (c.imager.lowWidth));
+        set ("imgMid", static_cast<float> (c.imager.midWidth));
+        set ("imgHigh", static_cast<float> (c.imager.highWidth));
+        set ("satOn", 1.0f);
+        set ("satMode", static_cast<float> (static_cast<int> (c.saturation.mode)));
+        set ("satDrive", static_cast<float> (c.saturation.driveDb));
+        set ("satMix", static_cast<float> (c.saturation.mix));
         set ("clipOn", c.clipper.enabled ? 1.0f : 0.0f);
         if (c.clipper.enabled)
         {
