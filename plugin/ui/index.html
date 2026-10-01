@@ -150,19 +150,22 @@
     <label class="check"><input type="checkbox" id="chk-autoreset"> Reset loudness meter when playback starts</label>
     <label class="check"><input type="checkbox" id="chk-resetchange"> Restart loudness after you change a control</label>
     <label class="check"><input type="checkbox" id="chk-adaptive"> Adaptive release (Maximizer)</label>
-    <div class="pop-foot mono">Polisher v0.10.4 · Auto-Master · EQ · Bass · Dynamics · Imager · Saturation · Clipper · Maximizer</div>
+    <div class="pop-foot mono">Polisher v0.10.5 · Auto-Master · EQ · Bass · Dynamics · Imager · Saturation · Clipper · Maximizer</div>
   </div>
   <div class="popover" id="pop-help" hidden>
     <div class="pop-title wm">QUICK HELP</div>
     <ul>
       <li><b>Auto-Master:</b> pick your genre (top), an intensity and a target, then play the loudest part of your song and press Auto-Master. It listens for 12 seconds, sets every module and explains why in Learn. The undo arrow puts everything back.</li>
       <li><b>Knobs:</b> drag up/down. Hold Shift for fine control. Double-click to reset. Mouse wheel works too.</li>
-      <li><b>A / B:</b> A plays your original mix (bypassed), B plays the master. Turn on <b>MATCH</b> first: the master is turned down to your original's loudness, so you compare tone and punch, not volume. MATCH switches itself off when you close Polisher and during export.</li>
+      <li><b>A / B:</b> A plays your original mix (bypassed), B plays the master. Turn on <b>MATCH</b> first and play B for about 10 seconds: the louder side is turned down so both play at the same loudness, and your original is kept from clipping. Then you compare tone and punch, not volume. The meters always show the real master. MATCH switches itself off when you close Polisher and during export.</li>
       <li><b>Loudness:</b> watch Short-term while you turn Drive (it follows the last 3 seconds). Integrated averages the whole time since it started, so it restarts a moment after you change a control (Settings). True Peak stays at or below the Ceiling.</li>
       <li><b>Tonal EQ:</b> turn a band's knob, or drag its numbered point on the spectrum: sideways moves the frequency, up/down sets the gain. Double-click a point to reset it. Master EQ moves of 1–3 dB go a long way.</li>
       <li><b>Bass Control:</b> Mono Below at about 100 Hz makes the bass mono so it hits on club systems and phones. Sub Tame evens out 808 notes that jump out. Punch adds thump to the start of each kick.</li>
+      <li><b>Dynamics:</b> four-band compression. Pick a band, raise its Ratio (2:1 is plenty), then lower the Threshold until the band's button shows 1–3 dB on the loud hits.</li>
+      <li><b>Stereo Imager:</b> width for lows, mids and highs. Keep the lows at 100 %; try the highs at 110–115 % and keep Correlation above +0.3.</li>
+      <li><b>Saturation:</b> adds harmonics. Tape is smooth, Tube is rich (fuller bass), Clip is bright. Aim for the Harmonics meter around −25 to −35 dB.</li>
       <li><b>Soft Clipper:</b> turn it on, then lower Clip Level until the Clipping meter shows 1–3 dB on the drums. Clip Level is measured from the Maximizer ceiling, so peaks always use the full headroom.</li>
-      <li><b>Learn:</b> the right panel explains what each control is doing to your track, live.</li>
+      <li><b>Learn:</b> the right panel explains what each control is doing to your track, live. Red boxes need a decision and say exactly what to do; blue boxes are tips.</li>
     </ul>
   </div>
   <div class="toast" id="toast" hidden></div>

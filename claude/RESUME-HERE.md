@@ -4,7 +4,7 @@ Read this first in a new chat. Code: github.com/DK7602/polisher, branch `claude/
 (merge to `main` when ready). Every push builds Mac + Windows; download Polisher-Windows from the
 latest green Actions run.
 
-## Status: v0.10.4 — all seven modules live, Auto-Master sets every one
+## Status: v0.10.5 — all seven modules live, Auto-Master sets every one
 Chain: Tonal EQ -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
 -> Maximizer (+ MATCH gain at the very end). Engine tests: 73 cases
 (`cmake -S . -B build-tests -DPOLISHER_BUILD_PLUGIN=OFF && cmake --build build-tests && ./build-tests/tests/polisher_tests`).

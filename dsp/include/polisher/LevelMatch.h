@@ -16,7 +16,7 @@ class LevelMatch
 {
 public:
     static constexpr double kPeakTargetDb = -1.0;   // where A's loudest sample lands
-    static constexpr double kSmoothingSeconds = 3.0;
+    static constexpr double kSmoothingSeconds = 8.0;   // loudness is averaged as energy over ~8 s
     static constexpr double kMaxGapDb = 24.0;
 
     void prepare (double sampleRate) noexcept { sr = sampleRate; reset(); }
@@ -24,6 +24,7 @@ public:
     void reset() noexcept
     {
         gap = 0.0;
+        inEnergy = outEnergy = 0.0;
         inputPeakDb = -120.0;
     }
 
@@ -41,8 +42,14 @@ public:
         if (listeningToB && std::isfinite (inShort) && std::isfinite (outShort) && inShort > -60.0 && outShort > -60.0)
         {
             const double k = 1.0 - std::exp (-numSamples / (kSmoothingSeconds * sr));
-            gap += ((outShort - inShort) - gap) * k;
-            gap = std::clamp (gap, -kMaxGapDb, kMaxGapDb);
+            // Average the two loudnesses as energy (like integrated loudness), not the dB gap: loud
+            // and quiet sections are limited differently, and one steady match level is what makes the
+            // comparison fair (the gain must not ride the music).
+            const double inE = std::pow (10.0, inShort / 10.0), outE = std::pow (10.0, outShort / 10.0);
+            if (inEnergy <= 0.0) { inEnergy = inE; outEnergy = outE; }
+            inEnergy += (inE - inEnergy) * k;
+            outEnergy += (outE - outEnergy) * k;
+            gap = std::clamp (10.0 * std::log10 (outEnergy / inEnergy), -kMaxGapDb, kMaxGapDb);
         }
     }
 
@@ -67,6 +74,7 @@ private:
 
     double sr = 48000.0;
     double gap = 0.0;
+    double inEnergy = 0.0, outEnergy = 0.0;
     double inputPeakDb = -120.0;
 };
 
