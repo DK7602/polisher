@@ -659,6 +659,8 @@ function item(name, value, why) {
 // A Learn box. Warnings always carry a plan: fix = { need: "Do I need to fix it? …", steps: ["…", …] }.
 function tip(title, text, ok, fix) {
   const d = document.createElement("div");
+  // A plan whose answer is "No" is information, not a warning: show it calm (blue), not red.
+  if (fix && /^No\b/.test(fix.need)) ok = true;
   d.className = "l-tip" + (ok ? " ok" : "");
   d.appendChild(head(title));
   d.appendChild(para("l-p", text));

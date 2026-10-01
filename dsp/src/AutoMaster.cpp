@@ -953,7 +953,7 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
     reason ("max", "Release", "120 ms adaptive", "Recovers fast after drum hits and slowly on sustained bass, so the master doesn't pump.");
 
     if ((budgetLimited || peakLimited) && s.intensity != Intensity::punchy)
-        r.notes.push_back ("HEADS UP: this mix has big peaks for its loudness (" + num (plr) + " dB). " +
+        r.notes.push_back ("LOUDER, IF YOU WANT: this mix has big peaks for its loudness (" + num (plr) + " dB). " +
                            std::string (bassHeavy ? "Controlling the drum peaks in the mix (a clipper or limiter on the drum bus)"
                                                   : "Taming the biggest peaks in the mix (strums, drum hits, vocal peaks: a compressor on those tracks)") +
                            " would let the master get louder without losing punch."
