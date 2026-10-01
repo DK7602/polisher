@@ -32,18 +32,37 @@ def band_weights(sr, nfft=NFFT):
     return (W / W.sum(0, keepdims=True)).astype(np.float32)
 
 
-def stft_power(x, sr):
-    """x: (channels, T) -> power summed over channels, (F, frames). Hann window, centred frames
-    are NOT used: frame k covers samples [k*HOP, k*HOP+NFFT), as in the plug-in."""
+def stft(ch, sr):
+    """ch: (T,) -> complex spectrum (F, frames), and NFFT used. Hann window, centred frames are NOT
+    used: frame k covers samples [k*HOP, k*HOP+NFFT), as in the plug-in."""
     n = NFFT if sr < 80000 else 2 * NFFT
     h = HOP if sr < 80000 else 2 * HOP
     w = np.hanning(n + 1)[:-1].astype(np.float32)
-    frames = (x.shape[1] - n) // h + 1
+    frames = (len(ch) - n) // h + 1
     idx = np.arange(n)[None, :] + h * np.arange(frames)[:, None]
+    return np.fft.rfft(ch[idx] * w, axis=1).T, n
+
+
+def stft_power(x, sr):
+    """x: (channels, T) -> power summed over channels, (F, frames)."""
     P = 0
     for ch in x:
-        P = P + np.abs(np.fft.rfft(ch[idx] * w, axis=1)) ** 2
-    return P.T.astype(np.float32), n
+        X, n = stft(ch, sr)
+        P = P + np.abs(X) ** 2
+    return P.astype(np.float32), n
+
+
+def stem_energies(stems, sr):
+    """stems: (S, 2, T) -> band energies (S, B, frames) of L+R power, of mid and of side, from one
+    STFT per channel (same numbers as band_energies on stems, on their mid and on their side)."""
+    E, Em, Es = [], [], []
+    for s in stems:
+        L, n = stft(s[0], sr); R, _ = stft(s[1], sr)
+        W = band_weights(sr, n)
+        E.append(W @ (np.abs(L) ** 2 + np.abs(R) ** 2).astype(np.float32))
+        Em.append(W @ (np.abs(0.5 * (L + R)) ** 2).astype(np.float32))
+        Es.append(W @ (np.abs(0.5 * (L - R)) ** 2).astype(np.float32))
+    return np.stack(E), np.stack(Em), np.stack(Es)
 
 
 def band_energies(stems, sr):

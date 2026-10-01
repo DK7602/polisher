@@ -2,10 +2,13 @@
 band and frame.  Two kinds of input:
   python prep.py stems <dir-with-vocals/drums/bass/other.wav>... -> real stems (MUSDB-style)
   python prep.py teach <song.wav|mp3>...                       -> stems from the HT-Demucs teacher
-                                                                  (TEACHER=htdemucs for the faster one)
-Writes one .npz per song into data/."""
+                                                                  (TEACHER=htdemucs for the faster one;
+                                                                  KEEP_STEMS=<dir> also saves its stems)
+  python prep.py taught <dir-with-saved-teacher-stems>...       -> re-prep saved teacher stems
+Writes one .npz per song into data/: x (mix features), e (log energy per stem), and m / s (log
+mid / side energy per stem) so train.py can remix stems for augmentation."""
 import os, sys, numpy as np, soundfile as sf
-from common import SOURCES, HOP, features, band_energies, band_centres
+from common import SOURCES, HOP, features, stem_energies, band_centres
 
 OUT = os.path.join(os.path.dirname(__file__), 'data')
 
@@ -21,14 +24,15 @@ def long_low_hits(D, fps, min_len=0.3, drop_db=15.0, win=0.5):
     return np.isin(lab, 1 + np.flatnonzero(lens >= min_len))
 
 
-def low_end_to_bass(E, sr, lo=120.0, hi=200.0, hold=0.15):
+def low_end_to_bass(E, sr, *also, lo=120.0, hi=200.0, hold=0.15):
     """Teacher labels only (trap; on live rock drums it would steal ~14 % of the kick).  The user wants
     808s under the Bass knob, but HT-Demucs scatters them over drums / other / vocals.  Below `lo` Hz
     (fading out by `hi`): vocals and other become bass (MUSDB's real stems hold almost nothing there);
     from drums, whole low hits lasting 0.3 s or more (808 notes) and anything ringing on under the
     kicks for `hold` seconds become bass.  Short hits stay drums (the kick).  Checked by ear on the
     user's songs: Bubba's 808 at 0:33 moves fully, its kicks and Addie (no 808) do not move.
-    E: (4, B, F) energies in SOURCES order."""
+    E: (4, B, F) energies in SOURCES order; arrays in `also` (e.g. mid / side energies of the same
+    stems) get the same moves, as fractions decided on E.  Returns E (and the `also` arrays)."""
     from scipy.ndimage import grey_opening
     v, d, b, o = range(4)
     cf = band_centres(sr)
@@ -37,20 +41,27 @@ def low_end_to_bass(E, sr, lo=120.0, hi=200.0, hold=0.15):
     n = max(2, int(round(hold * fps)))
     ring = np.minimum(grey_opening(E[d], size=(1, n)), E[d])
     notes = long_low_hits(E[d, cf < lo].sum(0), fps)
-    take = np.where(notes[None, :], E[d], ring)
-    E = E.copy()
-    E[b] += w * (E[v] + E[o] + take)
-    E[v] *= 1 - w; E[o] *= 1 - w; E[d] -= w * take
-    return E
+    frac = np.where(notes[None, :], 1.0, ring / np.maximum(E[d], 1e-30))    # share of drums moved
+    out = []
+    for X in (E,) + also:
+        X = X.copy()
+        take = frac * X[d]
+        X[b] += w * (X[v] + X[o] + take)
+        X[v] *= 1 - w; X[o] *= 1 - w; X[d] -= w * take
+        out.append(X)
+    return out[0] if not also else tuple(out)
 
 
 def save(name, stems, sr, teach=False):
     """stems: (4, 2, T) float32 in SOURCES order."""
     mix = stems.sum(0)
-    E = band_energies(stems, sr)                           # 4, B, F
-    if teach: E = low_end_to_bass(E, sr)
-    np.savez_compressed(os.path.join(OUT, name + '.npz'), x=features(mix, sr),
-                        e=np.log10(E + 1e-9).astype(np.float16), sr=sr, teach=teach)
+    E, Em, Es = stem_energies(stems, sr)                    # each 4, B, F
+    if teach: E, Em, Es = low_end_to_bass(E, sr, Em, Es)
+    lg = lambda A: np.log10(A + 1e-9).astype(np.float16)
+    path = os.path.join(OUT, name + '.npz')
+    with open(path + '.part', 'wb') as fh:                  # atomic: a stopped run leaves no bad .npz
+        np.savez_compressed(fh, x=features(mix, sr), e=lg(E), m=lg(Em), s=lg(Es), sr=sr, teach=teach)
+    os.replace(path + '.part', path)
     print(name, E.shape[-1], 'frames')
 
 
@@ -71,7 +82,12 @@ def teacher():
             out = apply_model(m, ((x - mu) / sd)[None], shifts=1, split=True, overlap=0.25)[0] * sd + mu / 4
         # Teacher order is drums, bass, other, vocals; the parts sum back to the song.
         d = dict(zip(m.sources, out.numpy()))
-        return np.stack([d[s] for s in SOURCES]).astype(np.float32), m.samplerate
+        stems = np.stack([d[s] for s in SOURCES]).astype(np.float32)
+        if os.environ.get('KEEP_STEMS'):
+            keep = os.path.join(os.environ['KEEP_STEMS'], os.path.splitext(os.path.basename(path))[0])
+            os.makedirs(keep, exist_ok=True)
+            for s, st in zip(SOURCES, stems): sf.write(os.path.join(keep, s + '.wav'), st.T, m.samplerate, subtype='FLOAT')
+        return stems, m.samplerate
     return run
 
 
@@ -88,4 +104,4 @@ if __name__ == '__main__':
             parts = [sf.read(os.path.join(p, s + '.wav'), dtype='float32', always_2d=True) for s in SOURCES]
             sr = parts[0][1]
             stems = np.stack([w.T[:2] for w, _ in parts])
-        save(name, stems, sr, teach=mode == 'teach')
+        save(name, stems, sr, teach=mode in ('teach', 'taught'))

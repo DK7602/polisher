@@ -1,5 +1,10 @@
 """Train StemNet on data/*.npz.  Loss: band-energy-weighted error of the predicted share of each stem,
-which is what decides how wrong a Stem EQ move sounds."""
+which is what decides how wrong a Stem EQ move sounds.
+Augmentation (the first full run memorised its ~110 songs): most excerpts are remixes built from the
+stored per-stem mid / side band energies - random stem levels, stems borrowed from other songs,
+sometimes a stem left out.  Stems are summed as energies (no in-band cross terms: vs the real mix that
+is off by ~2 dB median in the lowest bands, 0.4 dB mid, 0.15 dB top), so a share of excerpts stays the
+real mix, and validation always uses real mixes.  Saves the checkpoint with the best validation loss."""
 import glob, os, sys, time, numpy as np, torch
 from common import LOOKAHEAD
 from model import StemNet
@@ -7,21 +12,43 @@ from model import StemNet
 torch.set_num_threads(os.cpu_count())
 SEG = 400                                      # frames per training excerpt (~2.3 s)
 OWN_SHARE = 0.35                               # share of excerpts from teacher-labelled (own) songs
+REMIX = 0.75                                   # share of excerpts that are remixes
 
 
 def load(files):
+    """Per song: x (2B, F) float32, e / m / s (4, B, F) float16 log energies (kept small in memory), own."""
     out = []
     for f in files:
         d = np.load(f)
-        e = d['e'].astype(np.float32)
-        out.append((d['x'], e, bool(d['teach']) if 'teach' in d else False))
+        out.append((d['x'], d['e'], d['m'], d['s'], bool(d['teach'])))
     return out
+
+
+def remix(data, i, t, rng, p):
+    """Excerpt of song i at frame t, remixed: each stem from this song or (half the time) another,
+    level -9..+6 dB, 10 % of stems left out (but never all).  Returns x (2B, SEG), e (4, B, SEG)."""
+    B = data[i][1].shape[1]
+    Em, Es, E = np.zeros((4, B, SEG)), np.zeros((4, B, SEG)), np.zeros((4, B, SEG))
+    keep = rng.random(4) > 0.1
+    if not keep.any(): keep[rng.integers(4)] = True
+    for k in range(4):
+        if not keep[k]: continue
+        j, tt = i, t
+        if rng.random() < 0.5:
+            j = rng.choice(len(data), p=p); tt = rng.integers(0, data[j][0].shape[1] - SEG)
+        g = 10 ** (rng.uniform(-9, 6) / 10)
+        sl = slice(tt, tt + SEG)
+        E[k] = g * 10 ** data[j][1][k, :, sl].astype(np.float64)
+        Em[k] = g * 10 ** data[j][2][k, :, sl].astype(np.float64)
+        Es[k] = g * 10 ** data[j][3][k, :, sl].astype(np.float64)
+    x = np.concatenate([np.log10(Em.sum(0) + 1e-9), np.log10(Es.sum(0) + 1e-9)])
+    return x.astype(np.float32), np.log10(E + 1e-9).astype(np.float32)
 
 
 def song_weights(data):
     """Own (teacher-labelled) songs get OWN_SHARE of the draws, so a few trap songs are not drowned
     out by ~100 MUSDB songs."""
-    own = np.array([t for _, _, t in data])
+    own = np.array([d[-1] for d in data])
     if own.all() or not own.any(): return np.full(len(data), 1 / len(data))
     return np.where(own, OWN_SHARE / own.sum(), (1 - OWN_SHARE) / (~own).sum())
 
@@ -29,12 +56,13 @@ def song_weights(data):
 def batch(data, n, rng, p=None):
     xs, es = [], []
     for _ in range(n):
-        x, e, _ = data[rng.choice(len(data), p=p)]
-        t = rng.integers(0, x.shape[1] - SEG)
-        xx, ee = x[:, t:t + SEG].copy(), e[:, :, t:t + SEG].copy()
-        # Augment: overall level, and random per-stem level changes would need the mix rebuilt,
-        # so only level here (the features are log energies: level is an offset).
-        g = rng.uniform(-1.5, 0.5)
+        i = rng.choice(len(data), p=p)
+        t = rng.integers(0, data[i][0].shape[1] - SEG)
+        if rng.random() < REMIX:
+            xx, ee = remix(data, i, t, rng, p)
+        else:
+            xx, ee = data[i][0][:, t:t + SEG].copy(), data[i][1][:, :, t:t + SEG].astype(np.float32)
+        g = rng.uniform(-1.5, 0.5)             # overall level (log energies: an offset)
         xs.append(xx + g); es.append(ee + g)
     return torch.from_numpy(np.stack(xs)), torch.from_numpy(np.stack(es))
 
@@ -58,7 +86,7 @@ if __name__ == '__main__':
     net = StemNet(); opt = torch.optim.AdamW(net.parameters(), 2e-3, weight_decay=1e-4)
     steps = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, 2e-3, total_steps=steps)
-    p = song_weights(dtr)
+    p = song_weights(dtr); best = np.inf
     rng = np.random.default_rng(0); t0 = time.time()
     print(len(dtr), 'training songs,', sum(t for *_, t in dtr), 'own;', len(dval), 'validation', flush=True)
     for step in range(1, steps + 1):
@@ -67,9 +95,11 @@ if __name__ == '__main__':
         opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0); opt.step(); sched.step()
         if step % 200 == 0 or step == steps:
             with torch.no_grad():
-                vl = [(loss_fn(net(torch.from_numpy(x[None])), torch.from_numpy(e[None])).item(), t) for x, e, t in dval]
+                vl = [(loss_fn(net(torch.from_numpy(x[None])), torch.from_numpy(e[None].astype(np.float32))).item(), t)
+                      for x, e, _, _, t in dval]
             msg = ' '.join(f'{k} {np.mean([l for l, t in vl if t == own]):.4f}' for k, own in (('val-musdb', False), ('val-own', True))
                            if any(t == own for _, t in vl))
+            v = np.mean([l for l, _ in vl])
+            if v < best: best = v; torch.save(net.state_dict(), 'stemnet.pt'); msg += ' *'
             print(f'step {step} train {loss.item():.4f} {msg} ({time.time() - t0:.0f}s)', flush=True)
-    torch.save(net.state_dict(), 'stemnet.pt')
-    print('params', sum(p.numel() for p in net.parameters()))
+    print('best val', round(best, 4), 'params', sum(p.numel() for p in net.parameters()))
