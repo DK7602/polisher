@@ -6,6 +6,7 @@ from model import StemNet
 
 torch.set_num_threads(os.cpu_count())
 SEG = 400                                      # frames per training excerpt (~2.3 s)
+OWN_SHARE = 0.35                               # share of excerpts from teacher-labelled (own) songs
 
 
 def load(files):
@@ -13,14 +14,22 @@ def load(files):
     for f in files:
         d = np.load(f)
         e = d['e'].astype(np.float32)
-        out.append((d['x'], e))
+        out.append((d['x'], e, bool(d['teach']) if 'teach' in d else False))
     return out
 
 
-def batch(data, n, rng):
+def song_weights(data):
+    """Own (teacher-labelled) songs get OWN_SHARE of the draws, so a few trap songs are not drowned
+    out by ~100 MUSDB songs."""
+    own = np.array([t for _, _, t in data])
+    if own.all() or not own.any(): return np.full(len(data), 1 / len(data))
+    return np.where(own, OWN_SHARE / own.sum(), (1 - OWN_SHARE) / (~own).sum())
+
+
+def batch(data, n, rng, p=None):
     xs, es = [], []
     for _ in range(n):
-        x, e = data[rng.integers(len(data))]
+        x, e, _ = data[rng.choice(len(data), p=p)]
         t = rng.integers(0, x.shape[1] - SEG)
         xx, ee = x[:, t:t + SEG].copy(), e[:, :, t:t + SEG].copy()
         # Augment: overall level, and random per-stem level changes would need the mix rebuilt,
@@ -49,14 +58,18 @@ if __name__ == '__main__':
     net = StemNet(); opt = torch.optim.AdamW(net.parameters(), 2e-3, weight_decay=1e-4)
     steps = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, 2e-3, total_steps=steps)
+    p = song_weights(dtr)
     rng = np.random.default_rng(0); t0 = time.time()
+    print(len(dtr), 'training songs,', sum(t for *_, t in dtr), 'own;', len(dval), 'validation', flush=True)
     for step in range(1, steps + 1):
-        x, e = batch(dtr, 16, rng)
+        x, e = batch(dtr, 16, rng, p)
         loss = loss_fn(net(x), e)
         opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0); opt.step(); sched.step()
         if step % 200 == 0 or step == steps:
             with torch.no_grad():
-                vl = np.mean([loss_fn(net(torch.from_numpy(x[None])), torch.from_numpy(e[None])).item() for x, e in dval])
-            print(f'step {step} train {loss.item():.4f} val {vl:.4f} ({time.time() - t0:.0f}s)', flush=True)
+                vl = [(loss_fn(net(torch.from_numpy(x[None])), torch.from_numpy(e[None])).item(), t) for x, e, t in dval]
+            msg = ' '.join(f'{k} {np.mean([l for l, t in vl if t == own]):.4f}' for k, own in (('val-musdb', False), ('val-own', True))
+                           if any(t == own for _, t in vl))
+            print(f'step {step} train {loss.item():.4f} {msg} ({time.time() - t0:.0f}s)', flush=True)
     torch.save(net.state_dict(), 'stemnet.pt')
     print('params', sum(p.numel() for p in net.parameters()))

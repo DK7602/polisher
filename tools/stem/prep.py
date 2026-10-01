@@ -50,7 +50,7 @@ def save(name, stems, sr, teach=False):
     E = band_energies(stems, sr)                           # 4, B, F
     if teach: E = low_end_to_bass(E, sr)
     np.savez_compressed(os.path.join(OUT, name + '.npz'), x=features(mix, sr),
-                        e=np.log10(E + 1e-9).astype(np.float16), sr=sr)
+                        e=np.log10(E + 1e-9).astype(np.float16), sr=sr, teach=teach)
     print(name, E.shape[-1], 'frames')
 
 
