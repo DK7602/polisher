@@ -16,8 +16,8 @@ Setup (scratch venv): `pip install torch torchaudio demucs soundfile librosa lam
    MUSDB18-HQ (non-commercial research licence): download parquet shards from HF dataset
    `danjacobellis/musdb18HQ`, then `python musdb.py stems/ shard*.parquet` and
    `python prep.py stems stems/train/<song dir> ...` (test-split songs come out as `val_*`).
-   Teacher-labelled songs move the low end (below ~120 Hz) that rings on, plus any vocals/other there,
-   into bass, so trap 808s sit under the Bass knob; short low hits stay drums (kick).
+   Teacher-labelled songs put the 808 under Bass: below ~120 Hz, low hits lasting 0.3 s or more, sound
+   ringing on under the kicks, and any vocals/other become bass; short low hits stay drums (kick).
    Prefix a file with `val_` to hold it out for validation.
 2. `python train.py 20000` -> stemnet.pt
 3. (next) export weights for dsp/src/StemEQ.cpp and check C++ against PyTorch frame by frame.

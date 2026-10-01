@@ -10,20 +10,37 @@ from common import SOURCES, HOP, features, band_energies, band_centres
 OUT = os.path.join(os.path.dirname(__file__), 'data')
 
 
+def long_low_hits(D, fps, min_len=0.3, drop_db=15.0, win=0.5):
+    """D: low drum energy per frame.  Frames within drop_db of the local peak form one hit; hits that
+    last min_len seconds or more are 808 notes, not kicks (trap kicks here are 0.10-0.14 s)."""
+    from scipy.ndimage import maximum_filter1d, label
+    pk = maximum_filter1d(D, int(win * fps) | 1)
+    lab, n = label(D > pk * 10 ** (-drop_db / 10))
+    if not n: return np.zeros(len(D), bool)
+    lens = np.bincount(lab)[1:] / fps
+    return np.isin(lab, 1 + np.flatnonzero(lens >= min_len))
+
+
 def low_end_to_bass(E, sr, lo=120.0, hi=200.0, hold=0.15):
-    """Teacher labels only.  Trap 808s should sit under the Bass knob, but HT-Demucs scatters them
-    over drums / other / vocals.  Below `lo` Hz (fading out by `hi`): vocals and other become bass
-    (MUSDB's real stems hold almost nothing there), and drum energy that rings on longer than `hold`
-    seconds becomes bass; short hits stay drums (the kick).  E: (4, B, F) energies, SOURCES order."""
+    """Teacher labels only (trap; on live rock drums it would steal ~14 % of the kick).  The user wants
+    808s under the Bass knob, but HT-Demucs scatters them over drums / other / vocals.  Below `lo` Hz
+    (fading out by `hi`): vocals and other become bass (MUSDB's real stems hold almost nothing there);
+    from drums, whole low hits lasting 0.3 s or more (808 notes) and anything ringing on under the
+    kicks for `hold` seconds become bass.  Short hits stay drums (the kick).  Checked by ear on the
+    user's songs: Bubba's 808 at 0:33 moves fully, its kicks and Addie (no 808) do not move.
+    E: (4, B, F) energies in SOURCES order."""
     from scipy.ndimage import grey_opening
     v, d, b, o = range(4)
-    w = np.clip((hi - band_centres(sr)) / (hi - lo), 0, 1)[:, None]
-    n = max(2, int(round(hold * sr / HOP)))
+    cf = band_centres(sr)
+    w = np.clip((hi - cf) / (hi - lo), 0, 1)[:, None]
+    fps = sr / HOP
+    n = max(2, int(round(hold * fps)))
     ring = np.minimum(grey_opening(E[d], size=(1, n)), E[d])
+    notes = long_low_hits(E[d, cf < lo].sum(0), fps)
+    take = np.where(notes[None, :], E[d], ring)
     E = E.copy()
-    moved = w * (E[v] + E[o] + ring)
-    E[b] += moved
-    E[v] *= 1 - w; E[o] *= 1 - w; E[d] -= w * ring
+    E[b] += w * (E[v] + E[o] + take)
+    E[v] *= 1 - w; E[o] *= 1 - w; E[d] -= w * take
     return E
 
 
