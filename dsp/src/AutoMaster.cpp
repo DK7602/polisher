@@ -681,13 +681,14 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
         const double scale = s.intensity == Intensity::gentle ? 0.5 : s.intensity == Intensity::punchy ? 1.3 : 1.0;
         const double genreScale = s.genre == Genre::acoustic ? 0.6 : s.genre == Genre::rock ? 0.8 : 1.0;
         const bool risky = a.correlation < 0.25;
+        const bool mono = std::max (a.midSideDb, a.highSideDb) < -35.0;   // (almost) no stereo to widen
         auto widen = [&] (double sideDb, double narrowDb, double maxPct)
         {
             // How far below "already wide" this band sits decides how much it opens (0 .. maxPct).
             const double room = std::clamp ((narrowDb - sideDb) / 9.0, 0.0, 1.0);
             return std::round (100.0 + maxPct * room * scale * genreScale);
         };
-        if (! risky)
+        if (! risky && ! mono)
         {
             im.highWidth = widen (a.highSideDb, -6.0, 18.0);
             im.midWidth = widen (a.midSideDb, -12.0, 8.0);
@@ -696,12 +697,14 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
         const auto sideText = [] (double db) { return db <= -40.0 ? std::string ("almost mono") : num (-db) + " dB below the center"; };
         reason ("img", "Lows", "100 %", "The lows stay as they are: wide bass costs punch and cancels on mono speakers (Mono Below in Bass Control handles the sub).");
         reason ("img", "Mids", pct (im.midWidth),
-                risky ? "Your mix's correlation is low (" + num (a.correlation) + "), so widening could make parts cancel on phones and club systems. Left alone."
+                mono ? "Your mix is (almost) mono. The Imager widens what is already stereo, so there's nothing for it to open up; widen in the mix with stereo reverbs, doubles or panning."
+                : risky ? "Your mix's correlation is low (" + num (a.correlation) + "), so widening could make parts cancel on phones and club systems. Left alone."
                 : im.midWidth > 100.0 ? "The stereo part of your mids is " + sideText (a.midSideDb) + ", fairly narrow, so a small lift adds space around the vocal without loosening it."
                 : im.midWidth < 100.0 ? "Your mids are already very wide (stereo part only " + num (-a.midSideDb) + " dB below the center), so they're pulled in a little to keep the vocal solid."
                                       : "Your mids already have a healthy width, so they stay as they are.");
         reason ("img", "Highs", pct (im.highWidth),
-                risky ? "Left alone for mono safety (low correlation)."
+                mono ? "Left alone: there's no stereo in the highs to widen."
+                : risky ? "Left alone for mono safety (low correlation)."
                 : im.highWidth > 100.0 ? "The stereo part of your highs is " + sideText (a.highSideDb) + ". Opening them to " + pct (im.highWidth) +
                                          " spreads hats, reverbs and ad-libs, where width sounds best and stays mono-safe."
                                        : "Your highs are already wide, so they stay as they are.");

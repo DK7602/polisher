@@ -250,10 +250,12 @@ TEST_CASE ("Auto-Master sets Dynamics, Stereo Imager and Saturation and explains
 TEST_CASE ("Auto-Master widens a narrow mix's highs but leaves a wide one alone", "[automaster]")
 {
     auto narrow = testsig::musicLike (48000.0, 12.0, -14.0);
-    for (int i = 0; i < narrow.numSamples(); ++i)   // nearly mono
+    for (int i = 0; i < narrow.numSamples(); ++i)   // narrow: mostly center, a little stereo
     {
-        const auto m = 0.5f * (narrow.channels[0][static_cast<size_t> (i)] + narrow.channels[1][static_cast<size_t> (i)]);
-        narrow.channels[0][static_cast<size_t> (i)] = narrow.channels[1][static_cast<size_t> (i)] = m;
+        const float l = narrow.channels[0][static_cast<size_t> (i)], r = narrow.channels[1][static_cast<size_t> (i)];
+        const float m = 0.5f * (l + r), sd = 0.5f * (l - r) * 0.2f;
+        narrow.channels[0][static_cast<size_t> (i)] = m + sd;
+        narrow.channels[1][static_cast<size_t> (i)] = m - sd;
     }
     const auto n = autoMaster (narrow, {});
     INFO ("narrow: high side " << n.analysis.highSideDb << " corr " << n.analysis.correlation);
@@ -262,4 +264,11 @@ TEST_CASE ("Auto-Master widens a narrow mix's highs but leaves a wide one alone"
     const auto wide = autoMaster (testsig::musicLike (48000.0, 12.0, -14.0), {});   // independent L/R noise: very wide
     INFO ("wide: high side " << wide.analysis.highSideDb << " mid side " << wide.analysis.midSideDb << " corr " << wide.analysis.correlation);
     CHECK (wide.chain.imager.highWidth <= 100.0);
+
+    // A mono mix has nothing to widen: left alone, and Learn says why.
+    auto mono = testsig::musicLike (48000.0, 12.0, -14.0);
+    mono.channels[1] = mono.channels[0];
+    const auto m = autoMaster (mono, {});
+    CHECK (m.chain.imager.highWidth == 100.0);
+    CHECK (m.chain.imager.midWidth == 100.0);
 }
