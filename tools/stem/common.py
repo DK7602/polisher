@@ -3,33 +3,48 @@ import numpy as np
 
 SOURCES = ['vocals', 'drums', 'bass', 'other']
 NFFT, HOP = 1024, 256          # at 44.1/48 kHz; doubled at 88.2/96 kHz so bands stay in Hz
-NBANDS = 64
+NBANDS = 64                    # output bands (per-stem shares)
+NIN = 192                      # input bands when the model uses detailed input (see input_weights)
 LOOKAHEAD = 3                  # frames the model may see ahead (adds 3 * HOP latency)
 FMIN = 20.0
 
 
-def band_centres(sr):
+def band_centres(sr, nb=NBANDS):
     erb = lambda f: 21.4 * np.log10(1 + 0.00437 * f)
-    c = np.linspace(erb(FMIN), erb(min(sr / 2, 20000.0)), NBANDS)
+    c = np.linspace(erb(FMIN), erb(min(sr / 2, 20000.0)), nb)
     return (10 ** (c / 21.4) - 1) / 0.00437
 
 
-def band_weights(sr, nfft=NFFT):
-    """Triangular ERB-spaced bands over the STFT bins; columns sum to 1, so per-band gains
-    interpolate smoothly into per-bin gains and all-ones stays exactly one."""
-    f = np.arange(nfft // 2 + 1) * sr / nfft
-    cf = band_centres(sr)
-    W = np.zeros((NBANDS, len(f)))
-    for i in range(NBANDS):
+def tri_weights(f, cf):
+    """Triangular bands centred on cf over frequencies f; columns sum to 1."""
+    nb = len(cf)
+    W = np.zeros((nb, len(f)))
+    for i in range(nb):
         if i == 0:
             W[i] = f <= cf[0]
         else:
             W[i] = np.clip((f - cf[i - 1]) / (cf[i] - cf[i - 1]), 0, 1) * (f <= cf[i])
-        if i == NBANDS - 1:
+        if i == nb - 1:
             W[i] += f > cf[i]
         else:
             W[i] += np.clip((cf[i + 1] - f) / (cf[i + 1] - cf[i]), 0, 1) * (f > cf[i])
     return (W / W.sum(0, keepdims=True)).astype(np.float32)
+
+
+def band_weights(sr, nfft=NFFT, nb=NBANDS):
+    """Triangular ERB-spaced bands over the STFT bins; columns sum to 1, so per-band gains
+    interpolate smoothly into per-bin gains and all-ones stays exactly one."""
+    return tri_weights(np.arange(nfft // 2 + 1) * sr / nfft, band_centres(sr, nb))
+
+
+def input_weights(sr, nfft=NFFT, nin=NIN, split=2000.0):
+    """Finer bands for the model INPUT only (output stays NBANDS): every STFT bin up to `split` Hz,
+    then ERB-spaced bands up to 20 kHz, nin in all.  Fine enough to see harmonics and attacks."""
+    f = np.arange(nfft // 2 + 1) * sr / nfft
+    low = f[(f > 0) & (f < split)]
+    erb = lambda x: 21.4 * np.log10(1 + 0.00437 * x)
+    c = np.linspace(erb(split), erb(min(sr / 2, 20000.0)), nin - len(low))
+    return tri_weights(f, np.concatenate([low, (10 ** (c / 21.4) - 1) / 0.00437]))
 
 
 def stft(ch, sr):
@@ -81,3 +96,12 @@ def features(mix, sr):
     em = band_energies(mid[None], sr)[0]
     es = band_energies(side[None], sr)[0]
     return np.concatenate([np.log10(em + 1e-9), np.log10(es + 1e-9)]).astype(np.float32)
+
+
+def features_hi(mix, sr):
+    """Detailed model input per frame: log energy of mid and of side in the NIN input bands."""
+    out = []
+    for ch in (0.5 * (mix[0] + mix[1]), 0.5 * (mix[0] - mix[1])):
+        X, n = stft(ch, sr)
+        out.append(np.log10(input_weights(sr, n) @ (np.abs(X) ** 2) + 1e-9))
+    return np.concatenate(out).astype(np.float32)

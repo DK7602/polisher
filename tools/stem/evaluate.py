@@ -18,13 +18,14 @@ def move_error(share, E, k, db):
 
 
 if __name__ == '__main__':
-    net = StemNet(); net.load_state_dict(torch.load(sys.argv[1] if len(sys.argv) > 1 else 'stemnet.pt')); net.eval()
+    net = StemNet.load(sys.argv[1] if len(sys.argv) > 1 else 'stemnet.pt')
+    feat = 'x' if net.norm.weight.shape[0] == 128 else "xh"
     print(f'{"song":34s} {"":7s}' + ''.join(f'{s + " " + d:>12s}' for s in SOURCES for d in ('+6', '-6')))
     for f in sorted(glob.glob('data/val_*.npz')):
         d = np.load(f)
         E = 10 ** d['e'].astype(np.float64)[..., LOOKAHEAD:-LOOKAHEAD]
         with torch.no_grad():
-            p = torch.softmax(net(torch.from_numpy(d['x'][None])), 1)[0].numpy().astype(np.float64)
+            p = torch.softmax(net(torch.from_numpy(d[feat].astype(np.float32)[None])), 1)[0].numpy().astype(np.float64)
         q = E / E.sum(0, keepdims=True)
         for name, sh in (('model', p), ('oracle', q)):
             row = [move_error(sh, E, k, db) for k in range(4) for db in (6, -6)]

@@ -7,16 +7,23 @@ HIDDEN = 128
 
 
 class StemNet(nn.Module):
-    def __init__(self):
+    def __init__(self, nin=NBANDS):
+        """nin: input bands per channel (NBANDS for features(), NIN for features_hi())."""
         super().__init__()
         # Input normalisation is learned (per feature) so the C++ side just applies scale/shift.
-        self.norm = nn.Conv1d(2 * NBANDS, 2 * NBANDS, 1, groups=2 * NBANDS)
+        self.norm = nn.Conv1d(2 * nin, 2 * nin, 1, groups=2 * nin)
         # Looks at frames t-LOOKAHEAD..t+LOOKAHEAD (the plug-in delays the audio by LOOKAHEAD frames).
-        self.conv = nn.Conv1d(2 * NBANDS, HIDDEN, 2 * LOOKAHEAD + 1)
+        self.conv = nn.Conv1d(2 * nin, HIDDEN, 2 * LOOKAHEAD + 1)
         self.gru = nn.GRU(HIDDEN, HIDDEN, batch_first=True)
         self.out = nn.Linear(HIDDEN, 4 * NBANDS)
 
-    def forward(self, x):                      # x: (N, 2B, T) -> logits (N, 4, B, T - 2*LOOKAHEAD)
+    @staticmethod
+    def load(path):
+        sd = torch.load(path)
+        net = StemNet(sd['norm.weight'].shape[0] // 2); net.load_state_dict(sd); net.eval()
+        return net
+
+    def forward(self, x):                      # x: (N, 2*nin, T) -> logits (N, 4, NBANDS, T - 2*LOOKAHEAD)
         h = torch.relu(self.conv(self.norm(x)))
         h, _ = self.gru(h.transpose(1, 2))
         y = self.out(h).transpose(1, 2)

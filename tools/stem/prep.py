@@ -5,10 +5,10 @@ band and frame.  Two kinds of input:
                                                                   (TEACHER=htdemucs for the faster one;
                                                                   KEEP_STEMS=<dir> also saves its stems)
   python prep.py taught <dir-with-saved-teacher-stems>...       -> re-prep saved teacher stems
-Writes one .npz per song into data/: x (mix features), e (log energy per stem), and m / s (log
+Writes one .npz per song into data/: x (mix features), xh (detailed mix features), e (log energy per stem), and m / s (log
 mid / side energy per stem) so train.py can remix stems for augmentation."""
 import os, sys, numpy as np, soundfile as sf
-from common import SOURCES, HOP, features, stem_energies, band_centres
+from common import SOURCES, HOP, features, features_hi, stem_energies, band_centres
 
 OUT = os.path.join(os.path.dirname(__file__), 'data')
 
@@ -60,7 +60,7 @@ def save(name, stems, sr, teach=False):
     lg = lambda A: np.log10(A + 1e-9).astype(np.float16)
     path = os.path.join(OUT, name + '.npz')
     with open(path + '.part', 'wb') as fh:                  # atomic: a stopped run leaves no bad .npz
-        np.savez_compressed(fh, x=features(mix, sr), e=lg(E), m=lg(Em), s=lg(Es), sr=sr, teach=teach)
+        np.savez_compressed(fh, x=features(mix, sr), xh=features_hi(mix, sr).astype(np.float16), e=lg(E), m=lg(Em), s=lg(Es), sr=sr, teach=teach)
     os.replace(path + '.part', path)
     print(name, E.shape[-1], 'frames')
 
