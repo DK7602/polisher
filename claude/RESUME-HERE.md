@@ -33,14 +33,22 @@ Measured (tests), clean internals (double precision, oversampled nonlinearities,
 allocation), fresh-eyes review by a separate agent before shipping anything significant, heard
 (user test with MATCH), and later proven in blind loudness-matched shoot-outs vs Ozone 12 and others.
 
-## Stem EQ (requested 2026-10-01; UI slot added in v0.10.6, DSP not started)
-Module 02 in the chain (after Tonal EQ): AI source separation (vocals / drums / bass / other), per-stem
-level (about +/-6 dB) and tone, parts summed back. Panel and Learn are designed; shown as "Coming soon".
-Plan: (1) feasibility spike on the user's song - quality, CPU real-time factor, latency - with an
-MIT-licensed model (Demucs / HT-Demucs from Meta; Spleeter as the light fallback); blocked until the
-environment allows huggingface.co and dl.fbaipublicfiles.com. (2) Engine: ONNX Runtime in the plug-in,
-look-ahead buffer (reported latency), background thread, residual summing so untouched stems stay
-bit-close to the input. (3) UI + Learn + Auto-Master hooks (e.g. vocal level vs genre).
+## Stem EQ (requested 2026-10-01; UI slot in v0.10.6; model work in progress)
+Module 02 in the chain (after Tonal EQ): per-stem EQ for vocals / drums / bass / other.
+Spike done: HT-Demucs splits the user's song well (user: stems good, a little drum bleed in "other");
+too heavy for live use (needs ~8 s chunks, 2-4 cores). Decided design (see tools/stem/README.md):
+small band-share model (conv + GRU, ~250k params, ~40 ms latency, plain C++ inference, no ONNX)
+distilled from HT-Demucs. Oracle ceiling is good (+/-6 dB moves within about -20 dB of ideal).
+Training pipeline (tools/stem: common.py, prep.py, model.py, train.py) works; smoke test on the
+user's one song: loss 0.033 -> 0.013 in 600 steps.
+Data (user chose "Both"): (a) MUSDB18-HQ from HF dataset danjacobellis/musdb18HQ (27 GB parquet,
+non-commercial licence: fine while Polisher is free; keep an own-songs-only model if it is ever
+sold); (b) 20-40 of the user's own songs, teacher-labelled (clean licence). Network is now "Full"
+but only applies to NEW sessions (this one could not reach us.aws.cdn.hf.co).
+Next: download MUSDB (a subset first), prep, train ~20k steps, validate on held-out songs, try to
+cut drum bleed in "other" (htdemucs_ft teacher failed to download here: retry with Full network),
+then C++ engine + exact-passthrough tests, params/UI/Learn ("other" cuts touch drums a little),
+Auto-Master hooks, review agent, user listening test.
 
 ## Next, when the user asks (paused 2026-10-01: "good for now until bugs or add-ons")
 1. Pro EQ: mid/side per band, linear-phase mode, dynamic EQ bands (harsh 3-5 kHz, boomy lows).

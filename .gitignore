@@ -8,3 +8,6 @@ out/
 .DS_Store
 plugin/ui/juce/
 stems-preview/
+tools/stem/data/
+tools/stem/*.pt
+__pycache__/
