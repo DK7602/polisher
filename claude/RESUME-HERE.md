@@ -43,8 +43,11 @@ Training pipeline (tools/stem: common.py, prep.py, model.py, train.py) works; sm
 user's one song: loss 0.033 -> 0.013 in 600 steps.
 Data (user chose "Both"): (a) MUSDB18-HQ from HF dataset danjacobellis/musdb18HQ (27 GB parquet,
 non-commercial licence: fine while Polisher is free; keep an own-songs-only model if it is ever
-sold); (b) 20-40 of the user's own songs, teacher-labelled (clean licence). Network is now "Full"
-but only applies to NEW sessions (this one could not reach us.aws.cdn.hf.co).
+sold); (b) 20-40 of the user's own songs, teacher-labelled (clean licence).
+2026-10-01 (2nd session): network reaches us.aws.cdn.hf.co; htdemucs_ft downloads and is now the
+default teacher. tools/stem/musdb.py unpacks shards (one row = one stem file; songs can straddle
+shards; test split -> val_*). Subset in progress: train shards 14-17,21,22,27,28,30,32 + validation
+12,13,16 (~4.5 GB). Session data is ephemeral: re-download in a new session.
 Next: download MUSDB (a subset first), prep, train ~20k steps, validate on held-out songs, try to
 cut drum bleed in "other" (htdemucs_ft teacher failed to download here: retry with Full network),
 then C++ engine + exact-passthrough tests, params/UI/Learn ("other" cuts touch drums a little),

@@ -2,6 +2,7 @@
 band and frame.  Two kinds of input:
   python prep.py stems <dir-with-vocals/drums/bass/other.wav>... -> real stems (MUSDB-style)
   python prep.py teach <song.wav|mp3>...                       -> stems from the HT-Demucs teacher
+                                                                  (TEACHER=htdemucs for the faster one)
 Writes one .npz per song into data/."""
 import os, sys, numpy as np, soundfile as sf
 from common import SOURCES, features, band_energies
@@ -23,7 +24,8 @@ def teacher():
     from demucs.pretrained import get_model
     from demucs.apply import apply_model
     torch.set_num_threads(os.cpu_count())
-    m = get_model('htdemucs'); m.eval()
+    # htdemucs_ft (four fine-tuned models, ~4x slower) bleeds less drum into 'other' than htdemucs.
+    m = get_model(os.environ.get('TEACHER', 'htdemucs_ft')); m.eval()
     def run(path):
         import librosa
         wav, sr = librosa.load(path, sr=m.samplerate, mono=False)

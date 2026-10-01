@@ -13,7 +13,9 @@ Latency: NFFT 1024 + LOOKAHEAD 3 x HOP 256 = 1792 samples (about 40 ms at 44.1 k
 Setup (scratch venv): `pip install torch torchaudio demucs soundfile librosa lameenc`
 
 1. `python prep.py teach song1.wav song2.mp3 ...`   (user's songs, teacher-labelled, clean licence)
-   `python prep.py stems musdb/train/<song dir> ...` (MUSDB18-HQ: non-commercial research licence)
+   MUSDB18-HQ (non-commercial research licence): download parquet shards from HF dataset
+   `danjacobellis/musdb18HQ`, then `python musdb.py stems/ shard*.parquet` and
+   `python prep.py stems stems/train/<song dir> ...` (test-split songs come out as `val_*`).
    Prefix a file with `val_` to hold it out for validation.
 2. `python train.py 20000` -> stemnet.pt
 3. (next) export weights for dsp/src/StemEQ.cpp and check C++ against PyTorch frame by frame.
