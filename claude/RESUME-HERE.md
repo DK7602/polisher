@@ -48,6 +48,15 @@ sold); (b) 20-40 of the user's own songs, teacher-labelled (clean licence).
 default teacher. tools/stem/musdb.py unpacks shards (one row = one stem file; songs can straddle
 shards; test split -> val_*). Subset in progress: train shards 14-17,21,22,27,28,30,32 + validation
 12,13,16 (~4.5 GB). Session data is ephemeral: re-download in a new session.
+User uploaded 13 own songs (masters, trap/hip-hop; Gallas held out as val_; Jay + Mom have no drums).
+808 rule (prep.low_end_to_bass, teacher songs only): below 120 Hz, vocals/other -> bass, low hits
+>= 0.3 s and sustain under kicks -> bass, short hits stay drums. User checked Bubba by ear: correct.
+First real run (112 songs, 12 own at 35 % of draws, 20k steps, 87 min): evaluate.py (+/-6 dB move
+error vs ideal, dB, lower is better), 7 held-out songs avg: static EQ (true song-average shares)
+-14.5, model -14.4, oracle -20.4.  Gallas: static -13.8, model -15.1, oracle -18.6.  Training songs:
+static -13.7, model -15.6, oracle -17.9 -> the model memorises songs; it does not yet track the
+time-varying part on new songs.  val-musdb best at ~4k steps.  Next: remix augmentation (store
+per-stem mid/side band energies; random stem gains + stems from different songs), then re-check.
 Next: download MUSDB (a subset first), prep, train ~20k steps, validate on held-out songs, try to
 cut drum bleed in "other" (htdemucs_ft teacher failed to download here: retry with Full network),
 then C++ engine + exact-passthrough tests, params/UI/Learn ("other" cuts touch drums a little),
