@@ -1423,6 +1423,9 @@ function updateOutputMeter() {
   $("out-peak").textContent = hold.peak <= -99 ? `${MINUS}inf` : fmtNum(hold.peak, 1);
 }
 
+// After Auto-Master looked at a module and chose to leave it untouched, say so instead of "Neutral".
+const amKept = (module) => !!(amReport && amReport.ok && (amReport.reasons || []).some((x) => x.module === module) && moduleUnchanged(module));
+const neutralText = (module) => (amKept(module) ? "Checked \u00b7 kept" : "Neutral");
 const dynWorst = () => Math.min(0, ...[0, 1, 2, 3].map((k) => (dynRatioAt(k) > 1.005 ? M.dynGr[k] || 0 : 0)));
 function updateLiveReadouts() {
   const gr = M.gr;
@@ -1460,18 +1463,18 @@ function updateLiveReadouts() {
   const ri = $("read-img");
   const imgW = [P.imgLow, P.imgMid, P.imgHigh].map((x) => x.getScaledValue());
   const imgNeutral = imgW.every((v) => Math.abs(v - 100) < 0.5);
-  if (ri) ri.textContent = P.bypass.getValue() ? "Bypassed" : !P.imgOn.getValue() ? "Off" : imgNeutral ? "Neutral" : imgW.map((v) => Math.round(v)).join("/") + " %";
+  if (ri) ri.textContent = P.bypass.getValue() ? "Bypassed" : !P.imgOn.getValue() ? "Off" : imgNeutral ? neutralText("img") : imgW.map((v) => Math.round(v)).join("/") + " %";
   const cf = $("corr-fill");
   if (cf) {
     cf.style.width = (((clamp(M.corr, -1, 1) + 1) / 2) * 100).toFixed(0) + "%";
     $("corr-val").textContent = `${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`;
   }
   const rd = $("read-dyn");
-  if (rd) rd.textContent = P.bypass.getValue() ? "Bypassed" : !P.dynOn.getValue() ? "Off" : dynIsNeutral() ? "Neutral"
+  if (rd) rd.textContent = P.bypass.getValue() ? "Bypassed" : !P.dynOn.getValue() ? "Off" : dynIsNeutral() ? neutralText("dyn")
     : `${[0, 1, 2, 3].filter(dynBandActive).length} band${[0, 1, 2, 3].filter(dynBandActive).length > 1 ? "s" : ""} \u00b7 ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`;
   if (selected === "dyn") dynPicker.refresh();
   const rs = $("read-sat");
-  if (rs) rs.textContent = P.bypass.getValue() ? "Bypassed" : !P.satOn.getValue() ? "Off" : satIsNeutral() ? "Neutral" : `${SAT_MODES[satModeIndex()]} +${satDriveAt().toFixed(1)} dB`;
+  if (rs) rs.textContent = P.bypass.getValue() ? "Bypassed" : !P.satOn.getValue() ? "Off" : satIsNeutral() ? neutralText("sat") : `${SAT_MODES[satModeIndex()]} +${satDriveAt().toFixed(1)} dB`;
   const hf = $("harmmeter-fill");
   if (hf) {
     const active = P.satOn.getValue() && !satIsNeutral() && !P.bypass.getValue();
