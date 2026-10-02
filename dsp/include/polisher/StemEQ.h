@@ -26,7 +26,8 @@ struct StemEQParams
 
 /** Tone Steady: keeps the tonal balance steady as the song plays. Each band's short-term level is
     compared with the song's own long-term balance; where a passage drifts (muddier, harsher,
-    thinner) the band is nudged back, cuts up to Range, boosts up to half of it. */
+    thinner) the band is nudged back, cuts up to Range, boosts up to half of it. Above ~2.5 kHz it
+    reacts only to a top end that stays brighter for seconds, never to hats coming and going. */
 struct ToneSteadyParams
 {
     bool enabled = true;

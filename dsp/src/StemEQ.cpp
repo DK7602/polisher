@@ -365,7 +365,13 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
         e[static_cast<size_t> (band)] = sum;
     }
     static constexpr double kShortS[3] = { 1.0, 0.4, 0.15 };
-    const double aS = 1.0 - std::exp (-1.0 / (kShortS[std::clamp (tsParams.speed, 0, 2)] * framesPerSecond));
+    const double shortS = kShortS[std::clamp (tsParams.speed, 0, 2)];
+    const double aS = 1.0 - std::exp (-1.0 / (shortS * framesPerSecond));
+    // The top end (hats, cymbals, S's) comes and goes from beat to beat in most songs; short-term
+    // cuts there land on the loud moments and dull the song. Above ~2.5 kHz the short-term average
+    // stretches to 2 s, the dead band widens to 3 dB and cuts are capped like boosts, so only a
+    // real drift (a section that stays harsher) is touched. topW: 0 below 2.5 kHz, 1 above 5 kHz.
+    auto topW = [this] (size_t b) { return std::clamp ((bandCf[b] - 2500.0) / 2500.0, 0.0, 1.0); };
     // Both averages are of dB levels: a loud new passage moves the slow reference by its dB, not
     // by its (much bigger) energy, so the song's own balance stays put for ~10 s.
     double eTotal = 0.0;
@@ -383,12 +389,15 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
     }
     if (tsFrames > 0 || signal)
     {
-        const double aL = tsFrames < static_cast<long> (2.0 * framesPerSecond) ? aS : 1.0 - std::exp (-1.0 / (10.0 * framesPerSecond));
+        const bool warming = tsFrames < static_cast<long> (2.0 * framesPerSecond);   // both averages follow fast at first
+        const double aL = warming ? aS : 1.0 - std::exp (-1.0 / (10.0 * framesPerSecond));
         for (size_t b = 0; b < static_cast<size_t> (B); ++b)
         {
             const double db = std::max (10.0 * std::log10 (e[b] + 1.0e-20), totalDb - 90.0);   // empty bands: 90 dB under the frame
-            tsShort[b] += (db - tsShort[b]) * aS;
-            if (signal) tsLong[b] += (db - tsLong[b]) * aL;
+            const double aB = topW (b) > 0.0 && ! warming ? 1.0 - std::exp (-1.0 / ((shortS + (2.0 - shortS) * topW (b)) * framesPerSecond)) : aS;
+            if (! signal) continue;   // band balances freeze in silence (the slow top bands would lag after it)
+            tsShort[b] += (db - tsShort[b]) * aB;
+            tsLong[b] += (db - tsLong[b]) * aL;
         }
         tsLevelShort += (totalDb - tsLevelShort) * aS;
         if (signal) { tsLevelLong += (totalDb - tsLevelLong) * aL; ++tsFrames; }
@@ -418,8 +427,9 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
         {
             if (tsLong[b] < maxLong - 60.0) continue;
             const double x = d[b] - mean;
-            const double dead = x > 0.0 ? std::max (0.0, x - 1.0) : std::min (0.0, x + 1.0);   // 1 dB dead band
-            t[b] = std::clamp (tsAmount * dead, -range, range * 0.5);
+            const double db = 1.0 + 2.0 * topW (b);                                                // 1 dB dead band (3 dB up top)
+            const double dead = x > 0.0 ? std::max (0.0, x - db) : std::min (0.0, x + db);
+            t[b] = std::clamp (tsAmount * dead, -range * (1.0 - 0.5 * topW (b)), range * 0.5);
         }
     }
     const double aG = 1.0 - std::exp (-1.0 / (0.08 * framesPerSecond));

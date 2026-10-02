@@ -233,3 +233,72 @@ TEST_CASE ("Tone Steady learns nothing from silence (stopped transport, gaps)", 
     const auto st = measureSpectral (song, ts, {});
     CHECK (st.steadyMoveDb < 0.35);   // Auto-Master would leave it off
 }
+
+TEST_CASE ("Tone Steady leaves busy trap hats alone (no duller top)", "[spectral]")
+{
+    // Hats come and go every 8th note: short-term top-end bursts that are the song's own balance,
+    // not a drift. Tone Steady must not dull them (the user heard it on Addie).
+    const double sr = 48000.0;
+    AudioClip in = testsig::musicLike (sr, 14.0, -18.0, 5);
+    std::mt19937 rng (3);
+    std::normal_distribution<double> wn (0.0, 1.0);
+    // Trap hats: each beat picks a pattern (rest, 8ths, 16ths or a 32nd roll) and an accent, so the
+    // top end comes and goes from beat to beat as it does in a real song.
+    const double beat = 60.0 / 140.0;
+    std::vector<int> hitsPerBeat; std::vector<double> accent;
+    std::uniform_int_distribution<int> pick (0, 4);
+    std::uniform_real_distribution<double> acc (0.4, 1.0);
+    for (int b = 0; b < 40; ++b) { static const int kHits[5] = { 0, 2, 2, 4, 8 }; hitsPerBeat.push_back (kHits[pick (rng)]); accent.push_back (acc (rng)); }
+    for (auto& ch : in.channels)
+    {
+        double hp1 = 0.0, hpx = 0.0;
+        for (size_t i = 0; i < ch.size(); ++i)
+        {
+            const double t = static_cast<double> (i) / sr;
+            const auto b = static_cast<size_t> (t / beat) % hitsPerBeat.size();
+            const int n = hitsPerBeat[b];
+            const double step = beat / std::max (1, n);
+            const double env = n == 0 ? 0.0 : accent[b] * std::exp (-std::fmod (t, step) / 0.025);
+            const double x = wn (rng);
+            hp1 = 0.2 * (hp1 + x - hpx); hpx = x;                 // crude high-pass: hat-like hiss
+            ch[i] += static_cast<float> (0.25 * env * hp1);
+        }
+    }
+    auto topDb = [&] (const AudioClip& c, size_t off) {             // energy above ~5 kHz, 4 s ... 13 s
+        double y = 0.0, xp = 0.0, e = 0.0;
+        for (size_t i = 0; i < c.channels[0].size(); ++i)
+        {
+            const double x = c.channels[0][i];
+            y = 0.5 * (y + x - xp); xp = x;                       // one-pole high-pass
+            double z = y;
+            if (i >= static_cast<size_t> (4.0 * sr) + off && i < static_cast<size_t> (13.0 * sr) + off) e += z * z;
+        }
+        return 10.0 * std::log10 (e + 1e-30);
+    };
+    for (int speed = 0; speed < 3; ++speed)
+    {
+        ToneSteadyParams ts; ts.amount = 100.0; ts.rangeDb = 6.0; ts.speed = speed;
+        StemEQ s;
+        const auto out = runStage (in, ts, {}, &s);
+        const double change = topDb (out, static_cast<size_t> (s.latencySamples())) - topDb (in, 0);
+        UNSCOPED_INFO ("speed " << speed << ": top end change with busy hats " << change << " dB");
+        CHECK (std::abs (change) < 0.3);
+    }
+}
+
+TEST_CASE ("Tone Steady still pulls back a top end that stays harsher", "[spectral]")
+{
+    const double sr = 48000.0;
+    const auto in = noiseWithBandStep (sr, 12.0, 7.0, 6000.0, 12.0);    // from 7 s the 6 kHz area is up
+    ToneSteadyParams ts; ts.amount = 100.0; ts.rangeDb = 6.0;
+    StemEQ s;
+    const auto out = runStage (in, ts, {}, &s);
+    const auto L = static_cast<size_t> (s.latencySamples());
+    const double change = energyDb (out.channels[0], static_cast<size_t> (9.5 * sr) + L, static_cast<size_t> (11.5 * sr) + L)
+                        - energyDb (in.channels[0], static_cast<size_t> (9.5 * sr), static_cast<size_t> (11.5 * sr));
+    double largest = 0.0, at = 0.0;
+    s.takeToneSteadyMeter (largest, at);
+    UNSCOPED_INFO ("harsher section: level change " << change << " dB, largest move " << largest << " dB at " << at << " Hz");
+    CHECK (largest < -1.5);
+    CHECK ((at > 2500.0 && at < 10000.0));
+}
