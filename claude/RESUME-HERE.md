@@ -63,6 +63,11 @@ still about a best-possible static EQ.  Likely limit: input is only 64 band ener
 detail to tell a voice from a guitar in the same band).  Next: richer input (per-bin log spectrum,
 conv over frequency), keep 64 output bands.  Teacher stems of the user's 13 songs are saved
 (KEEP_STEMS) in the session scratchpad; MUSDB needs re-download (~5 min) + prep in a new session.
+Experiments 2026-10-02 (7 held-out avg / Gallas, dB; static -15.0 / -13.8, oracle -20.4 / -18.6):
+  coarse, no remix, 6k: -14.5 / -14.7    detailed input (192 bands), no remix, 6k: -14.2 / -14.9
+  coarse + remix, 6k: -15.1 / -14.9      bidirectional (whole-song context) + remix, 6k: -15.4 / -15.1
+  -> input detail, look-ahead and remix each move < 1 dB; all near a static EQ.  Next check: score
+  the HT-Demucs teacher itself with the same metric vs true MUSDB stems (realistic ceiling).
 Next: download MUSDB (a subset first), prep, train ~20k steps, validate on held-out songs, try to
 cut drum bleed in "other" (htdemucs_ft teacher failed to download here: retry with Full network),
 then C++ engine + exact-passthrough tests, params/UI/Learn ("other" cuts touch drums a little),
