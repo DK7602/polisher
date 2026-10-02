@@ -15,6 +15,30 @@ struct StemEQParams
     std::array<double, kStems> gainDb {};   // vocals, drums, bass, other: -12 ... +12 dB, 0 = untouched
 };
 
+/** Tone Steady: keeps the tonal balance steady as the song plays. Each band's short-term level is
+    compared with the song's own long-term balance; where a passage drifts (muddier, harsher,
+    thinner) the band is nudged back, cuts up to Range, boosts up to half of it. */
+struct ToneSteadyParams
+{
+    bool enabled = true;
+    double amount = 0.0;      // % of the drift corrected, 0 = off
+    double rangeDb = 3.0;     // largest cut (boosts: half), 1 ... 6 dB
+    int speed = 1;            // 0 slow (1 s), 1 medium (0.4 s), 2 fast (0.15 s)
+};
+
+enum class ResonanceFocus { full = 0, boxiness = 1, harshness = 2 };
+
+/** Resonance Tamer: finds narrow peaks standing out of the spectrum around them (ringing boxiness,
+    whistly or harsh tones) and cuts only those, only while they ring. */
+struct ResonanceParams
+{
+    bool enabled = true;
+    double amount = 0.0;          // %, 0 = off; 100 = each peak cut down to the threshold
+    double sensitivity = 50.0;    // %: higher catches smaller peaks (threshold 12 ... 3 dB above the surroundings)
+    double releaseMs = 80.0;      // how fast a cut lets go, 20 ... 300 ms
+    ResonanceFocus focus = ResonanceFocus::full;   // full 80 Hz-16 kHz, boxiness 150-800 Hz, harshness 1.5-8 kHz
+};
+
 /** The small model behind Stem EQ (tools/stem: conv over 7 frames + GRU + dense, distilled from
     HT-Demucs). For each STFT frame it gives the share of the energy in each of 64 ERB bands that
     belongs to vocals / drums / bass / other. Plain float maths, weights compiled in
@@ -38,7 +62,11 @@ private:
     int head = 0, filled = 0;
 };
 
-/** Stem EQ: turn vocals, drums, bass and "other" up or down inside a finished stereo mix.
+/** The spectral stage: Stem EQ, Tone Steady and Resonance Tamer share one STFT (so the two later
+    modules add no latency). Their gains multiply per bin and frame; Tone Steady and Resonance Tamer
+    listen to the spectrum after the Stem EQ move.
+
+    Stem EQ: turn vocals, drums, bass and "other" up or down inside a finished stereo mix.
 
     The mix is not split into stems. StemNet predicts, per frame and band, how the energy divides
     between the four; the four stem gains are mixed by those shares into one gain per band, spread
@@ -64,7 +92,14 @@ public:
     void reset() noexcept;
     void setParams (const StemEQParams& p) noexcept { params = p; }
     const StemEQParams& getParams() const noexcept { return params; }
+    void setToneSteady (const ToneSteadyParams& p) noexcept { tsParams = p; }
+    const ToneSteadyParams& getToneSteady() const noexcept { return tsParams; }
+    void setResonance (const ResonanceParams& p) noexcept { rtParams = p; }
+    const ResonanceParams& getResonance() const noexcept { return rtParams; }
     static bool isNeutral (const StemEQParams& p) noexcept;
+    static bool isNeutral (const ToneSteadyParams& p) noexcept { return ! p.enabled || p.amount < 0.5; }
+    static bool isNeutral (const ResonanceParams& p) noexcept { return ! p.enabled || p.amount < 0.5; }
+    bool allNeutral() const noexcept { return isNeutral (params) && isNeutral (tsParams) && isNeutral (rtParams); }
 
     static int fftSizeFor (double sampleRate) noexcept { return sampleRate < 80000.0 ? 1024 : 2048; }
     static int latencyFor (double sampleRate) noexcept { return fftSizeFor (sampleRate) * 7 / 4; }
@@ -100,6 +135,19 @@ public:
         stemEnergy.fill (0.0);
     }
 
+    /** Deepest Resonance Tamer cut (dB, <= 0) and its frequency since the last call. */
+    void takeResonanceMeter (double& deepestDb, double& atHz) noexcept
+    {
+        deepestDb = rtDeepest; atHz = rtDeepestHz;
+        rtDeepest = 0.0; rtDeepestHz = 0.0;
+    }
+    /** Largest Tone Steady correction (dB, signed) and its frequency since the last call. */
+    void takeToneSteadyMeter (double& largestDb, double& atHz) noexcept
+    {
+        largestDb = tsLargest; atHz = tsLargestHz;
+        tsLargest = 0.0; tsLargestHz = 0.0;
+    }
+
     /** Shares ([stem][band]) of the latest frame the model finished, and how many it has done. */
     const std::array<float, kStems * StemNet::kBands>& latestShares() const noexcept { return shares; }
     long framesAnalysed() const noexcept { return analysed; }
@@ -109,8 +157,12 @@ private:
     void fft (std::complex<double>* data, bool inverse) const noexcept;
     void spectrum (const double* ring, int start, std::complex<double>* out) const noexcept;
     void bandEnergies (const std::complex<double>* a, const std::complex<double>* b, double sign, float* out) const noexcept;
+    void resonanceGains (const std::complex<double>* L, const std::complex<double>* R) noexcept;
+    void toneSteadyGains (const std::complex<double>* L, const std::complex<double>* R) noexcept;
 
     StemEQParams params;
+    ToneSteadyParams tsParams;
+    ResonanceParams rtParams;
     double sampleRate = 48000.0;
     int channelCount = 2, fftSize = 1024, hopSize = 256, latency = 1792;
 
@@ -124,6 +176,13 @@ private:
     std::array<std::vector<std::complex<double>>, 2> spectra;   // 4 frames per channel (t-3 ... t)
     std::vector<std::complex<double>> work;
     std::vector<double> binGain, scratch;
+
+    // Resonance Tamer (per bin, dB) and Tone Steady (per band) state
+    std::vector<double> power, levelDb, prefix, rtCut, rtLin, rtTarget, rtSmooth, tsBin, bandCf;
+    std::array<double, 64> tsShort {}, tsLong {}, tsGain {}, tsTarget {};
+    double rtAmount = 0.0, tsAmount = 0.0, framesPerSecond = 187.5, tsLevelShort = 0.0, tsLevelLong = 0.0;
+    long tsFrames = 0;
+    double rtDeepest = 0.0, rtDeepestHz = 0.0, tsLargest = 0.0, tsLargestHz = 0.0;
     int inPos = 0, queuePos = 0;
     long frameCount = 0, analysed = 0;
 

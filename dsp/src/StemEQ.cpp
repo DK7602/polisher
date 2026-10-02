@@ -142,6 +142,7 @@ void StemEQ::prepare (double newSampleRate, int numChannels)
     std::array<double, B> cf {};
     for (int b = 0; b < B; ++b)
         cf[static_cast<size_t> (b)] = (std::pow (10.0, (e0 + (e1 - e0) * b / (B - 1)) / 21.4) - 1.0) / 0.00437;
+    bandCf.assign (cf.begin(), cf.end());
     bandW.assign (static_cast<size_t> (B * bins), 0.0);
     for (int k = 0; k < bins; ++k)
     {
@@ -178,6 +179,10 @@ void StemEQ::prepare (double newSampleRate, int numChannels)
     }
     work.assign (n, {});
     binGain.assign (static_cast<size_t> (bins), 1.0);
+    for (auto* v : { &power, &levelDb, &rtCut, &rtTarget, &rtSmooth, &tsBin }) v->assign (static_cast<size_t> (bins), 0.0);
+    rtLin.assign (static_cast<size_t> (bins), 1.0);
+    prefix.assign (static_cast<size_t> (bins + 1), 0.0);
+    framesPerSecond = sampleRate / hopSize;
     scratch.assign (n, 0.0);
     for (auto& d : dry) d.clear();
     for (int c = 0; c < channelCount; ++c) dry[static_cast<size_t> (c)].assign (static_cast<size_t> (latency), 0.0);
@@ -198,11 +203,19 @@ void StemEQ::reset() noexcept
     stemEnergy.fill (0.0);
     inPos = queuePos = dryPos = 0;
     frameCount = analysed = 0;
+    for (auto* v : { &rtCut, &rtTarget, &rtSmooth, &tsBin }) std::fill (v->begin(), v->end(), 0.0);
+    std::fill (rtLin.begin(), rtLin.end(), 1.0);
+    tsShort.fill (0.0); tsLong.fill (0.0); tsGain.fill (0.0); tsTarget.fill (0.0);
+    tsFrames = 0;
+    rtDeepest = rtDeepestHz = tsLargest = tsLargestHz = 0.0;
     // Start fully in the set state.
-    running = ! isNeutral (params);
+    running = ! allNeutral();
     mix = running ? 1.0 : 0.0;
+    const bool stemOn = ! isNeutral (params);
     for (int s = 0; s < kStems; ++s)
-        gain[static_cast<size_t> (s)] = running ? std::pow (10.0, std::clamp (params.gainDb[static_cast<size_t> (s)], -kMaxGainDb, kMaxGainDb) / 20.0) : 1.0;
+        gain[static_cast<size_t> (s)] = stemOn ? std::pow (10.0, std::clamp (params.gainDb[static_cast<size_t> (s)], -kMaxGainDb, kMaxGainDb) / 20.0) : 1.0;
+    rtAmount = isNeutral (rtParams) ? 0.0 : std::clamp (rtParams.amount, 0.0, 100.0) / 100.0;
+    tsAmount = isNeutral (tsParams) ? 0.0 : std::clamp (tsParams.amount, 0.0, 100.0) / 100.0;
 }
 
 void StemEQ::fft (std::complex<double>* d, bool inverse) const noexcept
@@ -255,6 +268,158 @@ void StemEQ::computeFeatures (const double* left, const double* right, float* fe
     bandEnergies (L, R, -1.0, features + StemNet::kBands);
 }
 
+namespace {
+// 1 inside [lo, hi] Hz, fading to 0 over half an octave outside.
+inline double focusWeight (double f, double lo, double hi) noexcept
+{
+    if (f <= 0.0) return 0.0;
+    return std::clamp (1.0 + 2.0 * std::log2 (f / lo), 0.0, 1.0) * std::clamp (1.0 + 2.0 * std::log2 (hi / f), 0.0, 1.0);
+}
+}
+
+void StemEQ::resonanceGains (const std::complex<double>* L, const std::complex<double>* R) noexcept
+{
+    const int half = fftSize / 2, bins = half + 1;
+    const double binHz = sampleRate / fftSize;
+    rtAmount += ((isNeutral (rtParams) ? 0.0 : std::clamp (rtParams.amount, 0.0, 100.0) / 100.0) - rtAmount) * gainCoeff;
+    const double thr = 12.0 - 9.0 * std::clamp (rtParams.sensitivity, 0.0, 100.0) / 100.0;
+    // Detect on power smoothed over ~40 ms: a resonance rings on, random flicker averages out.
+    const double aP = 1.0 - std::exp (-hopSize / (0.040 * sampleRate));
+    double pmax = 0.0;
+    for (int k = 0; k < bins; ++k)
+    {
+        const auto K = static_cast<size_t> (k);
+        const double g = binGain[K];
+        rtSmooth[K] += ((std::norm (L[k]) + std::norm (R[k])) * g * g - rtSmooth[K]) * aP;
+        power[K] = rtSmooth[K];
+        pmax = std::max (pmax, power[K]);
+        levelDb[K] = 10.0 * std::log10 (power[K] + 1.0e-20);
+        prefix[K + 1] = prefix[K] + power[K];
+    }
+    const double floorDb = 10.0 * std::log10 (pmax + 1.0e-20) - 60.0;
+    double lo = 80.0, hi = 16000.0;
+    if (rtParams.focus == ResonanceFocus::boxiness) { lo = 150.0; hi = 800.0; }
+    else if (rtParams.focus == ResonanceFocus::harshness) { lo = 1500.0; hi = 8000.0; }
+
+    // A peak is measured against the average power around it (about +/- 0.3 octave, itself left out).
+    for (int k = 0; k < bins; ++k)
+    {
+        const auto K = static_cast<size_t> (k);
+        rtTarget[K] = 0.0;
+        if (k == 0 || k == half || levelDb[K] < floorDb) continue;
+        const int w = std::max (4, static_cast<int> (k * 0.2));
+        const int a = std::max (1, k - w), b = std::min (half - 1, k + w);
+        if (b - a < 2) continue;
+        const double env = 10.0 * std::log10 ((prefix[static_cast<size_t> (b + 1)] - prefix[static_cast<size_t> (a)] - power[K]) / (b - a) + 1.0e-20);
+        const double excess = levelDb[K] - env - thr;
+        if (excess > 0.0)
+            rtTarget[K] = -std::min (12.0, rtAmount * excess * focusWeight (k * binHz, lo, hi));
+    }
+    // A ringing tone covers its neighbours too (the window's main lobe): cut them alike.
+    const double attack = 1.0 - std::exp (-hopSize / (0.003 * sampleRate));
+    const double release = 1.0 - std::exp (-hopSize / (std::clamp (rtParams.releaseMs, 20.0, 300.0) * 0.001 * sampleRate));
+    for (int k = 0; k < bins; ++k)
+    {
+        const auto K = static_cast<size_t> (k);
+        double t = rtTarget[K];
+        if (k > 0) t = std::min (t, rtTarget[K - 1]);
+        if (k < half) t = std::min (t, rtTarget[K + 1]);
+        double& g = rtCut[K];
+        g += (t - g) * (t < g ? attack : release);
+        if (g > -1.0e-6) g = 0.0;
+        rtLin[K] = g == 0.0 ? 1.0 : std::exp (g * (std::numbers::ln10 / 20.0));
+        if (g < rtDeepest) { rtDeepest = g; rtDeepestHz = k * binHz; }
+    }
+}
+
+void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<double>* R) noexcept
+{
+    constexpr int B = StemNet::kBands;
+    const int bins = fftSize / 2 + 1;
+    tsAmount += ((isNeutral (tsParams) ? 0.0 : std::clamp (tsParams.amount, 0.0, 100.0) / 100.0) - tsAmount) * gainCoeff;
+
+    // Band energies after the Stem EQ move and the resonance cuts.
+    std::array<double, B> e {};
+    for (int band = 0; band < B; ++band)
+    {
+        const double* w = bandW.data() + band * bins;
+        double sum = 0.0;
+        for (int k = bandLo[static_cast<size_t> (band)]; k < bandHi[static_cast<size_t> (band)]; ++k)
+        {
+            const auto K = static_cast<size_t> (k);
+            const double g = binGain[K] * rtLin[K];
+            sum += w[k] * (std::norm (L[k]) + std::norm (R[k])) * g * g;
+        }
+        e[static_cast<size_t> (band)] = sum;
+    }
+    static constexpr double kShortS[3] = { 1.0, 0.4, 0.15 };
+    const double aS = 1.0 - std::exp (-1.0 / (kShortS[std::clamp (tsParams.speed, 0, 2)] * framesPerSecond));
+    // Both averages are of dB levels: a loud new passage moves the slow reference by its dB, not
+    // by its (much bigger) energy, so the song's own balance stays put for ~10 s.
+    const double aL = tsFrames < static_cast<long> (2.0 * framesPerSecond) ? aS : 1.0 - std::exp (-1.0 / (10.0 * framesPerSecond));
+    double eTotal = 0.0;
+    for (size_t b = 0; b < static_cast<size_t> (B); ++b)
+    {
+        const double db = 10.0 * std::log10 (e[b] + 1.0e-20);
+        if (tsFrames == 0) tsShort[b] = tsLong[b] = db;
+        tsShort[b] += (db - tsShort[b]) * aS;
+        tsLong[b] += (db - tsLong[b]) * aL;
+        eTotal += e[b];
+    }
+    // Overall short / long level for the quiet-passage gate (dB, same averaging).
+    const double totalDb = 10.0 * std::log10 (eTotal + 1.0e-20);
+    if (tsFrames == 0) tsLevelShort = tsLevelLong = totalDb;
+    tsLevelShort += (totalDb - tsLevelShort) * aS;
+    tsLevelLong += (totalDb - tsLevelLong) * aL;
+    double maxLong = -400.0;
+    for (double v : tsLong) maxLong = std::max (maxLong, v);
+    ++tsFrames;
+
+    // Drift of each band from the song's own balance, with the overall level change taken out.
+    // Quiet passages (more than 15 dB under the song) are left alone: a breakdown is not a drift.
+    std::array<double, B> t {};
+    const bool active = tsAmount > 1.0e-4 && tsLevelLong > -150.0 && tsLevelShort > tsLevelLong - 15.0
+                        && tsFrames > static_cast<long> (framesPerSecond);
+    if (active)
+    {
+        std::array<double, B> d {};
+        double wsum = 0.0, mean = 0.0;
+        for (size_t b = 0; b < static_cast<size_t> (B); ++b)
+        {
+            if (tsLong[b] < maxLong - 60.0) continue;
+            d[b] = tsLong[b] - tsShort[b];
+            const double w = std::pow (10.0, (tsLong[b] - maxLong) / 20.0);   // louder bands weigh more
+            mean += w * d[b]; wsum += w;
+        }
+        mean = wsum > 0.0 ? mean / wsum : 0.0;
+        const double range = std::clamp (tsParams.rangeDb, 1.0, 6.0);
+        for (size_t b = 0; b < static_cast<size_t> (B); ++b)
+        {
+            if (tsLong[b] < maxLong - 60.0) continue;
+            const double x = d[b] - mean;
+            const double dead = x > 0.0 ? std::max (0.0, x - 1.0) : std::min (0.0, x + 1.0);   // 1 dB dead band
+            t[b] = std::clamp (tsAmount * dead, -range, range * 0.5);
+        }
+    }
+    const double aG = 1.0 - std::exp (-1.0 / (0.08 * framesPerSecond));
+    for (size_t b = 0; b < static_cast<size_t> (B); ++b)
+    {
+        const double sm = (t[b > 0 ? b - 1 : b] + 2.0 * t[b] + t[b + 1 < static_cast<size_t> (B) ? b + 1 : b]) / 4.0;
+        tsGain[b] += (sm - tsGain[b]) * aG;
+        if (std::abs (tsGain[b]) < 1.0e-6) tsGain[b] = 0.0;
+        if (std::abs (tsGain[b]) > std::abs (tsLargest)) { tsLargest = tsGain[b]; tsLargestHz = bandCf[b]; }
+    }
+    std::fill (tsBin.begin(), tsBin.end(), 0.0);
+    for (int band = 0; band < B; ++band)
+    {
+        const double g = tsGain[static_cast<size_t> (band)];
+        if (g == 0.0) continue;
+        const double* w = bandW.data() + band * bins;
+        for (int k = bandLo[static_cast<size_t> (band)]; k < bandHi[static_cast<size_t> (band)]; ++k)
+            tsBin[static_cast<size_t> (k)] += w[k] * g;
+    }
+}
+
 void StemEQ::hop() noexcept
 {
     const int N = fftSize, half = N / 2, bins = half + 1;
@@ -295,10 +460,11 @@ void StemEQ::hop() noexcept
     }
 
     std::array<double, kStems> target {};
+    const bool stemOn = ! isNeutral (params);
     for (int s = 0; s < kStems; ++s)
     {
         const auto i = static_cast<size_t> (s);
-        target[i] = running ? std::pow (10.0, std::clamp (params.gainDb[i], -kMaxGainDb, kMaxGainDb) / 20.0) : 1.0;
+        target[i] = stemOn ? std::pow (10.0, std::clamp (params.gainDb[i], -kMaxGainDb, kMaxGainDb) / 20.0) : 1.0;
         gain[i] += (target[i] - gain[i]) * gainCoeff;
     }
 
@@ -321,6 +487,16 @@ void StemEQ::hop() noexcept
         const auto old = static_cast<size_t> ((frameCount - StemNet::kLookahead) % 4) * static_cast<size_t> (N);
         const auto* Lo = spectra[0].data() + old;
         const auto* Ro = spectra[1].data() + old;
+        // Resonance Tamer and Tone Steady listen to this frame after the Stem EQ move; their dB
+        // gains multiply onto it.
+        resonanceGains (Lo, Ro);
+        toneSteadyGains (Lo, Ro);
+        for (int k = 0; k < bins; ++k)
+        {
+            const auto K = static_cast<size_t> (k);
+            binGain[K] *= rtLin[K];
+            if (tsBin[K] != 0.0) binGain[K] *= std::exp (tsBin[K] * (std::numbers::ln10 / 20.0));
+        }
         for (int k = 0; k < N; ++k)
         {
             const double g = binGain[static_cast<size_t> (k <= half ? k : N - k)];
@@ -355,7 +531,7 @@ void StemEQ::processFrame (double* frame, int numChannels) noexcept
     inRing[0][ip] = frame[0];
     inRing[1][ip] = nch > 1 ? frame[1] : frame[0];
 
-    running = ! isNeutral (params);
+    running = ! allNeutral();
     mix += ((running ? 1.0 : 0.0) - mix) * mixCoeff;
     if (! running && mix < 1.0e-6) mix = 0.0;
 

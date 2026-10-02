@@ -101,16 +101,19 @@ AudioClip renderBass (const AudioClip& clip, const BassParams& params)
     return out;
 }
 
-AudioClip renderStemEq (const AudioClip& input, const StemEQParams& params)
+AudioClip renderSpectral (const AudioClip& input, const StemEQParams& params, const ToneSteadyParams& steady,
+                          const ResonanceParams& resonance)
 {
     AudioClip out = input;
     const int nch = out.numChannels(), n = out.numSamples();
-    if (nch == 0 || StemEQ::isNeutral (params))
+    if (nch == 0 || (StemEQ::isNeutral (params) && StemEQ::isNeutral (steady) && StemEQ::isNeutral (resonance)))
         return out;
     // Run the tail through too, then drop the latency so the result lines up with the input.
     auto stem = std::make_unique<StemEQ>();
     stem->prepare (out.sampleRate, nch);
     stem->setParams (params);
+    stem->setToneSteady (steady);
+    stem->setResonance (resonance);
     stem->reset();
     const int lat = stem->latencySamples();
     std::vector<double> frame (static_cast<size_t> (nch));
@@ -155,7 +158,7 @@ std::array<double, kStems> measureStemLevels (const AudioClip& clip)
 
 AudioClip renderPreDrive (const AudioClip& input, const MasterChainParams& params)
 {
-    AudioClip out = renderBass (renderStemEq (renderEq (input, params.eq), params.stem), params.bass);
+    AudioClip out = renderBass (renderSpectral (renderEq (input, params.eq), params.stem, params.steady, params.resonance), params.bass);
     const int nch = out.numChannels(), n = out.numSamples();
     if (nch == 0)
         return out;

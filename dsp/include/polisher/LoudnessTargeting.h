@@ -41,8 +41,11 @@ AudioClip renderLimited (const AudioClip& clip, const LimiterParams& params);
 /** Renders a clip through the Tonal EQ offline (zero latency). */
 AudioClip renderEq (const AudioClip& clip, const TonalEQParams& params);
 
-/** Renders a clip through Stem EQ offline, latency compensated (a copy when neutral). */
-AudioClip renderStemEq (const AudioClip& clip, const StemEQParams& params);
+/** Renders a clip through the spectral stage (Stem EQ, Tone Steady, Resonance Tamer) offline,
+    latency compensated (a copy when all three are neutral). */
+AudioClip renderSpectral (const AudioClip& clip, const StemEQParams& stem, const ToneSteadyParams& steady,
+                          const ResonanceParams& resonance);
+inline AudioClip renderStemEq (const AudioClip& clip, const StemEQParams& params) { return renderSpectral (clip, params, {}, {}); }
 
 /** How loud each stem (vocals, drums, bass, other) is in a clip as Stem EQ's model hears it, in dB
     relative to the whole clip (-100 when it hears none of it). */
@@ -51,12 +54,14 @@ std::array<double, kStems> measureStemLevels (const AudioClip& clip);
 /** Renders a clip through Bass Control offline (zero latency). */
 AudioClip renderBass (const AudioClip& clip, const BassParams& params);
 
-/** The mastering chain as the plug-in runs it: Tonal EQ -> Stem EQ -> Bass Control -> Dynamics ->
+/** The mastering chain as the plug-in runs it: Tonal EQ -> Stem EQ / Tone Steady / Resonance Tamer -> Bass Control -> Dynamics ->
     Stereo Imager -> Saturation -> drive -> Soft Clipper -> Maximizer. */
 struct MasterChainParams
 {
     TonalEQParams eq;           // flat by default
     StemEQParams stem;          // 0 dB everywhere by default (pass-through, latency kept)
+    ToneSteadyParams steady;    // Amount 0 by default (pass-through)
+    ResonanceParams resonance;  // Amount 0 by default (pass-through)
     BassParams bass;            // all off by default
     DynamicsParams dynamics;    // 1:1 in every band by default (pass-through)
     ImagerParams imager;        // 100 % everywhere by default
