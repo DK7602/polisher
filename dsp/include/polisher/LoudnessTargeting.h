@@ -8,6 +8,7 @@
 #include "StereoImager.h"
 #include "TonalEQ.h"
 #include "TruePeakLimiter.h"
+#include "Unlimiter.h"
 
 #include <array>
 #include <vector>
@@ -57,10 +58,14 @@ SpectralStats measureSpectral (const AudioClip& clip, const ToneSteadyParams& st
 /** Renders a clip through Bass Control offline (zero latency). */
 AudioClip renderBass (const AudioClip& clip, const BassParams& params);
 
-/** The mastering chain as the plug-in runs it: Tonal EQ -> Stem EQ / Tone Steady / Resonance Tamer -> Bass Control -> Dynamics ->
+/** Renders a clip through the Unlimiter alone, latency compensated (a copy when neutral). */
+AudioClip renderUnlimiter (const AudioClip& clip, const UnlimiterParams& params);
+
+/** The mastering chain as the plug-in runs it: Unlimiter -> Tonal EQ -> Stem EQ / Tone Steady / Resonance Tamer -> Bass Control -> Dynamics ->
     Stereo Imager -> Saturation -> drive -> Soft Clipper -> Maximizer. */
 struct MasterChainParams
 {
+    UnlimiterParams unlimiter;  // Amount 0 by default (pass-through)
     TonalEQParams eq;           // flat by default
     StemEQParams stem;          // 0 dB everywhere by default (pass-through, latency kept)
     ToneSteadyParams steady;    // Amount 0 by default (pass-through)
@@ -74,7 +79,7 @@ struct MasterChainParams
     LimiterParams limiter;      // limiter.driveDb is ignored here; driveDb above is used
 };
 
-/** Renders a clip through everything before the drive (EQ -> Stem EQ -> Bass -> Dynamics -> Imager
+/** Renders a clip through everything before the drive (Unlimiter -> EQ -> Stem EQ -> Bass -> Dynamics -> Imager
     -> Saturation), latency compensated. */
 AudioClip renderPreDrive (const AudioClip& clip, const MasterChainParams& params);
 

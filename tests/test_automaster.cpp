@@ -279,3 +279,20 @@ TEST_CASE ("Auto-Master widens a narrow mix's highs but leaves a wide one alone"
     CHECK (m.chain.imager.highWidth == 100.0);
     CHECK (m.chain.imager.midWidth == 100.0);
 }
+
+TEST_CASE ("Auto-Master turns the Unlimiter on only for squashed audio", "[automaster]")
+{
+    const auto open = testsig::musicLike (48000.0, 12.0, -14.0, 4);
+    const auto r = autoMaster (open, {});
+    REQUIRE (r.ok);
+    UNSCOPED_INFO ("open squash " << Unlimiter::measureSquashDb (open.channels, 48000.0));
+    CHECK (r.chain.unlimiter.amount == 0.0);
+    CHECK (std::any_of (r.reasons.begin(), r.reasons.end(), [] (const AutoMasterReason& x) { return x.module == "ul"; }));
+
+    LimiterParams lp; lp.driveDb = 16.0; lp.ceilingDbtp = -0.3; lp.releaseMs = 30.0; lp.adaptiveRelease = false;
+    const auto wall = renderLimited (testsig::musicLike (48000.0, 12.0, -6.0, 4), lp);
+    const auto w = autoMaster (wall, {});
+    REQUIRE (w.ok);
+    CHECK (w.chain.unlimiter.amount == 75.0);
+    CHECK (w.output.truePeakDbtp <= w.chain.limiter.ceilingDbtp + 0.05);
+}

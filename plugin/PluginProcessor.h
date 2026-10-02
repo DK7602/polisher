@@ -12,6 +12,7 @@
 #include "polisher/MultibandDynamics.h"
 #include "polisher/Saturation.h"
 #include "polisher/StemEQ.h"
+#include "polisher/Unlimiter.h"
 #include "ModuleParams.h"
 #include "SpectrumTap.h"
 #include "AutoMasterController.h"
@@ -19,7 +20,7 @@
 #include <array>
 #include <atomic>
 
-/** Polisher: Tonal EQ -> Stem EQ -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
+/** Polisher: Unlimiter -> Tonal EQ -> Stem EQ -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
     -> Maximizer (true-peak limiter), plus EBU R128
     meters, spectrum taps and Auto-Master (which listens to the incoming mix and sets the chain). */
 class PolisherAudioProcessor final : public juce::AudioProcessor
@@ -81,6 +82,8 @@ public:
         std::atomic<float> satResidual { 0.0f }, satSignal { 0.0f };   // Saturation energies since read (harmonics, signal)
         std::array<std::atomic<float>, polisher::kStems> stemEnergy {};
         std::atomic<float> rtCut { 0.0f }, rtHz { 0.0f };   // deepest Resonance Tamer cut since read (dB, <= 0) and where
+        std::atomic<float> ulBoost { 0.0f };               // largest Unlimiter lift since read (dB, >= 0)
+        std::atomic<float> ulSquash { 0.0f };              // how squashed the incoming audio is (dB, 0 = not measured yet)
         std::atomic<float> tsDb { 0.0f }, tsHz { 0.0f };    // largest Tone Steady correction since read (dB, signed) and where   // energy the Stem EQ model credited to each stem since read
     };
     Meters meters;
@@ -115,6 +118,7 @@ private:
     double targetDriveGain() const;
     void publishMeters();
 
+    polisher::Unlimiter unlimiter;
     polisher::TonalEQ eq;
     polisher::StemEQ stemEq;
     polisher::BassControl bass;

@@ -196,6 +196,8 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     const int channels = juce::jmax (1, getTotalNumOutputChannels());
     limiter.prepare (sampleRate, channels);
     clipper.prepare (channels);
+    unlimiter.setParams (moduleParams.unlimiter (bypassParam->load() > 0.5f));
+    unlimiter.prepare (sampleRate, channels);
     eq.prepare (sampleRate, channels);
     stemEq.setParams (moduleParams.stem (bypassParam->load() > 0.5f));   // so reset() starts in the saved state
     stemEq.setToneSteady (moduleParams.steady (bypassParam->load() > 0.5f));
@@ -212,9 +214,9 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     inputMeter.prepare (sampleRate, channels);
     updateLimiterParams();
     currentDriveGain = targetDriveGain();
-    // Constant latency whatever the settings: Stem EQ look-ahead + saturation + clipper (all
+    // Constant latency whatever the settings: Unlimiter + Stem EQ look-ahead + saturation + clipper (all
     // oversampling modes) + limiter look-ahead.
-    setLatencySamples (stemEq.latencySamples() + polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples()
+    setLatencySamples (unlimiter.latencySamples() + stemEq.latencySamples() + polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples()
                        + limiter.latencySamples());
 }
 
@@ -269,6 +271,7 @@ void PolisherAudioProcessor::updateLimiterParams()
     ip.highWidth = imgHighParam->load();
     imager.setParams (ip);
 
+    unlimiter.setParams (moduleParams.unlimiter (p.bypassed));
     stemEq.setParams (moduleParams.stem (p.bypassed));
     stemEq.setToneSteady (moduleParams.steady (p.bypassed));
     stemEq.setResonance (moduleParams.resonance (p.bypassed));
@@ -333,6 +336,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     inputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     autoMaster.capture (buffer);   // the untouched mix, while Auto-Master is listening
 
+    unlimiter.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     eq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     stemEq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     bass.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
@@ -423,6 +427,10 @@ void PolisherAudioProcessor::publishMeters()
         if (d < slot.load())
             slot.store (d);
     }
+    const float lift = static_cast<float> (unlimiter.takeMaxBoostDb());
+    if (lift > meters.ulBoost.load())
+        meters.ulBoost.store (lift);
+    meters.ulSquash.store (static_cast<float> (unlimiter.squashDb()));
     double rtDb = 0.0, rtHz = 0.0, tsDb = 0.0, tsHz = 0.0;
     stemEq.takeResonanceMeter (rtDb, rtHz);
     if (rtDb < meters.rtCut.load()) { meters.rtCut.store (static_cast<float> (rtDb)); meters.rtHz.store (static_cast<float> (rtHz)); }

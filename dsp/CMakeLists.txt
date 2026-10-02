@@ -11,7 +11,8 @@ add_library(polisher_dsp STATIC
     src/Saturation.cpp
     src/AutoMaster.cpp
     src/LoudnessTargeting.cpp
-    src/StemEQ.cpp)
+    src/StemEQ.cpp
+    src/Unlimiter.cpp)
 
 target_include_directories(polisher_dsp PUBLIC include)
 target_compile_features(polisher_dsp PUBLIC cxx_std_20)

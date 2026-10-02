@@ -101,6 +101,30 @@ AudioClip renderBass (const AudioClip& clip, const BassParams& params)
     return out;
 }
 
+AudioClip renderUnlimiter (const AudioClip& clip, const UnlimiterParams& params)
+{
+    AudioClip out = clip;
+    const int nch = clip.numChannels(), n = clip.numSamples();
+    if (Unlimiter::isNeutral (params) || nch == 0)
+        return out;
+    Unlimiter u;
+    u.prepare (clip.sampleRate, nch);
+    u.setParams (params);
+    u.reset();
+    const int lat = u.latencySamples();
+    std::vector<double> frame (static_cast<size_t> (nch));
+    for (int i = 0; i < n + lat; ++i)
+    {
+        for (int c = 0; c < nch; ++c)
+            frame[static_cast<size_t> (c)] = i < n ? clip.channels[static_cast<size_t> (c)][static_cast<size_t> (i)] : 0.0;
+        u.processFrame (frame.data(), nch);
+        if (i >= lat)
+            for (int c = 0; c < nch; ++c)
+                out.channels[static_cast<size_t> (c)][static_cast<size_t> (i - lat)] = static_cast<float> (frame[static_cast<size_t> (c)]);
+    }
+    return out;
+}
+
 AudioClip renderSpectral (const AudioClip& input, const StemEQParams& params, const ToneSteadyParams& steady,
                           const ResonanceParams& resonance)
 {
@@ -178,7 +202,7 @@ SpectralStats measureSpectral (const AudioClip& clip, const ToneSteadyParams& st
 
 AudioClip renderPreDrive (const AudioClip& input, const MasterChainParams& params)
 {
-    AudioClip out = renderBass (renderSpectral (renderEq (input, params.eq), params.stem, params.steady, params.resonance), params.bass);
+    AudioClip out = renderBass (renderSpectral (renderEq (renderUnlimiter (input, params.unlimiter), params.eq), params.stem, params.steady, params.resonance), params.bass);
     const int nch = out.numChannels(), n = out.numSamples();
     if (nch == 0)
         return out;

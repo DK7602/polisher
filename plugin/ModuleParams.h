@@ -6,10 +6,11 @@
 #include "polisher/Saturation.h"
 #include "polisher/StemEQ.h"
 #include "polisher/StereoImager.h"
+#include "polisher/Unlimiter.h"
 
 #include <array>
 
-/** Parameters of the Stem EQ, Dynamics and Saturation modules: IDs, layout and a reader that turns
+/** Parameters of the Unlimiter, Stem EQ, Dynamics and Saturation modules: IDs, layout and a reader that turns
     the current values into engine params. Shared by the processor, Auto-Master and the web editor. */
 namespace ModuleParams
 {
@@ -23,7 +24,7 @@ namespace ModuleParams
     {
         juce::StringArray ids;
         for (auto* id : stemIds) ids.add (id);
-        for (const char* id : { "tsAmount", "tsRange", "rtAmount", "rtSens", "rtRelease" }) ids.add (id);
+        for (const char* id : { "tsAmount", "tsRange", "rtAmount", "rtSens", "rtRelease", "ulAmount", "ulLength" }) ids.add (id);
         for (int x = 0; x < polisher::kDynBands - 1; ++x) ids.add (band ("dynX", x));
         for (const char* p : { "dynThr", "dynRatio", "dynAtk", "dynRel", "dynGain" })
             for (int b = 0; b < polisher::kDynBands; ++b) ids.add (band (p, b));
@@ -31,8 +32,8 @@ namespace ModuleParams
         ids.add ("satMix");
         return ids;
     }
-    inline juce::StringArray toggleIds() { return { "stemOn", "tsOn", "rtOn", "dynOn", "dynAdaptive", "satOn" }; }
-    inline juce::StringArray comboIds()  { return { "satMode", "tsSpeed", "rtFocus" }; }
+    inline juce::StringArray toggleIds() { return { "ulOn", "stemOn", "tsOn", "rtOn", "dynOn", "dynAdaptive", "satOn" }; }
+    inline juce::StringArray comboIds()  { return { "satMode", "tsSpeed", "rtFocus", "ulFocus" }; }
 
     inline void addTo (juce::AudioProcessorValueTreeState::ParameterLayout& layout)
     {
@@ -40,6 +41,15 @@ namespace ModuleParams
         auto dbText = [] (float v, int) { return String (v, 1) + " dB"; };
         auto msText = [] (float v, int) { return v < 10.0f ? String (v, 1) + " ms" : String (roundToInt (v)) + " ms"; };
         auto hzText = [] (float v, int) { return v >= 1000.0f ? String (v / 1000.0f, 2) + " kHz" : String (roundToInt (v)) + " Hz"; };
+
+        // Unlimiter (first in the chain): Amount 0 = untouched. Version hint 3.
+        auto pctText0 = [] (float v, int) { return String (roundToInt (v)) + " %"; };
+        layout.add (std::make_unique<AudioParameterBool> (ParameterID { "ulOn", 3 }, "Unlimiter On", true));
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "ulAmount", 3 }, "Unlimiter Amount", NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f,
+                                                           AudioParameterFloatAttributes().withLabel ("%").withStringFromValueFunction (pctText0)));
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "ulLength", 3 }, "Unlimiter Length", NormalisableRange<float> (5.0f, 50.0f, 0.1f, 0.6f), 15.0f,
+                                                           AudioParameterFloatAttributes().withLabel ("ms").withStringFromValueFunction (msText)));
+        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "ulFocus", 3 }, "Unlimiter Focus", StringArray { "Full", "Kick", "Snap" }, 0));
 
         // Stem EQ (after Tonal EQ): level of each stem inside the mix, 0 dB = untouched. Version hint 2:
         // added after the first builds went out.
@@ -121,6 +131,7 @@ namespace ModuleParams
         void attach (juce::AudioProcessorValueTreeState& s)
         {
             auto get = [&s] (const juce::String& id) { auto* p = s.getRawParameterValue (id); jassert (p != nullptr); return p; };
+            ulOn = get ("ulOn"); ulAmount = get ("ulAmount"); ulLength = get ("ulLength"); ulFocus = get ("ulFocus");
             stemOn = get ("stemOn");
             tsOn = get ("tsOn"); tsAmount = get ("tsAmount"); tsRange = get ("tsRange"); tsSpeed = get ("tsSpeed");
             rtOn = get ("rtOn"); rtAmount = get ("rtAmount"); rtSens = get ("rtSens"); rtRelease = get ("rtRelease"); rtFocus = get ("rtFocus");
@@ -145,6 +156,16 @@ namespace ModuleParams
             imgLow = get ("imgLow");
             imgMid = get ("imgMid");
             imgHigh = get ("imgHigh");
+        }
+
+        polisher::UnlimiterParams unlimiter (bool bypassed) const noexcept
+        {
+            polisher::UnlimiterParams p;
+            p.enabled = ulOn->load() > 0.5f && ! bypassed;
+            p.amount = ulAmount->load();
+            p.lengthMs = ulLength->load();
+            p.focus = static_cast<polisher::UnlimiterFocus> (juce::jlimit (0, 2, juce::roundToInt (ulFocus->load())));
+            return p;
         }
 
         polisher::StemEQParams stem (bool bypassed) const noexcept
@@ -208,6 +229,7 @@ namespace ModuleParams
         }
 
     private:
+        std::atomic<float>* ulOn = nullptr; std::atomic<float>* ulAmount = nullptr; std::atomic<float>* ulLength = nullptr; std::atomic<float>* ulFocus = nullptr;
         std::atomic<float>* stemOn = nullptr;
         std::atomic<float>* tsOn = nullptr; std::atomic<float>* tsAmount = nullptr; std::atomic<float>* tsRange = nullptr; std::atomic<float>* tsSpeed = nullptr;
         std::atomic<float>* rtOn = nullptr; std::atomic<float>* rtAmount = nullptr; std::atomic<float>* rtSens = nullptr;

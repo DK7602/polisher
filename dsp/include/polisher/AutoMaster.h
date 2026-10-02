@@ -52,7 +52,7 @@ struct MixAnalysis
 
 MixAnalysis analyseMix (const AudioClip& clip);
 
-/** One explained decision. module: "eq", "bass", "dyn", "img", "sat", "clip" or "max". */
+/** One explained decision. module: "ul", "eq", "bass", "dyn", "img", "sat", "clip" or "max". */
 struct AutoMasterReason
 {
     std::string module, control, value, why;

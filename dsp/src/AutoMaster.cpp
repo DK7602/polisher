@@ -425,10 +425,10 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
 {
     // Stem EQ is the user's call: Auto-Master keeps their moves and hears the mix with them (Stem
     // EQ and Tonal EQ only scale frequencies, so applying it first is close to the plug-in's order).
-    const AudioClip clip = renderStemEq (input, s.stem);
+    const AudioClip heard = renderStemEq (input, s.stem);
     AutoMasterResult r;
     r.targetLufs = targetLufs (s.target);
-    r.analysis = analyseMix (clip);
+    r.analysis = analyseMix (heard);
     const auto& a = r.analysis;
     const auto rules = rulesFor (s.intensity);
     const std::string genre = genreName (s.genre);
@@ -477,6 +477,36 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
         r.reasons.push_back ({ module, std::move (control), std::move (value), std::move (why) });
     };
     auto& chain = r.chain;
+
+    // --- Unlimiter: only when the audio arrives already squashed --------------------------------------
+    // An unmastered mix keeps its hits well above the rest (Squash 14 dB or more); a beat or mix that
+    // was limited or clipped before Polisher has lost that. Everything after this hears the restored mix.
+    {
+        const double squash = Unlimiter::measureSquashDb (heard.channels, heard.sampleRate);
+        auto& ul = chain.unlimiter;
+        ul = UnlimiterParams {};
+        if (Unlimiter::squashScale (squash) < 0.25)
+            reason ("ul", "Amount", "0 %", "Your mix still has its punch: the hits stand " + num (squash) + " dB above the average level, "
+                    "like an unmastered mix, so there is nothing to undo and the Unlimiter stays off.");
+        else
+        {
+            ul.amount = s.intensity == Intensity::gentle ? 50.0 : s.intensity == Intensity::punchy ? 100.0 : 75.0;
+            const bool wall = squash <= Unlimiter::kFullSquashDb + 0.5;
+            reason ("ul", "Amount", pct (ul.amount), std::string ("Your audio arrives ") + (wall ? "brickwalled" : "already squashed") +
+                    ": the hits stand only " + num (squash) + " dB above the average level (an unmastered mix sits around 13 dB or more). "
+                    "Something limited or clipped it before Polisher. " + pct (ul.amount) + " puts back " +
+                    (ul.amount >= 100.0 ? "the punch it lost" : ul.amount >= 75.0 ? "most of the punch it lost" : "part of the punch it lost") +
+                    ", so the Maximizer can make it loud again without flattening it twice.");
+            r.notes.push_back ("SQUASHED INPUT: your audio was already limited or clipped before Polisher (Squash " + num (squash) +
+                               " dB). The Unlimiter puts back much of the punch, but the cleanest result comes from the unlimited mix."
+                               "\nNEED: Optional. The master works as it is."
+                               "\nSTEP: If it's your own mix, turn off the limiter or clipper on Stereo Out before Polisher (or export the beat without it)."
+                               "\nSTEP: Then set the Unlimiter Amount back to 0 and run Auto-Master again.");
+        }
+    }
+    const AudioClip clip = renderUnlimiter (heard, chain.unlimiter);
+    if (! Unlimiter::isNeutral (chain.unlimiter))
+        r.analysis = analyseMix (clip);   // the rest of the chain is set for the restored mix
 
     // 808-led genres, where the low end is programmed rather than played.
     const bool bassHeavy = s.genre == Genre::trapHipHop || s.genre == Genre::rnb || s.genre == Genre::edm || s.genre == Genre::pop;
@@ -884,11 +914,12 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
     const double ceiling = chain.limiter.ceilingDbtp;
 
     // Loudness: search on the real chain, then respect the intensity's peak-control budget.
-    const AudioClip shaped = renderPreDrive (clip, chain);   // EQ, Bass, Dynamics, Imager, Saturation
+    const AudioClip shaped = renderPreDrive (heard, chain);  // Unlimiter, EQ, Bass, Dynamics, Imager, Saturation
     const auto shapedStats = measure (shaped);
     const double inLufs = shapedStats.integratedLufs;
     const double recurring = recurringPeakDb (shaped);   // the peaks that keep coming back
     MasterChainParams rest = chain;
+    rest.unlimiter = UnlimiterParams {};
     rest.eq = TonalEQParams {};
     rest.bass = BassParams {};
     rest.steady = ToneSteadyParams {};
@@ -1065,16 +1096,16 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
     // Only the vocal: drums, bass and "other" swing too much with the arrangement (no drums in a ballad,
     // a kick but no 808...) for a usual level to mean anything.
     {
-        r.analysis.stemLevelDb = measureStemLevels (clip);
+        r.analysis.stemLevelDb = measureStemLevels (heard);
         const double vox = r.analysis.stemLevelDb[kStemVocals], usual = genreVocalLevelDb (s.genre);
         const double move = suggestVocalMoveDb (vox, s.genre);
         const double current = s.stem.enabled ? s.stem.gainDb[kStemVocals] : 0.0;
-        const std::string heard = "The model hears your vocal at " + num (vox) + " dB against the whole mix; in " + genre +
+        const std::string hears = "The model hears your vocal at " + num (vox) + " dB against the whole mix; in " + genre +
                                   " masters it usually sits around " + num (usual) + " dB";
         if (vox < -15.0)
             reason ("stem", "Vocals", "kept", "I hardly hear a lead vocal here (an instrumental, or a section without vocals), so there's nothing to suggest.");
         else if (move == 0.0)
-            reason ("stem", "Vocals", "kept", heard + ". Yours is right in that range, so no move is needed.");
+            reason ("stem", "Vocals", "kept", hears + ". Yours is right in that range, so no move is needed.");
         else
         {
             const double to = std::clamp (current + move, -StemEQ::kMaxGainDb, StemEQ::kMaxGainDb);
@@ -1083,7 +1114,7 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
             r.stemSuggestion.enabled = true;
             r.stemSuggestion.gainDb[kStemVocals] = to;
             reason ("stem", "Vocals", "try " + num (to, true) + " dB",
-                    heard + (move > 0 ? ", so yours sits a little low under the beat. " : ", so yours sits louder than usual over the beat. ") +
+                    hears + (move > 0 ? ", so yours sits a little low under the beat. " : ", so yours sits louder than usual over the beat. ") +
                     "This is a suggestion only: Auto-Master never moves Stem EQ. Press Apply in Stem EQ's Learn to try it, then compare with MATCH. "
                     "Vocal level is taste, so trust your ears over this number.");
         }

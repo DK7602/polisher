@@ -328,6 +328,10 @@ void PolisherWebEditor::timerCallback()
     const float tsNow = m.tsDb.exchange (0.0f), tsHzNow = m.tsHz.exchange (0.0f);
     tsHold = std::abs (tsNow) > std::abs (tsHold) ? tsNow : tsHold * 0.85f + tsNow * 0.15f;
     if (std::abs (tsNow) > 0.3f) tsHzHold = tsHzNow;
+    const float ulNow = m.ulBoost.exchange (0.0f);
+    ulHold = ulNow > ulHold ? ulNow : ulHold * 0.85f + ulNow * 0.15f;
+    frame->setProperty ("ulBoost", roundTo (ulHold, 0.1f));
+    frame->setProperty ("ulSquash", roundTo (m.ulSquash.load(), 0.1f));
     frame->setProperty ("rtCut", roundTo (rtHold, 0.1f));
     frame->setProperty ("rtHz",  juce::roundToInt (rtHzHold));
     frame->setProperty ("tsDb",  roundTo (tsHold, 0.1f));
