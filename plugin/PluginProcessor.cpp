@@ -197,6 +197,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     limiter.prepare (sampleRate, channels);
     clipper.prepare (channels);
     eq.prepare (sampleRate, channels);
+    stemEq.setParams (moduleParams.stem (bypassParam->load() > 0.5f));   // so reset() starts in the saved state
     stemEq.prepare (sampleRate, channels);
     bass.prepare (sampleRate, channels);
     dynamics.prepare (sampleRate, channels);
@@ -421,11 +422,11 @@ void PolisherAudioProcessor::publishMeters()
     std::array<double, polisher::kStems> stemE {};
     stemEq.takeStemEnergies (stemE);
     for (size_t k = 0; k < stemE.size(); ++k)
-        meters.stemEnergy[k].store (meters.stemEnergy[k].load() + static_cast<float> (stemE[k]));
+        addTo (meters.stemEnergy[k], static_cast<float> (stemE[k]));
     double satRes = 0.0, satSig = 0.0;
     saturation.takeEnergies (satRes, satSig);
-    meters.satResidual.store (meters.satResidual.load() + static_cast<float> (satRes));
-    meters.satSignal.store (meters.satSignal.load() + static_cast<float> (satSig));
+    addTo (meters.satResidual, static_cast<float> (satRes));
+    addTo (meters.satSignal, static_cast<float> (satSig));
 
     const float clip = static_cast<float> (clipper.takeMaxClipDb());
     if (clip < meters.clipReduction.load())

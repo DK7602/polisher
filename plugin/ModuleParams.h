@@ -40,11 +40,12 @@ namespace ModuleParams
         auto msText = [] (float v, int) { return v < 10.0f ? String (v, 1) + " ms" : String (roundToInt (v)) + " ms"; };
         auto hzText = [] (float v, int) { return v >= 1000.0f ? String (v / 1000.0f, 2) + " kHz" : String (roundToInt (v)) + " Hz"; };
 
-        // Stem EQ (after Tonal EQ): level of each stem inside the mix, 0 dB = untouched.
-        layout.add (std::make_unique<AudioParameterBool> (ParameterID { "stemOn", 1 }, "Stem EQ On", true));
+        // Stem EQ (after Tonal EQ): level of each stem inside the mix, 0 dB = untouched. Version hint 2:
+        // added after the first builds went out.
+        layout.add (std::make_unique<AudioParameterBool> (ParameterID { "stemOn", 2 }, "Stem EQ On", true));
         for (auto [id, name] : { std::pair { stemIds[0], "Stem EQ Vocals" }, std::pair { stemIds[1], "Stem EQ Drums" },
                                  std::pair { stemIds[2], "Stem EQ Bass" }, std::pair { stemIds[3], "Stem EQ Other" } })
-            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { id, 1 }, name,
+            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { id, 2 }, name,
                                                                NormalisableRange<float> (static_cast<float> (-polisher::StemEQ::kMaxGainDb),
                                                                                          static_cast<float> (polisher::StemEQ::kMaxGainDb), 0.1f), 0.0f,
                                                                AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction (dbText)));

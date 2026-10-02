@@ -286,8 +286,9 @@ void StemEQ::hop() noexcept
         // older than these energies, which doesn't matter for a meter averaged over a second).
         for (int band = 0; band < StemNet::kBands; ++band)
         {
-            const double e = std::pow (10.0, static_cast<double> (feat[static_cast<size_t> (band)]))
-                           + std::pow (10.0, static_cast<double> (feat[static_cast<size_t> (band + StemNet::kBands)]));
+            // Minus the 1e-9 floor the features carry, so silence credits nothing to any stem.
+            const double e = std::max (0.0, std::pow (10.0, static_cast<double> (feat[static_cast<size_t> (band)])) - 1.0e-9)
+                           + std::max (0.0, std::pow (10.0, static_cast<double> (feat[static_cast<size_t> (band + StemNet::kBands)])) - 1.0e-9);
             for (int st = 0; st < kStems; ++st)
                 stemEnergy[static_cast<size_t> (st)] += e * shares[static_cast<size_t> (st * StemNet::kBands + band)];
         }

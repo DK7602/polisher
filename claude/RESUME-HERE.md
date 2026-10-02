@@ -83,8 +83,13 @@ Experiments 2026-10-02 (7 held-out avg / Gallas, dB; static -15.0 / -13.8, oracl
   C++ shares match PyTorch within 2.4e-6, exact delayed pass-through at 0 dB / off, equal gains =
   plain gain (3e-8), bass +6 lifts a 110 Hz tone 5.85 dB vs 0.76 dB for the rest, no clicks,
   latency 1792 (3584 at 88.2k+), ~3 % of one core at 48 kHz stereo.
-  Next: plug-in (params, chain slot after Tonal EQ, latency report, UI / Learn, Auto-Master hooks),
-  review agent, user test.  Known: at 88.2k+ the features use NFFT 2048 (level offset vs training).
+  Plug-in done: params stemOn / stemVoc / stemDrums / stemBass / stemOther (version hint 2), chain
+  slot after Tonal EQ, latency reported, Stem EQ screen + 'Model Hears' meter + Learn, Auto-Master
+  hears the mix with the user's Stem EQ and keeps it.  Review agent: no high-severity bugs; fixed
+  Learn update rate, silent meter, meter race (CAS), stale meter on editor reopen, params before
+  prepare.  Left as known: 88.2k+ features ~3.5 dB hotter than training (NFFT 2048); mono input
+  gives side features at the floor; Auto-Master applies Stem EQ before Tonal EQ (approximation).
+  Next: user test in Cubase (MATCH A/B a vocal and an 808 move on their songs).
 Next: download MUSDB (a subset first), prep, train ~20k steps, validate on held-out songs, try to
 cut drum bleed in "other" (htdemucs_ft teacher failed to download here: retry with Full network),
 then C++ engine + exact-passthrough tests, params/UI/Learn ("other" cuts touch drums a little),

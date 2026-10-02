@@ -2,7 +2,7 @@
   python export.py [models/stemnet_v2.pt]
 Writes dsp/src/StemNetWeights.h (the weights as float arrays) and tests/StemNetReference.h (shares
 PyTorch computes for a test signal that the C++ test can regenerate exactly: integer-hashed noise
-plus two tones), so dsp/src/StemNet.cpp can be checked frame by frame."""
+plus two tones), so dsp/src/StemEQ.cpp can be checked frame by frame."""
 import os, sys, numpy as np, torch
 from common import NBANDS, LOOKAHEAD, features
 from model import StemNet

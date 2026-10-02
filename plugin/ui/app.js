@@ -104,7 +104,7 @@ const modules = [
     what: "Turns the vocals, drums, bass or everything else up or down inside your finished stereo mix, like reaching back into the session and moving one fader.",
     cells: [],
     controls: [["Vocals / Drums / Bass / Other", "Turns that part of the mix up or down (±12 dB). Other is everything else: synths, keys, guitars, pads, effects."],
-               ["How it works", "A small AI model listens to the mix and works out, moment by moment and frequency by frequency, how much of the sound is vocals, drums, bass or other. Your four levels are mixed by those shares into one EQ that changes 344 times a second."],
+               ["How it works", "A small AI model listens to the mix and works out, moment by moment and frequency by frequency, how much of the sound is vocals, drums, bass or other. Your four levels are mixed by those shares into one EQ that updates about 180 times a second."],
                ["Trade-offs", "Adds 40 ms of delay (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly. Moves up to about ±6 dB stay clean."]] },
   { id: "bass", name: "Bass Control", live: true, soon: "",
     what: "Keeps the low end solid on every system: mono below a crossover, controls 808 level jumps, and adds kick punch.",

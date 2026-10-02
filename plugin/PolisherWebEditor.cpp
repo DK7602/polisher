@@ -182,6 +182,10 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
         c->setFixedAspectRatio (static_cast<double> (kDesignWidth) / kDesignHeight);
     setSize (1280, 720);
 
+    // Energy meters piled up while the editor was closed: start fresh.
+    for (auto& e : audioProcessor.meters.stemEnergy) e.store (0.0f);
+    audioProcessor.meters.satResidual.store (0.0f);
+    audioProcessor.meters.satSignal.store (0.0f);
     startTimerHz (30);
 }
 

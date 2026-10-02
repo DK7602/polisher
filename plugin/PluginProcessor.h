@@ -83,6 +83,14 @@ public:
     };
     Meters meters;
 
+    /** Adds to a meter accumulator the editor drains with exchange(0); a CAS loop, so neither
+        side's update is lost (atomic<float>::fetch_add is not available everywhere yet). */
+    static void addTo (std::atomic<float>& a, float v) noexcept
+    {
+        float cur = a.load();
+        while (! a.compare_exchange_weak (cur, cur + v)) {}
+    }
+
     /** Full reset (RESET button). */
     void requestMeterReset() noexcept { meterResetRequested.store (true); }
     /** Restart Integrated / range / true peak only; Momentary and Short-term keep running

@@ -254,3 +254,15 @@ TEST_CASE ("Stem EQ offline render lines up with the input and matches real time
             worst = std::max (worst, static_cast<double> (std::abs (off.channels[static_cast<size_t> (c)][i] - rt.channels[static_cast<size_t> (c)][i + L])));
     CHECK (worst == 0.0);
 }
+
+TEST_CASE ("Stem EQ meter credits nothing during silence, and something during music", "[stemeq]")
+{
+    StemEQ s; s.prepare (48000.0, 2);
+    std::array<double, kStems> e {};
+    run (s, testsig::silence (48000.0, 2, 1.0));
+    s.takeStemEnergies (e);
+    CHECK (e[0] + e[1] + e[2] + e[3] == 0.0);
+    run (s, testsig::musicLike (48000.0, 1.0, -12.0));
+    s.takeStemEnergies (e);
+    CHECK (e[0] + e[1] + e[2] + e[3] > 0.0);
+}
