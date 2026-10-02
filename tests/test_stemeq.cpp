@@ -236,3 +236,21 @@ TEST_CASE ("Stem EQ handles mono and extra channels with the same latency", "[st
     CHECK (std::isfinite (e));
     CHECK (e > 0.0);
 }
+
+TEST_CASE ("Stem EQ offline render lines up with the input and matches real time", "[stemeq]")
+{
+    const auto in = testsig::musicLike (48000.0, 2.0, -12.0);
+    StemEQParams p;
+    CHECK (renderStemEq (in, p).channels == in.channels);           // neutral: an exact copy
+
+    p.gainDb = { 0.0, 3.0, -4.0, 0.0 };
+    const auto off = renderStemEq (in, p);
+    StemEQ s; s.prepare (48000.0, 2); s.setParams (p); s.reset();
+    const auto rt = run (s, in);
+    const auto L = static_cast<size_t> (s.latencySamples());
+    double worst = 0.0;
+    for (int c = 0; c < 2; ++c)
+        for (size_t i = 0; i + L < rt.channels[0].size(); ++i)
+            worst = std::max (worst, static_cast<double> (std::abs (off.channels[static_cast<size_t> (c)][i] - rt.channels[static_cast<size_t> (c)][i + L])));
+    CHECK (worst == 0.0);
+}

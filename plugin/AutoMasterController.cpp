@@ -119,6 +119,10 @@ void AutoMasterController::launchAnalysis()
     settings.genre = static_cast<polisher::Genre> (juce::jlimit (0, polisher::kNumGenres - 1, choice ("amGenre")));
     settings.intensity = static_cast<polisher::Intensity> (juce::jlimit (0, 2, choice ("amIntensity")));
     settings.target = static_cast<polisher::LoudnessTarget> (juce::jlimit (0, 2, choice ("amTarget")));
+    // Stem EQ is the user's: Auto-Master hears the mix with it and leaves it as it is.
+    settings.stem.enabled = state.getRawParameterValue ("stemOn")->load() > 0.5f;
+    for (int k = 0; k < polisher::kStems; ++k)
+        settings.stem.gainDb[static_cast<size_t> (k)] = state.getRawParameterValue (ModuleParams::stemIds[k])->load();
     pendingSettings = settings;
 
     const int thisSession = session;

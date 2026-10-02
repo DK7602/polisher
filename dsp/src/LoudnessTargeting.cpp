@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 
 namespace polisher {
 
@@ -100,9 +101,34 @@ AudioClip renderBass (const AudioClip& clip, const BassParams& params)
     return out;
 }
 
+AudioClip renderStemEq (const AudioClip& input, const StemEQParams& params)
+{
+    AudioClip out = input;
+    const int nch = out.numChannels(), n = out.numSamples();
+    if (nch == 0 || StemEQ::isNeutral (params))
+        return out;
+    // Run the tail through too, then drop the latency so the result lines up with the input.
+    auto stem = std::make_unique<StemEQ>();
+    stem->prepare (out.sampleRate, nch);
+    stem->setParams (params);
+    stem->reset();
+    const int lat = stem->latencySamples();
+    std::vector<double> frame (static_cast<size_t> (nch));
+    for (int i = 0; i < n + lat; ++i)
+    {
+        for (int c = 0; c < nch; ++c)
+            frame[static_cast<size_t> (c)] = i < n ? input.channels[static_cast<size_t> (c)][static_cast<size_t> (i)] : 0.0;
+        stem->processFrame (frame.data(), nch);
+        if (i >= lat)
+            for (int c = 0; c < nch; ++c)
+                out.channels[static_cast<size_t> (c)][static_cast<size_t> (i - lat)] = static_cast<float> (frame[static_cast<size_t> (c)]);
+    }
+    return out;
+}
+
 AudioClip renderPreDrive (const AudioClip& input, const MasterChainParams& params)
 {
-    AudioClip out = renderBass (renderEq (input, params.eq), params.bass);
+    AudioClip out = renderBass (renderStemEq (renderEq (input, params.eq), params.stem), params.bass);
     const int nch = out.numChannels(), n = out.numSamples();
     if (nch == 0)
         return out;

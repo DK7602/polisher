@@ -51,6 +51,7 @@ struct AutoMasterSettings
     Genre genre = Genre::trapHipHop;
     Intensity intensity = Intensity::balanced;
     LoudnessTarget target = LoudnessTarget::loud;
+    StemEQParams stem;                          // the user's Stem EQ: kept, and heard while deciding
 };
 
 struct AutoMasterResult

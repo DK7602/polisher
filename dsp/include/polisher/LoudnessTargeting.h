@@ -4,6 +4,7 @@
 #include "MultibandDynamics.h"
 #include "Saturation.h"
 #include "SoftClipper.h"
+#include "StemEQ.h"
 #include "StereoImager.h"
 #include "TonalEQ.h"
 #include "TruePeakLimiter.h"
@@ -39,14 +40,18 @@ AudioClip renderLimited (const AudioClip& clip, const LimiterParams& params);
 /** Renders a clip through the Tonal EQ offline (zero latency). */
 AudioClip renderEq (const AudioClip& clip, const TonalEQParams& params);
 
+/** Renders a clip through Stem EQ offline, latency compensated (a copy when neutral). */
+AudioClip renderStemEq (const AudioClip& clip, const StemEQParams& params);
+
 /** Renders a clip through Bass Control offline (zero latency). */
 AudioClip renderBass (const AudioClip& clip, const BassParams& params);
 
-/** The mastering chain as the plug-in runs it: Tonal EQ -> Bass Control -> Dynamics -> Stereo Imager
-    -> Saturation -> drive -> Soft Clipper -> Maximizer. */
+/** The mastering chain as the plug-in runs it: Tonal EQ -> Stem EQ -> Bass Control -> Dynamics ->
+    Stereo Imager -> Saturation -> drive -> Soft Clipper -> Maximizer. */
 struct MasterChainParams
 {
     TonalEQParams eq;           // flat by default
+    StemEQParams stem;          // 0 dB everywhere by default (pass-through, latency kept)
     BassParams bass;            // all off by default
     DynamicsParams dynamics;    // 1:1 in every band by default (pass-through)
     ImagerParams imager;        // 100 % everywhere by default
@@ -56,8 +61,8 @@ struct MasterChainParams
     LimiterParams limiter;      // limiter.driveDb is ignored here; driveDb above is used
 };
 
-/** Renders a clip through everything before the drive (EQ -> Bass -> Dynamics -> Imager ->
-    Saturation), latency compensated. */
+/** Renders a clip through everything before the drive (EQ -> Stem EQ -> Bass -> Dynamics -> Imager
+    -> Saturation), latency compensated. */
 AudioClip renderPreDrive (const AudioClip& clip, const MasterChainParams& params);
 
 /** Renders a clip through the whole chain offline, latency compensated. */

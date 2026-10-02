@@ -4,20 +4,25 @@
 
 #include "polisher/MultibandDynamics.h"
 #include "polisher/Saturation.h"
+#include "polisher/StemEQ.h"
 #include "polisher/StereoImager.h"
 
 #include <array>
 
-/** Parameters of the Dynamics and Saturation modules: IDs, layout and a reader that turns the
-    current values into engine params. Shared by the processor, Auto-Master and the web editor. */
+/** Parameters of the Stem EQ, Dynamics and Saturation modules: IDs, layout and a reader that turns
+    the current values into engine params. Shared by the processor, Auto-Master and the web editor. */
 namespace ModuleParams
 {
     inline juce::String band (const char* prefix, int b) { return juce::String (prefix) + juce::String (b + 1); }
+
+    /** Stem EQ gain IDs, in polisher::StemIndex order (vocals, drums, bass, other). */
+    inline const char* const stemIds[polisher::kStems] = { "stemVoc", "stemDrums", "stemBass", "stemOther" };
 
     /** Every slider / toggle / choice ID, for the web editor's relays. */
     inline juce::StringArray sliderIds()
     {
         juce::StringArray ids;
+        for (auto* id : stemIds) ids.add (id);
         for (int x = 0; x < polisher::kDynBands - 1; ++x) ids.add (band ("dynX", x));
         for (const char* p : { "dynThr", "dynRatio", "dynAtk", "dynRel", "dynGain" })
             for (int b = 0; b < polisher::kDynBands; ++b) ids.add (band (p, b));
@@ -25,7 +30,7 @@ namespace ModuleParams
         ids.add ("satMix");
         return ids;
     }
-    inline juce::StringArray toggleIds() { return { "dynOn", "dynAdaptive", "satOn" }; }
+    inline juce::StringArray toggleIds() { return { "stemOn", "dynOn", "dynAdaptive", "satOn" }; }
     inline juce::StringArray comboIds()  { return { "satMode" }; }
 
     inline void addTo (juce::AudioProcessorValueTreeState::ParameterLayout& layout)
@@ -34,6 +39,15 @@ namespace ModuleParams
         auto dbText = [] (float v, int) { return String (v, 1) + " dB"; };
         auto msText = [] (float v, int) { return v < 10.0f ? String (v, 1) + " ms" : String (roundToInt (v)) + " ms"; };
         auto hzText = [] (float v, int) { return v >= 1000.0f ? String (v / 1000.0f, 2) + " kHz" : String (roundToInt (v)) + " Hz"; };
+
+        // Stem EQ (after Tonal EQ): level of each stem inside the mix, 0 dB = untouched.
+        layout.add (std::make_unique<AudioParameterBool> (ParameterID { "stemOn", 1 }, "Stem EQ On", true));
+        for (auto [id, name] : { std::pair { stemIds[0], "Stem EQ Vocals" }, std::pair { stemIds[1], "Stem EQ Drums" },
+                                 std::pair { stemIds[2], "Stem EQ Bass" }, std::pair { stemIds[3], "Stem EQ Other" } })
+            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { id, 1 }, name,
+                                                               NormalisableRange<float> (static_cast<float> (-polisher::StemEQ::kMaxGainDb),
+                                                                                         static_cast<float> (polisher::StemEQ::kMaxGainDb), 0.1f), 0.0f,
+                                                               AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction (dbText)));
 
         // Dynamics (after Bass Control): four bands, 1:1 = untouched.
         layout.add (std::make_unique<AudioParameterBool> (ParameterID { "dynOn", 1 }, "Dynamics On", true));
@@ -88,6 +102,8 @@ namespace ModuleParams
         void attach (juce::AudioProcessorValueTreeState& s)
         {
             auto get = [&s] (const juce::String& id) { auto* p = s.getRawParameterValue (id); jassert (p != nullptr); return p; };
+            stemOn = get ("stemOn");
+            for (int k = 0; k < polisher::kStems; ++k) stemGain[static_cast<size_t> (k)] = get (stemIds[k]);
             dynOn = get ("dynOn");
             dynAdaptive = get ("dynAdaptive");
             for (int x = 0; x < polisher::kDynBands - 1; ++x) dynX[static_cast<size_t> (x)] = get (band ("dynX", x));
@@ -108,6 +124,14 @@ namespace ModuleParams
             imgLow = get ("imgLow");
             imgMid = get ("imgMid");
             imgHigh = get ("imgHigh");
+        }
+
+        polisher::StemEQParams stem (bool bypassed) const noexcept
+        {
+            polisher::StemEQParams p;
+            p.enabled = stemOn->load() > 0.5f && ! bypassed;
+            for (size_t k = 0; k < stemGain.size(); ++k) p.gainDb[k] = stemGain[k]->load();
+            return p;
         }
 
         polisher::DynamicsParams dynamics (bool bypassed) const noexcept
@@ -142,6 +166,8 @@ namespace ModuleParams
         }
 
     private:
+        std::atomic<float>* stemOn = nullptr;
+        std::array<std::atomic<float>*, polisher::kStems> stemGain {};
         std::atomic<float>* dynOn = nullptr;
         std::atomic<float>* dynAdaptive = nullptr;
         std::array<std::atomic<float>*, polisher::kDynBands - 1> dynX {};

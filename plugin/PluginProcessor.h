@@ -11,6 +11,7 @@
 #include "polisher/LevelMatch.h"
 #include "polisher/MultibandDynamics.h"
 #include "polisher/Saturation.h"
+#include "polisher/StemEQ.h"
 #include "ModuleParams.h"
 #include "SpectrumTap.h"
 #include "AutoMasterController.h"
@@ -18,7 +19,8 @@
 #include <array>
 #include <atomic>
 
-/** Polisher: Tonal EQ -> Bass Control -> Drive -> Soft Clipper -> Maximizer (true-peak limiter), plus EBU R128
+/** Polisher: Tonal EQ -> Stem EQ -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
+    -> Maximizer (true-peak limiter), plus EBU R128
     meters, spectrum taps and Auto-Master (which listens to the incoming mix and sets the chain). */
 class PolisherAudioProcessor final : public juce::AudioProcessor
 {
@@ -103,6 +105,7 @@ private:
     void publishMeters();
 
     polisher::TonalEQ eq;
+    polisher::StemEQ stemEq;
     polisher::BassControl bass;
     polisher::MultibandDynamics dynamics;
     polisher::StereoImager imager;

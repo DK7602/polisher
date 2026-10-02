@@ -197,6 +197,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     limiter.prepare (sampleRate, channels);
     clipper.prepare (channels);
     eq.prepare (sampleRate, channels);
+    stemEq.prepare (sampleRate, channels);
     bass.prepare (sampleRate, channels);
     dynamics.prepare (sampleRate, channels);
     imager.prepare (sampleRate);
@@ -208,8 +209,10 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     inputMeter.prepare (sampleRate, channels);
     updateLimiterParams();
     currentDriveGain = targetDriveGain();
-    // Constant latency whatever the settings: saturation + clipper (all oversampling modes) + limiter look-ahead.
-    setLatencySamples (polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples() + limiter.latencySamples());
+    // Constant latency whatever the settings: Stem EQ look-ahead + saturation + clipper (all
+    // oversampling modes) + limiter look-ahead.
+    setLatencySamples (stemEq.latencySamples() + polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples()
+                       + limiter.latencySamples());
 }
 
 void PolisherAudioProcessor::updateLimiterParams()
@@ -263,6 +266,7 @@ void PolisherAudioProcessor::updateLimiterParams()
     ip.highWidth = imgHighParam->load();
     imager.setParams (ip);
 
+    stemEq.setParams (moduleParams.stem (p.bypassed));
     dynamics.setParams (moduleParams.dynamics (p.bypassed));
     saturation.setParams (moduleParams.saturation (p.bypassed));
 
@@ -325,6 +329,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     autoMaster.capture (buffer);   // the untouched mix, while Auto-Master is listening
 
     eq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+    stemEq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     bass.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     dynamics.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     imager.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);

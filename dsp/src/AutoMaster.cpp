@@ -396,8 +396,11 @@ MixAnalysis analyseMix (const AudioClip& clip)
 // Decisions
 // =================================================================================================
 
-AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
+AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s)
 {
+    // Stem EQ is the user's call: Auto-Master keeps their moves and hears the mix with them (Stem
+    // EQ and Tonal EQ only scale frequencies, so applying it first is close to the plug-in's order).
+    const AudioClip clip = renderStemEq (input, s.stem);
     AutoMasterResult r;
     r.targetLufs = targetLufs (s.target);
     r.analysis = analyseMix (clip);
@@ -976,6 +979,7 @@ AutoMasterResult autoMaster (const AudioClip& clip, const AutoMasterSettings& s)
                 num (a.loudness.truePeakDbtp) + " dBTP. Settings: " + genre + ", " + rules.name + ", " + targetName (s.target) +
                 ". The master now measures " + num (out.integratedLufs) + " LUFS with true peak " + num (out.truePeakDbtp) +
                 " dBTP. The full song will read about 1 LU lower than this loud section, which is normal.";
+    chain.stem = s.stem;
     r.ok = true;
     return r;
 }
