@@ -418,6 +418,10 @@ void PolisherAudioProcessor::publishMeters()
         if (d < slot.load())
             slot.store (d);
     }
+    std::array<double, polisher::kStems> stemE {};
+    stemEq.takeStemEnergies (stemE);
+    for (size_t k = 0; k < stemE.size(); ++k)
+        meters.stemEnergy[k].store (meters.stemEnergy[k].load() + static_cast<float> (stemE[k]));
     double satRes = 0.0, satSig = 0.0;
     saturation.takeEnergies (satRes, satSig);
     meters.satResidual.store (meters.satResidual.load() + static_cast<float> (satRes));

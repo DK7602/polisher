@@ -195,6 +195,7 @@ void StemEQ::reset() noexcept
     for (auto& d : dry) std::fill (d.begin(), d.end(), 0.0);
     net.reset();
     shares.fill (0.25f);
+    stemEnergy.fill (0.0);
     inPos = queuePos = dryPos = 0;
     frameCount = analysed = 0;
     // Start fully in the set state.
@@ -278,7 +279,19 @@ void StemEQ::hop() noexcept
     bandEnergies (L, R, 1.0, feat.data());
     bandEnergies (L, R, -1.0, feat.data() + StemNet::kBands);
     const bool ready = net.push (feat.data(), shares.data());
-    if (ready) ++analysed;
+    if (ready)
+    {
+        ++analysed;
+        // Meter: credit each band's energy to the stems by their shares (the shares are 3 hops
+        // older than these energies, which doesn't matter for a meter averaged over a second).
+        for (int band = 0; band < StemNet::kBands; ++band)
+        {
+            const double e = std::pow (10.0, static_cast<double> (feat[static_cast<size_t> (band)]))
+                           + std::pow (10.0, static_cast<double> (feat[static_cast<size_t> (band + StemNet::kBands)]));
+            for (int st = 0; st < kStems; ++st)
+                stemEnergy[static_cast<size_t> (st)] += e * shares[static_cast<size_t> (st * StemNet::kBands + band)];
+        }
+    }
 
     std::array<double, kStems> target {};
     for (int s = 0; s < kStems; ++s)

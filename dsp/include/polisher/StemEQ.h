@@ -91,6 +91,15 @@ public:
         FFT, band energies of mid and side, log10). For tests and offline analysis. */
     void computeFeatures (const double* left, const double* right, float* features) noexcept;
 
+    /** How much of the music's energy the model has credited to each stem since the last call
+        (vocals, drums, bass, other; for the "what the model hears" meter). Not atomic: call from
+        the audio thread and hand the numbers on. */
+    void takeStemEnergies (std::array<double, kStems>& out) noexcept
+    {
+        out = stemEnergy;
+        stemEnergy.fill (0.0);
+    }
+
     /** Shares ([stem][band]) of the latest frame the model finished, and how many it has done. */
     const std::array<float, kStems * StemNet::kBands>& latestShares() const noexcept { return shares; }
     long framesAnalysed() const noexcept { return analysed; }
@@ -123,6 +132,7 @@ private:
     std::array<float, StemNet::kIn> feat {};
     std::array<float, kStems * StemNet::kBands> shares {};
     std::array<double, kStems> gain { 1.0, 1.0, 1.0, 1.0 };
+    std::array<double, kStems> stemEnergy {};
     double gainCoeff = 0.0;
 
     // dry path and cross-fade

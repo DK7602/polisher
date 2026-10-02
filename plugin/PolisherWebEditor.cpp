@@ -317,6 +317,17 @@ void PolisherWebEditor::timerCallback()
     satSigHold = satSigHold * 0.9 + m.satSignal.exchange (0.0f);
     const double ratio = satSigHold > 1.0e-12 ? satResHold / satSigHold : 0.0;
     frame->setProperty ("satHarm",    roundTo (ratio > 1.0e-10 ? static_cast<float> (10.0 * std::log10 (ratio)) : -100.0f, 0.1f));
+    // Stem EQ: share of the music the model hears as vocals / drums / bass / other (%, ~1 s average).
+    double stemTotal = 0.0;
+    for (size_t k = 0; k < stemHold.size(); ++k)
+    {
+        stemHold[k] = stemHold[k] * 0.97 + m.stemEnergy[k].exchange (0.0f);
+        stemTotal += stemHold[k];
+    }
+    juce::Array<juce::var> stemShare;
+    for (double e : stemHold)
+        stemShare.add (juce::roundToInt (stemTotal > 1.0e-6 ? 100.0 * e / stemTotal : 0.0));
+    frame->setProperty ("stemShare",  stemShare);
     frame->setProperty ("matchDb",    roundTo (m.matchDb.load(), 0.1f));
     frame->setProperty ("sr",         audioProcessor.getSampleRate());
     frame->setProperty ("inShort",    roundTo (m.inputShortTerm.load(), 0.1f));

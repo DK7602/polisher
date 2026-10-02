@@ -60,6 +60,8 @@ const P = {
   satMode: Juce.getComboBoxState("satMode"),
   satDrive: Juce.getSliderState("satDrive"),
   satMix: Juce.getSliderState("satMix"),
+  stemOn: Juce.getToggleState("stemOn"),
+  stemGain: ["stemVoc", "stemDrums", "stemBass", "stemOther"].map((id) => Juce.getSliderState(id)),
 };
 const resetMeter = Juce.getNativeFunction("resetMeter");
 const amStart = Juce.getNativeFunction("startAutoMaster");
@@ -79,7 +81,7 @@ const M = {
   peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
   inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
   amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0, matchDb: 0, corr: 1,
-  dynGr: [0, 0, 0, 0], satHarm: -100,
+  dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0],
 };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
 let clipWindow = [];         // ~3 s of clipper peak-reduction samples
@@ -98,13 +100,12 @@ const modules = [
                ["Low Mid", "Where mud and boxiness build up. Cutting here often reads as clearer and louder."],
                ["Upper Mid / Presence", "Vocal consonants, snare crack and edge. A little goes a long way."],
                ["Air", "Sheen on top. Shelves rather than peaks, so hats get shine instead of bite."]] },
-  { id: "stem", name: "Stem EQ", soon: "In development: needs an AI separation model. Polisher's other modules are unaffected.",
-    what: "Your Tonal EQ changes the whole mix at once. Stem EQ will use AI source separation to isolate just the vocal, the drums or the bass inside your finished stereo track, so you can turn each one up or down, or brighten or warm it, without touching the other instruments.",
-    cells: [["Vocals", "level", "0.0 dB", .5], ["Drums", "level", "0.0 dB", .5], ["Bass", "level", "0.0 dB", .5], ["Other", "level", "0.0 dB", .5], ["Tone", "picked stem", "0.0 dB", .5]],
-    controls: [["Vocals / Drums / Bass / Other", "Turns that part of the mix up or down (about ±6 dB), the way you would with its fader in the mix."],
-               ["Tone", "Brightens or warms just the picked part: a brighter vocal, warmer bass, crisper drums."],
-               ["How it works", "An AI model splits the stereo master into vocals, drums, bass and everything else, the level and tone changes are applied, and the parts are summed back. Untouched parts come back unchanged."],
-               ["Trade-offs", "Separation adds a short delay (Cubase compensates it) and uses more CPU than the other modules. Large moves (beyond about 3 dB) can let a little of one part bleed into another."]] },
+  { id: "stem", name: "Stem EQ", live: true, soon: "",
+    what: "Turns the vocals, drums, bass or everything else up or down inside your finished stereo mix, like reaching back into the session and moving one fader.",
+    cells: [],
+    controls: [["Vocals / Drums / Bass / Other", "Turns that part of the mix up or down (±12 dB). Other is everything else: synths, keys, guitars, pads, effects."],
+               ["How it works", "A small AI model listens to the mix and works out, moment by moment and frequency by frequency, how much of the sound is vocals, drums, bass or other. Your four levels are mixed by those shares into one EQ that changes 344 times a second."],
+               ["Trade-offs", "Adds 40 ms of delay (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly. Moves up to about ±6 dB stay clean."]] },
   { id: "bass", name: "Bass Control", live: true, soon: "",
     what: "Keeps the low end solid on every system: mono below a crossover, controls 808 level jumps, and adds kick punch.",
     cells: [],
@@ -531,6 +532,25 @@ const satCells = [
   barCell({ label: "Harmonics", sub: "added vs signal", minText: `${MINUS}60`, maxText: `${MINUS}10 dB`, id: "harmmeter" }),
 ];
 
+// Stem EQ cells
+const STEMS = ["Vocals", "Drums", "Bass", "Other"];
+const stemGainAt = (k) => P.stemGain[k].getScaledValue();
+const stemIsNeutral = () => [0, 1, 2, 3].every((k) => Math.abs(stemGainAt(k)) < 0.05);
+const stemMoves = () => [0, 1, 2, 3].filter((k) => Math.abs(stemGainAt(k)) >= 0.05);
+function stemHearsCell() {
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.innerHTML = `<span class="cell-label">Model Hears</span><span class="cell-sub mono">share of the music</span>
+    <div class="stemhear">${STEMS.map((n, k) => `<div class="sh-row"><span class="sh-name mono">${n[0]}</span>
+      <div class="sh-bar screen"><div class="sh-fill" id="sh-fill-${k}"></div></div><span class="sh-val mono" id="sh-val-${k}"></span></div>`).join("")}</div>`;
+  return cell;
+}
+const stemCells = [
+  ...STEMS.map((name, k) => liveKnobCell({ label: name, sub: k === 3 ? "synths · keys · fx" : "level", state: P.stemGain[k], def: 0,
+                                           minText: `${MINUS}12`, maxText: "+12", fmt: fmtSigned })),
+  stemHearsCell(),
+];
+
 function renderModule() {
   const m = modules.find((x) => x.id === selected);
   const row = $("knob-row");
@@ -540,7 +560,7 @@ function renderModule() {
   $("btn-bypass").hidden = !m.live;
   if (m.live) {
     row.classList.remove("soon");
-    ({ clip: clipperCells, eq: eqCells, bass: bassCells, dyn: dynCells(), img: imagerCells, sat: satCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
+    ({ clip: clipperCells, eq: eqCells, stem: stemCells, bass: bassCells, dyn: dynCells(), img: imagerCells, sat: satCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
     $("module-note").textContent = "Live · drag up/down · Shift = fine · double-click = reset";
     refreshHeadButton();
   } else {
@@ -728,6 +748,7 @@ function renderLearn() {
   if (m.id === "img") { renderImagerLearn(body); liftWarning(body); prependAmSection(body, "img"); return; }
   if (m.id === "dyn") { renderDynLearn(body); liftWarning(body); prependAmSection(body, "dyn"); return; }
   if (m.id === "sat") { renderSatLearn(body); liftWarning(body); prependAmSection(body, "sat"); return; }
+  if (m.id === "stem") { renderStemLearn(body); liftWarning(body); return; }
 
   const drive = P.drive.getScaledValue();
   const ceiling = P.ceiling.getScaledValue();
@@ -1010,6 +1031,42 @@ function renderSatLearn(body) {
     body.appendChild(tip("TRY THIS", "Tape, Drive +9 dB, Mix 50 %: a little density you feel more than hear (the Harmonics meter around −35 dB). For thin bass on phones, try Tube instead. Always compare with MATCH on.", true));
 }
 
+function renderStemLearn(body) {
+  const on = !!P.stemOn.getValue(), bypassed = !!P.bypass.getValue();
+  const playing = performance.now() - lastAudioTime < 1500;
+  const moves = stemMoves(), share = M.stemShare || [0, 0, 0, 0];
+  const heard = STEMS.map((n, k) => `${n.toLowerCase()} ${share[k]} %`).join(", ");
+  body.appendChild(head("WHAT'S HAPPENING"));
+  body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
+    : !on ? "Stem EQ is off, so every part of the mix passes untouched."
+    : !moves.length ? (playing ? `All four levels are at 0 dB, so the mix passes untouched. The model is listening: it hears ${heard}.`
+                               : "All four levels are at 0 dB, so the mix passes untouched. Press play to see what the model hears.")
+    : `${moves.map((k) => `${STEMS[k]} ${fmtSigned(stemGainAt(k))}`).join(", ")}: only the parts of the sound the model hears as ${moves.length > 1 ? "those stems" : STEMS[moves[0]].toLowerCase()} are turned ${moves.every((k) => stemGainAt(k) > 0) ? "up" : moves.every((k) => stemGainAt(k) < 0) ? "down" : "up or down"}; the rest stays where it was.`
+      + (playing ? ` Right now it hears ${heard}.` : "")));
+  body.appendChild(sep());
+  body.appendChild(head("WHAT EACH CONTROL IS DOING"));
+  const why = [
+    (v) => v > 0 ? "Brings the vocal forward, like pushing its fader. Great for a vocal that sits a little low under the beat." : "Tucks the vocal back into the beat.",
+    (v) => v > 0 ? "More kick, snare and hats. Adds punch and energy." : "Softer drums: the hits sit back and the music around them opens up.",
+    (v) => v > 0 ? "More bass and 808. Check on small speakers and keep an eye on the Maximizer: bass is what limiters grab first." : "Less bass and 808. Useful when the low end swamps the mix.",
+    (v) => v > 0 ? "More of everything else: synths, keys, guitars, pads and effects." : "Less of everything else, so vocals and drums stand out.",
+  ];
+  STEMS.forEach((n, k) => {
+    const v = stemGainAt(k);
+    body.appendChild(item(n, fmtSigned(v), Math.abs(v) < 0.05 ? "Untouched." : why[k](v)));
+  });
+  body.appendChild(item("Model Hears", "", "How the model divides the music right now, averaged over about a second. A part it barely hears won't move much when you turn it up or down."));
+  const big = moves.filter((k) => Math.abs(stemGainAt(k)) > 6.05);
+  if (on && !bypassed && big.length)
+    body.appendChild(tip("HEADS UP", `${big.map((k) => STEMS[k]).join(" and ")} ${big.length > 1 ? "are" : "is"} moved more than 6 dB. Big moves can nudge the parts that share notes with ${big.length > 1 ? "them" : "it"} too.`, false,
+      { need: "Only if something besides that part changes level.", steps: ["Turn on MATCH and flip A/B.", "Listen to the parts you didn't touch: do they jump or thin out?", "If they do, back the move off to about 6 dB, or make the rest of the change with Tonal EQ."] }));
+  else if (on && !bypassed && moves.includes(3))
+    body.appendChild(tip("GOOD TO KNOW", "Other moves touch the drums a little, because the model sometimes hears cymbals and percussion as Other.", true,
+      { need: "No, unless the drums change level when you move Other.", steps: ["Turn on MATCH and flip A/B.", "If the hats or snare move with Other, keep Other within about 3 dB."] }));
+  else
+    body.appendChild(tip("TRY THIS", "Vocal sitting low? Vocals +2 dB is often all it takes. Flip MATCH on and A/B: the beat should stay put while the vocal steps forward.", true));
+}
+
 // Warnings go right under "What's happening" so they're seen without scrolling; friendly tips stay at the end.
 function liftWarning(body) {
   const warn = body.querySelector(".l-tip:not(.ok)"), firstSep = body.querySelector(".l-sep");
@@ -1122,6 +1179,12 @@ function refreshHeadButton() {
     bp.textContent = (selected === "dyn" ? "DYNAMICS " : "SAT ") + (on ? "ON" : "OFF");
     bp.setAttribute("aria-pressed", String(on));
     $("knob-row").classList.toggle("dimmed", !on);
+  } else if (selected === "stem") {
+    const on = !!P.stemOn.getValue();
+    bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
+    bp.textContent = on ? "STEM EQ ON" : "STEM EQ OFF";
+    bp.setAttribute("aria-pressed", String(on));
+    $("knob-row").classList.toggle("dimmed", !on);
   } else if (selected === "img") {
     const on = !!P.imgOn.getValue();
     bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
@@ -1163,6 +1226,7 @@ $("btn-bypass").addEventListener("click", () => {
   else if (selected === "img") P.imgOn.setValue(!P.imgOn.getValue());
   else if (selected === "dyn") P.dynOn.setValue(!P.dynOn.getValue());
   else if (selected === "sat") P.satOn.setValue(!P.satOn.getValue());
+  else if (selected === "stem") P.stemOn.setValue(!P.stemOn.getValue());
   else P.bypass.setValue(!P.bypass.getValue());
   onParamsChanged();
   userEdited();
@@ -1174,6 +1238,7 @@ P.bassOn.valueChangedEvent.addListener(onParamsChanged);
 P.imgOn.valueChangedEvent.addListener(onParamsChanged);
 P.dynOn.valueChangedEvent.addListener(onParamsChanged);
 P.satOn.valueChangedEvent.addListener(onParamsChanged);
+P.stemOn.valueChangedEvent.addListener(onParamsChanged);
 for (const s of [...P.dynX, ...P.dynRatio, ...P.dynGain]) s.valueChangedEvent.addListener(() => { dynPicker.refresh(); updateLiveReadouts(); });
 
 function togglePopover(id) {
@@ -1503,6 +1568,7 @@ function updateLiveReadouts() {
  : selected === "img" ? (!P.imgOn.getValue() ? "OFF" : `CORR ${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`)
                    : selected === "dyn" ? (!P.dynOn.getValue() ? "OFF" : dynIsNeutral() ? "1:1" : `GR ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`)
                    : selected === "sat" ? (!P.satOn.getValue() ? "OFF" : satIsNeutral() ? "CLEAN" : SAT_MODES[satModeIndex()].toUpperCase())
+                   : selected === "stem" ? (!P.stemOn.getValue() ? "OFF" : stemIsNeutral() ? "FLAT" : `${stemMoves().length} MOVE${stemMoves().length > 1 ? "S" : ""}`)
                    : selected === "bass" ? (!P.bassOn.getValue() ? "OFF" : `WIDTH ${Math.round(M.bassWidth || 0)} %`)
                    : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
   const r = $("read-max");
@@ -1537,6 +1603,16 @@ function updateLiveReadouts() {
   if (rd) rd.textContent = P.bypass.getValue() ? "Bypassed" : !P.dynOn.getValue() ? "Off" : dynIsNeutral() ? neutralText("dyn")
     : `${[0, 1, 2, 3].filter(dynBandActive).length} band${[0, 1, 2, 3].filter(dynBandActive).length > 1 ? "s" : ""} \u00b7 ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`;
   if (selected === "dyn") dynPicker.refresh();
+  const rst = $("read-stem");
+  if (rst) rst.textContent = P.bypass.getValue() ? "Bypassed" : !P.stemOn.getValue() ? "Off" : stemIsNeutral() ? "Neutral"
+    : stemMoves().map((k) => `${["Vox", "Drm", "Bass", "Oth"][k]} ${fmtSigned(stemGainAt(k)).replace(" dB", "")}`).join("\u00b7");
+  for (let k = 0; k < 4; k++) {
+    const f = $("sh-fill-" + k);
+    if (!f) break;
+    const v = clamp((M.stemShare || [])[k] || 0, 0, 100);
+    f.style.width = v.toFixed(0) + "%";
+    $("sh-val-" + k).textContent = `${Math.round(v)} %`;
+  }
   const rs = $("read-sat");
   if (rs) rs.textContent = P.bypass.getValue() ? "Bypassed" : !P.satOn.getValue() ? "Off" : satIsNeutral() ? neutralText("sat") : `${SAT_MODES[satModeIndex()]} +${satDriveAt().toFixed(1)} dB`;
   const hf = $("harmmeter-fill");
@@ -1590,7 +1666,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   $("sp-master").setAttribute("d", master);
   $("sp-master-glow").setAttribute("d", master);
 });
-setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "dyn", "sat"].includes(selected)) renderLearn(); }, 1000);
+setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "dyn", "sat", "stem"].includes(selected)) renderLearn(); }, 1000);
 
 // ---------------------------------------------------------------------------------------------
 buildSpectrumGrid();

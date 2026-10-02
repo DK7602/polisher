@@ -242,6 +242,14 @@ img { -webkit-user-drag: none; }
 .clipmeter-fill { height: 100%; width: 0%; border-radius: 999px; background: linear-gradient(180deg,#FF7A80,#E0141E 60%,#8E0A10);
   box-shadow: 0 0 10px rgba(255,40,50,.7); transition: width 80ms linear; }
 .knob-row.dimmed .knob, .knob-row.dimmed .seg, .knob-row.dimmed .clipmeter { opacity: .45; filter: saturate(.6); }
+/* Stem EQ: what the model hears */
+.stemhear { display: flex; flex-direction: column; gap: 7px; margin: 22px 0 6px; width: 112px; }
+.sh-row { display: flex; align-items: center; gap: 5px; }
+.sh-name { width: 10px; font-size: 11px; color: var(--dim); }
+.sh-bar { flex: 1; height: 9px; border-radius: 999px; overflow: hidden; }
+.sh-fill { height: 100%; width: 0%; border-radius: 999px; background: linear-gradient(180deg,#FF7A80,#E0141E 60%,#8E0A10); transition: width 200ms linear; }
+.sh-val { width: 30px; text-align: right; font-size: 10px; color: var(--dim); }
+.knob-row.dimmed .stemhear { opacity: .45; filter: saturate(.6); }
 .band-pick { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
 .band-pick button { height: 27px; width: 106px; font-size: 11px; font-weight: 700; letter-spacing: .04em; cursor: pointer; }
 .knob-row.dimmed .band-pick { opacity: .45; filter: saturate(.6); }
