@@ -60,6 +60,10 @@ const P = {
   satMode: Juce.getComboBoxState("satMode"),
   satDrive: Juce.getSliderState("satDrive"),
   satMix: Juce.getSliderState("satMix"),
+  ulOn: Juce.getToggleState("ulOn"),
+  ulAmount: Juce.getSliderState("ulAmount"),
+  ulLength: Juce.getSliderState("ulLength"),
+  ulFocus: Juce.getComboBoxState("ulFocus"),
   stemOn: Juce.getToggleState("stemOn"),
   tsOn: Juce.getToggleState("tsOn"),
   tsAmount: Juce.getSliderState("tsAmount"),
@@ -91,6 +95,7 @@ const M = {
   inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
   amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0, matchDb: 0, corr: 1,
   dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
+  ulBoost: 0, ulSquash: 0,
 };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
 let clipWindow = [];         // ~3 s of clipper peak-reduction samples
@@ -101,6 +106,9 @@ let lastAudioTime = 0;
 // ---------------------------------------------------------------------------------------------
 // Module catalogue. Only the Maximizer processes audio in this build.
 const modules = [
+  { id: "ul", name: "Unlimiter", live: true, soon: "",
+    what: "Puts back the punch a limiter or clipper squashed out of a beat, loop or mix, so the hits stand out again before mastering.",
+    cells: [], controls: [] },
   { id: "eq", name: "Tonal EQ", live: true, soon: "",
     what: "Shapes the overall tone in seven musical bands, from the sub up to the air, and nudges the mix toward your genre's reference balance.",
     cells: [["Low End", "30 Hz", "0.0 dB", .5], ["Bass", "90 Hz", "0.0 dB", .5], ["Low Mid", "350 Hz", "0.0 dB", .5], ["Mid", "1 kHz", "0.0 dB", .5],
@@ -222,7 +230,7 @@ function renderChain() {
     row.className = "row" + (m.live ? "" : " soon");
     // The panel art has 7 slots; with more modules every row draws its own art, packed evenly.
     const packed = modules.length > 7;
-    const pitch = packed ? (626 - 110.2) / (modules.length - 1) : 69.55;   // last row ends above the note
+    const pitch = packed ? (746 + 5 - 110.2) / modules.length : 69.55;    // rows fill the panel down to y 746
     row.style.top = (110.2 + i * pitch).toFixed(1) + "px";
     if (packed) { row.style.height = (pitch - 5).toFixed(1) + "px"; row.classList.add("packed"); }
     if (m.id === selected) row.appendChild(img("assets/row_red.png"));
@@ -616,6 +624,22 @@ const rtCells = [
   barCell({ label: "Cutting", sub: "deepest now", minText: "0", maxText: `${MINUS}12 dB`, id: "rtmeter" }),
 ];
 
+// Unlimiter cells
+const ulAmountAt = () => P.ulAmount.getScaledValue();
+const ulIsNeutral = () => !P.ulOn.getValue() || ulAmountAt() < 0.5;
+const UL_FOCUS = ["Full", "Kick", "Snap"];
+// Squash reading -> plain words (thresholds match dsp/include/polisher/Unlimiter.h).
+const UL_FULL = 8.5, UL_OPEN = 12.5;
+const ulScale = (sq) => clamp((UL_OPEN - sq) / (UL_OPEN - UL_FULL), 0, 1);
+const squashWord = (sq) => (!sq ? "listening" : sq <= UL_FULL ? "brickwalled" : sq < UL_OPEN ? "squashed" : "open");
+const ulCells = [
+  liveKnobCell({ label: "Amount", sub: "punch put back", state: P.ulAmount, def: 0, minText: "off", maxText: "100", fmt: (v) => `${Math.round(v)} %` }),
+  liveKnobCell({ label: "Length", sub: "each hit", state: P.ulLength, def: 15, minText: "5", maxText: "50", fmt: fmtMs }),
+  segCell({ label: "Focus", sub: "hits to find", state: P.ulFocus, labels: UL_FOCUS, notes: ["every hit", "kick · 808 < 150 Hz", "snare · hats > 1 kHz"] }),
+  barCell({ label: "Squash", sub: "your audio", minText: "open", maxText: "wall", id: "ulsquash" }),
+  barCell({ label: "Restoring", sub: "lift now", minText: "0", maxText: "12 dB", id: "ulmeter" }),
+];
+
 function renderModule() {
   const m = modules.find((x) => x.id === selected);
   const row = $("knob-row");
@@ -625,7 +649,7 @@ function renderModule() {
   $("btn-bypass").hidden = !m.live;
   if (m.live) {
     row.classList.remove("soon");
-    ({ clip: clipperCells, eq: eqCells, stem: stemCells, ts: tsCells, rt: rtCells, bass: bassCells, dyn: dynCells(), img: imagerCells, sat: satCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
+    ({ ul: ulCells, clip: clipperCells, eq: eqCells, stem: stemCells, ts: tsCells, rt: rtCells, bass: bassCells, dyn: dynCells(), img: imagerCells, sat: satCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
     $("module-note").textContent = "Live · drag up/down · Shift = fine · double-click = reset";
     refreshHeadButton();
   } else {
@@ -813,6 +837,7 @@ function renderLearn() {
   if (m.id === "img") { renderImagerLearn(body); liftWarning(body); prependAmSection(body, "img"); return; }
   if (m.id === "dyn") { renderDynLearn(body); liftWarning(body); prependAmSection(body, "dyn"); return; }
   if (m.id === "sat") { renderSatLearn(body); liftWarning(body); prependAmSection(body, "sat"); return; }
+  if (m.id === "ul") { renderUlLearn(body); liftWarning(body); prependAmSection(body, "ul"); return; }
   if (m.id === "ts") { renderTsLearn(body); liftWarning(body); prependAmSection(body, "ts"); return; }
   if (m.id === "rt") { renderRtLearn(body); liftWarning(body); prependAmSection(body, "rt"); return; }
   if (m.id === "stem") {
@@ -1165,6 +1190,39 @@ function renderStemLearn(body) {
     body.appendChild(tip("TRY THIS", "Vocal sitting low? Vocals +2 dB is often all it takes. Flip MATCH on and A/B: the beat should stay put while the vocal steps forward.", true));
 }
 
+function renderUlLearn(body) {
+  const on = !!P.ulOn.getValue(), bypassed = !!P.bypass.getValue();
+  const playing = performance.now() - lastAudioTime < 1500;
+  const amount = ulAmountAt(), len = P.ulLength.getScaledValue(), focus = UL_FOCUS[comboIndex(P.ulFocus)];
+  const sq = M.ulSquash || 0, lift = M.ulBoost || 0, scale = ulScale(sq);
+  const sqText = sq ? `${fmtNum(sq)} dB` : "";
+  body.appendChild(head("WHAT'S HAPPENING"));
+  body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
+    : !on ? "The Unlimiter is off, so your audio passes through untouched."
+    : !playing ? "Press play: the Unlimiter listens for a second to measure how squashed your audio is."
+    : !sq ? "Listening: it needs about a second of music to measure how squashed your audio is."
+    : amount < 0.5 ? (scale > 0 ? `Your audio measures ${squashWord(sq)} (Squash ${sqText}). Turn Amount up to put the punch back.`
+                                : `Your audio still has its punch (Squash ${sqText}), so there's nothing to undo. Leave Amount at 0.`)
+    : scale === 0 ? `Your audio still has its punch (Squash ${sqText}), so the Unlimiter rests: it only puts back what a limiter took away.`
+    : lift < 0.3 ? `Your audio measures ${squashWord(sq)} (Squash ${sqText}). Between hits nothing is lifted; it waits for the next hit.`
+    : `Lifting each hit by up to ${fmtNum(lift)} dB: your audio measures ${squashWord(sq)} (Squash ${sqText}), so the hits get back some of the height the limiter took.`));
+  body.appendChild(sep());
+  body.appendChild(head("WHAT EACH CONTROL IS DOING"));
+  body.appendChild(item("Squash", sq ? sqText : "–", "How far the peaks stand above the average level over the last 3 seconds. 13 dB or more is an open, unmastered mix; 8.5 dB or less is brickwalled (limited hard). The more squashed, the harder the Unlimiter works; on an open mix it does nothing."));
+  body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `Puts back about ${Math.round(amount)} % of the punch the limiter took away, scaled by how squashed the audio measures.`));
+  body.appendChild(item("Length", fmtMs(len), len < 12 ? "Short: just the click and snap of each hit comes back. Cleanest." : len > 30 ? "Long: the body of each hit comes back too. Bigger, but the music around the hits pumps a little." : "A middle setting: the attack and a little body of each hit."));
+  body.appendChild(item("Focus", focus, focus === "Full" ? "Listens for every hit." : focus === "Kick" ? "Listens for the kick and 808 (below 150 Hz), so only those hits come back up." : "Listens for snares, claps and hats (above 1 kHz), so only those hits come back up."));
+  body.appendChild(item("Good to know", "", "Like the limiter it undoes, it lifts the whole sound at each hit, not just the drum. It can't rebuild a waveform a clipper cut flat; it brings back the contrast between the hits and the rest."));
+  if (on && !bypassed && playing && amount > 0.5 && sq && scale === 0)
+    body.appendChild(tip("GOOD TO KNOW", "Your audio isn't squashed, so the Unlimiter has nothing to undo and stays out of the way.", true,
+      { need: "No. It is resting on purpose.", steps: ["You can leave it as it is, or set Amount to 0."] }));
+  else if (on && !bypassed && playing && lift > 9)
+    body.appendChild(tip("HEADS UP", `It's lifting some hits by more than 9 dB. That much can make the music around the hits pump.`, false,
+      { need: "Only if you hear the vocal or pads jump on each drum hit.", steps: ["Turn on MATCH and flip A/B.", "If B pumps: lower Amount by 20 %, or Length to about 10 ms.", "Or try Focus Kick so only the kick hits are lifted."] }));
+  else
+    body.appendChild(tip("TRY THIS", "Got a beat that's already loud and flat? Amount 75 %, Length 15 ms, Focus Full, then compare with MATCH on: the drums should hit harder while the level between them stays the same.", true));
+}
+
 function renderTsLearn(body) {
   const on = !!P.tsOn.getValue(), bypassed = !!P.bypass.getValue();
   const playing = performance.now() - lastAudioTime < 1500;
@@ -1179,7 +1237,7 @@ function renderTsLearn(body) {
     : `Right now it's ${move < 0 ? "pulling down" : "lifting"} the area around ${where} by ${fmtNum(Math.abs(move))} dB: this part drifted ${move < 0 ? "fuller" : "thinner"} there than the rest of the song.`));
   body.appendChild(sep());
   body.appendChild(head("WHAT EACH CONTROL IS DOING"));
-  body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `Corrects about ${Math.round(amount)} % of each drift, beyond a 1 dB dead zone, so small natural changes are left alone.`));
+  body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `Corrects about ${Math.round(amount)} % of each drift, beyond a 1 dB dead zone (3 dB in the highs, where hats and cymbals come and go), so small natural changes are left alone.`));
   body.appendChild(item("Range", `${MINUS}${range.toFixed(1)} / +${(range / 2).toFixed(1)} dB`, `Cuts go at most ${range.toFixed(1)} dB, boosts at most ${(range / 2).toFixed(1)} dB, so it can never reshape your mix, only steady it.`));
   body.appendChild(item("Speed", speed, speed === "Slow" ? "Follows whole sections: the gentlest, best for most masters."
     : speed === "Medium" ? "Follows phrases: catches a verse that gets muddier or a hook that gets harsher." : "Follows single notes and hits: strongest, can make the mix feel controlled."));
@@ -1536,7 +1594,7 @@ function refreshAllCells() {
   onParamsChanged();
 }
 
-const AM_MODULES = [["eq", "TONAL EQ"], ["stem", "STEM EQ"], ["ts", "TONE STEADY"], ["rt", "RESONANCE TAMER"], ["bass", "BASS CONTROL"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
+const AM_MODULES = [["ul", "UNLIMITER"], ["eq", "TONAL EQ"], ["stem", "STEM EQ"], ["ts", "TONE STEADY"], ["rt", "RESONANCE TAMER"], ["bass", "BASS CONTROL"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
 function notesAsTips(body) {
   for (const raw of amReport.notes || []) {
     // "TITLE: text" plus optional lines "NEED: …" and "STEP: …" (the plan).
@@ -1582,21 +1640,22 @@ function paramValue(id) {
   const map = { drive: P.drive, ceiling: P.ceiling, release: P.release, clipLevel: P.clipLevel, clipSoftness: P.clipSoftness,
                 bassMono: P.bassMono, bassTame: P.bassTame, bassPunch: P.bassPunch,
                 imgLow: P.imgLow, imgMid: P.imgMid, imgHigh: P.imgHigh, satDrive: P.satDrive, satMix: P.satMix,
-                tsAmount: P.tsAmount, tsRange: P.tsRange, rtAmount: P.rtAmount, rtSens: P.rtSens, rtRelease: P.rtRelease,
+                ulAmount: P.ulAmount, ulLength: P.ulLength, tsAmount: P.tsAmount, tsRange: P.tsRange, rtAmount: P.rtAmount, rtSens: P.rtSens, rtRelease: P.rtRelease,
                 stemVoc: P.stemGain[0], stemDrums: P.stemGain[1], stemBass: P.stemGain[2], stemOther: P.stemGain[3] };
   const band = /^dyn(X|Thr|Ratio|Atk|Rel|Gain)(\d)$/.exec(id);
   if (band) return P["dyn" + band[1]][Number(band[2]) - 1].getScaledValue();
   if (id === "satMode") return satModeIndex();
   if (id === "tsSpeed") return comboIndex(P.tsSpeed);
+  if (id === "ulFocus") return comboIndex(P.ulFocus);
   if (id === "rtFocus") return comboIndex(P.rtFocus);
   if (map[id]) return map[id].getScaledValue();
   const toggles = { eqOn: P.eqOn, bassOn: P.bassOn, clipOn: P.clipOn, adaptive: P.adaptive, bypass: P.bypass,
-                    dynOn: P.dynOn, dynAdaptive: P.dynAdaptive, imgOn: P.imgOn, satOn: P.satOn, tsOn: P.tsOn, rtOn: P.rtOn };
+                    dynOn: P.dynOn, dynAdaptive: P.dynAdaptive, imgOn: P.imgOn, satOn: P.satOn, tsOn: P.tsOn, rtOn: P.rtOn, ulOn: P.ulOn };
   if (toggles[id]) return toggles[id].getValue() ? 1 : 0;
   if (id === "clipOversampling") return osIndex();
   return null;
 }
-const MODULE_PARAMS = { stem: /^stem/, ts: /^ts/, rt: /^rt/, eq: /^eq/, bass: /^bass/, dyn: /^dyn/, img: /^img/, sat: /^sat/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive)$/ };
+const MODULE_PARAMS = { ul: /^ul/, stem: /^stem/, ts: /^ts/, rt: /^rt/, eq: /^eq/, bass: /^bass/, dyn: /^dyn/, img: /^img/, sat: /^sat/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive)$/ };
 function moduleUnchanged(module) {
   const values = (amReport && amReport.values) || {};
   return Object.entries(values).every(([id, v]) => {
@@ -1732,6 +1791,7 @@ function updateLiveReadouts() {
  : selected === "img" ? (!P.imgOn.getValue() ? "OFF" : `CORR ${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`)
                    : selected === "dyn" ? (!P.dynOn.getValue() ? "OFF" : dynIsNeutral() ? "1:1" : `GR ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`)
                    : selected === "sat" ? (!P.satOn.getValue() ? "OFF" : satIsNeutral() ? "CLEAN" : SAT_MODES[satModeIndex()].toUpperCase())
+                   : selected === "ul" ? (!P.ulOn.getValue() ? "OFF" : ulIsNeutral() ? "IDLE" : !M.ulSquash ? "LISTENING" : (M.ulBoost || 0) < 0.3 ? "RESTING" : `LIFT +${fmtNum(M.ulBoost)} dB`)
                    : selected === "ts" ? (!P.tsOn.getValue() ? "OFF" : tsIsNeutral() ? "IDLE" : Math.abs(M.tsDb || 0) < 0.3 ? "RESTING" : `STEADY ${fmtNum(M.tsDb)} dB`)
                    : selected === "rt" ? (!P.rtOn.getValue() ? "OFF" : rtIsNeutral() ? "IDLE" : (M.rtCut || 0) > -0.3 ? "RESTING" : `CUT ${fmtNum(M.rtCut)} dB`)
                    : selected === "stem" ? (!P.stemOn.getValue() ? "OFF" : stemIsNeutral() ? "FLAT" : `${stemMoves().length} MOVE${stemMoves().length > 1 ? "S" : ""}`)
@@ -1769,6 +1829,18 @@ function updateLiveReadouts() {
   if (rd) rd.textContent = P.bypass.getValue() ? "Bypassed" : !P.dynOn.getValue() ? "Off" : dynIsNeutral() ? neutralText("dyn")
     : `${[0, 1, 2, 3].filter(dynBandActive).length} band${[0, 1, 2, 3].filter(dynBandActive).length > 1 ? "s" : ""} \u00b7 ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`;
   if (selected === "dyn") dynPicker.refresh();
+  const rul = $("read-ul");
+  if (rul) rul.textContent = P.bypass.getValue() ? "Bypassed" : !P.ulOn.getValue() ? "Off" : ulIsNeutral() ? neutralText("ul")
+    : `${Math.round(ulAmountAt())} % \u00b7 ${UL_FOCUS[comboIndex(P.ulFocus)]}`;
+  const usf = $("ulsquash-fill");
+  if (usf) {
+    const sq = M.ulSquash || 0;
+    usf.style.width = (sq ? clamp((16 - sq) / 10, 0, 1) * 100 : 0).toFixed(1) + "%";
+    $("ulsquash-val").textContent = !sq ? "listening" : `${fmtNum(sq)} dB \u00b7 ${squashWord(sq)}`;
+    const v = ulIsNeutral() || P.bypass.getValue() ? 0 : M.ulBoost || 0;
+    $("ulmeter-fill").style.width = (clamp(v / 12, 0, 1) * 100).toFixed(1) + "%";
+    $("ulmeter-val").textContent = v < 0.3 ? "resting" : `+${v.toFixed(1)} dB`;
+  }
   const rts = $("read-ts");
   if (rts) rts.textContent = P.bypass.getValue() ? "Bypassed" : !P.tsOn.getValue() ? "Off" : tsIsNeutral() ? neutralText("ts")
     : `${Math.round(tsAmountAt())} % \u00b7 ${MINUS}${P.tsRange.getScaledValue().toFixed(1)} dB`;
@@ -1851,7 +1923,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   $("sp-master").setAttribute("d", master);
   $("sp-master-glow").setAttribute("d", master);
 });
-setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "dyn", "sat", "stem", "ts", "rt"].includes(selected)) renderLearn(); }, 1000);
+setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "dyn", "sat", "stem", "ts", "rt", "ul"].includes(selected)) renderLearn(); }, 1000);
 
 // ---------------------------------------------------------------------------------------------
 buildSpectrumGrid();
