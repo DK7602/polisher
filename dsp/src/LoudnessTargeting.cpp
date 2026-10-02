@@ -156,6 +156,26 @@ std::array<double, kStems> measureStemLevels (const AudioClip& clip)
     return out;
 }
 
+SpectralStats measureSpectral (const AudioClip& clip, const ToneSteadyParams& steady, const ResonanceParams& resonance)
+{
+    const int nch = clip.numChannels(), n = clip.numSamples();
+    if (nch == 0 || n == 0)
+        return {};
+    auto stage = std::make_unique<StemEQ>();
+    stage->prepare (clip.sampleRate, nch);
+    stage->setToneSteady (steady);
+    stage->setResonance (resonance);
+    stage->reset();
+    std::vector<double> frame (static_cast<size_t> (nch));
+    for (int i = 0; i < n; ++i)
+    {
+        for (int c = 0; c < nch; ++c)
+            frame[static_cast<size_t> (c)] = clip.channels[static_cast<size_t> (c)][static_cast<size_t> (i)];
+        stage->processFrame (frame.data(), nch);
+    }
+    return stage->takeSpectralStats();
+}
+
 AudioClip renderPreDrive (const AudioClip& input, const MasterChainParams& params)
 {
     AudioClip out = renderBass (renderSpectral (renderEq (input, params.eq), params.stem, params.steady, params.resonance), params.bass);

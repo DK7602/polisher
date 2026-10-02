@@ -208,6 +208,8 @@ void StemEQ::reset() noexcept
     tsShort.fill (0.0); tsLong.fill (0.0); tsGain.fill (0.0); tsTarget.fill (0.0);
     tsFrames = 0;
     rtDeepest = rtDeepestHz = tsLargest = tsLargestHz = 0.0;
+    statPower = statCut = statCutLow = statCutHigh = statSteady = 0.0;
+    statSteadyFrames = 0;
     // Start fully in the set state.
     running = ! allNeutral();
     mix = running ? 1.0 : 0.0;
@@ -328,6 +330,14 @@ void StemEQ::resonanceGains (const std::complex<double>* L, const std::complex<d
         g += (t - g) * (t < g ? attack : release);
         if (g > -1.0e-6) g = 0.0;
         rtLin[K] = g == 0.0 ? 1.0 : std::exp (g * (std::numbers::ln10 / 20.0));
+        if (g < 0.0)
+        {
+            const double f = k * binHz, c = -g * power[K];
+            statCut += c;
+            if (f >= 150.0 && f <= 800.0) statCutLow += c;
+            else if (f >= 1500.0 && f <= 8000.0) statCutHigh += c;
+        }
+        statPower += power[K];
         if (g < rtDeepest) { rtDeepest = g; rtDeepestHz = k * binHz; }
     }
 }
@@ -409,6 +419,12 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
         if (std::abs (tsGain[b]) < 1.0e-6) tsGain[b] = 0.0;
         if (std::abs (tsGain[b]) > std::abs (tsLargest)) { tsLargest = tsGain[b]; tsLargestHz = bandCf[b]; }
     }
+    if (active)
+    {
+        double num = 0.0, den = 0.0;
+        for (size_t b = 0; b < static_cast<size_t> (B); ++b) { num += e[b] * std::abs (tsGain[b]); den += e[b]; }
+        if (den > 0.0) { statSteady += num / den; ++statSteadyFrames; }
+    }
     std::fill (tsBin.begin(), tsBin.end(), 0.0);
     for (int band = 0; band < B; ++band)
     {
@@ -418,6 +434,17 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
         for (int k = bandLo[static_cast<size_t> (band)]; k < bandHi[static_cast<size_t> (band)]; ++k)
             tsBin[static_cast<size_t> (k)] += w[k] * g;
     }
+}
+
+SpectralStats StemEQ::takeSpectralStats() noexcept
+{
+    SpectralStats s;
+    if (statPower > 0.0) s.resonanceCutDb = -statCut / statPower;
+    if (statCut > 0.0) { s.boxinessShare = statCutLow / statCut; s.harshnessShare = statCutHigh / statCut; }
+    if (statSteadyFrames > 0) s.steadyMoveDb = statSteady / static_cast<double> (statSteadyFrames);
+    statPower = statCut = statCutLow = statCutHigh = statSteady = 0.0;
+    statSteadyFrames = 0;
+    return s;
 }
 
 void StemEQ::hop() noexcept

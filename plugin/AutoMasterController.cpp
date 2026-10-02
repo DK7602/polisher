@@ -192,6 +192,15 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
             set ("eqGain" + juce::String (b + 1), static_cast<float> (c.eq.gainDb[static_cast<size_t> (b)]));
             set ("eqFreq" + juce::String (b + 1), static_cast<float> (polisher::kEqBandSpecs[static_cast<size_t> (b)].defaultHz));
         }
+        set ("tsOn", 1.0f);
+        set ("tsAmount", static_cast<float> (c.steady.amount));
+        set ("tsRange", static_cast<float> (c.steady.rangeDb));
+        set ("tsSpeed", static_cast<float> (c.steady.speed));
+        set ("rtOn", 1.0f);
+        set ("rtAmount", static_cast<float> (c.resonance.amount));
+        set ("rtSens", static_cast<float> (c.resonance.sensitivity));
+        set ("rtRelease", static_cast<float> (c.resonance.releaseMs));
+        set ("rtFocus", static_cast<float> (static_cast<int> (c.resonance.focus)));
         set ("bassOn", 1.0f);
         set ("bassMono", static_cast<float> (c.bass.monoHz >= polisher::kBassMonoOffHz ? c.bass.monoHz : 0.0));
         set ("bassTame", static_cast<float> (c.bass.tame * 100.0));

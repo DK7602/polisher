@@ -9,6 +9,15 @@ namespace polisher {
 inline constexpr int kStems = 4;
 enum StemIndex { kStemVocals = 0, kStemDrums = 1, kStemBass = 2, kStemOther = 3 };
 
+/** What Resonance Tamer and Tone Steady did over a stretch of audio (for Auto-Master). */
+struct SpectralStats
+{
+    double resonanceCutDb = 0.0;   // energy-weighted average resonance cut (dB, <= 0)
+    double boxinessShare = 0.0;    // share of that cutting in 150-800 Hz (0..1)
+    double harshnessShare = 0.0;   // share in 1.5-8 kHz (0..1)
+    double steadyMoveDb = 0.0;     // energy-weighted average size of Tone Steady's corrections (dB, >= 0)
+};
+
 struct StemEQParams
 {
     bool enabled = true;
@@ -148,6 +157,9 @@ public:
         tsLargest = 0.0; tsLargestHz = 0.0;
     }
 
+    /** Averages since the last call (see SpectralStats). */
+    SpectralStats takeSpectralStats() noexcept;
+
     /** Shares ([stem][band]) of the latest frame the model finished, and how many it has done. */
     const std::array<float, kStems * StemNet::kBands>& latestShares() const noexcept { return shares; }
     long framesAnalysed() const noexcept { return analysed; }
@@ -183,6 +195,8 @@ private:
     double rtAmount = 0.0, tsAmount = 0.0, framesPerSecond = 187.5, tsLevelShort = 0.0, tsLevelLong = 0.0;
     long tsFrames = 0;
     double rtDeepest = 0.0, rtDeepestHz = 0.0, tsLargest = 0.0, tsLargestHz = 0.0;
+    double statPower = 0.0, statCut = 0.0, statCutLow = 0.0, statCutHigh = 0.0, statSteady = 0.0;
+    long statSteadyFrames = 0;
     int inPos = 0, queuePos = 0;
     long frameCount = 0, analysed = 0;
 

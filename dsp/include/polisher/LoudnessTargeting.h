@@ -51,6 +51,9 @@ inline AudioClip renderStemEq (const AudioClip& clip, const StemEQParams& params
     relative to the whole clip (-100 when it hears none of it). */
 std::array<double, kStems> measureStemLevels (const AudioClip& clip);
 
+/** Runs Tone Steady and Resonance Tamer over a clip and reports how much they had to do. */
+SpectralStats measureSpectral (const AudioClip& clip, const ToneSteadyParams& steady, const ResonanceParams& resonance);
+
 /** Renders a clip through Bass Control offline (zero latency). */
 AudioClip renderBass (const AudioClip& clip, const BassParams& params);
 

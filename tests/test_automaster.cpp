@@ -47,7 +47,7 @@ void checkWellFormed (const AutoMasterResult& r)
 {
     REQUIRE (r.ok);
     CHECK_FALSE (r.summary.empty());
-    for (const char* module : { "eq", "bass", "dyn", "img", "sat", "clip", "max" })
+    for (const char* module : { "eq", "ts", "rt", "bass", "dyn", "img", "sat", "clip", "max" })
     {
         INFO ("module " << module);
         CHECK (std::any_of (r.reasons.begin(), r.reasons.end(), [&] (const auto& x) { return x.module == module; }));

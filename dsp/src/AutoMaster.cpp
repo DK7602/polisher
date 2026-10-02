@@ -587,7 +587,62 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
     // Each band is held down by a set amount on its loud moments (the threshold is found by running
     // the real compressor on what Auto-Master heard), and what the band loses on average is given
     // back, so the tone stays put while the loud moments get steadier.
-    const AudioClip toneShaped = renderBass (renderEq (clip, chain.eq), chain.bass);
+    // --- Resonance Tamer and Tone Steady: measured at full strength on the EQ'd mix ----------------------
+    // How much they would have to do tells how ringy the mix is and how much its tone swings.
+    {
+        const AudioClip eqd = renderEq (clip, chain.eq);
+        ToneSteadyParams tsProbe; tsProbe.amount = 100.0; tsProbe.rangeDb = 6.0; tsProbe.speed = 1;
+        ResonanceParams rtProbe; rtProbe.amount = 100.0;
+        const SpectralStats st = measureSpectral (eqd, tsProbe, rtProbe);
+        const bool gentle = s.intensity == Intensity::gentle, punchy = s.intensity == Intensity::punchy;
+
+        auto& rt = chain.resonance;
+        rt = ResonanceParams {};
+        const double fullCut = -st.resonanceCutDb;
+        if (fullCut < 0.15)
+            reason ("rt", "Amount", "0 %", "I hardly hear any tones ringing out of your mix (at full strength the tamer would cut only " +
+                    num (fullCut, false, 2) + " dB on average), so Resonance Tamer stays off.");
+        else
+        {
+            const double aim = gentle ? 0.3 : punchy ? 0.8 : 0.5;   // average trim, dB
+            // Mild ringing gets a mild Amount: capped at 60 % rather than chasing the average trim.
+            rt.amount = std::clamp (std::round (100.0 * aim / fullCut / 5.0) * 5.0, 15.0, 60.0);
+            const char* where = st.boxinessShare > 0.65 ? "the low mids (boxiness)" : st.harshnessShare > 0.65 ? "the upper mids (harshness)" : "several places across the range";
+            reason ("rt", "Amount", pct (rt.amount), "Some tones in your mix ring out above the sound around them, mostly in " + std::string (where) +
+                    ". At full strength the tamer would cut " + num (fullCut) + " dB on average; " + pct (rt.amount) + " trims them by about " +
+                    num (std::min (aim, fullCut * rt.amount / 100.0)) + " dB, enough to clean them up without dulling the sound.");
+            if (st.boxinessShare > 0.65)
+            {
+                rt.focus = ResonanceFocus::boxiness;
+                reason ("rt", "Focus", "Boxiness", "Most of the ringing sits between 150 and 800 Hz, so the tamer only looks there and leaves vocals and hats alone.");
+            }
+            else if (st.harshnessShare > 0.65)
+            {
+                rt.focus = ResonanceFocus::harshness;
+                reason ("rt", "Focus", "Harshness", "Most of the ringing sits between 1.5 and 8 kHz, so the tamer only looks there and leaves the low end alone.");
+            }
+            else
+                reason ("rt", "Focus", "Full", "The ringing is spread out, so the tamer watches the whole range.");
+        }
+
+        auto& ts = chain.steady;
+        ts = ToneSteadyParams {};
+        const double swing = st.steadyMoveDb;
+        if (swing < 0.35)
+            reason ("ts", "Amount", "0 %", "Your tone stays consistent through what I heard (at full strength Tone Steady would move only " +
+                    num (swing, false, 2) + " dB on average), so it stays off.");
+        else
+        {
+            ts.amount = gentle ? 25.0 : punchy ? 55.0 : 40.0;
+            ts.speed = swing > 1.2 ? 1 : 0;
+            reason ("ts", "Amount", pct (ts.amount), "Your tone shifts from moment to moment: at full strength Tone Steady would move " + num (swing) +
+                    " dB on average. " + pct (ts.amount) + " keeps the parts consistent while they keep their own character. Range stays at \xC2\xB1" "3 dB.");
+            reason ("ts", "Speed", ts.speed == 1 ? "Medium" : "Slow", ts.speed == 1 ? "The shifts come phrase by phrase, so Medium follows them."
+                                                                                    : "The shifts are gradual, so Slow follows whole sections, the gentlest setting.");
+        }
+    }
+
+    const AudioClip toneShaped = renderBass (renderSpectral (renderEq (clip, chain.eq), {}, chain.steady, chain.resonance), chain.bass);
     // The compressor's thresholds are found on the loudest 6 s (quicker, and that's what it must hold).
     const AudioClip loudest = [&]
     {
@@ -836,6 +891,8 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
     MasterChainParams rest = chain;
     rest.eq = TonalEQParams {};
     rest.bass = BassParams {};
+    rest.steady = ToneSteadyParams {};
+    rest.resonance = ResonanceParams {};
     rest.dynamics = DynamicsParams {};
     rest.imager = ImagerParams {};
     rest.saturation = SaturationParams {};
