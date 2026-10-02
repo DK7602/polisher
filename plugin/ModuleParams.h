@@ -23,6 +23,7 @@ namespace ModuleParams
     {
         juce::StringArray ids;
         for (auto* id : stemIds) ids.add (id);
+        for (const char* id : { "tsAmount", "tsRange", "rtAmount", "rtSens", "rtRelease" }) ids.add (id);
         for (int x = 0; x < polisher::kDynBands - 1; ++x) ids.add (band ("dynX", x));
         for (const char* p : { "dynThr", "dynRatio", "dynAtk", "dynRel", "dynGain" })
             for (int b = 0; b < polisher::kDynBands; ++b) ids.add (band (p, b));
@@ -30,8 +31,8 @@ namespace ModuleParams
         ids.add ("satMix");
         return ids;
     }
-    inline juce::StringArray toggleIds() { return { "stemOn", "dynOn", "dynAdaptive", "satOn" }; }
-    inline juce::StringArray comboIds()  { return { "satMode" }; }
+    inline juce::StringArray toggleIds() { return { "stemOn", "tsOn", "rtOn", "dynOn", "dynAdaptive", "satOn" }; }
+    inline juce::StringArray comboIds()  { return { "satMode", "tsSpeed", "rtFocus" }; }
 
     inline void addTo (juce::AudioProcessorValueTreeState::ParameterLayout& layout)
     {
@@ -49,6 +50,23 @@ namespace ModuleParams
                                                                NormalisableRange<float> (static_cast<float> (-polisher::StemEQ::kMaxGainDb),
                                                                                          static_cast<float> (polisher::StemEQ::kMaxGainDb), 0.1f), 0.0f,
                                                                AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction (dbText)));
+
+        // Tone Steady and Resonance Tamer (run with Stem EQ): Amount 0 = untouched. Version hint 2.
+        auto pctText = [] (float v, int) { return String (roundToInt (v)) + " %"; };
+        layout.add (std::make_unique<AudioParameterBool> (ParameterID { "tsOn", 2 }, "Tone Steady On", true));
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "tsAmount", 2 }, "Tone Steady Amount", NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f,
+                                                           AudioParameterFloatAttributes().withLabel ("%").withStringFromValueFunction (pctText)));
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "tsRange", 2 }, "Tone Steady Range", NormalisableRange<float> (1.0f, 6.0f, 0.1f), 3.0f,
+                                                           AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction (dbText)));
+        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "tsSpeed", 2 }, "Tone Steady Speed", StringArray { "Slow", "Medium", "Fast" }, 1));
+        layout.add (std::make_unique<AudioParameterBool> (ParameterID { "rtOn", 2 }, "Resonance Tamer On", true));
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "rtAmount", 2 }, "Resonance Tamer Amount", NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f,
+                                                           AudioParameterFloatAttributes().withLabel ("%").withStringFromValueFunction (pctText)));
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "rtSens", 2 }, "Resonance Tamer Sensitivity", NormalisableRange<float> (0.0f, 100.0f, 0.1f), 50.0f,
+                                                           AudioParameterFloatAttributes().withLabel ("%").withStringFromValueFunction (pctText)));
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "rtRelease", 2 }, "Resonance Tamer Release", NormalisableRange<float> (20.0f, 300.0f, 1.0f, 0.5f), 80.0f,
+                                                           AudioParameterFloatAttributes().withLabel ("ms").withStringFromValueFunction (msText)));
+        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "rtFocus", 2 }, "Resonance Tamer Focus", StringArray { "Full", "Boxiness", "Harshness" }, 0));
 
         // Dynamics (after Bass Control): four bands, 1:1 = untouched.
         layout.add (std::make_unique<AudioParameterBool> (ParameterID { "dynOn", 1 }, "Dynamics On", true));
@@ -104,6 +122,8 @@ namespace ModuleParams
         {
             auto get = [&s] (const juce::String& id) { auto* p = s.getRawParameterValue (id); jassert (p != nullptr); return p; };
             stemOn = get ("stemOn");
+            tsOn = get ("tsOn"); tsAmount = get ("tsAmount"); tsRange = get ("tsRange"); tsSpeed = get ("tsSpeed");
+            rtOn = get ("rtOn"); rtAmount = get ("rtAmount"); rtSens = get ("rtSens"); rtRelease = get ("rtRelease"); rtFocus = get ("rtFocus");
             for (int k = 0; k < polisher::kStems; ++k) stemGain[static_cast<size_t> (k)] = get (stemIds[k]);
             dynOn = get ("dynOn");
             dynAdaptive = get ("dynAdaptive");
@@ -132,6 +152,27 @@ namespace ModuleParams
             polisher::StemEQParams p;
             p.enabled = stemOn->load() > 0.5f && ! bypassed;
             for (size_t k = 0; k < stemGain.size(); ++k) p.gainDb[k] = stemGain[k]->load();
+            return p;
+        }
+
+        polisher::ToneSteadyParams steady (bool bypassed) const noexcept
+        {
+            polisher::ToneSteadyParams p;
+            p.enabled = tsOn->load() > 0.5f && ! bypassed;
+            p.amount = tsAmount->load();
+            p.rangeDb = tsRange->load();
+            p.speed = juce::jlimit (0, 2, juce::roundToInt (tsSpeed->load()));
+            return p;
+        }
+
+        polisher::ResonanceParams resonance (bool bypassed) const noexcept
+        {
+            polisher::ResonanceParams p;
+            p.enabled = rtOn->load() > 0.5f && ! bypassed;
+            p.amount = rtAmount->load();
+            p.sensitivity = rtSens->load();
+            p.releaseMs = rtRelease->load();
+            p.focus = static_cast<polisher::ResonanceFocus> (juce::jlimit (0, 2, juce::roundToInt (rtFocus->load())));
             return p;
         }
 
@@ -168,6 +209,9 @@ namespace ModuleParams
 
     private:
         std::atomic<float>* stemOn = nullptr;
+        std::atomic<float>* tsOn = nullptr; std::atomic<float>* tsAmount = nullptr; std::atomic<float>* tsRange = nullptr; std::atomic<float>* tsSpeed = nullptr;
+        std::atomic<float>* rtOn = nullptr; std::atomic<float>* rtAmount = nullptr; std::atomic<float>* rtSens = nullptr;
+        std::atomic<float>* rtRelease = nullptr; std::atomic<float>* rtFocus = nullptr;
         std::array<std::atomic<float>*, polisher::kStems> stemGain {};
         std::atomic<float>* dynOn = nullptr;
         std::atomic<float>* dynAdaptive = nullptr;

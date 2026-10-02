@@ -321,6 +321,17 @@ void PolisherWebEditor::timerCallback()
     satSigHold = satSigHold * 0.9 + m.satSignal.exchange (0.0f);
     const double ratio = satSigHold > 1.0e-12 ? satResHold / satSigHold : 0.0;
     frame->setProperty ("satHarm",    roundTo (ratio > 1.0e-10 ? static_cast<float> (10.0 * std::log10 (ratio)) : -100.0f, 0.1f));
+    // Resonance Tamer / Tone Steady: hold the strongest move for a moment so it can be read.
+    const float rtNow = m.rtCut.exchange (0.0f), rtHzNow = m.rtHz.exchange (0.0f);
+    rtHold = rtNow < rtHold ? rtNow : rtHold * 0.85f + rtNow * 0.15f;
+    if (rtNow < -0.3f) rtHzHold = rtHzNow;
+    const float tsNow = m.tsDb.exchange (0.0f), tsHzNow = m.tsHz.exchange (0.0f);
+    tsHold = std::abs (tsNow) > std::abs (tsHold) ? tsNow : tsHold * 0.85f + tsNow * 0.15f;
+    if (std::abs (tsNow) > 0.3f) tsHzHold = tsHzNow;
+    frame->setProperty ("rtCut", roundTo (rtHold, 0.1f));
+    frame->setProperty ("rtHz",  juce::roundToInt (rtHzHold));
+    frame->setProperty ("tsDb",  roundTo (tsHold, 0.1f));
+    frame->setProperty ("tsHz",  juce::roundToInt (tsHzHold));
     // Stem EQ: share of the music the model hears as vocals / drums / bass / other (%, ~1 s average).
     double stemTotal = 0.0;
     for (size_t k = 0; k < stemHold.size(); ++k)

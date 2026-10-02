@@ -103,6 +103,7 @@ private:
     std::array<float, polisher::kDynBands> dynHold {};
     double satResHold = 0.0, satSigHold = 0.0;
     std::array<double, polisher::kStems> stemHold {};
+    float rtHold = 0.0f, rtHzHold = 0.0f, tsHold = 0.0f, tsHzHold = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherWebEditor)
 };

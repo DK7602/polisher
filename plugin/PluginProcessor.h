@@ -79,7 +79,9 @@ public:
         std::atomic<float> correlation { 1.0f };      // output L/R correlation (+1 mono ... -1 out of phase)
         std::array<std::atomic<float>, polisher::kDynBands> dynGr {};   // deepest Dynamics gain reduction per band since read (dB, <= 0)
         std::atomic<float> satResidual { 0.0f }, satSignal { 0.0f };   // Saturation energies since read (harmonics, signal)
-        std::array<std::atomic<float>, polisher::kStems> stemEnergy {};   // energy the Stem EQ model credited to each stem since read
+        std::array<std::atomic<float>, polisher::kStems> stemEnergy {};
+        std::atomic<float> rtCut { 0.0f }, rtHz { 0.0f };   // deepest Resonance Tamer cut since read (dB, <= 0) and where
+        std::atomic<float> tsDb { 0.0f }, tsHz { 0.0f };    // largest Tone Steady correction since read (dB, signed) and where   // energy the Stem EQ model credited to each stem since read
     };
     Meters meters;
 

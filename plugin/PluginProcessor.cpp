@@ -198,6 +198,8 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     clipper.prepare (channels);
     eq.prepare (sampleRate, channels);
     stemEq.setParams (moduleParams.stem (bypassParam->load() > 0.5f));   // so reset() starts in the saved state
+    stemEq.setToneSteady (moduleParams.steady (bypassParam->load() > 0.5f));
+    stemEq.setResonance (moduleParams.resonance (bypassParam->load() > 0.5f));
     stemEq.prepare (sampleRate, channels);
     bass.prepare (sampleRate, channels);
     dynamics.prepare (sampleRate, channels);
@@ -268,6 +270,8 @@ void PolisherAudioProcessor::updateLimiterParams()
     imager.setParams (ip);
 
     stemEq.setParams (moduleParams.stem (p.bypassed));
+    stemEq.setToneSteady (moduleParams.steady (p.bypassed));
+    stemEq.setResonance (moduleParams.resonance (p.bypassed));
     dynamics.setParams (moduleParams.dynamics (p.bypassed));
     saturation.setParams (moduleParams.saturation (p.bypassed));
 
@@ -419,6 +423,11 @@ void PolisherAudioProcessor::publishMeters()
         if (d < slot.load())
             slot.store (d);
     }
+    double rtDb = 0.0, rtHz = 0.0, tsDb = 0.0, tsHz = 0.0;
+    stemEq.takeResonanceMeter (rtDb, rtHz);
+    if (rtDb < meters.rtCut.load()) { meters.rtCut.store (static_cast<float> (rtDb)); meters.rtHz.store (static_cast<float> (rtHz)); }
+    stemEq.takeToneSteadyMeter (tsDb, tsHz);
+    if (std::abs (tsDb) > std::abs (meters.tsDb.load())) { meters.tsDb.store (static_cast<float> (tsDb)); meters.tsHz.store (static_cast<float> (tsHz)); }
     std::array<double, polisher::kStems> stemE {};
     stemEq.takeStemEnergies (stemE);
     for (size_t k = 0; k < stemE.size(); ++k)
