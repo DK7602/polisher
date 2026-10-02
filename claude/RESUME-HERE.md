@@ -75,7 +75,12 @@ Experiments 2026-10-02 (7 held-out avg / Gallas, dB; static -15.0 / -13.8, oracl
   LOSS=move (trains on the move error itself): worse, -14.1 / -14.4; train reached -21..-27 dB vs
   val -14 -> it is a generalisation limit (~110 songs), not the loss, size, input or look-ahead.
   All variants sit at about -15 dB = the best static EQ that knew the true song-average shares.
-  Next: listening test on Gallas (vocals +6): ideal stems vs teacher shares vs our model.
+  Listening test (render.py, Gallas 1:00-1:20, vocals +6): user heard our model's vocals at the
+  same level as the ideal, no odd sounds.  DECISION: research done, ship model v2 (share loss, remix,
+  HIDDEN 128, 1 layer, 247k params; best checkpoint of the 16k run, step 7.6k).  Keep a copy of
+  stemnet_v2.pt in the repo (tools/stem/models/) - the scratchpad does not survive.
+  Next: export weights, C++ engine (dsp/src/StemEQ.cpp) + tests (exact passthrough at 0 dB, C++ vs
+  PyTorch frame by frame), params / UI / Learn, Auto-Master hooks, review agent, user test.
 Next: download MUSDB (a subset first), prep, train ~20k steps, validate on held-out songs, try to
 cut drum bleed in "other" (htdemucs_ft teacher failed to download here: retry with Full network),
 then C++ engine + exact-passthrough tests, params/UI/Learn ("other" cuts touch drums a little),
