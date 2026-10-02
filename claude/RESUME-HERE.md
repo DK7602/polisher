@@ -6,8 +6,8 @@ latest green Actions run.
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
 
-## Status: v0.12.0 — ten modules (Tone Steady + Resonance Tamer new); Auto-Master sets all but Stem EQ (suggests vocals)
-Chain: Tonal EQ -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
+## Status: v0.13.0 — eleven modules (Unlimiter new, slot 01); Auto-Master sets all but Stem EQ (suggests vocals)
+Chain: Unlimiter -> Tonal EQ -> Stem EQ / Tone Steady / Resonance Tamer -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
 -> Maximizer (+ MATCH gain at the very end). Engine tests: 73 cases
 (`cmake -S . -B build-tests -DPOLISHER_BUILD_PLUGIN=OFF && cmake --build build-tests && ./build-tests/tests/polisher_tests`).
 
@@ -127,7 +127,11 @@ Sent the user A/B clips (Addie, Dean: off vs Auto-Master's settings, level-match
 400-650 Hz ~2 dB, 808 range < 0.5 dB. User's ears: B "lessened some of the high pitched
 frequencies" (no complaint about 808 / vocal body). Measured: Addie B was -0.6 dB at 4-8 kHz and
 -1.0 dB at 8-16 kHz (Tone Steady, not the tamer, whose Focus was Boxiness); Dean's top end ~0.
-FIRST THING NEXT SESSION: ask whether the duller top is wanted; likely fix: keep Tone Steady from
+DONE 2026-10-02 (user: "go with your pick"): above ~2.5 kHz Tone Steady's short-term average is 2 s, dead
+band 3 dB, cuts capped at Range/2; band averages freeze in silence. Test: busy trap hats keep their top
+(was -0.7 dB, now 0.0 at all speeds); a harsher section is still cut. A/B clips NOT re-rendered (user songs
+not in this session) - ask the user to A/B Addie in the plug-in.
+(Old note:) ask whether the duller top is wanted; likely fix: keep Tone Steady from
 cutting the top unless that band truly drifts (e.g. no cuts above ~4 kHz from short-term hat / cymbal
 bursts: longer short-term average or a larger dead band up there), re-render the A/B, ask again.
 Clips were rendered before the silence fix (e5d4bb6); Dean's tamer now caps at 60 %.
@@ -139,3 +143,17 @@ Clips were rendered before the silence fix (e5d4bb6); Dean's tamer now caps at 6
   steps to rebuild. Model v2 is in tools/stem/models/stemnet_v2.pt.
 - Open items: Tone Steady top-end dulling (above); Auto-Master turning a too-hot mix down (offered,
   not done); repo private (user doing it); Pro EQ / Maximizer modes / Match ref / shoot-out list below.
+
+## Unlimiter (v0.13.0, 2026-10-02; user asked for an Ozone-Unlimiter-like "undo" for squashed beats)
+Module 01 (before Tonal EQ). dsp/src/Unlimiter.cpp: 5 ms RMS detector (max over channels, Focus filter:
+Full / Kick < 150 Hz / Snap > 1 kHz), fast follower held 25 ms + 80 ms release, slow follower 50 ms attack
+falls with it; lift = 6 dB per dB of rise beyond 1.5 dB x Amount x squashScale, max 12 dB, lets go over
+Length (5-50 ms, default 15); wideband gain, 1.5 ms look-ahead (latency 72 @ 48k). Squash = sample peak
+minus RMS over the last 3 s (blocks above -60 dBFS). squashScale: 1 at <= 8.5 dB, 0 at >= 12.5 dB, so
+open mixes are never touched (the user's own mixes, -17 LUFS / -1 dBTP, should read ~13: CHECK on a real
+song). Calibration is from synthetic tests only (beat pushed 14 dB into a 30 ms limiter gets ~3/4 of its
+hit contrast back). Auto-Master: measures Squash on what it heard; scale >= 0.25 -> Amount 50/75/100 by
+intensity + a NEED/STEP note; the rest of the chain is set for the restored mix. Params ulOn / ulAmount /
+ulLength / ulFocus (hint 3), meters ulBoost / ulSquash. UI: chain note moved to the top of Quick Help,
+11 rows fill the panel. NEXT: user test on a squashed beat (MATCH A/B); confirm Squash readings on the
+user's own mixes and on a released master.
