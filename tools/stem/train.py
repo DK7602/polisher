@@ -15,6 +15,7 @@ OWN_SHARE = 0.35                               # share of excerpts from teacher-
 REMIX = float(os.environ.get('REMIX', 0.75))   # share of excerpts that are remixes
 FEAT = os.environ.get('FEAT', 'x')             # model input: x (64 bands) or xh (detailed, no remix yet)
 OUT = os.environ.get('OUT', 'stemnet.pt')
+# LOSS=move trains on the stem-move error itself (see move_loss); default: share error.
 
 
 def load(files):
@@ -70,7 +71,8 @@ def batch(data, n, rng, p=None):
     return torch.from_numpy(np.stack(xs)), torch.from_numpy(np.stack(es))
 
 
-def loss_fn(logits, e):
+def share_loss(logits, e):
+    """Band-energy-weighted (square-rooted) error of each stem's predicted share."""
     e = e[..., LOOKAHEAD:-LOOKAHEAD]
     E = 10 ** e                                # 4,B,T stem energies
     total = E.sum(1, keepdim=True)
@@ -79,6 +81,27 @@ def loss_fn(logits, e):
     w = total / total.mean(dim=(2, 3), keepdim=True)        # loud bands matter more...
     w = w ** 0.5                                             # ...but not completely
     return (w * (pred - target) ** 2).sum(1).mean()
+
+
+MOVES = torch.tensor([[1 if k == j else 0 for k in range(4)] for j in range(4)], dtype=torch.float32)
+
+
+def move_loss(logits, e, n_random=4):
+    """What evaluate.py measures (and roughly what is heard): for stem moves g, the error energy
+    sum_k (g_k - G)^2 E_k against the ideal sum_k g_k^2 E_k, where G = sum_k share_k g_k is the
+    plug-in's gain.  Moves: each stem alone +/-6 dB, plus random -6..+6 dB on every stem.
+    Returns the mean error in dB (lower is better)."""
+    E = (10 ** e[..., LOOKAHEAD:-LOOKAHEAD]).double()         # N,4,B,T
+    p = torch.softmax(logits, 1).double()
+    db = torch.cat([6 * MOVES, -6 * MOVES, 12 * torch.rand(n_random, 4) - 6]).double()
+    g = 10 ** (db / 20)                                      # M,4 amplitude gains
+    G = torch.einsum('mk,nkbt->nmbt', g, p)                  # plug-in gain per move
+    err = (((g[None, :, :, None, None] - G[:, :, None]) ** 2) * E[:, None]).sum((2, 3, 4))
+    ideal = ((g[None, :, :, None, None] ** 2) * E[:, None]).sum((2, 3, 4))
+    return (10 * torch.log10(err / ideal + 1e-12)).mean().float()
+
+
+loss_fn = move_loss if os.environ.get('LOSS') == 'move' else share_loss
 
 
 if __name__ == '__main__':

@@ -70,7 +70,9 @@ Experiments 2026-10-02 (7 held-out avg / Gallas, dB; static -15.0 / -13.8, oracl
   the HT-Demucs teacher itself with the same metric vs true MUSDB stems (realistic ceiling).
   Done (teacher_score.py, 6 MUSDB held-out): HT-Demucs -17.9 vs ours -15.3, static -15.2, oracle -20.7
   -> ~2.5 dB real room.  Smoothing our shares over time makes it worse (-13.9 at 0.4 s).
-  Next: bigger model (HIDDEN=256 LAYERS=2, ~1.1M params, ~2 % of a core in C++).
+  Bigger model (HIDDEN=256 LAYERS=2, 1.1M params, 6k steps): better val loss (0.130) but move test
+  unchanged (-15.2 / -15.2) -> the share loss rewards quiet bands the move test barely weighs.
+  Next: LOSS=move trains on the move error itself (exactly evaluate.py's number for fixed moves).
 Next: download MUSDB (a subset first), prep, train ~20k steps, validate on held-out songs, try to
 cut drum bleed in "other" (htdemucs_ft teacher failed to download here: retry with Full network),
 then C++ engine + exact-passthrough tests, params/UI/Learn ("other" cuts touch drums a little),
