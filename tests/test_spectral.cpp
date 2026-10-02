@@ -2,7 +2,10 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "Signals.h"
+#include "polisher/LoudnessTargeting.h"
 #include "polisher/StemEQ.h"
+
+#include <array>
 
 #include <cmath>
 #include <numbers>
@@ -202,4 +205,31 @@ TEST_CASE ("Spectral stage offline render matches real time with all three on", 
     for (size_t i = 0; i + L < rtc.channels[0].size(); ++i)
         worst = std::max (worst, static_cast<double> (std::abs (off.channels[0][i] - rtc.channels[0][i + L])));
     CHECK (worst == 0.0);
+}
+
+TEST_CASE ("Tone Steady learns nothing from silence (stopped transport, gaps)", "[spectral]")
+{
+    // 5 s of silence, then a steady bass-heavy song: nothing to steady.
+    const double sr = 48000.0;
+    auto song = testsig::musicLike (sr, 20.0, -14.0, 9);
+    for (auto& ch : song.channels)
+        for (size_t i = 0; i < static_cast<size_t> (5.0 * sr); ++i) ch[i] = 0.0f;
+    for (auto& ch : song.channels)                                   // and a 4 s gap later on
+        for (size_t i = static_cast<size_t> (11.0 * sr); i < static_cast<size_t> (15.0 * sr); ++i) ch[i] = 0.0f;
+    ToneSteadyParams ts; ts.amount = 100.0; ts.rangeDb = 6.0;
+    StemEQ s; s.prepare (sr, 2); s.setToneSteady (ts); s.reset();
+    float* ch[2] = { song.channels[0].data(), song.channels[1].data() };
+    const int block = 4800;
+    double worst = 0.0;
+    for (int i = 0; i < song.numSamples(); i += block)
+    {
+        s.process (std::array<float*, 2> { ch[0] + i, ch[1] + i }.data(), 2, std::min (block, song.numSamples() - i));
+        double d = 0.0, hz = 0.0;
+        s.takeToneSteadyMeter (d, hz);
+        worst = std::max (worst, std::abs (d));
+    }
+    UNSCOPED_INFO ("largest Tone Steady move " << worst << " dB");
+    CHECK (worst < 1.5);
+    const auto st = measureSpectral (song, ts, {});
+    CHECK (st.steadyMoveDb < 0.35);   // Auto-Master would leave it off
 }

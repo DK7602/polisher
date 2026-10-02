@@ -604,7 +604,7 @@ function segCell({ label, sub, state, labels, notes }) {
 }
 const tsCells = [
   liveKnobCell({ label: "Amount", sub: "how much drift", state: P.tsAmount, def: 0, minText: "off", maxText: "100", fmt: (v) => `${Math.round(v)} %` }),
-  liveKnobCell({ label: "Range", sub: "largest cut", state: P.tsRange, def: 3, minText: "1", maxText: "6 dB", fmt: (v) => `\u00b1${v.toFixed(1)} dB` }),
+  liveKnobCell({ label: "Range", sub: "largest cut", state: P.tsRange, def: 3, minText: "1", maxText: "6 dB", fmt: (v) => `${MINUS}${v.toFixed(1)} / +${(v / 2).toFixed(1)}` }),
   segCell({ label: "Speed", sub: "reaction", state: P.tsSpeed, labels: TS_SPEEDS, notes: ["1 s \u00b7 sections", "0.4 s \u00b7 phrases", "0.15 s \u00b7 notes"] }),
   barCell({ label: "Steadying", sub: "biggest move now", minText: "0", maxText: "6 dB", id: "tsmeter" }),
 ];
@@ -1180,7 +1180,7 @@ function renderTsLearn(body) {
   body.appendChild(sep());
   body.appendChild(head("WHAT EACH CONTROL IS DOING"));
   body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `Corrects about ${Math.round(amount)} % of each drift, beyond a 1 dB dead zone, so small natural changes are left alone.`));
-  body.appendChild(item("Range", `\u00b1${range.toFixed(1)} dB`, `Cuts go at most ${range.toFixed(1)} dB, boosts at most ${(range / 2).toFixed(1)} dB, so it can never reshape your mix, only steady it.`));
+  body.appendChild(item("Range", `${MINUS}${range.toFixed(1)} / +${(range / 2).toFixed(1)} dB`, `Cuts go at most ${range.toFixed(1)} dB, boosts at most ${(range / 2).toFixed(1)} dB, so it can never reshape your mix, only steady it.`));
   body.appendChild(item("Speed", speed, speed === "Slow" ? "Follows whole sections: the gentlest, best for most masters."
     : speed === "Medium" ? "Follows phrases: catches a verse that gets muddier or a hook that gets harsher." : "Follows single notes and hits: strongest, can make the mix feel controlled."));
   body.appendChild(item("Reference", "", "Your song's own balance over the last ~10 seconds, so the Tonal EQ sets the tone and Tone Steady only keeps it. Quiet breakdowns are left alone."));
@@ -1188,7 +1188,7 @@ function renderTsLearn(body) {
     body.appendChild(tip("HEADS UP", "High Amount at Fast speed follows single notes. That can flatten moves you made on purpose, like a drop that's meant to hit with more bass.", false,
       { need: "Only if the big moments sound smaller with it on.", steps: ["Turn on MATCH and flip A/B through the drop or chorus.", "If the impact shrinks: Speed to Medium or Slow.", "Or lower Amount to about 40 %."] }));
   else
-    body.appendChild(tip("TRY THIS", "Amount 40 %, Range \u00b13 dB, Speed Slow: sections stay consistent without losing their character. Compare with MATCH on.", true));
+    body.appendChild(tip("TRY THIS", "Amount 40 %, Range 3 dB, Speed Slow: sections stay consistent without losing their character. Compare with MATCH on.", true));
 }
 
 function renderRtLearn(body) {
@@ -1205,7 +1205,7 @@ function renderRtLearn(body) {
     : `Right now it's cutting ${fmtNum(-cut)} dB around ${where}: a tone there rings ${-cut > 4 ? "clearly" : "a little"} above the sound around it.`));
   body.appendChild(sep());
   body.appendChild(head("WHAT EACH CONTROL IS DOING"));
-  body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `How far each ringing tone is pulled down: at 100 % it is cut level with the sound around it. ${Math.round(amount)} % takes it part of the way.`));
+  body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `How far each ringing tone is pulled down: at 100 % it is cut down to the Sensitivity threshold (no more than 12 dB). ${Math.round(amount)} % takes it part of the way.`));
   body.appendChild(item("Sensitivity", `${Math.round(sens)} %`, `Catches tones that stand ${fmtNum(12 - 9 * sens / 100, 1)} dB or more above their surroundings. Higher catches smaller ones.`));
   body.appendChild(item("Release", fmtMs(rel), rel < 50 ? "Lets go quickly: cuts follow every note; most transparent on busy mixes." : rel > 150 ? "Lets go slowly: smooth, steady taming of tones that keep coming back." : "A middle setting that suits most mixes."));
   body.appendChild(item("Focus", focus, focus === "Full" ? "Looks from 80 Hz to 16 kHz." : focus === "Boxiness" ? "Looks only at 150\u2013800 Hz, where boxy, muddy rings live." : "Looks only at 1.5\u20138 kHz, where harsh, piercing tones live."));
@@ -1587,6 +1587,8 @@ function paramValue(id) {
   const band = /^dyn(X|Thr|Ratio|Atk|Rel|Gain)(\d)$/.exec(id);
   if (band) return P["dyn" + band[1]][Number(band[2]) - 1].getScaledValue();
   if (id === "satMode") return satModeIndex();
+  if (id === "tsSpeed") return comboIndex(P.tsSpeed);
+  if (id === "rtFocus") return comboIndex(P.rtFocus);
   if (map[id]) return map[id].getScaledValue();
   const toggles = { eqOn: P.eqOn, bassOn: P.bassOn, clipOn: P.clipOn, adaptive: P.adaptive, bypass: P.bypass,
                     dynOn: P.dynOn, dynAdaptive: P.dynAdaptive, imgOn: P.imgOn, satOn: P.satOn, tsOn: P.tsOn, rtOn: P.rtOn };
@@ -1769,7 +1771,7 @@ function updateLiveReadouts() {
   if (selected === "dyn") dynPicker.refresh();
   const rts = $("read-ts");
   if (rts) rts.textContent = P.bypass.getValue() ? "Bypassed" : !P.tsOn.getValue() ? "Off" : tsIsNeutral() ? neutralText("ts")
-    : `${Math.round(tsAmountAt())} % \u00b7 \u00b1${P.tsRange.getScaledValue().toFixed(0)} dB`;
+    : `${Math.round(tsAmountAt())} % \u00b7 ${MINUS}${P.tsRange.getScaledValue().toFixed(1)} dB`;
   const rrt = $("read-rt");
   if (rrt) rrt.textContent = P.bypass.getValue() ? "Bypassed" : !P.rtOn.getValue() ? "Off" : rtIsNeutral() ? neutralText("rt")
     : `${Math.round(rtAmountAt())} % \u00b7 ${RT_FOCUS[comboIndex(P.rtFocus)]}`;

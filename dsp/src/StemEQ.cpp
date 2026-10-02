@@ -205,7 +205,8 @@ void StemEQ::reset() noexcept
     frameCount = analysed = 0;
     for (auto* v : { &rtCut, &rtTarget, &rtSmooth, &tsBin }) std::fill (v->begin(), v->end(), 0.0);
     std::fill (rtLin.begin(), rtLin.end(), 1.0);
-    tsShort.fill (0.0); tsLong.fill (0.0); tsGain.fill (0.0); tsTarget.fill (0.0);
+    tsShort.fill (0.0); tsLong.fill (0.0); tsGain.fill (0.0);
+    tsLevelShort = tsLevelLong = 0.0;
     tsFrames = 0;
     rtDeepest = rtDeepestHz = tsLargest = tsLargestHz = 0.0;
     statPower = statCut = statCutLow = statCutHigh = statSteady = 0.0;
@@ -293,6 +294,7 @@ void StemEQ::resonanceGains (const std::complex<double>* L, const std::complex<d
         const auto K = static_cast<size_t> (k);
         const double g = binGain[K];
         rtSmooth[K] += ((std::norm (L[k]) + std::norm (R[k])) * g * g - rtSmooth[K]) * aP;
+        if (rtSmooth[K] < 1.0e-30) rtSmooth[K] = 0.0;   // no denormals in silence (offline callers too)
         power[K] = rtSmooth[K];
         pmax = std::max (pmax, power[K]);
         levelDb[K] = 10.0 * std::log10 (power[K] + 1.0e-20);
@@ -366,24 +368,33 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
     const double aS = 1.0 - std::exp (-1.0 / (kShortS[std::clamp (tsParams.speed, 0, 2)] * framesPerSecond));
     // Both averages are of dB levels: a loud new passage moves the slow reference by its dB, not
     // by its (much bigger) energy, so the song's own balance stays put for ~10 s.
-    const double aL = tsFrames < static_cast<long> (2.0 * framesPerSecond) ? aS : 1.0 - std::exp (-1.0 / (10.0 * framesPerSecond));
     double eTotal = 0.0;
-    for (size_t b = 0; b < static_cast<size_t> (B); ++b)
-    {
-        const double db = 10.0 * std::log10 (e[b] + 1.0e-20);
-        if (tsFrames == 0) tsShort[b] = tsLong[b] = db;
-        tsShort[b] += (db - tsShort[b]) * aS;
-        tsLong[b] += (db - tsLong[b]) * aL;
-        eTotal += e[b];
-    }
-    // Overall short / long level for the quiet-passage gate (dB, same averaging).
+    for (double v : e) eTotal += v;
     const double totalDb = 10.0 * std::log10 (eTotal + 1.0e-20);
-    if (tsFrames == 0) tsLevelShort = tsLevelLong = totalDb;
-    tsLevelShort += (totalDb - tsLevelShort) * aS;
-    tsLevelLong += (totalDb - tsLevelLong) * aL;
+    // Silence and near-silence (stopped transport, a gap, a fade) must not teach the reference
+    // anything: the averages start at the first frame with signal, and the slow reference and its
+    // clock freeze while the frame is 30 dB or more under the song.
+    const bool signal = totalDb > -80.0 && (tsFrames == 0 || totalDb > tsLevelLong - 30.0);
+    if (tsFrames == 0 && signal)
+    {
+        for (size_t b = 0; b < static_cast<size_t> (B); ++b)
+            tsShort[b] = tsLong[b] = std::max (10.0 * std::log10 (e[b] + 1.0e-20), totalDb - 90.0);
+        tsLevelShort = tsLevelLong = totalDb;
+    }
+    if (tsFrames > 0 || signal)
+    {
+        const double aL = tsFrames < static_cast<long> (2.0 * framesPerSecond) ? aS : 1.0 - std::exp (-1.0 / (10.0 * framesPerSecond));
+        for (size_t b = 0; b < static_cast<size_t> (B); ++b)
+        {
+            const double db = std::max (10.0 * std::log10 (e[b] + 1.0e-20), totalDb - 90.0);   // empty bands: 90 dB under the frame
+            tsShort[b] += (db - tsShort[b]) * aS;
+            if (signal) tsLong[b] += (db - tsLong[b]) * aL;
+        }
+        tsLevelShort += (totalDb - tsLevelShort) * aS;
+        if (signal) { tsLevelLong += (totalDb - tsLevelLong) * aL; ++tsFrames; }
+    }
     double maxLong = -400.0;
     for (double v : tsLong) maxLong = std::max (maxLong, v);
-    ++tsFrames;
 
     // Drift of each band from the song's own balance, with the overall level change taken out.
     // Quiet passages (more than 15 dB under the song) are left alone: a breakdown is not a drift.

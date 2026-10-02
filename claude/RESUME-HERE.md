@@ -6,7 +6,7 @@ latest green Actions run.
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
 
-## Status: v0.11.0 — all eight modules live (Stem EQ new); Auto-Master sets every one but Stem EQ
+## Status: v0.12.0 — ten modules (Tone Steady + Resonance Tamer new); Auto-Master sets all but Stem EQ (suggests vocals)
 Chain: Tonal EQ -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
 -> Maximizer (+ MATCH gain at the very end). Engine tests: 73 cases
 (`cmake -S . -B build-tests -DPOLISHER_BUILD_PLUGIN=OFF && cmake --build build-tests && ./build-tests/tests/polisher_tests`).
@@ -114,3 +114,14 @@ Auto-Master hooks, review agent, user listening test.
 5. Optional: Auto-Master opens highs a little for Trap even when already fairly wide (user may want).
 Housekeeping: repo private (due after Oct 1), GitHub 2FA by Nov 4 2026, Actions Node 20 warnings,
 "Polisher" trademark search, rights to AI-rendered art, code signing / notarization before release.
+
+## Tone Steady + Resonance Tamer (v0.12.0, 2026-10-02)
+User asked for Ozone-style Stabilizer / Clarity; our own names (Ozone trademarks). Both run inside the
+Stem EQ STFT (no extra latency), chain slots 03 / 04. Resonance Tamer: peaks over the +/-0.3 oct mean
+power (40 ms smoothed) above a Sensitivity threshold, cut by Amount; Focus Full / Boxiness / Harshness.
+Tone Steady: 64-band short (Speed) vs 10 s long-term dB balance, 1 dB dead band, cuts <= Range, boosts
+<= Range/2; silence / quiet frames never update the reference (review fix: stopped transport used to
+flatten the mix for ~20 s). Auto-Master measures both at full strength and sets them (Resonance Tamer
+off on Bubba / Schaf, 45-60 % Boxiness on Addie / Dean; Tone Steady 40 % on all four).
+Sent the user A/B clips (Addie, Dean: off vs Auto-Master's settings, level-matched): B trims
+400-650 Hz ~2 dB, 808 range < 0.5 dB. Waiting for their ears: does the 808 or vocal lose body?

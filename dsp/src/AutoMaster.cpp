@@ -636,7 +636,7 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
             ts.amount = gentle ? 25.0 : punchy ? 55.0 : 40.0;
             ts.speed = swing > 1.2 ? 1 : 0;
             reason ("ts", "Amount", pct (ts.amount), "Your tone shifts from moment to moment: at full strength Tone Steady would move " + num (swing) +
-                    " dB on average. " + pct (ts.amount) + " keeps the parts consistent while they keep their own character. Range stays at \xC2\xB1" "3 dB.");
+                    " dB on average. " + pct (ts.amount) + " keeps the parts consistent while they keep their own character. Range stays at 3 dB (boosts at most 1.5 dB).");
             reason ("ts", "Speed", ts.speed == 1 ? "Medium" : "Slow", ts.speed == 1 ? "The shifts come phrase by phrase, so Medium follows them."
                                                                                     : "The shifts are gradual, so Slow follows whole sections, the gentlest setting.");
         }

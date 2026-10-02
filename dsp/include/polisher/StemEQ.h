@@ -191,7 +191,7 @@ private:
 
     // Resonance Tamer (per bin, dB) and Tone Steady (per band) state
     std::vector<double> power, levelDb, prefix, rtCut, rtLin, rtTarget, rtSmooth, tsBin, bandCf;
-    std::array<double, 64> tsShort {}, tsLong {}, tsGain {}, tsTarget {};
+    std::array<double, 64> tsShort {}, tsLong {}, tsGain {};
     double rtAmount = 0.0, tsAmount = 0.0, framesPerSecond = 187.5, tsLevelShort = 0.0, tsLevelLong = 0.0;
     long tsFrames = 0;
     double rtDeepest = 0.0, rtDeepestHz = 0.0, tsLargest = 0.0, tsLargestHz = 0.0;
