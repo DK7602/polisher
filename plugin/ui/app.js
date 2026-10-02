@@ -748,7 +748,12 @@ function renderLearn() {
   if (m.id === "img") { renderImagerLearn(body); liftWarning(body); prependAmSection(body, "img"); return; }
   if (m.id === "dyn") { renderDynLearn(body); liftWarning(body); prependAmSection(body, "dyn"); return; }
   if (m.id === "sat") { renderSatLearn(body); liftWarning(body); prependAmSection(body, "sat"); return; }
-  if (m.id === "stem") { renderStemLearn(body); liftWarning(body); return; }
+  if (m.id === "stem") {
+    renderStemLearn(body); liftWarning(body); prependAmSection(body, "stem");
+    const b = stemSuggestButton();
+    if (b) { const at = body.querySelector(".l-sep"); body.insertBefore(b, at ? at.nextSibling : null); }
+    return;
+  }
 
   const drive = P.drive.getScaledValue();
   const ceiling = P.ceiling.getScaledValue();
@@ -1029,6 +1034,32 @@ function renderSatLearn(body) {
       { need: "Only if it sounds harsh or crunchy to you.", steps: ["Turn on MATCH and flip A/B.", "If B sounds distorted: lower Drive by 3 dB, or Mix to about 30 %.", "Aim for the Harmonics meter around −25 to −35 dB."] }));
   else
     body.appendChild(tip("TRY THIS", "Tape, Drive +9 dB, Mix 50 %: a little density you feel more than hear (the Harmonics meter around −35 dB). For thin bass on phones, try Tube instead. Always compare with MATCH on.", true));
+}
+
+// Auto-Master's Stem EQ suggestion (never applied by Auto-Master itself): one click sets the knobs.
+function stemSuggestion() {
+  const s = amReport && amReport.ok && amReport.stemSuggest;
+  if (!s || s.length !== 4) return null;
+  const pending = s.some((v, k) => Math.abs(v - stemGainAt(k)) > 0.05) || !P.stemOn.getValue();
+  return pending ? s : null;
+}
+function stemSuggestButton() {
+  const s = stemSuggestion();
+  if (!s) return null;
+  const moves = [0, 1, 2, 3].filter((k) => Math.abs(s[k] - stemGainAt(k)) > 0.05);
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "pill pill-red stem-apply";
+  b.textContent = "APPLY: " + (moves.length ? moves.map((k) => `${STEMS[k].toUpperCase()} ${fmtSigned(s[k])}`).join(", ") : "STEM EQ ON");
+  b.addEventListener("click", () => {
+    P.stemOn.setValue(true);
+    s.forEach((v, k) => { const st = P.stemGain[k]; st.sliderDragStarted(); st.setNormalisedValue(scaledToNorm(st, v)); st.sliderDragEnded(); });
+    stemCells.forEach((c) => c.refresh && c.refresh());
+    onParamsChanged(); userEdited();
+    toast("Stem EQ suggestion applied. Turn on MATCH and flip A/B to judge it.");
+    renderLearn();
+  });
+  return b;
 }
 
 function renderStemLearn(body) {
@@ -1377,7 +1408,7 @@ function refreshAllCells() {
   onParamsChanged();
 }
 
-const AM_MODULES = [["eq", "TONAL EQ"], ["bass", "BASS CONTROL"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
+const AM_MODULES = [["eq", "TONAL EQ"], ["stem", "STEM EQ"], ["bass", "BASS CONTROL"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
 function notesAsTips(body) {
   for (const raw of amReport.notes || []) {
     // "TITLE: text" plus optional lines "NEED: …" and "STEP: …" (the plan).
@@ -1411,6 +1442,7 @@ function renderReport(body) {
     body.appendChild(sep());
     body.appendChild(head(label));
     list.forEach((x) => body.appendChild(item(x.control, x.value, x.why)));
+    if (id === "stem") { const b = stemSuggestButton(); if (b) body.appendChild(b); }
   }
   body.appendChild(tip("COMPARE IT", "Turn on MATCH, then press A for your original mix and B for the master: both play at the same loudness, so you hear only what the master changed. The undo arrow at the top puts every setting back.", true));
 }
@@ -1421,7 +1453,8 @@ function paramValue(id) {
   if (id.startsWith("eqFreq")) return eqFreqAt(Number(id.slice(6)) - 1);
   const map = { drive: P.drive, ceiling: P.ceiling, release: P.release, clipLevel: P.clipLevel, clipSoftness: P.clipSoftness,
                 bassMono: P.bassMono, bassTame: P.bassTame, bassPunch: P.bassPunch,
-                imgLow: P.imgLow, imgMid: P.imgMid, imgHigh: P.imgHigh, satDrive: P.satDrive, satMix: P.satMix };
+                imgLow: P.imgLow, imgMid: P.imgMid, imgHigh: P.imgHigh, satDrive: P.satDrive, satMix: P.satMix,
+                stemVoc: P.stemGain[0], stemDrums: P.stemGain[1], stemBass: P.stemGain[2], stemOther: P.stemGain[3] };
   const band = /^dyn(X|Thr|Ratio|Atk|Rel|Gain)(\d)$/.exec(id);
   if (band) return P["dyn" + band[1]][Number(band[2]) - 1].getScaledValue();
   if (id === "satMode") return satModeIndex();
@@ -1432,7 +1465,7 @@ function paramValue(id) {
   if (id === "clipOversampling") return osIndex();
   return null;
 }
-const MODULE_PARAMS = { eq: /^eq/, bass: /^bass/, dyn: /^dyn/, img: /^img/, sat: /^sat/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive)$/ };
+const MODULE_PARAMS = { stem: /^stem/, eq: /^eq/, bass: /^bass/, dyn: /^dyn/, img: /^img/, sat: /^sat/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive)$/ };
 function moduleUnchanged(module) {
   const values = (amReport && amReport.values) || {};
   return Object.entries(values).every(([id, v]) => {
@@ -1604,7 +1637,8 @@ function updateLiveReadouts() {
     : `${[0, 1, 2, 3].filter(dynBandActive).length} band${[0, 1, 2, 3].filter(dynBandActive).length > 1 ? "s" : ""} \u00b7 ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`;
   if (selected === "dyn") dynPicker.refresh();
   const rst = $("read-stem");
-  if (rst) rst.textContent = P.bypass.getValue() ? "Bypassed" : !P.stemOn.getValue() ? "Off" : stemIsNeutral() ? "Neutral"
+  if (rst) rst.textContent = P.bypass.getValue() ? "Bypassed" : !P.stemOn.getValue() ? "Off" : stemSuggestion() ? "Suggestion ready"
+    : stemIsNeutral() ? neutralText("stem")
     : stemMoves().map((k) => `${["Vox", "Drm", "Bass", "Oth"][k]} ${fmtSigned(stemGainAt(k)).replace(" dB", "")}`).join("\u00b7");
   for (let k = 0; k < 4; k++) {
     const f = $("sh-fill-" + k);

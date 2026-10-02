@@ -9,6 +9,7 @@
 #include "TonalEQ.h"
 #include "TruePeakLimiter.h"
 
+#include <array>
 #include <vector>
 
 namespace polisher {
@@ -42,6 +43,10 @@ AudioClip renderEq (const AudioClip& clip, const TonalEQParams& params);
 
 /** Renders a clip through Stem EQ offline, latency compensated (a copy when neutral). */
 AudioClip renderStemEq (const AudioClip& clip, const StemEQParams& params);
+
+/** How loud each stem (vocals, drums, bass, other) is in a clip as Stem EQ's model hears it, in dB
+    relative to the whole clip (-100 when it hears none of it). */
+std::array<double, kStems> measureStemLevels (const AudioClip& clip);
 
 /** Renders a clip through Bass Control offline (zero latency). */
 AudioClip renderBass (const AudioClip& clip, const BassParams& params);

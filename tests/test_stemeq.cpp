@@ -3,6 +3,7 @@
 
 #include "Signals.h"
 #include "StemNetReference.h"
+#include "polisher/AutoMaster.h"
 #include "polisher/StemEQ.h"
 
 #include <cmath>
@@ -265,4 +266,37 @@ TEST_CASE ("Stem EQ meter credits nothing during silence, and something during m
     run (s, testsig::musicLike (48000.0, 1.0, -12.0));
     s.takeStemEnergies (e);
     CHECK (e[0] + e[1] + e[2] + e[3] > 0.0);
+}
+
+TEST_CASE ("Stem levels and Auto-Master's vocal suggestion", "[stemeq]")
+{
+    // The rule: inside the genre's range -> no move; low -> up (max +3); loud -> down; instrumental -> none.
+    CHECK (suggestVocalMoveDb (-3.0, Genre::trapHipHop) == 0.0);
+    CHECK (suggestVocalMoveDb (-4.4, Genre::trapHipHop) == 0.0);
+    CHECK (suggestVocalMoveDb (-5.0, Genre::trapHipHop) == 2.0);
+    CHECK (suggestVocalMoveDb (-9.0, Genre::trapHipHop) == 3.0);
+    CHECK (suggestVocalMoveDb (0.0, Genre::trapHipHop) == -2.0);
+    CHECK (suggestVocalMoveDb (-20.0, Genre::trapHipHop) == 0.0);
+    CHECK (suggestVocalMoveDb (-7.0, Genre::edm) == 0.0);
+
+    // Measurement: silence hears nothing; music hears every stem at a finite level below the whole.
+    for (double v : measureStemLevels (testsig::silence (48000.0, 2, 1.0))) CHECK (v == -100.0);
+    const auto lv = measureStemLevels (testsig::musicLike (48000.0, 4.0, -12.0));
+    double sum = 0.0;
+    for (double v : lv) { CHECK (v <= 0.0); CHECK (v > -100.0); sum += std::pow (10.0, v / 10.0); }
+    CHECK_THAT (sum, WithinAbs (1.0, 1e-6));
+
+    // Auto-Master always reports on Stem EQ, keeps the user's setting, and only ever suggests.
+    AutoMasterSettings s; s.stem.gainDb = { 1.5, 0.0, 0.0, 0.0 };
+    const auto r = autoMaster (testsig::musicLike (48000.0, 14.0, -14.0), s);
+    REQUIRE (r.ok);
+    CHECK (r.chain.stem.gainDb == s.stem.gainDb);
+    bool reported = false;
+    for (const auto& x : r.reasons) reported = reported || x.module == "stem";
+    CHECK (reported);
+    if (r.hasStemSuggestion)
+    {
+        CHECK (r.stemSuggestion.gainDb[1] == 0.0);
+        CHECK (std::abs (r.stemSuggestion.gainDb[0] - 1.5) <= 3.0);
+    }
 }

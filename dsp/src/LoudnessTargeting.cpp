@@ -126,6 +126,33 @@ AudioClip renderStemEq (const AudioClip& input, const StemEQParams& params)
     return out;
 }
 
+std::array<double, kStems> measureStemLevels (const AudioClip& clip)
+{
+    std::array<double, kStems> out;
+    out.fill (-100.0);
+    const int nch = clip.numChannels(), n = clip.numSamples();
+    if (nch == 0 || n == 0)
+        return out;
+    auto stem = std::make_unique<StemEQ>();   // neutral: only listens
+    stem->prepare (clip.sampleRate, nch);
+    std::vector<double> frame (static_cast<size_t> (nch));
+    for (int i = 0; i < n; ++i)
+    {
+        for (int c = 0; c < nch; ++c)
+            frame[static_cast<size_t> (c)] = clip.channels[static_cast<size_t> (c)][static_cast<size_t> (i)];
+        stem->processFrame (frame.data(), nch);
+    }
+    std::array<double, kStems> e {};
+    stem->takeStemEnergies (e);
+    double total = 0.0;
+    for (double v : e) total += v;
+    if (total <= 0.0)
+        return out;
+    for (size_t k = 0; k < e.size(); ++k)
+        if (e[k] > 0.0) out[k] = std::max (-100.0, 10.0 * std::log10 (e[k] / total));
+    return out;
+}
+
 AudioClip renderPreDrive (const AudioClip& input, const MasterChainParams& params)
 {
     AudioClip out = renderBass (renderStemEq (renderEq (input, params.eq), params.stem), params.bass);

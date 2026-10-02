@@ -4,7 +4,7 @@ Read this first in a new chat. Code: github.com/DK7602/polisher, branch `claude/
 (merge to `main` when ready). Every push builds Mac + Windows; download Polisher-Windows from the
 latest green Actions run.
 
-## Status: v0.10.6 — all seven modules live, Auto-Master sets every one
+## Status: v0.11.0 — all eight modules live (Stem EQ new); Auto-Master sets every one but Stem EQ
 Chain: Tonal EQ -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
 -> Maximizer (+ MATCH gain at the very end). Engine tests: 73 cases
 (`cmake -S . -B build-tests -DPOLISHER_BUILD_PLUGIN=OFF && cmake --build build-tests && ./build-tests/tests/polisher_tests`).
@@ -89,7 +89,16 @@ Experiments 2026-10-02 (7 held-out avg / Gallas, dB; static -15.0 / -13.8, oracl
   Learn update rate, silent meter, meter race (CAS), stale meter on editor reopen, params before
   prepare.  Left as known: 88.2k+ features ~3.5 dB hotter than training (NFFT 2048); mono input
   gives side features at the floor; Auto-Master applies Stem EQ before Tonal EQ (approximation).
-  Next: user test in Cubase (MATCH A/B a vocal and an 808 move on their songs).
+  User test (Bubba, 2026-10-02): Vocals +3 / Bass +3 pulled forward as expected.  Their earlier hot
+  input (+9.8 dBTP) came from their old chain (ZL EQ, Magneto II, Compressor, Velvet, Limiter) still on
+  Stereo Out before Polisher: told them to bypass it for demos.
+  Auto-Master Stem EQ suggestion (user asked): vocals only (drums / bass / other vary too much with the
+  arrangement), measured by the model on what Auto-Master heard; genre usual levels (trap / R&B -3 dB
+  from the user's 13 songs, median -2.8; others are starting points); suggest when > 1.5 dB low or
+  > 2.5 dB loud, max +/-3 dB; shown in the report and Stem EQ Learn with an APPLY button; never applied.
+  Quick Help has Stem EQ; version 0.11.0.
+  Offered, not done: Auto-Master turning a too-hot mix down (Drive can't go below 0 dB, so a +10 dBTP
+  input overshoots the target).
 Next: download MUSDB (a subset first), prep, train ~20k steps, validate on held-out songs, try to
 cut drum bleed in "other" (htdemucs_ft teacher failed to download here: retry with Full network),
 then C++ engine + exact-passthrough tests, params/UI/Learn ("other" cuts touch drums a little),

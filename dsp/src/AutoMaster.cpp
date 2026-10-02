@@ -28,6 +28,31 @@ const char* genreName (Genre g) noexcept
     return "";
 }
 
+double genreVocalLevelDb (Genre g) noexcept
+{
+    switch (g)
+    {
+        case Genre::trapHipHop: return -3.0;
+        case Genre::rnb:        return -3.0;
+        case Genre::pop:        return -4.5;
+        case Genre::edm:        return -7.0;
+        case Genre::rock:       return -6.0;
+        case Genre::acoustic:   return -4.0;
+    }
+    return -4.5;
+}
+
+double suggestVocalMoveDb (double level, Genre g) noexcept
+{
+    if (level < -15.0)
+        return 0.0;                                   // hardly any vocal: an instrumental
+    const double target = genreVocalLevelDb (g);
+    double move = 0.0;
+    if (level < target - 1.5)      move = std::min (3.0, target - level);
+    else if (level > target + 2.5) move = -std::min (3.0, level - (target + 1.0));
+    return std::round (move * 2.0) / 2.0;
+}
+
 double targetLufs (LoudnessTarget t) noexcept
 {
     switch (t)
@@ -979,6 +1004,34 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
                 num (a.loudness.truePeakDbtp) + " dBTP. Settings: " + genre + ", " + rules.name + ", " + targetName (s.target) +
                 ". The master now measures " + num (out.integratedLufs) + " LUFS with true peak " + num (out.truePeakDbtp) +
                 " dBTP. The full song will read about 1 LU lower than this loud section, which is normal.";
+    // --- Stem EQ: suggest a vocal move, never apply it -------------------------------------------------
+    // Only the vocal: drums, bass and "other" swing too much with the arrangement (no drums in a ballad,
+    // a kick but no 808...) for a usual level to mean anything.
+    {
+        r.analysis.stemLevelDb = measureStemLevels (clip);
+        const double vox = r.analysis.stemLevelDb[kStemVocals], usual = genreVocalLevelDb (s.genre);
+        const double move = suggestVocalMoveDb (vox, s.genre);
+        const double current = s.stem.enabled ? s.stem.gainDb[kStemVocals] : 0.0;
+        const std::string heard = "The model hears your vocal at " + num (vox) + " dB against the whole mix; in " + genre +
+                                  " masters it usually sits around " + num (usual) + " dB";
+        if (vox < -15.0)
+            reason ("stem", "Vocals", "kept", "I hardly hear a lead vocal here (an instrumental, or a section without vocals), so there's nothing to suggest.");
+        else if (move == 0.0)
+            reason ("stem", "Vocals", "kept", heard + ". Yours is right in that range, so no move is needed.");
+        else
+        {
+            const double to = std::clamp (current + move, -StemEQ::kMaxGainDb, StemEQ::kMaxGainDb);
+            r.hasStemSuggestion = true;
+            r.stemSuggestion = s.stem;
+            r.stemSuggestion.enabled = true;
+            r.stemSuggestion.gainDb[kStemVocals] = to;
+            reason ("stem", "Vocals", "try " + num (to, true) + " dB",
+                    heard + (move > 0 ? ", so yours sits a little low under the beat. " : ", so yours sits louder than usual over the beat. ") +
+                    "This is a suggestion only: Auto-Master never moves Stem EQ. Press Apply in Stem EQ's Learn to try it, then compare with MATCH. "
+                    "Vocal level is taste, so trust your ears over this number.");
+        }
+    }
+
     chain.stem = s.stem;
     r.ok = true;
     return r;

@@ -56,7 +56,7 @@
     for (const [k, v] of Object.entries(values)) (k === "clipOn" ? setToggle(k, !!v) : setSlider(k, v));
     const R = (module, control, value, why) => ({ module, control, value, why });
     am.report = JSON.stringify({
-      ok: true, genre: "Trap / Hip-Hop", intensity: "Balanced", target: "Loud \u22129", values,
+      ok: true, stemSuggest: [2, 0, 0, 0], genre: "Trap / Hip-Hop", intensity: "Balanced", target: "Loud \u22129", values,
       summary: "Listened to 12 s of the loudest part. Your mix measured \u221217.8 LUFS with peaks at \u22120.4 dBTP. The master now measures \u22129.0 LUFS with true peak \u22121.0 dBTP. The full song will read about 1 LU lower than this loud section, which is normal.",
       notes: ["FIX IT IN THE MIX: your mix is 7.4 dB higher in the low mids (180\u2013600 Hz) than typical Trap / Hip-Hop masters. The master EQ only fixes part of that; adjusting the main source in the mix (often guitars, pads or a boomy vocal) will sound better."],
       reasons: [
@@ -64,6 +64,7 @@
         R("eq", "Presence", "+0.8 dB", "Your mix has about 3.1 dB less presence (3.5\u20138 kHz) than typical Trap / Hip-Hop masters, so a 0.8 dB boost closes part of the gap. More edge and definition on vocals and hi-hats."),
         R("eq", "Air", "+1.6 dB", "Your mix has about 6.2 dB less air (above 8 kHz) than typical Trap / Hip-Hop masters, so a 1.6 dB boost closes part of the gap. More sheen and openness on top."),
         R("eq", "Other bands", "0 dB", "Low End, Bass, Mid and Upper Mid are already close to the Trap / Hip-Hop balance, so they stay flat."),
+        R("stem", "Vocals", "try +2.0 dB", "The model hears your vocal at \u22125.2 dB against the whole mix; in Trap / Hip-Hop masters it usually sits around \u22123.0 dB, so yours sits a little low under the beat. This is a suggestion only: Auto-Master never moves Stem EQ. Press Apply in Stem EQ's Learn to try it, then compare with MATCH. Vocal level is taste, so trust your ears over this number."),
         R("bass", "Mono Below", "100 Hz", "Your bass is 42 % stereo below 150 Hz. Club systems and phones play bass in mono, so stereo bass partly cancels there. Making it mono below 100 Hz keeps it solid everywhere."),
         R("bass", "Sub Tame", "40 %", "Your loudest bass moments rise about 6.3 dB above the typical bass level, so some 808 notes leap out. Sub Tame evens those notes out."),
         R("bass", "Punch", "25 %", "Your low end is fairly sustained, so kicks can get lost under it. Punch adds thump to the start of each kick without turning the sub up."),

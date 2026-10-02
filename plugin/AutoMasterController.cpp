@@ -234,6 +234,13 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
             notes.add (juce::String::fromUTF8 (n.c_str()));
         doc->setProperty ("notes", notes);
         doc->setProperty ("reasons", reasonsToVar (r.reasons));
+        // Stem EQ is only ever suggested: the editor offers an Apply button with these values.
+        if (r.hasStemSuggestion)
+        {
+            juce::Array<juce::var> sug;
+            for (double g : r.stemSuggestion.gainDb) sug.add (g);
+            doc->setProperty ("stemSuggest", sug);
+        }
         doc->setProperty ("values", juce::var (values));
         doc->setProperty ("outputLufs", r.output.integratedLufs);
         doc->setProperty ("outputTruePeak", r.output.truePeakDbtp);
