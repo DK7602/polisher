@@ -1,9 +1,16 @@
 name: Build & Test
 
+# Every push builds Windows only (the repo is private: macOS minutes count 10x against the free
+# 2,000 a month). For a Mac build: Actions -> Build & Test -> Run workflow, tick "Also build macOS".
 on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      mac:
+        description: "Also build macOS (VST3 / AU / Standalone)"
+        type: boolean
+        default: true
 
 jobs:
   build:
@@ -12,11 +19,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: macOS
-            os: macos-14
-          - name: Windows
-            os: windows-latest
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.mac
+          && '[{"name":"macOS","os":"macos-14"},{"name":"Windows","os":"windows-latest"}]'
+          || '[{"name":"Windows","os":"windows-latest"}]') }}
 
     steps:
       - uses: actions/checkout@v4

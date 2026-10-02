@@ -3,6 +3,8 @@
 Read this first in a new chat. Code: github.com/DK7602/polisher, branch `claude/gracious-wright-tgs0no`
 (merge to `main` when ready). Every push builds Mac + Windows; download Polisher-Windows from the
 latest green Actions run.
+CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
+Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
 
 ## Status: v0.11.0 — all eight modules live (Stem EQ new); Auto-Master sets every one but Stem EQ
 Chain: Tonal EQ -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
