@@ -79,8 +79,12 @@ Experiments 2026-10-02 (7 held-out avg / Gallas, dB; static -15.0 / -13.8, oracl
   same level as the ideal, no odd sounds.  DECISION: research done, ship model v2 (share loss, remix,
   HIDDEN 128, 1 layer, 247k params; best checkpoint of the 16k run, step 7.6k).  Keep a copy of
   stemnet_v2.pt in the repo (tools/stem/models/) - the scratchpad does not survive.
-  Next: export weights, C++ engine (dsp/src/StemEQ.cpp) + tests (exact passthrough at 0 dB, C++ vs
-  PyTorch frame by frame), params / UI / Learn, Auto-Master hooks, review agent, user test.
+  C++ engine done (dsp/src/StemEQ.cpp + StemNetWeights.h from export.py; 7 tests, 80 total pass):
+  C++ shares match PyTorch within 2.4e-6, exact delayed pass-through at 0 dB / off, equal gains =
+  plain gain (3e-8), bass +6 lifts a 110 Hz tone 5.85 dB vs 0.76 dB for the rest, no clicks,
+  latency 1792 (3584 at 88.2k+), ~3 % of one core at 48 kHz stereo.
+  Next: plug-in (params, chain slot after Tonal EQ, latency report, UI / Learn, Auto-Master hooks),
+  review agent, user test.  Known: at 88.2k+ the features use NFFT 2048 (level offset vs training).
 Next: download MUSDB (a subset first), prep, train ~20k steps, validate on held-out songs, try to
 cut drum bleed in "other" (htdemucs_ft teacher failed to download here: retry with Full network),
 then C++ engine + exact-passthrough tests, params/UI/Learn ("other" cuts touch drums a little),

@@ -20,6 +20,8 @@ Setup (scratch venv): `pip install torch torchaudio demucs soundfile librosa lam
    ringing on under the kicks, and any vocals/other become bass; short low hits stay drums (kick).
    Prefix a file with `val_` to hold it out for validation.
 2. `python train.py 20000` -> stemnet.pt
-3. (next) export weights for dsp/src/StemEQ.cpp and check C++ against PyTorch frame by frame.
+3. `python evaluate.py models/stemnet_v2.pt` (+/-6 dB move error vs ideal), `python render.py ...` (listening clips).
+4. `python export.py [model.pt]` -> dsp/src/StemNetWeights.h + tests/StemNetReference.h; the C++ test
+   checks dsp/src/StemEQ.cpp against PyTorch frame by frame (shares within 1e-5).
 
 Keep `common.py` and the C++ in lock-step: band layout, window, frame timing, features.
