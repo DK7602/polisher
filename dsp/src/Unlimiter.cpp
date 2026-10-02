@@ -95,7 +95,7 @@ void Unlimiter::processFrame (double* frame, int numChannels) noexcept
     // a held note gives a flat line), then falls. Slow follower: rises toward it over Length, falls
     // with it at once. They differ only while the level is climbing: the start of a hit.
     // Level, not peaks: a limiter leaves every peak at the ceiling, but a hit still carries more
-    // energy than what plays between hits. RMS over the last 10 ms (running sum, refreshed now and
+    // energy than what plays between hits. RMS over the last 5 ms (running sum, refreshed now and
     // then so rounding can't build up).
     rmsSum += sc - rmsRing[static_cast<size_t> (rmsPos)];
     rmsRing[static_cast<size_t> (rmsPos)] = sc;
@@ -109,6 +109,12 @@ void Unlimiter::processFrame (double* frame, int numChannels) noexcept
     if (sc > fastEnv) { fastEnv += (sc - fastEnv) * aFastAtk; holdLeft = holdSamples; }
     else if (holdLeft > 0) --holdLeft;
     else fastEnv += (sc - fastEnv) * aRel;
+    if (! std::isfinite (fastEnv) || ! std::isfinite (rmsSum))   // a NaN / inf input sample must not stall detection
+    {
+        fastEnv = slowEnv = 0.0;
+        rmsSum = 0.0;
+        std::fill (rmsRing.begin(), rmsRing.end(), 0.0);
+    }
     slowEnv = fastEnv > slowEnv ? slowEnv + (fastEnv - slowEnv) * aSlowAtk : fastEnv;
 
     const double target = isNeutral (params) ? 0.0 : std::clamp (params.amount, 0.0, 100.0) / 100.0;

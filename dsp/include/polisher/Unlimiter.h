@@ -80,7 +80,7 @@ public:
     double takeMaxBoostDb() noexcept { const double v = maxBoost; maxBoost = 0.0; return v; }
 
     /** How squashed the incoming audio is: sample peak minus RMS (dB) over the last ~3 s of audio
-        with signal. About 8 dB or less is brickwalled, 14 dB or more is open (an unmastered mix);
+        with signal. kFullSquashDb or less is brickwalled, kOpenSquashDb or more is open (an unmastered mix);
         0 until there is enough audio. */
     double squashDb() const noexcept { return squash; }
 

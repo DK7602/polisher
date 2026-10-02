@@ -296,3 +296,20 @@ TEST_CASE ("Auto-Master turns the Unlimiter on only for squashed audio", "[autom
     CHECK (w.chain.unlimiter.amount == 75.0);
     CHECK (w.output.truePeakDbtp <= w.chain.limiter.ceilingDbtp + 0.05);
 }
+
+TEST_CASE ("Auto-Master's loudness matches the plug-in with Stem EQ moves on squashed input", "[automaster]")
+{
+    LimiterParams lp; lp.driveDb = 16.0; lp.ceilingDbtp = -0.3; lp.releaseMs = 30.0; lp.adaptiveRelease = false;
+    const auto wall = renderLimited (testsig::musicLike (48000.0, 12.0, -6.0, 4), lp);
+    for (double move : { -6.0, 6.0 })
+    {
+        AutoMasterSettings s;
+        s.stem.gainDb[kStemDrums] = move;
+        s.stem.gainDb[kStemBass] = -move;
+        const auto r = autoMaster (wall, s);
+        REQUIRE (r.ok);
+        CHECK (r.chain.unlimiter.amount > 0.0);
+        const auto check = measure (renderMaster (wall, r.chain));
+        CHECK_THAT (check.integratedLufs, WithinAbs (r.output.integratedLufs, 0.05));
+    }
+}

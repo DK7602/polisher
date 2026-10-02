@@ -384,7 +384,7 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
     if (tsFrames == 0 && signal)
     {
         for (size_t b = 0; b < static_cast<size_t> (B); ++b)
-            tsShort[b] = tsLong[b] = std::max (10.0 * std::log10 (e[b] + 1.0e-20), totalDb - 90.0);
+            tsShort[b] = tsLong[b] = std::max (10.0 * std::log10 (e[b] + 1.0e-20) - totalDb, -90.0);
         tsLevelShort = tsLevelLong = totalDb;
     }
     if (tsFrames > 0 || signal)
@@ -393,7 +393,9 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
         const double aL = warming ? aS : 1.0 - std::exp (-1.0 / (10.0 * framesPerSecond));
         for (size_t b = 0; b < static_cast<size_t> (B); ++b)
         {
-            const double db = std::max (10.0 * std::log10 (e[b] + 1.0e-20), totalDb - 90.0);   // empty bands: 90 dB under the frame
+            // Each band relative to the whole frame: an overall level change (a louder chorus) never
+            // reaches the averages, so the slower top bands can't lag behind it. Empty bands: -90 dB.
+            const double db = std::max (10.0 * std::log10 (e[b] + 1.0e-20) - totalDb, -90.0);
             const double aB = topW (b) > 0.0 && ! warming ? 1.0 - std::exp (-1.0 / ((shortS + (2.0 - shortS) * topW (b)) * framesPerSecond)) : aS;
             if (! signal) continue;   // band balances freeze in silence (the slow top bands would lag after it)
             tsShort[b] += (db - tsShort[b]) * aB;

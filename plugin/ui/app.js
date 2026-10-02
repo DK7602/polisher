@@ -1208,7 +1208,7 @@ function renderUlLearn(body) {
     : `Lifting each hit by up to ${fmtNum(lift)} dB: your audio measures ${squashWord(sq)} (Squash ${sqText}), so the hits get back some of the height the limiter took.`));
   body.appendChild(sep());
   body.appendChild(head("WHAT EACH CONTROL IS DOING"));
-  body.appendChild(item("Squash", sq ? sqText : "–", "How far the peaks stand above the average level over the last 3 seconds. 13 dB or more is an open, unmastered mix; 8.5 dB or less is brickwalled (limited hard). The more squashed, the harder the Unlimiter works; on an open mix it does nothing."));
+  body.appendChild(item("Squash", sq ? sqText : "–", "How far the peaks stand above the average level over the last 3 seconds. 12.5 dB or more is an open, unmastered mix; 8.5 dB or less is brickwalled (limited hard). The more squashed, the harder the Unlimiter works; on an open mix it does nothing."));
   body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `Puts back about ${Math.round(amount)} % of the punch the limiter took away, scaled by how squashed the audio measures.`));
   body.appendChild(item("Length", fmtMs(len), len < 12 ? "Short: just the click and snap of each hit comes back. Cleanest." : len > 30 ? "Long: the body of each hit comes back too. Bigger, but the music around the hits pumps a little." : "A middle setting: the attack and a little body of each hit."));
   body.appendChild(item("Focus", focus, focus === "Full" ? "Listens for every hit." : focus === "Kick" ? "Listens for the kick and 808 (below 150 Hz), so only those hits come back up." : "Listens for snares, claps and hats (above 1 kHz), so only those hits come back up."));

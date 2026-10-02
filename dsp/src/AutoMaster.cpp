@@ -482,7 +482,7 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
     // An unmastered mix keeps its hits well above the rest (Squash 14 dB or more); a beat or mix that
     // was limited or clipped before Polisher has lost that. Everything after this hears the restored mix.
     {
-        const double squash = Unlimiter::measureSquashDb (heard.channels, heard.sampleRate);
+        const double squash = Unlimiter::measureSquashDb (input.channels, input.sampleRate);   // as the plug-in sees it, before Stem EQ
         auto& ul = chain.unlimiter;
         ul = UnlimiterParams {};
         if (Unlimiter::squashScale (squash) < 0.25)
@@ -493,7 +493,7 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
             ul.amount = s.intensity == Intensity::gentle ? 50.0 : s.intensity == Intensity::punchy ? 100.0 : 75.0;
             const bool wall = squash <= Unlimiter::kFullSquashDb + 0.5;
             reason ("ul", "Amount", pct (ul.amount), std::string ("Your audio arrives ") + (wall ? "brickwalled" : "already squashed") +
-                    ": the hits stand only " + num (squash) + " dB above the average level (an unmastered mix sits around 13 dB or more). "
+                    ": the hits stand only " + num (squash) + " dB above the average level (an unmastered mix sits at 12.5 dB or more). "
                     "Something limited or clipped it before Polisher. " + pct (ul.amount) + " puts back " +
                     (ul.amount >= 100.0 ? "the punch it lost" : ul.amount >= 75.0 ? "most of the punch it lost" : "part of the punch it lost") +
                     ", so the Maximizer can make it loud again without flattening it twice.");
@@ -504,7 +504,8 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
                                "\nSTEP: Then set the Unlimiter Amount back to 0 and run Auto-Master again.");
         }
     }
-    const AudioClip clip = renderUnlimiter (heard, chain.unlimiter);
+    // Plug-in order: Unlimiter first, then the user's Stem EQ (the Unlimiter is not linear, so the order matters).
+    const AudioClip clip = Unlimiter::isNeutral (chain.unlimiter) ? heard : renderStemEq (renderUnlimiter (input, chain.unlimiter), s.stem);
     if (! Unlimiter::isNeutral (chain.unlimiter))
         r.analysis = analyseMix (clip);   // the rest of the chain is set for the restored mix
 
@@ -914,7 +915,8 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
     const double ceiling = chain.limiter.ceilingDbtp;
 
     // Loudness: search on the real chain, then respect the intensity's peak-control budget.
-    const AudioClip shaped = renderPreDrive (heard, chain);  // Unlimiter, EQ, Bass, Dynamics, Imager, Saturation
+    // The whole pre-drive chain from the raw input, in the plug-in's order (Stem EQ included).
+    const AudioClip shaped = [&] { MasterChainParams full = chain; full.stem = s.stem; return renderPreDrive (input, full); }();
     const auto shapedStats = measure (shaped);
     const double inLufs = shapedStats.integratedLufs;
     const double recurring = recurringPeakDb (shaped);   // the peaks that keep coming back

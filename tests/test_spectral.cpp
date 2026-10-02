@@ -302,3 +302,30 @@ TEST_CASE ("Tone Steady still pulls back a top end that stays harsher", "[spectr
     CHECK (largest < -1.5);
     CHECK ((at > 2500.0 && at < 10000.0));
 }
+
+TEST_CASE ("Tone Steady doesn't touch the top end when the song gets louder", "[spectral]")
+{
+    // A chorus 6 dB louder than the verse, same tone: nothing to steady, at any speed.
+    const double sr = 48000.0;
+    auto in = testsig::musicLike (sr, 14.0, -20.0, 6);
+    for (auto& ch : in.channels)
+        for (size_t i = static_cast<size_t> (8.0 * sr); i < ch.size(); ++i) ch[i] *= 2.0f;
+    for (int speed = 0; speed < 3; ++speed)
+    {
+        ToneSteadyParams ts; ts.amount = 100.0; ts.rangeDb = 6.0; ts.speed = speed;
+        StemEQ s; s.prepare (sr, 2); s.setToneSteady (ts); s.reset();
+        AudioClip c = in;
+        float* ch[2] = { c.channels[0].data(), c.channels[1].data() };
+        const int block = 2400;
+        double worst = 0.0;
+        for (int i = 0; i < c.numSamples(); i += block)
+        {
+            s.process (std::array<float*, 2> { ch[0] + i, ch[1] + i }.data(), 2, std::min (block, c.numSamples() - i));
+            double d = 0.0, hz = 0.0;
+            s.takeToneSteadyMeter (d, hz);
+            if (i > static_cast<int> (7.5 * sr) && hz > 2500.0) worst = std::max (worst, std::abs (d));
+        }
+        UNSCOPED_INFO ("speed " << speed << ": largest top-end move after the level step " << worst << " dB");
+        CHECK (worst < 0.5);
+    }
+}
