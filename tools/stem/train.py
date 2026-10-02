@@ -86,7 +86,8 @@ if __name__ == '__main__':
     val = [f for f in files if os.path.basename(f).startswith('val_')] or files[:1]
     tr = [f for f in files if f not in val] or files
     dtr, dval = load(tr), load(val)
-    net = StemNet(dtr[0][0].shape[0] // 2, os.environ.get('BIDIR') == '1'); opt = torch.optim.AdamW(net.parameters(), 2e-3, weight_decay=1e-4)
+    net = StemNet(dtr[0][0].shape[0] // 2, os.environ.get('BIDIR') == '1',
+                  int(os.environ.get('HIDDEN', 128)), int(os.environ.get('LAYERS', 1))); opt = torch.optim.AdamW(net.parameters(), 2e-3, weight_decay=1e-4)
     steps = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, 2e-3, total_steps=steps)
     p = song_weights(dtr); best = np.inf
