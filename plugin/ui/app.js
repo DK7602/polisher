@@ -61,6 +61,15 @@ const P = {
   satDrive: Juce.getSliderState("satDrive"),
   satMix: Juce.getSliderState("satMix"),
   stemOn: Juce.getToggleState("stemOn"),
+  tsOn: Juce.getToggleState("tsOn"),
+  tsAmount: Juce.getSliderState("tsAmount"),
+  tsRange: Juce.getSliderState("tsRange"),
+  tsSpeed: Juce.getComboBoxState("tsSpeed"),
+  rtOn: Juce.getToggleState("rtOn"),
+  rtAmount: Juce.getSliderState("rtAmount"),
+  rtSens: Juce.getSliderState("rtSens"),
+  rtRelease: Juce.getSliderState("rtRelease"),
+  rtFocus: Juce.getComboBoxState("rtFocus"),
   stemGain: ["stemVoc", "stemDrums", "stemBass", "stemOther"].map((id) => Juce.getSliderState(id)),
 };
 const resetMeter = Juce.getNativeFunction("resetMeter");
@@ -81,7 +90,7 @@ const M = {
   peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
   inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
   amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0, matchDb: 0, corr: 1,
-  dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0],
+  dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
 };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
 let clipWindow = [];         // ~3 s of clipper peak-reduction samples
@@ -106,6 +115,12 @@ const modules = [
     controls: [["Vocals / Drums / Bass / Other", "Turns that part of the mix up or down (±12 dB). Other is everything else: synths, keys, guitars, pads, effects."],
                ["How it works", "A small AI model listens to the mix and works out, moment by moment and frequency by frequency, how much of the sound is vocals, drums, bass or other. Your four levels are mixed by those shares into one EQ that updates about 180 times a second."],
                ["Trade-offs", "Adds 40 ms of delay (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly. Moves up to about ±6 dB stay clean."]] },
+  { id: "ts", name: "Tone Steady", live: true, soon: "",
+    what: "Keeps your tone steady as the song plays: when a section drifts muddier, harsher or thinner than the rest of the song, it nudges those frequencies back.",
+    cells: [], controls: [] },
+  { id: "rt", name: "Resonance Tamer", live: true, soon: "",
+    what: "Finds ringing tones that stick out (boxiness, whistly vocal tones, harsh hats) and cuts just those, only while they ring.",
+    cells: [], controls: [] },
   { id: "bass", name: "Bass Control", live: true, soon: "",
     what: "Keeps the low end solid on every system: mono below a crossover, controls 808 level jumps, and adds kick punch.",
     cells: [],
@@ -205,9 +220,13 @@ function renderChain() {
   modules.forEach((m, i) => {
     const row = document.createElement("div");
     row.className = "row" + (m.live ? "" : " soon");
-    row.style.top = (110.2 + i * 69.55).toFixed(1) + "px";
+    // The panel art has 7 slots; with more modules every row draws its own art, packed evenly.
+    const packed = modules.length > 7;
+    const pitch = packed ? (626 - 110.2) / (modules.length - 1) : 69.55;   // last row ends above the note
+    row.style.top = (110.2 + i * pitch).toFixed(1) + "px";
+    if (packed) { row.style.height = (pitch - 5).toFixed(1) + "px"; row.classList.add("packed"); }
     if (m.id === selected) row.appendChild(img("assets/row_red.png"));
-    else if (i >= 6) row.appendChild(img("assets/row_blue.png"));   // the panel art has row 7 lit red and only 7 slots
+    else if (packed || i >= 6) row.appendChild(img("assets/row_blue.png"));
 
     const btn = document.createElement("button");
     btn.type = "button";
@@ -551,6 +570,52 @@ const stemCells = [
   stemHearsCell(),
 ];
 
+// Tone Steady / Resonance Tamer cells
+const tsAmountAt = () => P.tsAmount.getScaledValue();
+const rtAmountAt = () => P.rtAmount.getScaledValue();
+const tsIsNeutral = () => !P.tsOn.getValue() || tsAmountAt() < 0.5;
+const rtIsNeutral = () => !P.rtOn.getValue() || rtAmountAt() < 0.5;
+const TS_SPEEDS = ["Slow", "Medium", "Fast"], RT_FOCUS = ["Full", "Boxiness", "Harshness"];
+function segCell({ label, sub, state, labels, notes }) {
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.innerHTML = `<span class="cell-label">${label}</span><span class="cell-sub mono">${sub}</span>
+    <div class="seg seg-v"></div><span class="cell-value mono os-note"></span>`;
+  const seg = cell.querySelector(".seg"), note = cell.querySelector(".os-note");
+  const buttons = labels.map((text, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = text.toUpperCase();
+    b.addEventListener("click", () => { state.setChoiceIndex(i); refresh(); onParamsChanged(); userEdited(); });
+    seg.appendChild(b);
+    return b;
+  });
+  function refresh() {
+    // (comboIndex is defined further down; cells are built at load time, so work it out here)
+    const n = labels.length, idx = clamp(Math.round(state.getChoiceIndex ? state.getChoiceIndex() : state.value * (n - 1)), 0, n - 1);
+    buttons.forEach((b, i) => { b.className = "pill " + (i === idx ? "pill-red" : "pill-blue"); b.setAttribute("aria-pressed", String(i === idx)); });
+    note.textContent = notes[idx];
+  }
+  state.valueChangedEvent.addListener(() => { refresh(); onParamsChanged(); });
+  state.propertiesChangedEvent.addListener(refresh);
+  cell.refresh = refresh;
+  refresh();
+  return cell;
+}
+const tsCells = [
+  liveKnobCell({ label: "Amount", sub: "how much drift", state: P.tsAmount, def: 0, minText: "off", maxText: "100", fmt: (v) => `${Math.round(v)} %` }),
+  liveKnobCell({ label: "Range", sub: "largest cut", state: P.tsRange, def: 3, minText: "1", maxText: "6 dB", fmt: (v) => `\u00b1${v.toFixed(1)} dB` }),
+  segCell({ label: "Speed", sub: "reaction", state: P.tsSpeed, labels: TS_SPEEDS, notes: ["1 s \u00b7 sections", "0.4 s \u00b7 phrases", "0.15 s \u00b7 notes"] }),
+  barCell({ label: "Steadying", sub: "biggest move now", minText: "0", maxText: "6 dB", id: "tsmeter" }),
+];
+const rtCells = [
+  liveKnobCell({ label: "Amount", sub: "how deep", state: P.rtAmount, def: 0, minText: "off", maxText: "100", fmt: (v) => `${Math.round(v)} %` }),
+  liveKnobCell({ label: "Sensitivity", sub: "smaller peaks", state: P.rtSens, def: 50, minText: "0", maxText: "100", fmt: (v) => `${Math.round(v)} %` }),
+  liveKnobCell({ label: "Release", sub: "let-go speed", state: P.rtRelease, def: 80, minText: "20", maxText: "300", fmt: fmtMs }),
+  segCell({ label: "Focus", sub: "where to look", state: P.rtFocus, labels: RT_FOCUS, notes: ["80 Hz \u2013 16 kHz", "150 \u2013 800 Hz", "1.5 \u2013 8 kHz"] }),
+  barCell({ label: "Cutting", sub: "deepest now", minText: "0", maxText: `${MINUS}12 dB`, id: "rtmeter" }),
+];
+
 function renderModule() {
   const m = modules.find((x) => x.id === selected);
   const row = $("knob-row");
@@ -560,7 +625,7 @@ function renderModule() {
   $("btn-bypass").hidden = !m.live;
   if (m.live) {
     row.classList.remove("soon");
-    ({ clip: clipperCells, eq: eqCells, stem: stemCells, bass: bassCells, dyn: dynCells(), img: imagerCells, sat: satCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
+    ({ clip: clipperCells, eq: eqCells, stem: stemCells, ts: tsCells, rt: rtCells, bass: bassCells, dyn: dynCells(), img: imagerCells, sat: satCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
     $("module-note").textContent = "Live · drag up/down · Shift = fine · double-click = reset";
     refreshHeadButton();
   } else {
@@ -748,6 +813,8 @@ function renderLearn() {
   if (m.id === "img") { renderImagerLearn(body); liftWarning(body); prependAmSection(body, "img"); return; }
   if (m.id === "dyn") { renderDynLearn(body); liftWarning(body); prependAmSection(body, "dyn"); return; }
   if (m.id === "sat") { renderSatLearn(body); liftWarning(body); prependAmSection(body, "sat"); return; }
+  if (m.id === "ts") { renderTsLearn(body); liftWarning(body); prependAmSection(body, "ts"); return; }
+  if (m.id === "rt") { renderRtLearn(body); liftWarning(body); prependAmSection(body, "rt"); return; }
   if (m.id === "stem") {
     renderStemLearn(body); liftWarning(body); prependAmSection(body, "stem");
     const b = stemSuggestButton();
@@ -1098,6 +1165,57 @@ function renderStemLearn(body) {
     body.appendChild(tip("TRY THIS", "Vocal sitting low? Vocals +2 dB is often all it takes. Flip MATCH on and A/B: the beat should stay put while the vocal steps forward.", true));
 }
 
+function renderTsLearn(body) {
+  const on = !!P.tsOn.getValue(), bypassed = !!P.bypass.getValue();
+  const playing = performance.now() - lastAudioTime < 1500;
+  const amount = tsAmountAt(), range = P.tsRange.getScaledValue(), speed = TS_SPEEDS[comboIndex(P.tsSpeed)];
+  const move = M.tsDb || 0, where = M.tsHz ? fmtHz(M.tsHz) : "";
+  body.appendChild(head("WHAT'S HAPPENING"));
+  body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
+    : !on ? "Tone Steady is off, so the tone is left exactly as it comes in."
+    : amount < 0.5 ? "Amount is at 0, so nothing is changed. Turn Amount up to keep the tone steady through the song."
+    : !playing ? "Press play: Tone Steady learns your song's own balance over the first seconds, then keeps each section close to it."
+    : Math.abs(move) < 0.3 ? "This part of the song matches its own overall balance, so Tone Steady is resting."
+    : `Right now it's ${move < 0 ? "pulling down" : "lifting"} the area around ${where} by ${fmtNum(Math.abs(move))} dB: this part drifted ${move < 0 ? "fuller" : "thinner"} there than the rest of the song.`));
+  body.appendChild(sep());
+  body.appendChild(head("WHAT EACH CONTROL IS DOING"));
+  body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `Corrects about ${Math.round(amount)} % of each drift, beyond a 1 dB dead zone, so small natural changes are left alone.`));
+  body.appendChild(item("Range", `\u00b1${range.toFixed(1)} dB`, `Cuts go at most ${range.toFixed(1)} dB, boosts at most ${(range / 2).toFixed(1)} dB, so it can never reshape your mix, only steady it.`));
+  body.appendChild(item("Speed", speed, speed === "Slow" ? "Follows whole sections: the gentlest, best for most masters."
+    : speed === "Medium" ? "Follows phrases: catches a verse that gets muddier or a hook that gets harsher." : "Follows single notes and hits: strongest, can make the mix feel controlled."));
+  body.appendChild(item("Reference", "", "Your song's own balance over the last ~10 seconds, so the Tonal EQ sets the tone and Tone Steady only keeps it. Quiet breakdowns are left alone."));
+  if (on && !bypassed && amount > 70 && speed === "Fast")
+    body.appendChild(tip("HEADS UP", "High Amount at Fast speed follows single notes. That can flatten moves you made on purpose, like a drop that's meant to hit with more bass.", false,
+      { need: "Only if the big moments sound smaller with it on.", steps: ["Turn on MATCH and flip A/B through the drop or chorus.", "If the impact shrinks: Speed to Medium or Slow.", "Or lower Amount to about 40 %."] }));
+  else
+    body.appendChild(tip("TRY THIS", "Amount 40 %, Range \u00b13 dB, Speed Slow: sections stay consistent without losing their character. Compare with MATCH on.", true));
+}
+
+function renderRtLearn(body) {
+  const on = !!P.rtOn.getValue(), bypassed = !!P.bypass.getValue();
+  const playing = performance.now() - lastAudioTime < 1500;
+  const amount = rtAmountAt(), sens = P.rtSens.getScaledValue(), rel = P.rtRelease.getScaledValue(), focus = RT_FOCUS[comboIndex(P.rtFocus)];
+  const cut = M.rtCut || 0, where = M.rtHz ? fmtHz(M.rtHz) : "";
+  body.appendChild(head("WHAT'S HAPPENING"));
+  body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
+    : !on ? "Resonance Tamer is off, so nothing is cut."
+    : amount < 0.5 ? "Amount is at 0, so nothing is cut. Turn Amount up to tame ringing tones."
+    : !playing ? "Press play to see which ringing tones Resonance Tamer finds."
+    : cut > -0.3 ? "Nothing rings out right now, so Resonance Tamer is resting."
+    : `Right now it's cutting ${fmtNum(-cut)} dB around ${where}: a tone there rings ${-cut > 4 ? "clearly" : "a little"} above the sound around it.`));
+  body.appendChild(sep());
+  body.appendChild(head("WHAT EACH CONTROL IS DOING"));
+  body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `How far each ringing tone is pulled down: at 100 % it is cut level with the sound around it. ${Math.round(amount)} % takes it part of the way.`));
+  body.appendChild(item("Sensitivity", `${Math.round(sens)} %`, `Catches tones that stand ${fmtNum(12 - 9 * sens / 100, 1)} dB or more above their surroundings. Higher catches smaller ones.`));
+  body.appendChild(item("Release", fmtMs(rel), rel < 50 ? "Lets go quickly: cuts follow every note; most transparent on busy mixes." : rel > 150 ? "Lets go slowly: smooth, steady taming of tones that keep coming back." : "A middle setting that suits most mixes."));
+  body.appendChild(item("Focus", focus, focus === "Full" ? "Looks from 80 Hz to 16 kHz." : focus === "Boxiness" ? "Looks only at 150\u2013800 Hz, where boxy, muddy rings live." : "Looks only at 1.5\u20138 kHz, where harsh, piercing tones live."));
+  if (on && !bypassed && playing && cut < -8)
+    body.appendChild(tip("HEADS UP", `It's cutting more than 8 dB at ${where}. Deep cuts can make that area sound dull or hollow.`, false,
+      { need: "Only if that area sounds dull or hollow to you.", steps: ["Turn on MATCH and flip A/B.", "If B sounds dull there: lower Amount by 20 %, or Sensitivity to about 40 %.", "If the ring is in your mix, an EQ cut on that one track fixes it at the source."] }));
+  else
+    body.appendChild(tip("TRY THIS", "Amount 50 %, Sensitivity 50 %, Focus Full. Then try Focus Harshness on a bright mix: hats and vocals get smoother without losing air.", true));
+}
+
 // Warnings go right under "What's happening" so they're seen without scrolling; friendly tips stay at the end.
 function liftWarning(body) {
   const warn = body.querySelector(".l-tip:not(.ok)"), firstSep = body.querySelector(".l-sep");
@@ -1210,6 +1328,12 @@ function refreshHeadButton() {
     bp.textContent = (selected === "dyn" ? "DYNAMICS " : "SAT ") + (on ? "ON" : "OFF");
     bp.setAttribute("aria-pressed", String(on));
     $("knob-row").classList.toggle("dimmed", !on);
+  } else if (selected === "ts" || selected === "rt") {
+    const on = !!(selected === "ts" ? P.tsOn : P.rtOn).getValue();
+    bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
+    bp.textContent = (selected === "ts" ? "TONE STEADY " : "TAMER ") + (on ? "ON" : "OFF");
+    bp.setAttribute("aria-pressed", String(on));
+    $("knob-row").classList.toggle("dimmed", !on);
   } else if (selected === "stem") {
     const on = !!P.stemOn.getValue();
     bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
@@ -1258,6 +1382,8 @@ $("btn-bypass").addEventListener("click", () => {
   else if (selected === "dyn") P.dynOn.setValue(!P.dynOn.getValue());
   else if (selected === "sat") P.satOn.setValue(!P.satOn.getValue());
   else if (selected === "stem") P.stemOn.setValue(!P.stemOn.getValue());
+  else if (selected === "ts") P.tsOn.setValue(!P.tsOn.getValue());
+  else if (selected === "rt") P.rtOn.setValue(!P.rtOn.getValue());
   else P.bypass.setValue(!P.bypass.getValue());
   onParamsChanged();
   userEdited();
@@ -1270,6 +1396,8 @@ P.imgOn.valueChangedEvent.addListener(onParamsChanged);
 P.dynOn.valueChangedEvent.addListener(onParamsChanged);
 P.satOn.valueChangedEvent.addListener(onParamsChanged);
 P.stemOn.valueChangedEvent.addListener(onParamsChanged);
+P.tsOn.valueChangedEvent.addListener(onParamsChanged);
+P.rtOn.valueChangedEvent.addListener(onParamsChanged);
 for (const s of [...P.dynX, ...P.dynRatio, ...P.dynGain]) s.valueChangedEvent.addListener(() => { dynPicker.refresh(); updateLiveReadouts(); });
 
 function togglePopover(id) {
@@ -1408,7 +1536,7 @@ function refreshAllCells() {
   onParamsChanged();
 }
 
-const AM_MODULES = [["eq", "TONAL EQ"], ["stem", "STEM EQ"], ["bass", "BASS CONTROL"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
+const AM_MODULES = [["eq", "TONAL EQ"], ["stem", "STEM EQ"], ["ts", "TONE STEADY"], ["rt", "RESONANCE TAMER"], ["bass", "BASS CONTROL"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
 function notesAsTips(body) {
   for (const raw of amReport.notes || []) {
     // "TITLE: text" plus optional lines "NEED: …" and "STEP: …" (the plan).
@@ -1454,18 +1582,19 @@ function paramValue(id) {
   const map = { drive: P.drive, ceiling: P.ceiling, release: P.release, clipLevel: P.clipLevel, clipSoftness: P.clipSoftness,
                 bassMono: P.bassMono, bassTame: P.bassTame, bassPunch: P.bassPunch,
                 imgLow: P.imgLow, imgMid: P.imgMid, imgHigh: P.imgHigh, satDrive: P.satDrive, satMix: P.satMix,
+                tsAmount: P.tsAmount, tsRange: P.tsRange, rtAmount: P.rtAmount, rtSens: P.rtSens, rtRelease: P.rtRelease,
                 stemVoc: P.stemGain[0], stemDrums: P.stemGain[1], stemBass: P.stemGain[2], stemOther: P.stemGain[3] };
   const band = /^dyn(X|Thr|Ratio|Atk|Rel|Gain)(\d)$/.exec(id);
   if (band) return P["dyn" + band[1]][Number(band[2]) - 1].getScaledValue();
   if (id === "satMode") return satModeIndex();
   if (map[id]) return map[id].getScaledValue();
   const toggles = { eqOn: P.eqOn, bassOn: P.bassOn, clipOn: P.clipOn, adaptive: P.adaptive, bypass: P.bypass,
-                    dynOn: P.dynOn, dynAdaptive: P.dynAdaptive, imgOn: P.imgOn, satOn: P.satOn };
+                    dynOn: P.dynOn, dynAdaptive: P.dynAdaptive, imgOn: P.imgOn, satOn: P.satOn, tsOn: P.tsOn, rtOn: P.rtOn };
   if (toggles[id]) return toggles[id].getValue() ? 1 : 0;
   if (id === "clipOversampling") return osIndex();
   return null;
 }
-const MODULE_PARAMS = { stem: /^stem/, eq: /^eq/, bass: /^bass/, dyn: /^dyn/, img: /^img/, sat: /^sat/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive)$/ };
+const MODULE_PARAMS = { stem: /^stem/, ts: /^ts/, rt: /^rt/, eq: /^eq/, bass: /^bass/, dyn: /^dyn/, img: /^img/, sat: /^sat/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive)$/ };
 function moduleUnchanged(module) {
   const values = (amReport && amReport.values) || {};
   return Object.entries(values).every(([id, v]) => {
@@ -1601,6 +1730,8 @@ function updateLiveReadouts() {
  : selected === "img" ? (!P.imgOn.getValue() ? "OFF" : `CORR ${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`)
                    : selected === "dyn" ? (!P.dynOn.getValue() ? "OFF" : dynIsNeutral() ? "1:1" : `GR ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`)
                    : selected === "sat" ? (!P.satOn.getValue() ? "OFF" : satIsNeutral() ? "CLEAN" : SAT_MODES[satModeIndex()].toUpperCase())
+                   : selected === "ts" ? (!P.tsOn.getValue() ? "OFF" : tsIsNeutral() ? "IDLE" : Math.abs(M.tsDb || 0) < 0.3 ? "RESTING" : `STEADY ${fmtNum(M.tsDb)} dB`)
+                   : selected === "rt" ? (!P.rtOn.getValue() ? "OFF" : rtIsNeutral() ? "IDLE" : (M.rtCut || 0) > -0.3 ? "RESTING" : `CUT ${fmtNum(M.rtCut)} dB`)
                    : selected === "stem" ? (!P.stemOn.getValue() ? "OFF" : stemIsNeutral() ? "FLAT" : `${stemMoves().length} MOVE${stemMoves().length > 1 ? "S" : ""}`)
                    : selected === "bass" ? (!P.bassOn.getValue() ? "OFF" : `WIDTH ${Math.round(M.bassWidth || 0)} %`)
                    : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
@@ -1636,6 +1767,24 @@ function updateLiveReadouts() {
   if (rd) rd.textContent = P.bypass.getValue() ? "Bypassed" : !P.dynOn.getValue() ? "Off" : dynIsNeutral() ? neutralText("dyn")
     : `${[0, 1, 2, 3].filter(dynBandActive).length} band${[0, 1, 2, 3].filter(dynBandActive).length > 1 ? "s" : ""} \u00b7 ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`;
   if (selected === "dyn") dynPicker.refresh();
+  const rts = $("read-ts");
+  if (rts) rts.textContent = P.bypass.getValue() ? "Bypassed" : !P.tsOn.getValue() ? "Off" : tsIsNeutral() ? neutralText("ts")
+    : `${Math.round(tsAmountAt())} % \u00b7 \u00b1${P.tsRange.getScaledValue().toFixed(0)} dB`;
+  const rrt = $("read-rt");
+  if (rrt) rrt.textContent = P.bypass.getValue() ? "Bypassed" : !P.rtOn.getValue() ? "Off" : rtIsNeutral() ? neutralText("rt")
+    : `${Math.round(rtAmountAt())} % \u00b7 ${RT_FOCUS[comboIndex(P.rtFocus)]}`;
+  const tsf = $("tsmeter-fill");
+  if (tsf) {
+    const v = tsIsNeutral() || P.bypass.getValue() ? 0 : Math.abs(M.tsDb || 0);
+    tsf.style.width = (clamp(v / 6, 0, 1) * 100).toFixed(1) + "%";
+    $("tsmeter-val").textContent = v < 0.3 ? "resting" : `${M.tsDb < 0 ? MINUS : "+"}${v.toFixed(1)} dB @ ${fmtHz(M.tsHz || 0)}`;
+  }
+  const rtf = $("rtmeter-fill");
+  if (rtf) {
+    const v = rtIsNeutral() || P.bypass.getValue() ? 0 : -(M.rtCut || 0);
+    rtf.style.width = (clamp(v / 12, 0, 1) * 100).toFixed(1) + "%";
+    $("rtmeter-val").textContent = v < 0.3 ? "resting" : `${MINUS}${v.toFixed(1)} dB @ ${fmtHz(M.rtHz || 0)}`;
+  }
   const rst = $("read-stem");
   if (rst) rst.textContent = P.bypass.getValue() ? "Bypassed" : !P.stemOn.getValue() ? "Off" : stemSuggestion() ? "Suggestion ready"
     : stemIsNeutral() ? neutralText("stem")
@@ -1700,7 +1849,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   $("sp-master").setAttribute("d", master);
   $("sp-master-glow").setAttribute("d", master);
 });
-setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "dyn", "sat", "stem"].includes(selected)) renderLearn(); }, 1000);
+setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "dyn", "sat", "stem", "ts", "rt"].includes(selected)) renderLearn(); }, 1000);
 
 // ---------------------------------------------------------------------------------------------
 buildSpectrumGrid();

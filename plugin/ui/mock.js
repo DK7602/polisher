@@ -36,11 +36,18 @@
   sliders.bassMono = { start: 0, end: 250, skew: 1, interval: 1, value: 0, label: "Hz" };
   sliders.bassTame = { start: 0, end: 100, skew: 1, interval: 0.1, value: 0, label: "%" };
   sliders.bassPunch = { start: 0, end: 100, skew: 1, interval: 0.1, value: 0, label: "%" };
+  sliders.tsAmount = { start: 0, end: 100, skew: 1, interval: 0.1, value: 40, label: "%" };
+  sliders.tsRange = { start: 1, end: 6, skew: 1, interval: 0.1, value: 3, label: "dB" };
+  sliders.rtAmount = { start: 0, end: 100, skew: 1, interval: 0.1, value: 50, label: "%" };
+  sliders.rtSens = { start: 0, end: 100, skew: 1, interval: 0.1, value: 50, label: "%" };
+  sliders.rtRelease = { start: 20, end: 300, skew: 0.5, interval: 1, value: 80, label: "ms" };
   for (const k of ["stemVoc", "stemDrums", "stemBass", "stemOther"]) sliders[k] = { start: -12, end: 12, skew: 1, interval: 0.1, value: 0, label: "dB" };
-  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true, eqOn: true, bassOn: true, levelMatch: false, imgOn: true, dynOn: true, dynAdaptive: true, satOn: true, stemOn: true };
+  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true, eqOn: true, bassOn: true, levelMatch: false, imgOn: true, dynOn: true, dynAdaptive: true, satOn: true, stemOn: true, tsOn: true, rtOn: true };
   const combos = {
     clipOversampling: { choices: ["1x", "2x", "4x", "8x"], value: 2 / 3 },
     satMode: { choices: ["Tape", "Tube", "Clip"], value: 0 },
+    tsSpeed: { choices: ["Slow", "Medium", "Fast"], value: 0.5 },
+    rtFocus: { choices: ["Full", "Boxiness", "Harshness"], value: 0 },
     amGenre: { choices: ["Trap / Hip-Hop", "R&B", "Pop", "EDM", "Rock", "Acoustic"], value: 0 },
     amIntensity: { choices: ["Gentle", "Balanced", "Punchy"], value: 0.5 },
     amTarget: { choices: ["Stream -14", "Loud -9", "Club -7"], value: 0.5 },
@@ -173,6 +180,8 @@
         const over = Math.max(0, base + 8 + 6 * beat - sliders["dynThr" + b].value - 6 * b);
         return toggles.dynOn && !bypass && r > 1.005 ? +(-over * (1 - 1 / r) * 0.5).toFixed(1) : 0;
       }),
+      rtCut: toggles.rtOn && !bypass && sliders.rtAmount.value > 0.5 ? +(-(1.5 + 3 * beat) * sliders.rtAmount.value / 50).toFixed(1) : 0, rtHz: 2870,
+      tsDb: toggles.tsOn && !bypass && sliders.tsAmount.value > 0.5 ? +(-(0.8 + 1.4 * beat) * sliders.tsAmount.value / 40).toFixed(1) : 0, tsHz: 310,
       stemShare: [38 + Math.round(4 * beat), 27 - Math.round(3 * beat), 14, 21 - Math.round(beat)],
       satHarm: toggles.satOn && !bypass && sliders.satDrive.value > 0.05 && sliders.satMix.value > 0.05
         ? +(-62 + sliders.satDrive.value * 2.4 + 20 * Math.log10(sliders.satMix.value / 100 + 1e-3) + 3 * beat).toFixed(1) : -100,
