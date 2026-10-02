@@ -124,4 +124,18 @@ Tone Steady: 64-band short (Speed) vs 10 s long-term dB balance, 1 dB dead band,
 flatten the mix for ~20 s). Auto-Master measures both at full strength and sets them (Resonance Tamer
 off on Bubba / Schaf, 45-60 % Boxiness on Addie / Dean; Tone Steady 40 % on all four).
 Sent the user A/B clips (Addie, Dean: off vs Auto-Master's settings, level-matched): B trims
-400-650 Hz ~2 dB, 808 range < 0.5 dB. Waiting for their ears: does the 808 or vocal lose body?
+400-650 Hz ~2 dB, 808 range < 0.5 dB. User's ears: B "lessened some of the high pitched
+frequencies" (no complaint about 808 / vocal body). Measured: Addie B was -0.6 dB at 4-8 kHz and
+-1.0 dB at 8-16 kHz (Tone Steady, not the tamer, whose Focus was Boxiness); Dean's top end ~0.
+FIRST THING NEXT SESSION: ask whether the duller top is wanted; likely fix: keep Tone Steady from
+cutting the top unless that band truly drifts (e.g. no cuts above ~4 kHz from short-term hat / cymbal
+bursts: longer short-term average or a larger dead band up there), re-render the A/B, ask again.
+Clips were rendered before the silence fix (e5d4bb6); Dean's tamer now caps at 60 %.
+
+## Next session quick start
+- Read this file. Branch claude/gracious-wright-tgs0no. Pushes build Windows only; Mac on request
+  (Actions -> Build & Test -> Run workflow, or ask Claude).
+- Session scratch data (MUSDB, teacher stems, venv) does not survive; tools/stem/README.md has the
+  steps to rebuild. Model v2 is in tools/stem/models/stemnet_v2.pt.
+- Open items: Tone Steady top-end dulling (above); Auto-Master turning a too-hot mix down (offered,
+  not done); repo private (user doing it); Pro EQ / Maximizer modes / Match ref / shoot-out list below.
