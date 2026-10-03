@@ -157,3 +157,13 @@ intensity + a NEED/STEP note; the rest of the chain is set for the restored mix.
 ulLength / ulFocus (hint 3), meters ulBoost / ulSquash. UI: chain note moved to the top of Quick Help,
 11 rows fill the panel. NEXT: user test on a squashed beat (MATCH A/B); confirm Squash readings on the
 user's own mixes and on a released master.
+
+## Validation (2026-10-03): step 1 of the "prove it's top tier" plan DONE
+CI (Windows) now runs pluginval at strictness 10 (max) + Steinberg's VST3 validator (built from the VST3
+SDK, cached). Run #62: pluginval SUCCESS, VST3 validator 537/537 (the one earlier failure was the
+unnamed program -> getProgramName returns "Default"). CI bug found and fixed: pluginval.exe is a GUI app,
+so pwsh didn't wait for it and a failure showed green; now Start-Process -Wait -PassThru.
+Next steps the user agreed to (planned for after credits reset Sunday): 2) EBU Tech 3341/3342 loudness
+compliance files + true-peak worst cases as tests; 3) sanitizer builds (ASan/UBSan/RealtimeSanitizer) +
+block-size / offline-vs-realtime invariance; later competitor comparisons (user renders TDR Limiter 6 GE /
+LoudMax / Ozone trial in Cubase) and blind loudness-matched listening. The user does NOT own Ozone.
