@@ -167,3 +167,10 @@ Next steps the user agreed to (planned for after credits reset Sunday): 2) EBU T
 compliance files + true-peak worst cases as tests; 3) sanitizer builds (ASan/UBSan/RealtimeSanitizer) +
 block-size / offline-vs-realtime invariance; later competitor comparisons (user renders TDR Limiter 6 GE /
 LoudMax / Ozone trial in Cubase) and blind loudness-matched listening. The user does NOT own Ozone.
+
+## Where the MAIN thread paused (2026-10-03): waiting for the user's credits to reset (Sunday)
+Done this session: Tone Steady top-end fix, Unlimiter (v0.13.0), review fixes, CI validation step 1 (green).
+Resume here with validation step 2 (EBU 3341/3342 + true-peak tests), then step 3 (sanitizers + block-size /
+offline-vs-realtime). Open questions for the user: Unlimiter listening test on a squashed beat; Squash
+readings on their own mix and a released song; A/B Addie for the Tone Steady fix.
+A separate UI thread was started (2026-10-03) for UI work on the same branch: pull before pushing.
