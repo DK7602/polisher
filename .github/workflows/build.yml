@@ -114,10 +114,15 @@ jobs:
           Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
           Expand-Archive pluginval.zip -DestinationPath pluginval
           New-Item -ItemType Directory -Force pluginval-logs | Out-Null
-          .\pluginval\pluginval.exe --strictness-level 10 --skip-gui-tests --validate-in-process --timeout-ms 1800000 `
-            --vst3validator "$PWD\vst3validator\validator.exe" --output-dir "$PWD\pluginval-logs" `
-            --validate "build\plugin\Polisher_artefacts\Release\VST3\Polisher.vst3"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # pluginval.exe is a GUI-subsystem program: PowerShell neither waits for it nor sees its exit code
+          # unless it is started with -Wait -PassThru (without this a failure showed as a green run).
+          $args = @("--strictness-level", "10", "--skip-gui-tests", "--validate-in-process", "--timeout-ms", "1800000",
+                    "--vst3validator", "`"$PWD\vst3validator\validator.exe`"", "--output-dir", "`"$PWD\pluginval-logs`"",
+                    "--validate", "`"$PWD\build\plugin\Polisher_artefacts\Release\VST3\Polisher.vst3`"")
+          $p = Start-Process -FilePath ".\pluginval\pluginval.exe" -ArgumentList $args -Wait -PassThru -NoNewWindow
+          Get-ChildItem pluginval-logs -Filter *.txt | ForEach-Object { Get-Content $_.FullName | Select-String -Pattern "failed|FAILED|ERROR|Result:" }
+          Write-Host "pluginval exit code: $($p.ExitCode)"
+          exit $p.ExitCode
 
       - name: Upload validation logs
         if: always() && runner.os == 'Windows'
