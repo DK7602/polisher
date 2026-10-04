@@ -1467,6 +1467,14 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".popover")) togglePopover(null);
 });
 
+// Easter egg: clicking the logo swaps the colour scheme (blue chrome <-> black & white glass). Look only.
+function setMono(on) {
+  document.body.classList.toggle("theme-mono", on);
+  try { localStorage.setItem("polisher.mono", on ? "1" : "0"); } catch (_) {}
+}
+try { if (localStorage.getItem("polisher.mono") === "1") document.body.classList.add("theme-mono"); } catch (_) {}
+document.querySelector(".logo").addEventListener("click", () => setMono(!document.body.classList.contains("theme-mono")));
+
 const chkAuto = $("chk-autoreset"), chkAdaptive = $("chk-adaptive");
 chkAuto.addEventListener("change", () => P.autoreset.setValue(chkAuto.checked));
 chkAdaptive.addEventListener("change", () => { P.adaptive.setValue(chkAdaptive.checked); onParamsChanged(); userEdited(); });
