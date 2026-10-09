@@ -23,6 +23,13 @@ What landed 2026-09-30 / 10-01:
 - Learn rule: every warning carries "Do I need to fix it?" + numbered "How" steps; "No" answers show
   calm (blue), not red. Auto-Master notes use NEED: / STEP: lines; a test enforces it.
 
+## User manual (2026-10-09) — STANDING RULE: keep it in step with the plug-in
+Source: docs/manual/polisher-manual.md (plain language, ranges taken from the code). Bundled into the plug-in
+(Quick Help -> OPEN THE FULL MANUAL; rendered offline by a small Markdown reader in app.js). Shared copy:
+Claude Docs page https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (update both).
+Whenever a control, range, default, module, Auto-Master rule or UI behaviour changes, update the manual in the
+same commit. The build stops if the manual's "Version x.y.z " line doesn't match the CMake project version.
+
 ## The user
 Mastering novice, Cubase on Windows, headphones. Tests by screen recording (audio via headphones held
 to the mic, or no audio) — trust the plug-in's own meters over recorded audio. Wants momentum

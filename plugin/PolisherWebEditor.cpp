@@ -17,6 +17,7 @@ namespace
         if (ext == "svg")  return "image/svg+xml";
         if (ext == "ttf")  return "font/ttf";
         if (ext == "json") return "application/json";
+        if (ext == "md")   return "text/markdown; charset=utf-8";
         return "text/plain";
     }
 

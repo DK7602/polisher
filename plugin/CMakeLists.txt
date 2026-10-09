@@ -34,8 +34,15 @@ juce_add_binary_data(PolisherUIData
     NAMESPACE   PolisherUI
     SOURCES
         ${POLISHER_UI_FILES}
+        "${CMAKE_SOURCE_DIR}/docs/manual/polisher-manual.md"
         "${juce_SOURCE_DIR}/modules/juce_gui_extra/native/javascript/index.js"
         "${juce_SOURCE_DIR}/modules/juce_gui_extra/native/javascript/check_native_interop.js")
+# The user manual ships inside the plug-in (MANUAL in Quick Help). Keep it in step with the plug-in:
+# the build stops if its version line doesn't match this release.
+file(READ "${CMAKE_SOURCE_DIR}/docs/manual/polisher-manual.md" POLISHER_MANUAL_TEXT)
+if(NOT POLISHER_MANUAL_TEXT MATCHES "Version ${PROJECT_VERSION} ")
+    message(FATAL_ERROR "docs/manual/polisher-manual.md is not updated for v${PROJECT_VERSION}: update the manual (and its 'Version' line) for this release.")
+endif()
 set_target_properties(PolisherUIData PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_sources(Polisher PRIVATE

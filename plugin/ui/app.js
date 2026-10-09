@@ -1467,6 +1467,97 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".popover")) togglePopover(null);
 });
 
+// ---------------------------------------------------------------------------------------------
+// User manual: docs/manual/polisher-manual.md, embedded in the plug-in and rendered here (offline).
+// A small Markdown reader for what the manual uses: headings, paragraphs, lists, tables, code,
+// bold and links (shown as text: the plug-in window stays on the manual).
+const escHtml = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function mdInline(t) {
+  return escHtml(t)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, '<span class="muted">$&</span>');
+}
+function renderMarkdown(md) {
+  const lines = md.replace(/\r\n?/g, "\n").split("\n");
+  const out = [], toc = [];
+  const isTableRow = (l) => /^\s*\|.*\|\s*$/.test(l);
+  const cells = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+    if (line.startsWith("```")) {
+      const code = [];
+      for (i++; i < lines.length && !lines[i].startsWith("```"); i++) code.push(lines[i]);
+      i++;
+      out.push(`<pre>${escHtml(code.join("\n"))}</pre>`);
+      continue;
+    }
+    const h = /^(#{1,3})\s+(.*)$/.exec(line);
+    if (h) {
+      const level = h[1].length, id = `man-${out.length}`;
+      if (level === 2) toc.push({ id, text: h[2] });
+      out.push(`<h${level} id="${id}">${mdInline(h[2])}</h${level}>`);
+      i++;
+      continue;
+    }
+    if (isTableRow(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      const head = cells(line);
+      const rows = [];
+      for (i += 2; i < lines.length && isTableRow(lines[i]); i++) rows.push(cells(lines[i]));
+      out.push(`<table><thead><tr>${head.map((c) => `<th>${mdInline(c)}</th>`).join("")}</tr></thead><tbody>` +
+               rows.map((r) => `<tr>${r.map((c) => `<td>${mdInline(c)}</td>`).join("")}</tr>`).join("") + "</tbody></table>");
+      continue;
+    }
+    const li = /^\s*([-*]|\d+\.)\s+/;
+    if (li.test(line)) {
+      const tag = /^\s*\d+\./.test(line) ? "ol" : "ul";
+      const items = [];
+      for (; i < lines.length && li.test(lines[i]); i++) items.push(`<li>${mdInline(lines[i].replace(li, ""))}</li>`);
+      out.push(`<${tag}>${items.join("")}</${tag}>`);
+      continue;
+    }
+    const para = [];
+    for (; i < lines.length && lines[i].trim() && !/^(#{1,3}\s|```|\s*([-*]|\d+\.)\s)/.test(lines[i]) && !isTableRow(lines[i]); i++) para.push(lines[i].trim());
+    out.push(`<p>${mdInline(para.join(" "))}</p>`);
+  }
+  return { html: out.join("\n"), toc };
+}
+let manualLoaded = false;
+async function loadManual() {
+  // Inside the plug-in the manual is served next to index.html; the browser preview reads the repo copy.
+  for (const url of ["polisher-manual.md", "../../docs/manual/polisher-manual.md"]) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return await res.text();
+    } catch (_) {}
+  }
+  return null;
+}
+async function openManual() {
+  togglePopover(null);
+  $("manual").hidden = false;
+  if (manualLoaded) return;
+  const md = await loadManual();
+  const body = $("manual-body"), toc = $("manual-toc");
+  if (!md) { body.innerHTML = "<p>The manual couldn't be loaded. Quick Help (the ? button) has the essentials.</p>"; return; }
+  const doc = renderMarkdown(md);
+  body.innerHTML = doc.html;
+  toc.innerHTML = "";
+  for (const t of doc.toc) {
+    const a = document.createElement("a");
+    a.textContent = t.text;
+    a.addEventListener("click", () => { const el = document.getElementById(t.id); if (el) body.scrollTo({ top: el.offsetTop - 8, behavior: "smooth" }); });
+    toc.appendChild(a);
+  }
+  manualLoaded = true;
+}
+$("btn-manual").addEventListener("click", (e) => { e.stopPropagation(); openManual(); });
+$("btn-manual-close").addEventListener("click", () => { $("manual").hidden = true; });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("manual").hidden) $("manual").hidden = true; });
+
 // Easter egg: clicking the logo swaps the colour scheme (blue chrome <-> black & white glass). Look only.
 function setMono(on) {
   document.body.classList.toggle("theme-mono", on);

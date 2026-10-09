@@ -282,7 +282,7 @@ The **Learn** panel on the right explains, live, what the selected module is doi
 - **Blue boxes** are tips, or warnings that don't need fixing. Nothing blue is a problem.
 - After Auto-Master, the top of each module's Learn shows the reasons for its settings, and **WHY IT SOUNDS LIKE THIS** holds the whole report.
 
-**Quick Help** (the help panel) is a one-page cheat sheet: the chain order and the first moves for every module.
+**Quick Help** (the **?** button, top right) is a one-page cheat sheet: the chain order and the first moves for every module. Its **OPEN THE FULL MANUAL** button opens this manual inside Polisher, with contents on the left; it works offline. Press **Esc** or **×** to close it.
 
 **Settings** has three switches:
 
