@@ -2,7 +2,8 @@
 (synth808.py, its own eval clips) added to the bass stem, summed as energies like train.py's remixes
 (the model input is built the same way for every model, so the comparison is fair).  Scores the
 +/-6 dB moves of evaluate.py, plus the Bass move alone (the knob a trap producer turns).
-  python evaluate808.py [model.pt ...]     SKIP=n as in evaluate.py"""
+  python evaluate808.py [model.pt ...]     SKIP=n as in evaluate.py; BANK=synth_808_eval_hard / _clean for
+                                           808 sounds training never used (synth808.py STYLE)"""
 import glob, os, sys, numpy as np, torch
 from common import LOOKAHEAD
 from evaluate import move_error, shares
@@ -10,7 +11,7 @@ from model import StemNet
 
 if __name__ == '__main__':
     nets = [(os.path.basename(m), StemNet.load(m)) for m in sys.argv[1:]]
-    bank = np.load(os.path.join('data', 'extra', 'synth_808_eval.npz'))
+    bank = np.load(os.path.join('data', 'extra', os.environ.get('BANK', 'synth_808_eval') + '.npz'))
     files = sorted(glob.glob('data/val_*.npz'))[int(os.environ.get('SKIP', 0)):]
     names = [n for n, _ in nets] + ['static', 'oracle']
     allm = {n: [] for n in names}; bassm = {n: [] for n in names}

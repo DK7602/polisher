@@ -19,18 +19,23 @@ def line(rng, seconds):
     step = 60.0 / bpm / 2                                       # eighth notes
     out = np.zeros(n)
     t = rng.uniform(0, 4) * step
-    drive = rng.uniform(1.0, 4.0)
+    # STYLE (evaluation only, sounds training never used): hard = heavy distortion, octave layer and long
+    # glides; clean = a pure sub sine with no saturation.
+    style = os.environ.get('STYLE', '')
+    drive = rng.uniform(6.0, 12.0) if style == 'hard' else 0.05 if style == 'clean' else rng.uniform(1.0, 4.0)
     while t < seconds:
         f0 = 41.2 * 2 ** (rng.integers(0, 8) / 12) * (2 if rng.random() < 0.15 else 1)
         length = step * rng.choice([1, 2, 3, 4, 6, 8])
         decay = rng.uniform(0.15, 1.6)
         i0, i1 = int(t * SR), min(n, int((t + length) * SR))
         tt = np.arange(i1 - i0) / SR
-        f = f0 * (1 + rng.uniform(0.5, 2.0) * np.exp(-tt / 0.012))     # the drop at the start
+        glide = 0.06 if style == 'hard' else 0.012
+        f = f0 * (1 + rng.uniform(0.5, 2.0) * np.exp(-tt / glide))     # the drop at the start
         ph = 2 * np.pi * np.cumsum(f) / SR
         env = np.exp(-tt / decay) * np.minimum(1, tt / 0.002)
         env[-min(len(env), 64):] *= np.linspace(1, 0, min(len(env), 64))   # cut by the next note, no click
-        out[i0:i1] = np.tanh(drive * env * np.sin(ph)) / np.tanh(drive)
+        tone = np.sin(ph) + (0.5 * np.sin(2 * ph) if style == 'hard' else 0.0)
+        out[i0:i1] = np.tanh(drive * env * tone) / np.tanh(drive)
         t += length + step * rng.choice([0, 0, 1, 2])
     return out * 0.5
 

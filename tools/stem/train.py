@@ -23,7 +23,7 @@ EMA = float(os.environ.get('EMA', 0))          # e.g. 0.999; 0 = off
 VAL_SONGS = int(os.environ.get('VAL_SONGS', 0))
 W_POW = float(os.environ.get('W_POW', 0.5))     # share-loss weighting by band energy (see share_loss)
 SYN808 = float(os.environ.get('SYN808', 0))     # share of remixes that get a synthetic 808 added to the bass stem
-SYN = None                                     # the 808 bank (synth808.py), loaded when SYN808 > 0
+SYN = None                                     # the 808 bank (synth808.py; SYN_BANK picks the file), loaded when SYN808 > 0
 OWN_SHARE = 0.35                               # share of excerpts from teacher-labelled (own) songs
 REMIX = float(os.environ.get('REMIX', 0.75))   # share of excerpts that are remixes
 FEAT = os.environ.get('FEAT', 'x')             # model input: x (64 bands) or xh (detailed, no remix yet)
@@ -185,7 +185,7 @@ if __name__ == '__main__':
     if VAL_SONGS: val = val[:VAL_SONGS]                # the rest of val_* stays unseen for evaluate.py
     dtr, dval = load(tr), load(val)
     if SYN808 > 0:
-        bank = np.load(os.path.join('data', 'extra', 'synth_808.npz'))
+        bank = np.load(os.path.join('data', 'extra', os.environ.get('SYN_BANK', 'synth_808') + '.npz'))
         SYN = (bank['m'], bank['s'])
     net = StemNet(dtr[0][0].shape[0] // 2, os.environ.get('BIDIR') == '1',
                   int(os.environ.get('HIDDEN', 128)), int(os.environ.get('LAYERS', 1))); opt = torch.optim.AdamW(net.parameters(), 2e-3, weight_decay=1e-4)
