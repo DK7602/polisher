@@ -94,7 +94,7 @@ TEST_CASE ("The Maximizer holds its ceiling on tones up to 20 kHz, by an indepen
         for (double f : { 100.0, 3000.0, 11025.0, 12000.0, 17000.0, 19500.0 })
             for (double ceiling : { -1.0, -0.1 })
             {
-                // 0 dBFS samples, up to +3 dBTP between them at fs / 4 with this phase.
+                // A 0 dBTP tone (at fs / 4 with this phase its samples sit at -3 dBFS), driven 6 dB into the ceiling.
                 const auto tone = faded (testsig::sine (sr, 2, f, 0.0, 1.5, std::numbers::pi / 4.0));
                 LimiterParams p;
                 p.ceilingDbtp = ceiling;

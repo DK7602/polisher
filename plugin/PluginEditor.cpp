@@ -121,12 +121,12 @@ void PolisherAudioProcessorEditor::paint (juce::Graphics& g)
     g.fillRoundedRectangle (noticeArea.toFloat(), 8.0f);
     g.setColour (Colours::red);
     g.drawRoundedRectangle (noticeArea.toFloat().reduced (0.5f), 8.0f, 1.0f);
-    auto text = noticeArea.reduced (12, 6);
+    auto noticeTextArea = noticeArea.reduced (12, 6);
     if (getWebViewButton.isVisible())
-        text.removeFromRight (getWebViewButton.getWidth() + 8);
+        noticeTextArea.removeFromRight (getWebViewButton.getWidth() + 8);
     g.setColour (Colours::pearl);
     g.setFont (juce::FontOptions (13.0f));
-    g.drawFittedText (noticeText, text, juce::Justification::centredLeft, 3);
+    g.drawFittedText (noticeText, noticeTextArea, juce::Justification::centredLeft, 3);
 
     for (const auto& r : readouts)
     {

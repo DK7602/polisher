@@ -127,6 +127,7 @@ private:
     int channelCount = 2;
     int updateCountdown = 0;
     bool firstParams = true;
+    bool hasParams = false;    // setParams() was called at least once
 };
 
 } // namespace polisher

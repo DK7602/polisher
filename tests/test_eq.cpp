@@ -178,3 +178,31 @@ TEST_CASE ("The loudness search accounts for the EQ", "[eq][targeting]")
     CHECK_THAT (check.integratedLufs, WithinAbs (-11.0, 0.1));
     CHECK (check.truePeakDbtp <= -0.95);
 }
+
+TEST_CASE ("After prepare, the next change glides whether the settings came before or after prepare", "[eq]")
+{
+    // The plug-in hands the EQ its settings before prepare(); a later knob move must still glide.
+    TonalEQParams a, b;
+    b.gainDb[3] = -6.0;
+    const auto noise = testsig::musicLike (48000.0, 0.3, -6.0);
+    auto run = [&] (bool settingsFirst)
+    {
+        TonalEQ eq;
+        if (settingsFirst) eq.setParams (a);
+        eq.prepare (48000.0, 2);
+        if (! settingsFirst) eq.setParams (a);
+        AudioClip c = noise;
+        float* ptrs[] = { c.channels[0].data(), c.channels[1].data() };
+        const int half = c.numSamples() / 2;
+        eq.process (ptrs, 2, half);
+        eq.setParams (b);
+        float* rest[] = { ptrs[0] + half, ptrs[1] + half };
+        eq.process (rest, 2, c.numSamples() - half);
+        return c;
+    };
+    const auto first = run (true), after = run (false);
+    double d = 0.0;
+    for (size_t i = 0; i < first.channels[0].size(); ++i)
+        d = std::max (d, std::abs ((double) first.channels[0][i] - after.channels[0][i]));
+    CHECK (d < 1.0e-9);
+}

@@ -32,18 +32,18 @@ juce::String db (double v, int digits = 1)
 
 } // namespace
 
-int main (int argc, char* argv[])
+int run (const juce::StringArray& args)
 {
     juce::StringArray paths;
     double start = 0.0, length = 0.0;
     bool wait = true;
-    for (int i = 1; i < argc; ++i)
+    for (int i = 0; i < args.size(); ++i)
     {
-        const juce::String a (juce::CharPointer_UTF8 (argv[i]));
-        if (a == "--start" && i + 1 < argc)        start = juce::String (argv[++i]).getDoubleValue();
-        else if (a == "--length" && i + 1 < argc)  length = juce::String (argv[++i]).getDoubleValue();
-        else if (a == "--no-wait")                 wait = false;
-        else                                       paths.add (a);
+        const auto& a = args[i];
+        if (a == "--start" && i + 1 < args.size())        start = args[++i].getDoubleValue();
+        else if (a == "--length" && i + 1 < args.size())  length = args[++i].getDoubleValue();
+        else if (a == "--no-wait")                        wait = false;
+        else                                              paths.add (a);
     }
 
     std::cout << "Polisher Blind Test\n";
@@ -82,13 +82,19 @@ int main (int argc, char* argv[])
             waitForEnter (wait);
             return 1;
         }
-        const int channels = (int) std::min (2u, reader->numChannels);
-        juce::AudioBuffer<float> buf (channels, (int) count);
-        reader->read (&buf, 0, (int) count, first, true, channels > 1);
+        // Always two channels: a mono file is played on both speakers, so it is measured (and written)
+        // that way too; measured as one channel it would read 3 dB quieter and then play 3 dB louder.
+        juce::AudioBuffer<float> buf (2, (int) count);
+        if (! reader->read (&buf, 0, (int) count, first, true, true))
+        {
+            std::cout << "Can't read the audio in " << f.getFileName() << ".\n";
+            waitForEnter (wait);
+            return 1;
+        }
 
         Song s { f, {}, {} };
         s.clip.sampleRate = sr;
-        for (int c = 0; c < channels; ++c)
+        for (int c = 0; c < 2; ++c)
             s.clip.channels.emplace_back (buf.getReadPointer (c), buf.getReadPointer (c) + count);
         // A cut-out part gets 20 ms fades, so no sample starts or ends with a click.
         if (start > 0.0 || length > 0.0)
@@ -113,8 +119,10 @@ int main (int argc, char* argv[])
     const auto gains = blindtest::matchGains (measured);
     const auto order = blindtest::shuffledOrder ((int) songs.size(), (unsigned) juce::Time::currentTimeMillis());
 
+    // A new folder every time (two runs in the same second must not mix their samples).
     const auto folder = songs.front().file.getParentDirectory()
-                            .getChildFile ("Polisher blind test " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S"));
+                            .getChildFile ("Polisher blind test " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S"))
+                            .getNonexistentSibling (false);
     if (! folder.createDirectory())
     {
         std::cout << "Can't create " << folder.getFullPathName() << "\n";
@@ -145,7 +153,14 @@ int main (int argc, char* argv[])
         for (int c = 0; c < out.getNumChannels(); ++c)
             out.copyFrom (c, 0, s.clip.channels[(size_t) c].data(), out.getNumSamples(), (float) juce::Decibels::decibelsToGain (g));
 
-        std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream> (folder.getChildFile (name + ".wav"));
+        auto file = std::make_unique<juce::FileOutputStream> (folder.getChildFile (name + ".wav"));
+        if (! file->openedOk() || ! file->setPosition (0) || file->truncate().failed())   // overwrite, never append
+        {
+            std::cout << "Can't write " << name << ".wav\n";
+            waitForEnter (wait);
+            return 1;
+        }
+        std::unique_ptr<juce::OutputStream> stream = std::move (file);
         juce::WavAudioFormat wav;
         auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions{}
                                                        .withSampleRate (s.clip.sampleRate)
@@ -158,7 +173,11 @@ int main (int argc, char* argv[])
             return 1;
         }
 
-        key << name << " = " << s.file.getFileName() << "\n"
+        // Two files can share a name (two "Mixdown.wav" from different folders): then show the full path.
+        int sameName = 0;
+        for (const auto& other : songs)
+            sameName += other.file.getFileName() == s.file.getFileName() ? 1 : 0;
+        key << name << " = " << (sameName > 1 ? s.file.getFullPathName() : s.file.getFileName()) << "\n"
             << "           measured " << db (s.measured.integratedLufs) << " LUFS, " << db (s.measured.truePeakDbtp)
             << " dBTP; turned down " << db (std::max (0.0, -g)) << " dB for the test\n";
         sheet << name << "   score (1-10): ____   notes: ________________________________________\n\n";
@@ -173,3 +192,23 @@ int main (int argc, char* argv[])
     waitForEnter (wait);
     return 0;
 }
+
+// On Windows the command line arrives in UTF-16 through wmain, so song titles with accents, curly quotes
+// or any other script open fine (main's argv would be in the ANSI code page).
+#if JUCE_WINDOWS
+int wmain (int argc, wchar_t* argv[])
+{
+    juce::StringArray args;
+    for (int i = 1; i < argc; ++i)
+        args.add (juce::String (argv[i]));
+    return run (args);
+}
+#else
+int main (int argc, char* argv[])
+{
+    juce::StringArray args;
+    for (int i = 1; i < argc; ++i)
+        args.add (juce::String (juce::CharPointer_UTF8 (argv[i])));
+    return run (args);
+}
+#endif

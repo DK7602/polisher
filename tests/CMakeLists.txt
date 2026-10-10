@@ -47,7 +47,7 @@ if(POLISHER_BUILD_PLUGIN)
     target_link_libraries(polisher_plugin_tests PRIVATE
         polisher_dsp
         juce::juce_audio_processors
-        Catch2::Catch2WithMain
+        Catch2::Catch2
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
     set_target_properties(polisher_plugin_tests PROPERTIES FOLDER "Polisher")

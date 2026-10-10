@@ -6,6 +6,7 @@
 #include "PluginProcessor.h"
 #include "../Signals.h"
 
+#include <catch2/catch_session.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
@@ -37,12 +38,6 @@ namespace {
 
 using polisher::AudioClip;
 
-/** JUCE needs a message manager for the parameter tree's timers. */
-void initJuce()
-{
-    static juce::ScopedJuceInitialiser_GUI init;
-}
-
 void set (PolisherAudioProcessor& p, const juce::String& id, float plain)
 {
     auto* param = p.parameters.getParameter (id);
@@ -68,7 +63,6 @@ void busySettings (PolisherAudioProcessor& p)
 
 std::unique_ptr<PolisherAudioProcessor> makeProcessor (double sr, int maxBlock, bool busy)
 {
-    initJuce();
     auto p = std::make_unique<PolisherAudioProcessor>();
     set (*p, "autoreset", 0.0f);
     if (busy) busySettings (*p);
@@ -193,9 +187,14 @@ TEST_CASE ("Plug-in: the latency it reports is the real delay, at every sample r
         CHECK (latency > 0);
         CHECK (err / ref < 1.0e-10);    // -100 dB
 
-        // The global bypass (A) keeps exactly the same delay, so A/B never jumps in time.
+        // The global bypass (A) plays the mix with exactly the same delay, so A/B never jumps in time.
         set (*p, "bypass", 1.0f);
-        CHECK (p->getLatencySamples() == latency);
+        const auto bypassed = renderFixed (*p, mix, 512);
+        double errA = 0.0;
+        for (int c = 0; c < 2; ++c)
+            for (int i = latency; i < mix.numSamples(); ++i)
+                errA = std::max (errA, std::abs ((double) bypassed.channels[(size_t) c][(size_t) i] - mix.channels[(size_t) c][(size_t) (i - latency)]));
+        CHECK (errA < 1.0e-6);
     }
 }
 
@@ -229,14 +228,10 @@ TEST_CASE ("Plug-in: processing never allocates memory on the audio thread", "[p
     int worst = 0;
     for (int pos = 0; pos + 1024 <= mix.numSamples(); pos += 1024)
     {
-        // Automation between blocks (as a host delivers it), then count what the block allocates.
+        // Automation between blocks (as a host delivers it, A/B and MATCH flips included), then count
+        // what the block allocates. Counts operator new only: malloc-based buffers are not seen here.
         for (int k = 0; k < 3; ++k)
-        {
-            auto* param = params[(int) (u (rng) * (float) params.size()) % params.size()];
-            const auto id = dynamic_cast<juce::AudioProcessorParameterWithID*> (param)->paramID;
-            if (id != "bypass" && id != "levelMatch")
-                param->setValueNotifyingHost (u (rng));
-        }
+            params[(int) (u (rng) * (float) params.size()) % params.size()]->setValueNotifyingHost (u (rng));
         for (int c = 0; c < 2; ++c)
             buf.copyFrom (c, 0, mix.channels[(size_t) c].data() + pos, 1024);
         allocations = 0;
@@ -289,8 +284,8 @@ TEST_CASE ("Plug-in: every control jumping at random never produces NaN or goes 
     juce::AudioBuffer<float> buf (2, 512);
     juce::MidiBuffer midi;
     bool finite = true;
-    double peak = 0.0;
     const int settle = (int) (0.5 * sr);
+    AudioClip settled = testsig::silence (sr, 2, 0.0);
     for (int pos = 0; pos + 512 <= mix.numSamples(); pos += 512)
     {
         for (auto* param : params)
@@ -307,12 +302,14 @@ TEST_CASE ("Plug-in: every control jumping at random never produces NaN or goes 
             {
                 const float v = buf.getSample (c, i);
                 finite = finite && std::isfinite (v);
-                if (pos >= settle) peak = std::max (peak, (double) std::abs (v));
+                if (pos >= settle) settled.channels[(size_t) c].push_back (v);
             }
     }
     CHECK (finite);
-    INFO ("highest sample " << 20.0 * std::log10 (peak) << " dBFS");
-    CHECK (20.0 * std::log10 (peak) <= -0.95);    // ceiling -1 dBTP: no sample may pass it
+    // The limiter also clamps every sample to the ceiling, so check the true peak (between samples).
+    const double tp = testsig::truePeakOf (settled);
+    INFO ("true peak " << tp << " dBTP");
+    CHECK (tp <= -0.95);
 }
 
 TEST_CASE ("Plug-in: double-precision hosts get the same master as single precision", "[plugin]")
@@ -340,3 +337,12 @@ TEST_CASE ("Plug-in: double-precision hosts get the same master as single precis
     CHECK (maxAbsDiff (single, dbl) < 1.0e-4);
 }
 
+
+
+// JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:
+// a function-local static would be torn down after JUCE's own shutdown objects and crash on exit.
+int main (int argc, char* argv[])
+{
+    juce::ScopedJuceInitialiser_GUI juce;
+    return Catch::Session().run (argc, argv);
+}

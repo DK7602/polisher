@@ -26,6 +26,15 @@ const state = () => page.evaluate(() => ({
 }));
 const pick = (name) => page.evaluate((n) => [...document.querySelectorAll('.row-btn')]
   .find((x) => x.querySelector('.row-name').textContent === n).click(), name);
+// The parameter each module's header button must switch (read from JUCE's own state, so a wrong id
+// in the UI's table fails here even if the button's label looks right).
+const SWITCH = { 'Unlimiter': 'ulOn', 'Tonal EQ': 'eqOn', 'Stem EQ': 'stemOn', 'Tone Steady': 'tsOn', 'Resonance Tamer': 'rtOn',
+                 'Bass Control': 'bassOn', 'Dynamics': 'dynOn', 'Stereo Imager': 'imgOn', 'Saturation': 'satOn',
+                 'Soft Clipper': 'clipOn', 'Maximizer': 'bypass' };
+const toggles = () => page.evaluate(async (ids) => {
+  const juce = await import('./juce/index.js');
+  return Object.fromEntries(ids.map((id) => [id, !!juce.getToggleState(id).getValue()]));
+}, Object.values(SWITCH));
 const names = await page.evaluate(() => [...document.querySelectorAll('.row-btn .row-name')].map((x) => x.textContent));
 check(names.length === 11, `signal chain lists 11 modules (${names.length})`);
 
@@ -33,10 +42,14 @@ for (const name of names) {
   await pick(name);
   await page.waitForTimeout(120);
   const before = await state();
+  const t0 = await toggles();
   check(before.module === name.toUpperCase(), `${name}: opens its own screen`);
   await page.click('#btn-bypass');
   await page.waitForTimeout(120);
   const after = await state();
+  const t1 = await toggles();
+  const flipped = Object.keys(t0).filter((id) => t0[id] !== t1[id]);
+  check(flipped.length === 1 && flipped[0] === SWITCH[name], `${name}: header button switches ${SWITCH[name]} and nothing else (${flipped.join(', ')})`);
   if (name === 'Maximizer') {
     check(after.globalA && after.button === 'BYPASSED', `${name}: header button is the global bypass (A)`);
   } else {

@@ -53,6 +53,14 @@ jobs:
       - name: Unit tests (engine + plug-in)
         run: ctest --test-dir build -C Release --output-on-failure
 
+      # The blind-test tool goes next to the plug-in folders, so the artifact keeps VST3 / Standalone at
+      # its top level (upload-artifact roots a multi-path upload at the paths' common folder).
+      - name: Stage the blind-test tool
+        shell: bash
+        run: |
+          mkdir -p build/plugin/Polisher_artefacts/Release/BlindTest
+          cp build/tools/blindtest/PolisherBlindTest_artefacts/Release/PolisherBlindTest* build/plugin/Polisher_artefacts/Release/BlindTest/
+
       - name: Upload plug-ins
         uses: actions/upload-artifact@v4
         with:
@@ -61,7 +69,7 @@ jobs:
             build/plugin/Polisher_artefacts/Release/VST3
             build/plugin/Polisher_artefacts/Release/AU
             build/plugin/Polisher_artefacts/Release/Standalone
-            build/tools/blindtest/PolisherBlindTest_artefacts/Release/PolisherBlindTest*
+            build/plugin/Polisher_artefacts/Release/BlindTest
           if-no-files-found: warn
 
       - name: pluginval (macOS)
@@ -164,8 +172,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-      - name: Fetch JUCE's web-view bridge
+          node-version: 22
+      - name: Fetch JUCE's web-view bridge (same JUCE tag as CMakeLists.txt)
         run: |
           mkdir -p plugin/ui/juce
           for f in index.js check_native_interop.js; do

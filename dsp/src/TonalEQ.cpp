@@ -85,9 +85,13 @@ void TonalEQ::prepare (double newSampleRate, int numChannels)
     channelCount = std::clamp (numChannels, 1, kMaxChannels);
     smoothingCoeff = std::exp (-static_cast<double> (kUpdateInterval) / (0.02 * sampleRate));
     firstParams = true;
+    const bool hadParams = hasParams;
     reset();
     setParams (params);    // re-apply the current settings at the new rate, immediately...
-    firstParams = true;    // ...and let the next setParams() land immediately too (no glide on load)
+    // ...and if nothing was set yet (prepared, then given its settings), let the first setParams() land
+    // immediately too (no glide on load). Once settings exist, later changes glide as usual.
+    firstParams = ! hadParams;
+    hasParams = hadParams;
 }
 
 void TonalEQ::reset() noexcept
@@ -101,6 +105,7 @@ void TonalEQ::reset() noexcept
 void TonalEQ::setParams (const TonalEQParams& p) noexcept
 {
     params = p;
+    hasParams = true;
     for (int b = 0; b < kEqBands; ++b)
     {
         auto& band = bands[static_cast<size_t> (b)];
