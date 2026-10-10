@@ -7,6 +7,8 @@ namespace polisher {
 
 void KWeighting::prepare (double sampleRate) noexcept
 {
+    rate = sampleRate;
+
     // Stage 1: high shelf, +4 dB above ~1.7 kHz (models the acoustic effect of the head).
     {
         const double f0 = 1681.974450955533;

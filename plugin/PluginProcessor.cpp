@@ -313,12 +313,16 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
         buffer.clear (c, 0, buffer.getNumSamples());
 
     // Fresh loudness measurement each time the host transport starts (optional).
-    bool isPlaying = wasPlaying;
+    bool isPlaying = wasPlaying, hostTransport = false;
     if (auto* hostPlayHead = getPlayHead())
         if (auto position = hostPlayHead->getPosition())
+        {
             isPlaying = position->getIsPlaying();
+            hostTransport = true;
+        }
     const bool justStarted = isPlaying && ! wasPlaying;
     wasPlaying = isPlaying;
+    meters.transport.store (hostTransport ? (isPlaying ? 1 : 0) : -1);   // the loudness history pauses while stopped
 
     const bool resetPressed = meterResetRequested.exchange (false);
     if (resetPressed || (justStarted && autoResetParam->load() > 0.5f))

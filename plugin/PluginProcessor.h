@@ -91,6 +91,7 @@ public:
         std::atomic<float> ulBoost { 0.0f };               // largest Unlimiter lift since read (dB, >= 0)
         std::atomic<float> ulSquash { 0.0f };              // how squashed the incoming audio is (dB, 0 = not measured yet)
         std::atomic<float> tsDb { 0.0f }, tsHz { 0.0f };    // largest Tone Steady correction since read (dB, signed) and where
+        std::atomic<int> transport { -1 };                 // host transport: 1 playing, 0 stopped, -1 the host doesn't say (standalone)
     };
     Meters meters;
 

@@ -119,7 +119,7 @@ Instead of a genre's typical sound, Auto-Master can aim for a **reference**: a r
 
 1. Pick a commercial song with the sound you want (for trap: a big trap single). Use a good file of the released version: WAV, AIFF, FLAC or MP3.
 2. Click **Match ref** (at the end of the TARGET row) and choose the file. Polisher reads the whole song (up to 15 minutes) and measures its **loudest 30 seconds**, usually the chorus or drop. That takes a few seconds; your music keeps playing.
-3. The pill now shows the song's name, and the spectrum shows its tone as a **dashed yellow line** (moved to the loudness of what's playing, so you compare tone, not volume).
+3. The pill now shows the song's name, and the spectrum shows its tone as a **dashed yellow line** (moved to the loudness of what's playing, so you compare tone, not volume). The dotted genre line steps aside while a reference is loaded; click its legend entry to show it too (see [The spectrum screen](#the-spectrum-screen)).
 4. Play the **loudest part of your own song** and click **Auto-Master**, as usual.
 
 What it takes from the reference:
@@ -177,7 +177,7 @@ Every band keeps its true shape right up to 20 kHz, at 44.1 and 48 kHz too, so t
 
 **Subsonic filter.** While Low End is boosted, a gentle high-pass at 15 Hz fades in by itself, so the boost doesn't also pump up rumble below 20 Hz that no speaker plays but the Maximizer still has to make room for. It costs less than 0.5 dB at 20 Hz and nothing you can measure from 30 Hz up. With Low End at 0 dB or cut, it's out of the path.
 
-On the spectrum, the white line is your mix, the blue curve is the EQ change and the red line is the master after the whole chain.
+On the spectrum, the white line is your mix, the blue curve is the EQ change and the red line is the master after the whole chain. The dotted line (for example **Trap target**) is the tone typical masters in your genre have, the balance Auto-Master's EQ aims for: where the red line sits above it, your master has more of that range than typical (see [The spectrum screen](#the-spectrum-screen)).
 
 ### 03 Stem EQ
 
@@ -354,6 +354,40 @@ The **Learn** panel on the right explains, live, what the selected module is doi
 | Reset loudness meter when playback starts | on | Integrated restarts each time you press play. |
 | Restart loudness after you change a control | on | Integrated restarts a moment after a change, so it measures what you hear now. |
 | Adaptive release (Maximizer) | on | Same as the Maximizer's Release Mode. |
+
+## The spectrum screen
+
+The big screen in the middle has two views. Switch with **SPECTRUM / HISTORY** at its bottom right; Polisher remembers your choice.
+
+### Spectrum
+
+- **White line**: your mix as it arrives. **Red line**: the master after the whole chain. Both are tilted 4.5 dB per octave, so a well-balanced mix reads roughly flat instead of falling to the right.
+- **Dotted line** (for example **Trap target**): the tone typical masters in the genre you picked at the top have, the same balance Auto-Master's EQ aims for. It follows the genre, and it is moved to the loudness of what's playing, so you compare tone, not volume.
+  - Where your red master line sits **above** the dotted line, your master has more of that range than typical masters in your genre; **below**, less. Differences of 1–2 dB are normal.
+  - Below about 60 Hz all the lines get rough: the screen can't draw the lowest notes finely.
+  - It shows a steady, average master. Busy drums and hats read up to about 1 dB above it, and wide stereo highs about 1 dB below it (the screen adds left and right together, so the purely stereo part of the sound doesn't count).
+- **Dashed yellow line**: a loaded reference's tone (Match ref). Auto-Master then aims for the reference, so the genre line is hidden. Click the genre line's legend entry to show or hide it, with or without a reference.
+- **Blue curve**: the Tonal EQ's change, when the EQ is shaping or its page is open.
+
+### Loudness history
+
+**HISTORY** draws the last 2 minutes of playback:
+
+| What you see | What it is |
+| --- | --- |
+| Red line | The master's Short-term loudness (the last 3 seconds) |
+| White line | Your mix as it comes in |
+| Dashed line | Your target (or the reference's loudness, when one is loaded) |
+| Blue shading from the top | How much the Maximizer turns the loud moments down: the deeper, the harder it works. Past 6 dB it turns orange |
+| Dotted vertical line | Where you stopped and started playback again |
+
+How to read it:
+
+- **Verse and chorus.** A chorus or drop usually sits 1–3 dB above the verse, so the red line steps up and down with your song. If the white line steps but the red one stays flat, the Maximizer is squashing the difference: lower Drive 1–2 dB and play the change again.
+- **Limiting.** Short dips of 1–3 dB on the hits are normal. Shading that stays orange (more than 6 dB) or dips past 9 dB is heavy limiting, and the kick and snare lose punch (the same advice as the Maximizer's **FIX IT IN THE MIX** in Learn).
+- The readout above the graph gives the loud and quiet parts' loudness and the deepest limiting on screen. Click **HISTORY** and Learn reads the graph for you.
+
+Time only runs while your song plays: stopping leaves a gap and the graph waits for you. **RESET** (under the Output meter) clears it; it is not cleared when Integrated restarts at play or after a control change.
 
 ## Meters
 

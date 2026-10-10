@@ -680,6 +680,39 @@ TEST_CASE ("Plug-in: a reference file is read in the background and its loudest 
     dir.deleteRecursively();
 }
 
+TEST_CASE ("Plug-in: the meters say whether the host is playing, so the loudness history pauses while stopped", "[plugin][history]")
+{
+    struct Head final : juce::AudioPlayHead
+    {
+        bool playing = false, says = true;
+        juce::Optional<PositionInfo> getPosition() const override
+        {
+            if (! says)
+                return {};
+            PositionInfo info;
+            info.setIsPlaying (playing);
+            return info;
+        }
+    };
+    auto p = makeProcessor (48000.0, 512, false);
+    const auto block = testsig::musicLike (48000.0, 512.0 / 48000.0, -14.0);
+    CHECK (p->meters.transport.load() == -1);                  // nothing processed yet
+    renderFixed (*p, block, 512);
+    CHECK (p->meters.transport.load() == -1);                  // no play head (standalone): the editor goes by the sound
+
+    Head head;
+    p->setPlayHead (&head);
+    renderFixed (*p, block, 512);
+    CHECK (p->meters.transport.load() == 0);                   // stopped
+    head.playing = true;
+    renderFixed (*p, block, 512);
+    CHECK (p->meters.transport.load() == 1);                   // playing
+    head.says = false;
+    renderFixed (*p, block, 512);
+    CHECK (p->meters.transport.load() == -1);                  // a host that gives no position this block
+    p->setPlayHead (nullptr);
+}
+
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:
 // a function-local static would be torn down after JUCE's own shutdown objects and crash on exit.
 int main (int argc, char* argv[])

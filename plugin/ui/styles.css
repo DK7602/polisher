@@ -98,7 +98,7 @@ img { -webkit-user-drag: none; }
 .plot-wrap { flex-grow: 1; min-width: 0; position: relative; }
 #spectrum-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 #eq-nodes { position: absolute; inset: 0; pointer-events: none; }
-#eq-nodes[hidden], #eq-readout[hidden], #eq-layer[hidden], #legend-eq[hidden] { display: none; }
+#eq-nodes[hidden], #eq-readout[hidden], #eq-layer[hidden], #legend-eq[hidden], #legend-ref[hidden] { display: none; }
 .eq-node { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 999px; pointer-events: auto; cursor: grab;
   display: flex; align-items: center; justify-content: center; font: 700 11px/1 "IBM Plex Mono", monospace; color: #fff; touch-action: none;
   background: radial-gradient(circle at 35% 30%, #ffffff 0, #ffd3d6 18%, #e0141e 55%, #7a0810 100%);
@@ -115,6 +115,28 @@ img { -webkit-user-drag: none; }
 .sw-white { height: 2px; background: #fff; }
 .sw-red { height: 3px; background: var(--red-hot); }
 .sw-ref { height: 0; border-top: 2px dashed #FFD27A; }
+.sw-genre { height: 0; border-top: 2.5px dotted #7EE0C3; opacity: .85; }
+.sw-gr { height: 9px; background: rgba(156,203,240,.3); border-top: 1px solid rgba(156,203,240,.8); }
+.sw-target { height: 0; border-top: 1.5px dashed #DCE8F5; opacity: .8; }
+/* the genre line's legend entry is also its show / hide switch */
+.legend-btn { display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
+.legend-btn[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
+.legend-btn:hover span { color: #fff; }
+/* Spectrum / History switch at the right end of the legend */
+.view-toggle { margin-left: auto; display: flex; border-radius: 999px; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(120,180,240,.5); flex-shrink: 0; }
+.view-toggle button { height: 18px; padding: 0 9px; border: 0; background: transparent; color: var(--muted); font: 700 9.5px/1 "IBM Plex Mono", monospace; letter-spacing: .06em; cursor: pointer; }
+.view-toggle button[aria-pressed="true"] { background: linear-gradient(180deg,#FF5A62,#C8101A); color: #fff; }
+/* Loudness history: the same screen, other contents */
+#spectrum-screen:not(.view-history) .hist-only, #spectrum-screen:not(.view-history) #hist-layer { display: none !important; }
+#spectrum-screen.view-history .spec-only, #spectrum-screen.view-history #spec-layer,
+#spectrum-screen.view-history #eq-nodes, #spectrum-screen.view-history #eq-readout { display: none !important; }
+.hist-top { height: 14px; margin-right: 30px; flex-shrink: 0; display: flex; justify-content: space-between; font-size: 10px; letter-spacing: .04em; color: var(--muted); white-space: nowrap; }
+#hist-stats { color: var(--powder); }
+.hist-note { position: absolute; font-size: 9.5px; color: var(--dim); pointer-events: none; transform: translateY(-50%); white-space: nowrap; }
+#hist-gr6-label { left: 20px; color: #FFB08F; }
+#hist-target-label { left: 84px; transform: translateY(-115%); color: #DCE8F5; }
+.hist-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted); pointer-events: none; }
+.hist-empty[hidden] { display: none; }
 
 .outmeter { width: 85px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 6px; }
 .outmeter-title { font-size: 11px; font-weight: 700; letter-spacing: .1em; }
@@ -292,6 +314,14 @@ body.theme-mono #grid { stroke: rgba(255,255,255,.08); }
 body.theme-mono #eq-zero { stroke: rgba(255,255,255,.3); }
 body.theme-mono #eq-fill { fill: rgba(255,255,255,.08); }
 body.theme-mono #eq-curve { stroke: #E6E6E6; }
+body.theme-mono #sp-genre { stroke: #CFCFCF; }
+body.theme-mono .sw-genre { border-top-color: #CFCFCF; }
+body.theme-mono #hist-gr { fill: rgba(255,255,255,.16); stroke: rgba(255,255,255,.55); }
+body.theme-mono #hist-gr6 { stroke: rgba(255,255,255,.6); }
+body.theme-mono #hist-gr-deep { fill: rgba(255,255,255,.32); }
+body.theme-mono #hist-gr6-label { color: #DDD; }
+body.theme-mono .sw-gr { background: rgba(255,255,255,.2); border-top-color: rgba(255,255,255,.6); }
+body.theme-mono .view-toggle { box-shadow: inset 0 0 0 1px rgba(255,255,255,.4); }
 body.theme-mono .sw-blue { background: #E6E6E6; }
 body.theme-mono .eq-node.flat { background: radial-gradient(circle at 35% 30%, #fff 0, #eee 18%, #8a8a8a 55%, #2a2a2a 100%);
   box-shadow: 0 0 0 1.5px rgba(255,255,255,.7), 0 0 8px rgba(255,255,255,.3), 0 3px 6px rgba(0,0,0,.6); }

@@ -2,6 +2,8 @@
 
 #include "Biquad.h"
 
+#include <numbers>
+
 namespace polisher {
 
 /** ITU-R BS.1770-4 "K" frequency weighting: a high-shelf (head effects) followed by a
@@ -15,8 +17,16 @@ public:
 
     inline double process (double x) noexcept { return highPass.process (shelf.process (x)); }
 
+    /** Power gain |H|^2 of the weighting at a frequency (Hz), at the rate given to prepare(). */
+    double powerGain (double hz) const noexcept
+    {
+        const double w = 2.0 * std::numbers::pi * hz / rate;
+        return shelf.powerGain (w) * highPass.powerGain (w);
+    }
+
 private:
     Biquad shelf, highPass;
+    double rate = 48000.0;
 };
 
 } // namespace polisher

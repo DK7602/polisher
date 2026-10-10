@@ -151,6 +151,25 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                              {
                                  complete (audioProcessor.reference.getInfoJson());
                              })
+        // The spectrum's dotted line: a genre's typical balance (what Auto-Master's EQ aims for) as the
+        // display draws it at this sample rate, computed by the engine so the page holds no numbers of
+        // its own. getGenreCurve(genreIndex) -> JSON { genre, name, lufs, sr, displayDb }.
+        .withNativeFunction ("getGenreCurve", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 const int g = args.size() > 0 ? juce::jlimit (0, polisher::kNumGenres - 1, static_cast<int> (args[0])) : 0;
+                                 const auto genre = static_cast<polisher::Genre> (g);
+                                 const double sr = audioProcessor.getSampleRate() > 0.0 ? audioProcessor.getSampleRate() : 48000.0;
+                                 juce::Array<juce::var> points;
+                                 for (const double v : polisher::genreDisplayCurve (genre, sr))
+                                     points.add (v);
+                                 auto* o = new juce::DynamicObject();
+                                 o->setProperty ("genre", g);
+                                 o->setProperty ("name", juce::String::fromUTF8 (polisher::genreName (genre)));
+                                 o->setProperty ("lufs", polisher::kGenreCurveLufs);
+                                 o->setProperty ("sr", sr);
+                                 o->setProperty ("displayDb", points);
+                                 complete (juce::JSON::toString (juce::var (o), true));
+                             })
         .withResourceProvider ([] (const auto& url) { return getResource (url); });
 }
 
@@ -320,8 +339,12 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("range",      roundTo (m.loudnessRange.load(), 0.1f));
     frame->setProperty ("truePeak",   roundTo (m.truePeakMax.load(), 0.1f));
     frame->setProperty ("peakRecent", roundTo (m.truePeakRecent.exchange (-100.0f), 0.1f));
-    frame->setProperty ("peakL",      roundTo (m.peakLeft.exchange (-100.0f), 0.1f));
-    frame->setProperty ("peakR",      roundTo (m.peakRight.exchange (-100.0f), 0.1f));
+    const float peakL = m.peakLeft.exchange (-100.0f), peakR = m.peakRight.exchange (-100.0f);
+    frame->setProperty ("peakL",      roundTo (peakL, 0.1f));
+    frame->setProperty ("peakR",      roundTo (peakR, 0.1f));
+    const auto nowMs = juce::Time::getMillisecondCounter();
+    if (peakL > -100.0f || peakR > -100.0f)
+        lastSoundMs = nowMs;   // the processor ran and something came out since the last frame
     frame->setProperty ("gr",         roundTo (grHold, 0.1f));
     frame->setProperty ("clip",       roundTo (clipHold, 0.1f));
     const float tame = m.bassTame.exchange (0.0f);
@@ -385,6 +408,12 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("sr",         audioProcessor.getSampleRate());
     frame->setProperty ("inShort",    roundTo (m.inputShortTerm.load(), 0.1f));
     frame->setProperty ("inIntegrated", roundTo (m.inputIntegrated.load(), 0.1f));
+    // The loudness history records only while the song plays: the host's transport (or, without one,
+    // e.g. the standalone app, while sound comes in), and only while the processor is still being called
+    // (a host that stops calling it would otherwise leave the meters frozen at their last reading).
+    const int transport = m.transport.load();
+    const bool running = nowMs - lastSoundMs < 1000;
+    frame->setProperty ("playing",    running && (transport == 1 || (transport < 0 && m.momentary.load() > -70.0f)));
     frame->setProperty ("mix",        makeSpectrum (audioProcessor.inputTap, mixAnalyser));
     frame->setProperty ("master",     makeSpectrum (audioProcessor.outputTap, masterAnalyser));
 
