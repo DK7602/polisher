@@ -29,6 +29,21 @@ double sineGainDb (TonalEQ& eq, double sr, double freq)
 
 TonalEQParams flat() { return TonalEQParams {}; }
 
+/** The band's analog (RBJ prototype) response in dB: what the digital band should follow. */
+double analogDb (int band, double gainDb, double f0, double f)
+{
+    const auto& spec = kEqBandSpecs[static_cast<size_t> (band)];
+    const double A = std::pow (10.0, gainDb / 40.0), x = f / f0, x2 = x * x, q = spec.q;
+    double p = 1.0;
+    if (spec.shape == EqBandSpec::Shape::bell)
+        p = ((1 - x2) * (1 - x2) + (A * x / q) * (A * x / q)) / ((1 - x2) * (1 - x2) + (x / (A * q)) * (x / (A * q)));
+    else if (spec.shape == EqBandSpec::Shape::lowShelf)
+        p = A * A * ((A - x2) * (A - x2) + A * x2 / (q * q)) / ((1 - A * x2) * (1 - A * x2) + A * x2 / (q * q));
+    else
+        p = A * A * ((1 - A * x2) * (1 - A * x2) + A * x2 / (q * q)) / ((A - x2) * (A - x2) + A * x2 / (q * q));
+    return 10.0 * std::log10 (p);
+}
+
 } // namespace
 
 TEST_CASE ("A flat or disabled EQ is an exact pass-through", "[eq]")
@@ -72,6 +87,135 @@ TEST_CASE ("Each band hits its exact gain at its frequency", "[eq]")
                 if (spec.shape == EqBandSpec::Shape::highShelf && sr > 90000.0)
                     CHECK_THAT (c.magnitudeDb (spec.defaultHz * 3.0, sr), WithinAbs (g, 0.3));
             }
+}
+
+TEST_CASE ("High bands keep their analog shape up to 20 kHz at 44.1 and 48 kHz", "[eq]")
+{
+    // The audit case: Presence +6 dB at 10 kHz and Air +6 dB at 12 kHz at 44.1 kHz. Plain RBJ gave
+    // 2.70 dB at 14 kHz (analog 4.30) and 0.54 dB at 18 kHz (analog 2.67), and the Air shelf
+    // overshot to 5.74 dB at 16.8 kHz (analog 4.72).
+    const double sr = 44100.0;
+    const auto presence = TonalEQ::designBand (5, 6.0, 10000.0, sr);
+    for (double f = 1000.0; f <= 18000.0; f *= 1.05)
+    {
+        INFO ("f " << f);
+        CHECK_THAT (presence.magnitudeDb (f, sr), WithinAbs (analogDb (5, 6.0, 10000.0, f), 0.5));
+    }
+    CHECK_THAT (presence.magnitudeDb (14000.0, sr), WithinAbs (4.30, 0.2));
+    CHECK_THAT (presence.magnitudeDb (18000.0, sr), WithinAbs (2.67, 0.3));
+    const auto air = TonalEQ::designBand (6, 6.0, 12000.0, sr);
+    CHECK_THAT (air.magnitudeDb (16800.0, sr), WithinAbs (analogDb (6, 6.0, 12000.0, 16800.0), 0.2));
+
+    // Every band, gain and frequency in range: within 0.75 dB of analog up to 20 kHz at 44.1 / 48 kHz,
+    // and within 0.05 dB at 96 kHz.
+    for (double rate : { 44100.0, 48000.0, 96000.0 })
+    {
+        double worst = 0.0;
+        for (int b = 0; b < kEqBands; ++b)
+        {
+            const auto& spec = kEqBandSpecs[static_cast<size_t> (b)];
+            for (double f0 : { spec.minHz, spec.defaultHz, spec.maxHz })
+                for (double g : { -9.0, -4.0, -1.0, 1.0, 4.0, 9.0 })
+                {
+                    const auto c = TonalEQ::designBand (b, g, f0, rate);
+                    for (double f = 20.0; f <= 20000.0; f *= 1.02)
+                        worst = std::max (worst, std::abs (c.magnitudeDb (f, rate) - analogDb (b, g, f0, f)));
+                }
+        }
+        INFO ("sr " << rate << " worst " << worst);
+        CHECK (worst < (rate > 90000.0 ? 0.05 : 0.75));
+    }
+}
+
+TEST_CASE ("Every band design is stable and minimum-phase from 44.1 to 192 kHz", "[eq]")
+{
+    // Poles and zeros strictly inside the unit circle: a2 < 1 and |a1| < 1 + a2 (and the same for
+    // the numerator, normalised by b0), for every band across its whole gain and frequency range.
+    for (double sr : { 44100.0, 48000.0, 88200.0, 96000.0, 176400.0, 192000.0 })
+        for (int b = 0; b < kEqBands; ++b)
+        {
+            const auto& spec = kEqBandSpecs[static_cast<size_t> (b)];
+            for (double f0 = spec.minHz; f0 <= spec.maxHz * 1.0001; f0 *= 1.1)
+                for (double g = -9.0; g <= 9.0; g += 0.5)
+                {
+                    const auto c = TonalEQ::designBand (b, g, f0, sr);
+                    INFO ("sr " << sr << " band " << b << " f0 " << f0 << " g " << g);
+                    REQUIRE (c.b0 > 0.0);
+                    REQUIRE (std::abs (c.a2) < 1.0);
+                    REQUIRE (std::abs (c.a1) < 1.0 + c.a2);
+                    REQUIRE (std::abs (c.b2 / c.b0) < 1.0);
+                    REQUIRE (std::abs (c.b1 / c.b0) < 1.0 + c.b2 / c.b0);
+                }
+        }
+}
+
+TEST_CASE ("A Low End boost brings in the subsonic filter; it leaves the audible range alone", "[eq]")
+{
+    const double sr = 44100.0;
+    auto p = flat();
+    p.gainDb[0] = 3.0;   // +3 dB Low End shelf at 45 Hz
+    CHECK (TonalEQ::subsonicEngaged (p));
+    // Without the filter the shelf would add ~3 dB from 5 to 20 Hz; with it, rumble is cut instead.
+    CHECK (TonalEQ::responseDb (p, 5.0, sr) < -30.0);
+    CHECK (TonalEQ::responseDb (p, 10.0, sr) < -10.0);
+    // Audible range: < 0.5 dB off the shelf alone at 20 Hz, nothing measurable from 30 Hz.
+    const auto shelf = TonalEQ::designBand (0, 3.0, 45.0, sr);
+    CHECK (std::abs (TonalEQ::responseDb (p, 20.0, sr) - shelf.magnitudeDb (20.0, sr)) < 0.5);
+    for (double f : { 30.0, 45.0, 100.0, 1000.0 })
+        CHECK (std::abs (TonalEQ::responseDb (p, f, sr) - shelf.magnitudeDb (f, sr)) < 0.03);
+
+    // Cuts and other bands don't engage it.
+    p.gainDb = { -3.0, 4.0, 0, 0, 0, 0, 2.0 };
+    CHECK_FALSE (TonalEQ::subsonicEngaged (p));
+    p.gainDb[0] = 3.0;
+    p.enabled = false;
+    CHECK_FALSE (TonalEQ::subsonicEngaged (p));
+
+    // Real audio: a 7 Hz rumble comes down by the designed amount.
+    p = flat();
+    p.gainDb[0] = 3.0;
+    TonalEQ eq;
+    eq.prepare (sr, 2);
+    eq.setParams (p);
+    CHECK_THAT (sineGainDb (eq, sr, 7.0), WithinAbs (TonalEQ::responseDb (p, 7.0, sr), 0.3));
+}
+
+TEST_CASE ("The subsonic filter fades in and out without clicks and leaves a bit-exact path", "[eq]")
+{
+    const double sr = 44100.0;
+    // A 30 Hz tone riding on a DC offset: the worst case for switching a high-pass in.
+    AudioClip clip = testsig::sine (sr, 1, 30.0, -6.0, 2.0);
+    for (auto& v : clip.channels[0])
+        v += 0.25f;
+    const auto original = clip.channels[0];
+    std::vector<float*> ptrs { clip.channels[0].data() };
+
+    TonalEQ eq;
+    eq.prepare (sr, 1);
+    eq.setParams (flat());
+    auto boosted = flat();
+    boosted.gainDb[0] = 6.0;
+    const int block = 256, n = clip.numSamples();
+    for (int start = 0; start < n; start += block)
+    {
+        if (start == 4352)  eq.setParams (boosted);
+        if (start == 44032) eq.setParams (flat());
+        eq.process (ptrs.data(), 1, std::min (block, n - start));
+        ptrs[0] += std::min (block, n - start);
+    }
+    // Biggest sample-to-sample step a +6 dB 30 Hz tone can take, plus a little for the DC fading
+    // out over the 20 ms glide; a click would be far larger.
+    const double amp = std::pow (10.0, (-6.0 + 6.0) / 20.0);
+    const double maxStep = amp * 2.0 * std::numbers::pi * 30.0 / sr;
+    double worst = 0.0;
+    for (int i = 1; i < n; ++i)
+        worst = std::max (worst, std::abs (static_cast<double> (clip.channels[0][static_cast<size_t> (i)]) - clip.channels[0][static_cast<size_t> (i - 1)]));
+    INFO ("worst step " << worst << " limit " << maxStep);
+    CHECK (worst < maxStep * 1.2);
+
+    CHECK_FALSE (eq.isActive());
+    for (int i = n - 4410; i < n; ++i)
+        REQUIRE (clip.channels[0][static_cast<size_t> (i)] == original[static_cast<size_t> (i)]);
 }
 
 TEST_CASE ("Real audio through the EQ matches the designed response", "[eq]")

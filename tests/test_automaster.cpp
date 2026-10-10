@@ -102,6 +102,55 @@ TEST_CASE ("Auto-Master lands the target and explains every module", "[automaste
     }
 }
 
+TEST_CASE ("Auto-Master sets EQ bands together, accounting for their overlap", "[automaster][eq]")
+{
+    auto rmsError = [] (const std::array<double, kEqBands>& got, const std::array<double, kEqBands>& want)
+    {
+        double e = 0.0;
+        for (size_t b = 0; b < want.size(); ++b)
+            e += (got[b] - want[b]) * (got[b] - want[b]);
+        return std::sqrt (e / static_cast<double> (want.size()));
+    };
+    std::array<double, kEqBands> limits {};
+    limits.fill (4.0);
+
+    for (double sr : { 44100.0, 48000.0, 96000.0 })
+    {
+        const std::array<std::array<double, kEqBands>, 3> wishes { {
+            { 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0 },     // all bands +2: set alone, Upper Mid lands at ~3 dB
+            { 0.0, 1.5, -1.5, 0.0, 0.0, 2.0, 2.5 },
+            { -2.5, 1.0, 0.0, -1.0, 0.0, 0.0, 3.0 },
+        } };
+        for (const auto& want : wishes)
+        {
+            TonalEQParams naive;
+            naive.gainDb = want;   // the old way: each band set to its own wish
+            const double before = rmsError (eqBandChangeDb (naive, sr), want);
+
+            TonalEQParams solved;
+            solved.gainDb = solveEqGains (want, limits, sr);
+            const auto got = eqBandChangeDb (solved, sr);
+            const double after = rmsError (got, want);
+            INFO ("sr " << sr << " before " << before << " after " << after);
+            CHECK (after < 0.75 * before);
+            CHECK (after < 0.4);
+            for (size_t b = 0; b < want.size(); ++b)
+            {
+                // Bands move only the way they were asked to, and never past the limit.
+                CHECK (solved.gainDb[b] * want[b] >= 0.0);
+                CHECK (std::abs (solved.gainDb[b]) <= limits[b]);
+            }
+        }
+    }
+
+    // The audit case: all bands +2 at 44.1 kHz used to put 3.1 dB into Upper Mid.
+    std::array<double, kEqBands> plus2 {};
+    plus2.fill (2.0);
+    TonalEQParams solved;
+    solved.gainDb = solveEqGains (plus2, limits, 44100.0);
+    CHECK_THAT (eqBandChangeDb (solved, 44100.0)[4], WithinAbs (2.0, 0.3));
+}
+
 TEST_CASE ("Auto-Master brightens a dull mix and calms a harsh one", "[automaster]")
 {
     const auto base = testsig::musicLike (48000.0, 12.0, -14.0);

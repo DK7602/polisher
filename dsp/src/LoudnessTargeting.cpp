@@ -1,4 +1,5 @@
 #include "polisher/LoudnessTargeting.h"
+#include "polisher/Denormals.h"
 #include "polisher/LoudnessMeter.h"
 
 #include <algorithm>
@@ -9,6 +10,7 @@ namespace polisher {
 
 LoudnessStats measure (const AudioClip& clip)
 {
+    const ScopedFlushDenormals noDenormals;
     LoudnessMeter meter;
     meter.prepare (clip.sampleRate, clip.numChannels());
 
@@ -28,6 +30,7 @@ LoudnessStats measure (const AudioClip& clip)
 
 AudioClip renderLimited (const AudioClip& clip, const LimiterParams& params)
 {
+    const ScopedFlushDenormals noDenormals;
     TruePeakLimiter limiter;
     limiter.prepare (clip.sampleRate, clip.numChannels());
     limiter.setParams (params);
@@ -65,6 +68,7 @@ namespace {
 
 AudioClip renderEq (const AudioClip& clip, const TonalEQParams& params)
 {
+    const ScopedFlushDenormals noDenormals;
     AudioClip out = clip;
     if (eqIsFlat (params) || clip.numChannels() == 0)
         return out;
@@ -87,6 +91,7 @@ namespace {
 
 AudioClip renderBass (const AudioClip& clip, const BassParams& params)
 {
+    const ScopedFlushDenormals noDenormals;
     AudioClip out = clip;
     if (bassIsNeutral (params) || clip.numChannels() == 0)
         return out;
@@ -103,6 +108,7 @@ AudioClip renderBass (const AudioClip& clip, const BassParams& params)
 
 AudioClip renderUnlimiter (const AudioClip& clip, const UnlimiterParams& params)
 {
+    const ScopedFlushDenormals noDenormals;
     AudioClip out = clip;
     const int nch = clip.numChannels(), n = clip.numSamples();
     if (Unlimiter::isNeutral (params) || nch == 0)
@@ -128,6 +134,7 @@ AudioClip renderUnlimiter (const AudioClip& clip, const UnlimiterParams& params)
 AudioClip renderSpectral (const AudioClip& input, const StemEQParams& params, const ToneSteadyParams& steady,
                           const ResonanceParams& resonance)
 {
+    const ScopedFlushDenormals noDenormals;
     AudioClip out = input;
     const int nch = out.numChannels(), n = out.numSamples();
     if (nch == 0 || (StemEQ::isNeutral (params) && StemEQ::isNeutral (steady) && StemEQ::isNeutral (resonance)))
@@ -155,6 +162,7 @@ AudioClip renderSpectral (const AudioClip& input, const StemEQParams& params, co
 
 std::array<double, kStems> measureStemLevels (const AudioClip& clip)
 {
+    const ScopedFlushDenormals noDenormals;
     std::array<double, kStems> out;
     out.fill (-100.0);
     const int nch = clip.numChannels(), n = clip.numSamples();
@@ -182,6 +190,7 @@ std::array<double, kStems> measureStemLevels (const AudioClip& clip)
 
 SpectralStats measureSpectral (const AudioClip& clip, const ToneSteadyParams& steady, const ResonanceParams& resonance)
 {
+    const ScopedFlushDenormals noDenormals;
     const int nch = clip.numChannels(), n = clip.numSamples();
     if (nch == 0 || n == 0)
         return {};
@@ -215,6 +224,7 @@ AudioClip withGain (const AudioClip& clip, double gainDb)
 
 AudioClip renderPreDrive (const AudioClip& input, const MasterChainParams& params)
 {
+    const ScopedFlushDenormals noDenormals;
     const AudioClip trimmed = withGain (input, std::clamp (params.trimDb, kMinTrimDb, 0.0));
     AudioClip out = renderBass (renderSpectral (renderEq (renderUnlimiter (trimmed, params.unlimiter), params.eq), params.stem, params.steady, params.resonance), params.bass);
     const int nch = out.numChannels(), n = out.numSamples();
@@ -265,6 +275,7 @@ AudioClip renderPreDrive (const AudioClip& input, const MasterChainParams& param
 
 AudioClip renderMaster (const AudioClip& input, const MasterChainParams& params)
 {
+    const ScopedFlushDenormals noDenormals;
     const AudioClip clip = renderPreDrive (input, params);
     const int nch = clip.numChannels();
     const int n = clip.numSamples();

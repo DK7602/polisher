@@ -1,4 +1,5 @@
 #include "polisher/AutoMaster.h"
+#include "polisher/Denormals.h"
 #include "polisher/FilterDesign.h"
 
 #include <algorithm>
@@ -245,6 +246,7 @@ double recurringPeakDb (const AudioClip& clip)
 
 MixAnalysis analyseMix (const AudioClip& clip)
 {
+    const ScopedFlushDenormals noDenormals;
     MixAnalysis a;
     const int nch = clip.numChannels(), n = clip.numSamples();
     const double sr = clip.sampleRate;
@@ -424,6 +426,197 @@ MixAnalysis analyseMix (const AudioClip& clip)
 }
 
 // =================================================================================================
+// EQ band interaction
+// =================================================================================================
+
+std::array<double, kEqBands> eqBandChangeDb (const TonalEQParams& eq, double sampleRate) noexcept
+{
+    std::array<double, kEqBands> out {};
+    if (! eq.enabled || sampleRate <= 0.0)
+        return out;
+    std::array<BiquadCoefficients, kEqBands> bands;
+    std::array<bool, kEqBands> on {};
+    for (int b = 0; b < kEqBands; ++b)
+    {
+        const auto i = static_cast<size_t> (b);
+        on[i] = eq.gainDb[i] != 0.0;
+        if (on[i])
+            bands[i] = TonalEQ::designBand (b, eq.gainDb[i], eq.freqHz[i], sampleRate);
+    }
+    const bool subsonic = TonalEQ::subsonicEngaged (eq);
+    const auto hp = TonalEQ::designSubsonic (sampleRate);
+
+    // Mean power gain per Hz over each band, for a spectrum falling 4.5 dB/oct (power per Hz ~ f^-1.5),
+    // integrated on a log grid (so each point also carries a factor f).
+    constexpr int kPoints = 32;
+    for (int b = 0; b < kEqBands; ++b)
+    {
+        const double lo = kEdges[static_cast<size_t> (b)];
+        const double hi = std::min (kEdges[static_cast<size_t> (b + 1)], 0.5 * sampleRate);
+        if (hi <= lo)
+            continue;
+        double sumW = 0.0, sumP = 0.0;
+        for (int k = 0; k < kPoints; ++k)
+        {
+            const double f = lo * std::pow (hi / lo, (k + 0.5) / kPoints);
+            double db = 0.0;
+            for (int j = 0; j < kEqBands; ++j)
+                if (on[static_cast<size_t> (j)])
+                    db += bands[static_cast<size_t> (j)].magnitudeDb (f, sampleRate);
+            if (subsonic)
+                db += hp[0].magnitudeDb (f, sampleRate) + hp[1].magnitudeDb (f, sampleRate);
+            const double w = 1.0 / std::sqrt (f);
+            sumW += w;
+            sumP += w * std::pow (10.0, db / 10.0);
+        }
+        out[static_cast<size_t> (b)] = 10.0 * std::log10 (sumP / sumW);
+    }
+    return out;
+}
+
+std::array<double, kEqBands> solveEqGains (const std::array<double, kEqBands>& wanted,
+                                           const std::array<double, kEqBands>& limitDb, double sampleRate) noexcept
+{
+    constexpr double kRegularisation = 0.02;   // per dB^2 of gain: prefer the smaller of near-equal fits
+    constexpr int kN = kEqBands;
+    using Vec = std::array<double, kN>;
+    Vec gains {};
+    auto changeFor = [&] (const Vec& g)
+    {
+        TonalEQParams p;
+        p.gainDb = g;
+        return eqBandChangeDb (p, sampleRate);
+    };
+    auto lowerOf = [&] (size_t b) { return wanted[b] < 0.0 ? -limitDb[b] : 0.0; };
+    auto upperOf = [&] (size_t b) { return wanted[b] > 0.0 ?  limitDb[b] : 0.0; };
+
+    // Band-interaction matrix: M[i][j] = change in analysis band i per dB of EQ band j.
+    std::array<Vec, kN> M {};
+    for (size_t j = 0; j < kN; ++j)
+    {
+        Vec up {}, down {};
+        up[j] = 1.0;
+        down[j] = -1.0;
+        const auto ru = changeFor (up), rd = changeFor (down);
+        for (size_t i = 0; i < kN; ++i)
+            M[i][j] = 0.5 * (ru[i] - rd[i]);
+    }
+
+    std::array<bool, kN> movable {};
+    for (size_t b = 0; b < kN; ++b)
+        movable[b] = wanted[b] != 0.0 && limitDb[b] > 0.0;
+
+    // One regularised least-squares step on the free bands, from the current gains toward the wish:
+    // minimise |r - M d|^2 + lambda |g + d|^2, with r the remaining error on the real response.
+    auto step = [&] (const std::array<bool, kN>& free)
+    {
+        const auto now = changeFor (gains);
+        std::array<size_t, kN> idx {};
+        size_t n = 0;
+        for (size_t b = 0; b < kN; ++b)
+            if (free[b])
+                idx[n++] = b;
+        Vec delta {};
+        if (n == 0)
+            return delta;
+        std::array<std::array<double, kN + 1>, kN> m {};   // augmented normal equations
+        for (size_t r = 0; r < n; ++r)
+        {
+            for (size_t c = 0; c < n; ++c)
+            {
+                double v = 0.0;
+                for (size_t i = 0; i < kN; ++i)
+                    v += M[i][idx[r]] * M[i][idx[c]];
+                m[r][c] = v + (r == c ? kRegularisation : 0.0);
+            }
+            double rhs = -kRegularisation * gains[idx[r]];
+            for (size_t i = 0; i < kN; ++i)
+                rhs += M[i][idx[r]] * (wanted[i] - now[i]);
+            m[r][kN] = rhs;
+        }
+        // Gaussian elimination with partial pivoting (small, symmetric positive definite).
+        for (size_t c = 0; c < n; ++c)
+        {
+            size_t piv = c;
+            for (size_t r = c + 1; r < n; ++r)
+                if (std::abs (m[r][c]) > std::abs (m[piv][c]))
+                    piv = r;
+            std::swap (m[c], m[piv]);
+            for (size_t r = c + 1; r < n; ++r)
+            {
+                const double f = m[r][c] / m[c][c];
+                for (size_t k = c; k < n; ++k)
+                    m[r][k] -= f * m[c][k];
+                m[r][kN] -= f * m[c][kN];
+            }
+        }
+        for (size_t r = n; r-- > 0;)
+        {
+            double v = m[r][kN];
+            for (size_t k = r + 1; k < n; ++k)
+                v -= m[r][k] * delta[idx[k]];
+            delta[idx[r]] = v / m[r][r];
+        }
+        return delta;
+    };
+
+    // Clamped solve: bands that would cross their bound are pinned there and the rest re-solved;
+    // a few outer passes re-linearise on the real (slightly non-linear) response.
+    auto solve = [&]
+    {
+        for (int pass = 0; pass < 4; ++pass)
+        {
+            auto free = movable;
+            for (size_t inner = 0; inner < kN; ++inner)
+            {
+                const auto delta = step (free);
+                bool pinned = false;
+                auto next = gains;
+                for (size_t b = 0; b < kN; ++b)
+                {
+                    if (! free[b])
+                        continue;
+                    next[b] = gains[b] + delta[b];
+                    if (next[b] < lowerOf (b) || next[b] > upperOf (b))
+                    {
+                        gains[b] = std::clamp (next[b], lowerOf (b), upperOf (b));   // pinned at its bound
+                        free[b] = false;
+                        pinned = true;
+                    }
+                }
+                if (! pinned)
+                {
+                    gains = next;
+                    break;
+                }
+            }
+        }
+    };
+
+    for (size_t b = 0; b < kN; ++b)
+        if (movable[b])
+            gains[b] = std::clamp (wanted[b], lowerOf (b), upperOf (b));
+    for (size_t round = 0; round <= kN; ++round)
+    {
+        solve();
+        bool dropped = false;
+        for (size_t b = 0; b < kN; ++b)
+        {
+            gains[b] = std::round (gains[b] * 10.0) / 10.0;
+            if (movable[b] && std::abs (gains[b]) < 0.4)
+            {
+                gains[b] = 0.0;
+                movable[b] = false;   // too small to bother: leave it flat and re-solve the rest
+                dropped = true;
+            }
+        }
+        if (! dropped)
+            break;
+    }
+    return gains;
+}
+
+// =================================================================================================
 // Decisions
 // =================================================================================================
 
@@ -528,27 +721,33 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     const bool bassHeavy = s.genre == Genre::trapHipHop || s.genre == Genre::rnb || s.genre == Genre::edm || s.genre == Genre::pop;
 
     // --- Tonal EQ: move part of the way toward the genre's typical balance --------------------------
+    // First what each analysis band should change by, then the band gains that achieve that together:
+    // neighbouring bands overlap, so setting each band on its own would over- or under-shoot.
     const auto target = genreTargetCurve (s.genre);
     const double tRef = (target[1] + target[2] + target[3] + target[4] + target[5]) / 5.0;
-    std::vector<std::string> flat;
+    std::array<double, kEqBands> diffs {}, wanted {}, limits {};
     for (int b = 0; b < kEqBands; ++b)
     {
         const auto i = static_cast<size_t> (b);
-        const double diff = std::clamp ((target[i] - tRef) - a.bandDb[i], -30.0, 30.0);   // + = your mix has less
+        diffs[i] = std::clamp ((target[i] - tRef) - a.bandDb[i], -30.0, 30.0);   // + = your mix has less
         const bool outer = b == 0 || b == kEqBands - 1;
         const double deadband = outer ? 3.0 : 1.5;                     // the outer bands vary most between songs
-        const double beyond = std::copysign (std::max (0.0, std::abs (diff) - deadband), diff);
-        double gain = std::clamp (rules.eqStrength * beyond, -rules.eqMaxDb, rules.eqMaxDb);
-        if (b == 0 && gain > 0.0 && a.bandDb[0] < -18.0)
-            gain = std::min (gain, 1.0);                                // don't pump up sub that isn't there
-        gain = std::round (gain * 10.0) / 10.0;
-        if (std::abs (gain) < 0.4)
-            gain = 0.0;
-        chain.eq.gainDb[i] = gain;
+        const double beyond = std::copysign (std::max (0.0, std::abs (diffs[i]) - deadband), diffs[i]);
+        wanted[i] = std::clamp (rules.eqStrength * beyond, -rules.eqMaxDb, rules.eqMaxDb);
+        limits[i] = rules.eqMaxDb;
+        if (b == 0 && wanted[i] > 0.0 && a.bandDb[0] < -18.0)
+            limits[i] = 1.0;                                           // don't pump up sub that isn't there
+    }
+    chain.eq.gainDb = solveEqGains (wanted, limits, clip.sampleRate);
 
+    std::vector<std::string> flat, covered;
+    for (int b = 0; b < kEqBands; ++b)
+    {
+        const auto i = static_cast<size_t> (b);
+        const double diff = diffs[i], gain = chain.eq.gainDb[i];
         if (gain == 0.0)
         {
-            flat.push_back (kBandNames[b]);
+            (std::abs (wanted[i]) >= 0.4 ? covered : flat).push_back (kBandNames[b]);
             continue;
         }
         const std::string more = diff > 0 ? "less" : "more";
@@ -566,6 +765,16 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                                (b <= 1 && ! bassHeavy ? "usually the bass or the kick" : kCulprit[b]) + ")."
                                "\nSTEP: Turn it " + (diff > 0 ? "up" : "down") + " a few dB, or EQ just that track in this range."
                                "\nSTEP: Run Auto-Master again: its EQ move here will get smaller.");
+    }
+    if (! covered.empty())
+    {
+        std::string list;
+        for (size_t k = 0; k < covered.size(); ++k)
+            list += (k ? (k + 1 == covered.size() ? " and " : ", ") : "") + covered[k];
+        const bool many = covered.size() > 1;
+        reason ("eq", many ? "Covered bands" : "Covered band", "0 dB",
+                list + (many ? " need" : " needs") + " a small change too, but the neighbouring bands' moves already reach into " +
+                (many ? "them" : "it") + ", so " + (many ? "they stay" : "it stays") + " flat.");
     }
     if (! flat.empty() && flat.size() < static_cast<size_t> (kEqBands))
     {
@@ -1187,6 +1396,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
 
 AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s)
 {
+    const ScopedFlushDenormals noDenormals;
     // A mix already louder than the target at Drive 0 is turned down at the input (Input Trim), then
     // every module is decided again for the level it will hear: Dynamics thresholds, Saturation Drive
     // and the loudness search all depend on it. At most two refinements.
