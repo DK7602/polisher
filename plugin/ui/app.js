@@ -135,7 +135,7 @@ const modules = [
     cells: [],
     controls: [["Mono Below", "Stereo sub wastes headroom and collapses on club systems and phones."],
                ["Sub Tame", "Evens out 808 slides so the limiter doesn't grab the whole mix on long notes."],
-               ["Punch", "Adds attack to the start of the kick without turning the sub up."]] },
+               ["Punch", "Adds attack to the start of the kick (found by its click) without turning the 808 up."]] },
   { id: "dyn", name: "Dynamics", live: true, soon: "",
     what: "Four-band compression: steadies the low end without ducking the vocal, and evens out section jumps gently.",
     cells: [["Crossovers", "3 splits", "120/1k/6k", .5], ["Low Ratio", "low band", "1:1", 0], ["Mid Attack", "mid band", "30 ms", .45], ["Release", "all bands", "Auto", .5]],
@@ -1068,10 +1068,10 @@ function renderBassLearn(body) {
         (monoHz > 160 ? "Above about 150 Hz this starts narrowing synths and guitars too." : "80–120 Hz is the safe range.")));
   body.appendChild(item("Sub Tame", `${tame} %`,
     tame < 1 ? "Off: low notes keep their natural level differences."
-      : `Listens to the low end's own average level. When an 808 note or kick jumps more than ${(6 - 3 * tame / 100).toFixed(1)} dB above it, that note is turned down, so the Maximizer doesn't grab the whole mix on big bass notes.`));
+      : `Listens to the low end's own average level. When an 808 note or kick jumps more than ${(6 - 3 * tame / 100).toFixed(1)} dB above it, that note is turned down, so the Maximizer doesn't grab the whole mix on big bass notes. It listens for about a second before it cuts anything, so the first notes of a song aren't cut harder than the rest.`));
   body.appendChild(item("Punch", `${punch} %`,
     punch < 1 ? "Off: kicks stay as they are."
-      : `Adds up to ${(4 * punch / 100).toFixed(1)} dB of thump in the first moments of each kick. The sustained sub stays where it was, so it hits harder without getting boomier.`));
+      : `Adds up to ${(4 * punch / 100).toFixed(1)} dB of thump in the first moments of each kick. It spots a kick by the click at its start, so 808 notes on their own aren't boosted and the sub stays where it was: the kick hits harder without the low end getting boomier.`));
 
   if (bypassed || !on || !playing) {
     body.appendChild(tip("TIP", "Start with Mono Below at 100 Hz. It's the safest low-end move in mastering: you'll barely hear it on headphones, but the bass hits harder on big systems.", true));
@@ -1143,7 +1143,7 @@ function renderDynLearn(body) {
   body.appendChild(para("l-p", `Holds the ${band.holds}.`));
   body.appendChild(item("Threshold", `${fmtNum(thr, 1)} dB`, "Where the band starts being held down. Lower = more of the music is compressed. Set it so the reduction only moves on the loudest hits."));
   body.appendChild(item("Ratio", `${ratio.toFixed(1)}:1`, ratio <= 1.005 ? "1:1: this band isn't compressed." : ratio <= 2.5 ? "A gentle mastering ratio: evens the band out without flattening it." : ratio <= 4 ? "Firm: the band gets noticeably steadier. Check the punch with MATCH." : "Heavy for a master: the band will sound squashed. 1.5:1 to 3:1 is typical."));
-  body.appendChild(item("Attack", fmtMs(atk), atk >= 20 ? "Slow: the start of each hit gets through before the band is turned down, so drums keep their punch." : atk >= 5 ? "Medium: catches most of each hit, a little of the snap stays." : "Fast: catches peaks almost instantly, smoother but less punchy."));
+  body.appendChild(item("Attack", fmtMs(atk), atk >= 20 ? "Slow: the start of each hit gets through before the band is turned down, so drums keep their punch." : atk >= 5 ? "Medium: catches most of each hit, a little of the snap stays." : b === 0 ? "Fast: the low band still needs about 20 ms to react (any quicker and bass notes would wobble), so a kick's first moment gets through. Smoother but less punchy." : "Fast: catches peaks within a few ms, smoother but less punchy."));
   body.appendChild(item("Release", fmtMs(rel), (rel <= 80 ? "Fast: recovers between hits; too fast can sound like fluttering on bass." : rel <= 300 ? "Medium: recovers between beats, the usual choice for a master." : "Slow: smooth and steady, evens out whole phrases.") + (P.dynAdaptive.getValue() ? " Adaptive release is on: quick after short hits, this setting on sustained notes." : "")));
   body.appendChild(item("Gain", fmtSigned(gain), Math.abs(gain) < 0.05 ? "The band's level after compression is unchanged." : gain > 0 ? "Turns the band up after compression: makes up what it lost, or brings it forward." : "Turns the band down after compression."));
   body.appendChild(item("Split", fmtHz(P.dynX[Math.min(b, 2)].getScaledValue()), b < 3 ? "Where this band ends and the next begins." : "Where this band starts."));

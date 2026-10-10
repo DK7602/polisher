@@ -27,6 +27,14 @@ inline Coeffs butterworth (bool highPass, double f, double sr) noexcept
     return { b0 / a0, b1 / a0, b0 / a0, -2.0 * cw / a0, (1.0 - alpha) / a0 };
 }
 
+/** The 2nd-order all-pass that equals the sum of a Linkwitz-Riley 4th-order low- and high-pass
+    at the same frequency (the Butterworth denominator, mirrored). */
+inline Coeffs allpass (double f, double sr) noexcept
+{
+    const auto lp = butterworth (false, f, sr);
+    return { lp.a2, lp.a1, 1.0, lp.a1, lp.a2 };
+}
+
 inline Coeffs lowShelf (double f, double gainDb, double sr, double q = 0.707) noexcept
 {
     const double w0 = 2.0 * std::numbers::pi * f / sr, cw = std::cos (w0);
