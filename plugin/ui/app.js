@@ -884,8 +884,8 @@ function renderLearn() {
   const trim = P.inTrim.getScaledValue();
   body.appendChild(item("Input Trim", `${fmtNum(trim, 1)} dB`,
     trim > -0.05
-      ? "Your mix goes into the chain as it is. Auto-Master turns this down only when your mix is already louder than the target."
-      : `Turns your mix down ${fmtNum(-trim, 1)} dB before the whole chain (all 11 modules), because it arrives louder than the target. Drive can only push up; this is how Polisher turns a too-hot mix down.`));
+      ? "Your mix goes into the chain as it is. Auto-Master turns this down only when the master would otherwise land above your target."
+      : `Turns your mix down ${fmtNum(-trim, 1)} dB before the whole chain (all 11 modules). Drive can only push up; this is how Polisher masters a mix that would otherwise land above your target. A (bypass) ignores it.`));
   body.appendChild(item("Ceiling", `${fmtNum(ceiling, 1)} dBTP`,
     `Nothing leaves Polisher above ${fmtNum(ceiling, 1)} dBTP, including peaks that fall between samples. ` +
     (ceiling > -0.95 ? "Above −1 dBTP, the MP3/AAC versions streaming services make can clip. −1.0 is the safe choice."
@@ -898,9 +898,11 @@ function renderLearn() {
   const gain = louderBy();
   if (bypassed || !playing) {
     body.appendChild(tip("TIP", "Set Drive by ear while watching Short-term in the footer. Most streaming releases land between −14 and −9 LUFS.", true));
-  } else if (gain !== null && drive >= 9 && drive - gain > 6) {
+  } else if (gain !== null && drive >= 9 && drive + trim - gain > 6) {
+    // Input Trim turns the mix down before Drive pushes it, so the push that counts is Drive + Trim.
+    const push = drive + trim;
     body.appendChild(tip("DIMINISHING RETURNS",
-      `Drive is at +${drive.toFixed(1)} dB, but the master is only ${gain.toFixed(1)} dB louder than your mix. The loud hits already reach the ceiling, so the extra Drive is going into squashing them, not into loudness. ` +
+      `${trim < -0.05 ? `Drive (+${drive.toFixed(1)} dB) after Input Trim (${fmtNum(trim, 1)} dB) pushes the mix ${push >= 0 ? "+" : MINUS}${Math.abs(push).toFixed(1)} dB` : `Drive is at +${drive.toFixed(1)} dB`}, but the master is only ${gain.toFixed(1)} dB louder than your mix. The loud hits already reach the ceiling, so the extra Drive is going into squashing them, not into loudness. ` +
       "", false, { need: "Yes. The extra Drive only adds squashing, not loudness.",
         steps: ["Turn Drive down slowly while watching Short-term in the footer.",
                 "Stop where Short-term starts to drop, then go back up about 0.5 dB.",

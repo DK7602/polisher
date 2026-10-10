@@ -315,6 +315,13 @@ TargetResult findDriveForTarget (const AudioClip& clip, double targetLufs, Limit
 TargetResult findDriveForTarget (const AudioClip& clip, double targetLufs, MasterChainParams base,
                                  double toleranceLu, double maxDriveDb)
 {
+    if (base.trimDb != 0.0)
+    {
+        // Input Trim comes first in the chain: apply it once, then search on the trimmed audio.
+        const AudioClip trimmed = withGain (clip, std::clamp (base.trimDb, kMinTrimDb, 0.0));
+        base.trimDb = 0.0;
+        return findDriveForTarget (trimmed, targetLufs, base, toleranceLu, maxDriveDb);
+    }
     if (! eqIsFlat (base.eq) || ! bassIsNeutral (base.bass))
     {
         // EQ and Bass Control first, once; then search the rest of the chain on that audio.

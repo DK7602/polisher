@@ -366,6 +366,29 @@ TEST_CASE ("Plug-in: Input Trim turns the mix down before the chain, and A ignor
     CHECK (errA < 1.0e-6);
 }
 
+TEST_CASE ("Plug-in: a state saved before a control existed puts that control back to its default", "[plugin]")
+{
+    // A v0.13 preset has no Input Trim. Loaded into a running Polisher whose trim Auto-Master set to
+    // -6.6 dB, the trim must go back to 0 dB, not stay (the master would play 6.6 dB quieter). JUCE's
+    // parameter tree does this (a control missing from the state gets its default); this pins it.
+    auto old = makeProcessor (48000.0, 512, false);
+    juce::MemoryBlock state;
+    old->getStateInformation (state);
+    auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+    REQUIRE (xml != nullptr);
+    for (auto* child : xml->getChildIterator())
+        if (child->getStringAttribute ("id") == "inTrim") { xml->removeChildElement (child, true); break; }
+    juce::MemoryBlock v013;
+    juce::AudioProcessor::copyXmlToBinary (*xml, v013);
+
+    auto p = makeProcessor (48000.0, 512, false);
+    set (*p, "inTrim", -6.6f);
+    set (*p, "drive", 3.0f);
+    p->setStateInformation (v013.getData(), (int) v013.getSize());
+    CHECK (p->parameters.getRawParameterValue ("inTrim")->load() == 0.0f);
+    CHECK (p->parameters.getRawParameterValue ("drive")->load() == 0.0f);    // from the preset
+}
+
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:
 // a function-local static would be torn down after JUCE's own shutdown objects and crash on exit.
 int main (int argc, char* argv[])

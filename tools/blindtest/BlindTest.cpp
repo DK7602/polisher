@@ -196,8 +196,11 @@ int run (const juce::StringArray& args)
 // On Windows the command line arrives in UTF-16 through wmain, so song titles with accents, curly quotes
 // or any other script open fine (main's argv would be in the ANSI code page).
 #if JUCE_WINDOWS
+extern "C" __declspec (dllimport) int __stdcall SetConsoleOutputCP (unsigned int);
+
 int wmain (int argc, wchar_t* argv[])
 {
+    SetConsoleOutputCP (65001);   // UTF-8, so the console prints accented file names correctly
     juce::StringArray args;
     for (int i = 1; i < argc; ++i)
         args.add (juce::String (argv[i]));

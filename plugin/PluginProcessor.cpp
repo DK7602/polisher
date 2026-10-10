@@ -199,7 +199,10 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     const int channels = juce::jmax (1, getTotalNumOutputChannels());
     // Every module gets its current settings before it is prepared, so it starts in the saved state.
     // Set afterwards, Bass Control, Dynamics, the Imager and the spectral stage would fade in from
-    // neutral over the first ~0.3 s of playback (and of an export that starts at bar 1).
+    // neutral over the first ~0.3 s of playback (and of an export that starts at bar 1). The EQ is handed
+    // its settings even when they equal its defaults (updateLimiterParams skips unchanged ones), so it
+    // knows it is configured and glides on the next change instead of jumping.
+    eq.setParams (eq.getParams());
     updateLimiterParams();
     limiter.prepare (sampleRate, channels);
     clipper.prepare (channels);

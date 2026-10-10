@@ -124,6 +124,8 @@ constexpr double kNotAMixExcessDb = 14.0;
 // When a mix is louder than the target, Input Trim turns it this much further down than the bare
 // minimum, so Drive has a little to do and the target is still reached after the modules re-adapt.
 constexpr double kTrimMarginDb = 0.5;
+// How close to the target counts as landing on it.
+constexpr double kTargetToleranceLu = 0.3;
 
 struct IntensityRules
 {
@@ -1014,7 +1016,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     chain.clipper = rest.clipper;
     r.output = out;
     r.loudnessCostDb = cost;
-    r.reachedTarget = std::abs (out.integratedLufs - r.targetLufs) <= 0.3;
+    r.reachedTarget = std::abs (out.integratedLufs - r.targetLufs) <= kTargetToleranceLu;
 
     // Explain the clipper with the peak work it actually does at this drive (on the recurring peaks).
     const double peakIn = recurring + drive;
@@ -1054,12 +1056,17 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                            "\nSTEP: Run Auto-Master again; the master comes out the same.");
 
     std::string driveWhy;
-    if (found.driveDb < 0.0 && drive == 0.0)
-    {
+    // Drive can't go below 0 dB: when the target needs less than that by more than the landing tolerance,
+    // the caller turns the input down (Input Trim) and decides everything again.
+    if (found.driveDb < -kTargetToleranceLu && drive == 0.0)
         wantTrimDb = found.driveDb - kTrimMarginDb;
-        driveWhy = "Your mix is already louder (" + num (arrivesLufs) + " LUFS) than the " + std::string (targetName (s.target)) +
-                   " target, even with Input Trim at its " + num (kMinTrimDb) + " dB limit. Turn the mix down before Polisher.";
-    }
+    if (found.driveDb < 0.0 && drive == 0.0 && ! r.reachedTarget)
+        driveWhy = trimDb <= kMinTrimDb
+            ? "Your mix arrives at " + num (arrivesLufs) + " LUFS, so loud that even with Input Trim at its " + num (kMinTrimDb) +
+              " dB limit the master lands at " + num (out.integratedLufs) + " LUFS, above the " + std::string (targetName (s.target)) +
+              " target. Turn the mix down before Polisher."
+            : "With Drive at 0 dB the master lands at " + num (out.integratedLufs) + " LUFS, " + num (out.integratedLufs - r.targetLufs) +
+              " dB above the " + std::string (targetName (s.target)) + " target. Lower Input Trim by that much, or run Auto-Master again.";
     else if (r.reachedTarget)
         driveWhy = num (drive, true) + " dB of Drive lands this part at " + num (out.integratedLufs) + " LUFS, your " + targetName (s.target) +
                    " target. " + (cost < 0.3 ? std::string ("At this level the peaks barely need controlling, so the master stays completely clean.")
@@ -1082,8 +1089,11 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         driveWhy = "Even the maximum Drive only reaches " + num (out.integratedLufs) + " LUFS on this mix.";
     if (trimDb < 0.0)
         reason ("max", "Input Trim", num (trimDb, true) + " dB",
-                "Your mix arrives at " + num (arrivesLufs) + " LUFS, already louder than the " + std::string (targetName (s.target)) + " target (" +
-                num (r.targetLufs) + " LUFS). Input Trim turns it down " + num (-trimDb) + " dB before the whole chain, so the master lands on "
+                "Your mix arrives at " + num (arrivesLufs) + " LUFS" +
+                (arrivesLufs > r.targetLufs ? ", already louder than the " + std::string (targetName (s.target)) + " target (" + num (r.targetLufs) + " LUFS)"
+                                            : "; with this chain's EQ and make-up gain it would land above the " + std::string (targetName (s.target)) +
+                                              " target (" + num (r.targetLufs) + " LUFS) even at Drive 0") +
+                ". Drive can only push up, so Input Trim turns the mix down " + num (-trimDb) + " dB before the whole chain: the master lands on "
                 "the target instead of overshooting it, and every module works at the level it was set for.");
     reason ("max", "Drive", num (drive, true) + " dB", driveWhy);
     reason ("max", "Ceiling", num (chain.limiter.ceilingDbtp, false) + " dBTP",
@@ -1113,7 +1123,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     std::snprintf (head, sizeof head, "Listened to %.0f s of the loudest part. ", a.seconds);
     r.summary = head + std::string ("Your mix measured ") + num (arrivesLufs) + " LUFS with peaks at " +
                 num (arrivesPeak) + " dBTP. Settings: " + genre + ", " + rules.name + ", " + targetName (s.target) +
-                (trimDb < 0.0 ? ". It was louder than the target, so Input Trim turns it down " + num (-trimDb) + " dB first" : std::string()) +
+                (trimDb < 0.0 ? ". To land on the target, Input Trim turns it down " + num (-trimDb) + " dB first" : std::string()) +
                 ". The master now measures " + num (out.integratedLufs) + " LUFS with true peak " + num (out.truePeakDbtp) +
                 " dBTP. The full song will read about 1 LU lower than this loud section, which is normal.";
     // --- Stem EQ: suggest a vocal move, never apply it -------------------------------------------------
@@ -1160,12 +1170,12 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
     double want = 0.0, trim = 0.0;
     auto r = autoMasterAt (input, s, 0.0, want);
     const auto arriving = r.analysis.loudness;
-    for (int pass = 0; pass < 2 && r.ok && want < -0.05 && trim > kMinTrimDb; ++pass)
+    for (int pass = 0; pass < 2 && r.ok && want < 0.0 && trim > kMinTrimDb; ++pass)
     {
         trim = std::max (kMinTrimDb, std::round ((trim + want) * 10.0) / 10.0);
         r = autoMasterAt (input, s, trim, want);
     }
-    r.analysis.loudness = arriving;     // the report describes the mix as it arrives
+    r.analysis.loudness = arriving;     // the untrimmed pass's reading, as before Input Trim existed
     return r;
 }
 

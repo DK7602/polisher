@@ -345,6 +345,20 @@ TEST_CASE ("A mix already louder than the target is turned down with Input Trim 
     CHECK (r.summary.find ("Input Trim") != std::string::npos);
     CHECK (std::any_of (r.reasons.begin(), r.reasons.end(), [] (const auto& x) { return x.module == "max" && x.control == "Input Trim"; }));
 
+    // Punchy on the same brickwalled beat: the clipper's make-up moves with the trim, so the search
+    // settles a little differently, but the report must not claim the trim ran out (review finding).
+    AutoMasterSettings punchy = s;
+    punchy.intensity = Intensity::punchy;
+    const auto rp = autoMaster (mix, punchy);
+    checkWellFormed (rp);
+    CHECK (rp.reachedTarget);
+    for (const auto& x : rp.reasons)
+        if (x.module == "max")
+        {
+            INFO (x.control << ": " << x.why);
+            CHECK (x.why.find ("limit") == std::string::npos);
+        }
+
     // A mix below the target keeps Input Trim at 0 dB.
     const auto quiet = autoMaster (testsig::musicLike (48000.0, 12.0, -20.0), s);
     CHECK (quiet.chain.trimDb == 0.0);

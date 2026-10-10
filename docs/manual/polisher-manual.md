@@ -327,7 +327,7 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Problem | Likely cause | Fix |
 | --- | --- | --- |
 | Master is too loud or squashed even at Drive 0; input reads far above 0 dBTP | Your old chain (EQ, saturator, compressor, limiter) is still on Stereo Out before Polisher, so the mix arrives already limited and hot | Bypass every other insert on Stereo Out, keep Polisher in the last slot, and run Auto-Master again |
-| Input is hot even with nothing else on Stereo Out | The mix itself is too loud | Run Auto-Master: it turns the mix down with Input Trim when it's louder than your target. Or set Input Trim yourself (Maximizer screen) so the mix arrives around −17 LUFS with peaks near −1 dBTP |
+| Input is hot even with nothing else on Stereo Out | The mix itself is too loud | Run Auto-Master: it turns the mix down with Input Trim when it's louder than your target. Or lower Input Trim yourself (Maximizer screen) by about as many dB as the master's Integrated reads above your target |
 | Auto-Master says "This doesn't sound like a full mix" | Polisher is on one track, not Stereo Out | Remove it from the track, load it in Stereo Out's last insert slot (F3 > Stereo Out), play the chorus and run Auto-Master again |
 | Auto-Master doesn't finish or says it heard too little | The song stopped or was mostly silence | Keep the loudest part playing until it's done (it needs 12 s of music, at least 3 s) |
 | Master lands quieter than the target | Auto-Master protected the drums within the intensity's limit | Fine as it is. To go louder, choose Punchy, or tame the drum peaks in the mix |
