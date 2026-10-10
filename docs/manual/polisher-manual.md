@@ -109,7 +109,7 @@ Every warning in the report says **Do I need to fix it?** and gives numbered ste
 
 ## Every module and its controls
 
-Click a module in the **Signal Chain** (left) to open it. Each module has its own on/off switch, and every module is an exact pass-through at its neutral settings, so a module you don't use changes nothing.
+Click a module in the **Signal Chain** (left) to open it. Each module has its own on/off switch (the button at the top right of the module panel, for example **UNLIMITER ON**), and every module is an exact pass-through at its neutral settings, so a module you don't use changes nothing. The Maximizer's button is different: **BYPASS** there bypasses the whole chain, the same as **A**.
 
 ### 01 Unlimiter
 

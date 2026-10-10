@@ -1377,49 +1377,18 @@ function refreshAB() {
   $("btn-b").setAttribute("aria-pressed", String(!bypassed));
   refreshHeadButton();
 }
-// The button in the module header: global bypass for the Maximizer, power for the Soft Clipper.
+// The button in the module header: each module's own on/off switch; on the Maximizer it is the global
+// bypass (A). Every live module except the Maximizer must be listed here.
+const HEAD_POWER = { ul: [P.ulOn, "UNLIMITER"], eq: [P.eqOn, "EQ"], stem: [P.stemOn, "STEM EQ"], ts: [P.tsOn, "TONE STEADY"],
+                     rt: [P.rtOn, "TAMER"], bass: [P.bassOn, "BASS"], dyn: [P.dynOn, "DYNAMICS"], img: [P.imgOn, "IMAGER"],
+                     sat: [P.satOn, "SAT"], clip: [P.clipOn, "CLIPPER"] };
 function refreshHeadButton() {
   const bp = $("btn-bypass");
-  if (selected === "dyn" || selected === "sat") {
-    const on = !!(selected === "dyn" ? P.dynOn : P.satOn).getValue();
+  const power = HEAD_POWER[selected];
+  if (power) {
+    const on = !!power[0].getValue();
     bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
-    bp.textContent = (selected === "dyn" ? "DYNAMICS " : "SAT ") + (on ? "ON" : "OFF");
-    bp.setAttribute("aria-pressed", String(on));
-    $("knob-row").classList.toggle("dimmed", !on);
-  } else if (selected === "ts" || selected === "rt") {
-    const on = !!(selected === "ts" ? P.tsOn : P.rtOn).getValue();
-    bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
-    bp.textContent = (selected === "ts" ? "TONE STEADY " : "TAMER ") + (on ? "ON" : "OFF");
-    bp.setAttribute("aria-pressed", String(on));
-    $("knob-row").classList.toggle("dimmed", !on);
-  } else if (selected === "stem") {
-    const on = !!P.stemOn.getValue();
-    bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
-    bp.textContent = on ? "STEM EQ ON" : "STEM EQ OFF";
-    bp.setAttribute("aria-pressed", String(on));
-    $("knob-row").classList.toggle("dimmed", !on);
-  } else if (selected === "img") {
-    const on = !!P.imgOn.getValue();
-    bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
-    bp.textContent = on ? "IMAGER ON" : "IMAGER OFF";
-    bp.setAttribute("aria-pressed", String(on));
-    $("knob-row").classList.toggle("dimmed", !on);
-  } else if (selected === "bass") {
-    const on = !!P.bassOn.getValue();
-    bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
-    bp.textContent = on ? "BASS ON" : "BASS OFF";
-    bp.setAttribute("aria-pressed", String(on));
-    $("knob-row").classList.toggle("dimmed", !on);
-  } else if (selected === "eq") {
-    const on = eqEnabled();
-    bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
-    bp.textContent = on ? "EQ ON" : "EQ OFF";
-    bp.setAttribute("aria-pressed", String(on));
-    $("knob-row").classList.toggle("dimmed", !on);
-  } else if (selected === "clip") {
-    const on = !!P.clipOn.getValue();
-    bp.className = "pill bypass " + (on ? "pill-red" : "pill-blue");
-    bp.textContent = on ? "CLIPPER ON" : "CLIPPER OFF";
+    bp.textContent = power[1] + (on ? " ON" : " OFF");
     bp.setAttribute("aria-pressed", String(on));
     $("knob-row").classList.toggle("dimmed", !on);
   } else {
@@ -1433,29 +1402,13 @@ function refreshHeadButton() {
 $("btn-a").addEventListener("click", () => { P.bypass.setValue(true); onParamsChanged(); userEdited(); });
 $("btn-b").addEventListener("click", () => { P.bypass.setValue(false); onParamsChanged(); userEdited(); });
 $("btn-bypass").addEventListener("click", () => {
-  if (selected === "clip") P.clipOn.setValue(!P.clipOn.getValue());
-  else if (selected === "eq") P.eqOn.setValue(!P.eqOn.getValue());
-  else if (selected === "bass") P.bassOn.setValue(!P.bassOn.getValue());
-  else if (selected === "img") P.imgOn.setValue(!P.imgOn.getValue());
-  else if (selected === "dyn") P.dynOn.setValue(!P.dynOn.getValue());
-  else if (selected === "sat") P.satOn.setValue(!P.satOn.getValue());
-  else if (selected === "stem") P.stemOn.setValue(!P.stemOn.getValue());
-  else if (selected === "ts") P.tsOn.setValue(!P.tsOn.getValue());
-  else if (selected === "rt") P.rtOn.setValue(!P.rtOn.getValue());
-  else P.bypass.setValue(!P.bypass.getValue());
+  const state = HEAD_POWER[selected] ? HEAD_POWER[selected][0] : P.bypass;
+  state.setValue(!state.getValue());
   onParamsChanged();
   userEdited();
 });
 P.bypass.valueChangedEvent.addListener(onParamsChanged);
-P.clipOn.valueChangedEvent.addListener(onParamsChanged);
-P.eqOn.valueChangedEvent.addListener(onParamsChanged);
-P.bassOn.valueChangedEvent.addListener(onParamsChanged);
-P.imgOn.valueChangedEvent.addListener(onParamsChanged);
-P.dynOn.valueChangedEvent.addListener(onParamsChanged);
-P.satOn.valueChangedEvent.addListener(onParamsChanged);
-P.stemOn.valueChangedEvent.addListener(onParamsChanged);
-P.tsOn.valueChangedEvent.addListener(onParamsChanged);
-P.rtOn.valueChangedEvent.addListener(onParamsChanged);
+for (const [state] of Object.values(HEAD_POWER)) state.valueChangedEvent.addListener(onParamsChanged);
 for (const s of [...P.dynX, ...P.dynRatio, ...P.dynGain]) s.valueChangedEvent.addListener(() => { dynPicker.refresh(); updateLiveReadouts(); });
 
 function togglePopover(id) {
