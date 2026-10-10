@@ -16,6 +16,7 @@
 #include "ModuleParams.h"
 #include "SpectrumTap.h"
 #include "AutoMasterController.h"
+#include "ReferenceTrack.h"
 
 #include <array>
 #include <atomic>
@@ -109,8 +110,11 @@ public:
     /** Recent audio before (mix) and after (master) processing, for the spectrum display. */
     SpectrumTap inputTap, outputTap;
 
+    /** The reference song for Match ref (its measurements only), saved with the state. */
+    ReferenceTrack reference;
+
     /** Listens to the mix, decides every module's settings and explains them. */
-    AutoMasterController autoMaster { parameters };
+    AutoMasterController autoMaster { parameters, reference };
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 

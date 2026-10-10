@@ -122,6 +122,35 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                              {
                                  complete (audioProcessor.autoMaster.getReportJson());
                              })
+        // Match ref: pick a reference song (the dialog runs asynchronously; the song is then read and
+        // measured on a background thread), forget it, or fetch what's loaded.
+        .withNativeFunction ("loadReference", [this] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 auto folder = audioProcessor.reference.getLastFolder();
+                                 if (! folder.isDirectory())
+                                     folder = juce::File::getSpecialLocation (juce::File::userMusicDirectory);
+                                 referenceChooser = std::make_unique<juce::FileChooser> (
+                                     "Choose a reference song: a released track you want your master to sound like",
+                                     folder, "*.wav;*.wave;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+                                 juce::Component::SafePointer<PolisherWebEditor> safe (this);
+                                 referenceChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                                                [safe] (const juce::FileChooser& chooser)
+                                                                {
+                                                                    const auto file = chooser.getResult();
+                                                                    if (safe != nullptr && file.existsAsFile())
+                                                                        safe->audioProcessor.reference.load (file);
+                                                                });
+                                 complete (true);
+                             })
+        .withNativeFunction ("clearReference", [this] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 audioProcessor.reference.clear();
+                                 complete (true);
+                             })
+        .withNativeFunction ("getReference", [this] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 complete (audioProcessor.reference.getInfoJson());
+                             })
         .withResourceProvider ([] (const auto& url) { return getResource (url); });
 }
 
@@ -308,6 +337,8 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("amHearing",  am.isHearingAudio());
     frame->setProperty ("amUndo",     am.canUndo());
     frame->setProperty ("amReport",   am.getReportVersion());
+    frame->setProperty ("refVersion", audioProcessor.reference.getVersion());
+    frame->setProperty ("refState",   static_cast<int> (audioProcessor.reference.getState()));
     frame->setProperty ("corr",       roundTo (m.correlation.load(), 0.01f));
     juce::Array<juce::var> dynGr;
     for (size_t b = 0; b < dynHold.size(); ++b)

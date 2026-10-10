@@ -21,7 +21,8 @@ add_executable(polisher_tests
     test_stemeq.cpp
     test_spectral.cpp
     test_unlimiter.cpp
-    test_validation.cpp)
+    test_validation.cpp
+    test_reference.cpp)
 
 target_link_libraries(polisher_tests PRIVATE polisher_dsp Catch2::Catch2WithMain)
 set_target_properties(polisher_tests PROPERTIES FOLDER "Polisher")
@@ -36,17 +37,20 @@ if(POLISHER_BUILD_PLUGIN)
     target_sources(polisher_plugin_tests PRIVATE
         plugin/test_plugin.cpp
         ${CMAKE_SOURCE_DIR}/plugin/PluginProcessor.cpp
-        ${CMAKE_SOURCE_DIR}/plugin/AutoMasterController.cpp)
+        ${CMAKE_SOURCE_DIR}/plugin/AutoMasterController.cpp
+        ${CMAKE_SOURCE_DIR}/plugin/ReferenceTrack.cpp)
     target_include_directories(polisher_plugin_tests PRIVATE ${CMAKE_SOURCE_DIR}/plugin)
     target_compile_definitions(polisher_plugin_tests PRIVATE
         POLISHER_HEADLESS=1
         JucePlugin_Name="Polisher"
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
+        JUCE_USE_MP3AUDIOFORMAT=1
         JUCE_DISPLAY_SPLASH_SCREEN=0)
     target_link_libraries(polisher_plugin_tests PRIVATE
         polisher_dsp
         juce::juce_audio_processors
+        juce::juce_audio_formats
         Catch2::Catch2
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)

@@ -478,6 +478,9 @@ void PolisherAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     if (auto xml = parameters.copyState().createXml())
     {
         xml->setAttribute ("amReport", autoMaster.getReportForSaving());
+        // Match ref: the reference song's measurements and name (no audio). Absent when none is loaded.
+        if (const auto ref = reference.getJsonForSaving(); ref.isNotEmpty())
+            xml->setAttribute ("amReference", ref);
         copyXmlToBinary (*xml, destData);
     }
 }
@@ -488,9 +491,12 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
         if (xml->hasTagName (parameters.state.getType()))
         {
             const auto savedReport = xml->getStringAttribute ("amReport");
+            const auto savedReference = xml->getStringAttribute ("amReference");   // "" in states from before Match ref
             xml->removeAttribute ("amReport");
+            xml->removeAttribute ("amReference");
             parameters.replaceState (juce::ValueTree::fromXml (*xml));
             autoMaster.onStateRestored (savedReport);
+            reference.restoreFromJson (savedReference);
         }
 }
 

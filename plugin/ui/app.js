@@ -82,6 +82,9 @@ const amStart = Juce.getNativeFunction("startAutoMaster");
 const amCancel = Juce.getNativeFunction("cancelAutoMaster");
 const amUndo = Juce.getNativeFunction("undoAutoMaster");
 const amGetReport = Juce.getNativeFunction("getAutoMasterReport");
+const refLoad = Juce.getNativeFunction("loadReference");
+const refClear = Juce.getNativeFunction("clearReference");
+const refGet = Juce.getNativeFunction("getReference");
 
 function scaledToNorm(state, v) {
   const { start, end, skew } = state.properties;
@@ -96,8 +99,10 @@ const M = {
   inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
   amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0, matchDb: 0, corr: 1,
   dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
-  ulBoost: 0, ulSquash: 0,
+  ulBoost: 0, ulSquash: 0, refVersion: 0, refState: 0,
 };
+// Match ref: the loaded reference song (its measurements; the plug-in keeps no audio).
+let refInfo = { state: 0, message: "", profile: null };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
 let clipWindow = [];         // ~3 s of clipper peak-reduction samples
 let tameWindow = [];         // ~3 s of Sub Tame cuts
@@ -158,7 +163,7 @@ const modules = [
   { id: "max", name: "Maximizer", live: true },
 ];
 let selected = "max";
-let learnView = "module";      // "module" or "report" (the Auto-Master report)
+let learnView = "module";      // "module", "report" (the Auto-Master report) or "ref" (Match ref)
 let amReport = null;           // last Auto-Master report (parsed), or null
 
 // ---------------------------------------------------------------------------------------------
@@ -918,6 +923,7 @@ function renderLearn() {
   }
 
   if (learnView === "report" && amReport) { renderReport(body); return; }
+  if (learnView === "ref") { renderRefLearn(body); return; }
 
   const m = modules.find((x) => x.id === selected);
   if (!m.live) {
@@ -1015,7 +1021,7 @@ function renderLearn() {
         steps: ["Turn on MATCH and flip A/B, listening only to the kick and snare.",
                 "If they lost punch: turn Drive down 1–2 dB, or turn on the Soft Clipper (chain, left) so it takes some of the peaks.",
                 "Best fix, in the mix: put a clipper or limiter on the drum bus taking 2–3 dB off the hits, then run Auto-Master again."] }));
-  } else if (M.integrated > -99 && M.integrated > [-14, -9, -7][clamp(Math.round(P.amTarget.value * 2), 0, 2)] + 1) {
+  } else if (!refInfo.profile && M.integrated > -99 && M.integrated > [-14, -9, -7][clamp(Math.round(P.amTarget.value * 2), 0, 2)] + 1) {
     const tgt = [-14, -9, -7][clamp(Math.round(P.amTarget.value * 2), 0, 2)];
     body.appendChild(tip("HEADS UP",
       `Your master is at ${fmtNum(M.integrated)} LUFS, louder than your ${["Stream", "Loud", "Club"][clamp(Math.round(P.amTarget.value * 2), 0, 2)]} ${fmtNum(tgt, 0)} target. Spotify and YouTube play everything at about −14 LUFS, so extra loudness is turned down there: it buys density, not volume.`, false,
@@ -1687,8 +1693,9 @@ function refreshAmChoices() {
   $("genre-name").textContent = (P.amGenre.properties.choices[g]) || GENRES[g];
   for (const [rowId, st] of [["row-intensity", P.amIntensity], ["row-target", P.amTarget]]) {
     const idx = comboIndex(st);
+    const refSets = rowId === "row-target" && !!refInfo.profile;   // a reference sets the loudness instead
     $(rowId).querySelectorAll("button[data-i]").forEach((b) => {
-      const on = Number(b.dataset.i) === idx;
+      const on = Number(b.dataset.i) === idx && !refSets;
       b.className = "pill " + (on ? "pill-red" : "pill-blue");
       b.setAttribute("aria-pressed", String(on));
     });
@@ -1703,7 +1710,13 @@ $("genre-prev").addEventListener("click", () => stepGenre(-1));
 $("genre-next").addEventListener("click", () => stepGenre(1));
 for (const [rowId, st] of [["row-intensity", P.amIntensity], ["row-target", P.amTarget]])
   $(rowId).querySelectorAll("button[data-i]").forEach((b) =>
-    b.addEventListener("click", () => { st.setChoiceIndex(Number(b.dataset.i)); refreshAmChoices(); }));
+    b.addEventListener("click", () => {
+      if (rowId === "row-target" && refInfo.profile) {
+        toast(`Auto-Master is matching \u201c${refInfo.profile.name}\u201d, so its loudness is the target. Press \u00d7 on the reference to use ${b.textContent} instead.`);
+        return;
+      }
+      st.setChoiceIndex(Number(b.dataset.i)); refreshAmChoices();
+    }));
 for (const st of [P.amGenre, P.amIntensity, P.amTarget]) {
   st.valueChangedEvent.addListener(refreshAmChoices);
   st.propertiesChangedEvent.addListener(refreshAmChoices);
@@ -1775,6 +1788,176 @@ function refreshAllCells() {
   onParamsChanged();
 }
 
+// ---------------------------------------------------------------------------------------------
+// Match ref: load a reference song, show its tone on the spectrum, compare it in Learn.
+let refSeenVersion = -1;
+let refRequested = false;      // a load is running (so its result is announced when it ends)
+let refClicked = 0;            // when the pill was last clicked (the dialog may still be open, or was cancelled)
+let refOffset = null;          // dB the reference curve is moved by: loudness playing now minus the reference's
+const mmss = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
+const signed = (v, digits = 1) => `${v > 0.049 ? "+" : ""}${fmtNum(v, digits)}`;
+
+async function fetchReference() {
+  let text = "";
+  try { text = await refGet(); } catch (e) { text = ""; }
+  let info = null;
+  try { info = text ? JSON.parse(text) : null; } catch (e) { info = null; }
+  const before = refInfo.profile && refInfo.profile.name;
+  refInfo = { state: info ? info.state : 0, message: (info && info.message) || "", profile: (info && info.profile) || null };
+  if (!refInfo.profile || refInfo.profile.name !== before) refOffset = null;
+  if (refInfo.state === 1) refRequested = true;
+  // A load that ended before we saw it start still counts if the user picked a file a moment ago.
+  const justPicked = refClicked && performance.now() - refClicked < 600000 && (refInfo.message || (refInfo.profile && refInfo.profile.name !== before));
+  if ((refRequested || justPicked) && refInfo.state !== 1) {
+    refRequested = false;
+    refClicked = 0;
+    if (refInfo.message) toast(refInfo.message);
+    else if (refInfo.profile) {
+      learnView = "ref";
+      toast(`Reference loaded: “${refInfo.profile.name}”. Play the loudest part of your song and press Auto-Master.`);
+    }
+  }
+  refreshRefPill();
+  refreshAmChoices();
+  drawRefCurve();
+  renderLearn();
+}
+function refreshRefPill() {
+  const btn = $("btn-ref"), p = refInfo.profile;
+  const loading = M.refState === 1 || refInfo.state === 1;
+  btn.textContent = loading ? "Loading…" : p ? p.name : "Match ref";
+  btn.className = "pill ref-pill " + (p && !loading ? "pill-red" : "pill-blue");
+  btn.setAttribute("aria-pressed", String(!!p));
+  btn.title = loading ? "Reading the reference song…"
+    : p ? `Matching “${p.name}” (${fmtNum(p.lufs)} LUFS in its loudest part). Click to load a different song; × goes back to the genre targets.`
+        : "Match a reference: load a released song you want your master to sound like";
+  $("btn-ref-clear").hidden = !p || loading;
+  $("row-target").classList.toggle("ref-active", !!p);
+}
+// The reference's average tone, moved to the loudness of what's playing now, so the two compare like for like.
+function drawRefCurve() {
+  const p = refInfo.profile, path = $("sp-ref");
+  const has = !!(p && p.displayDb && p.displayDb.length);
+  $("legend-ref").hidden = !has;
+  if (!has) { path.setAttribute("d", ""); return; }
+  if (M.shortTerm > -50) {
+    const want = M.shortTerm - p.lufs;
+    refOffset = refOffset === null ? want : refOffset + 0.05 * (want - refOffset);   // ~1 s glide
+  }
+  const off = refOffset === null ? 0 : refOffset;
+  path.setAttribute("d", spectrumPath(p.displayDb.map((v) => v + off)));
+}
+$("btn-ref").addEventListener("click", async () => {
+  if (M.refState === 1) return;
+  refClicked = performance.now();
+  learnView = "ref";
+  renderLearn();
+  try { await refLoad(); } catch (e) { refClicked = 0; }
+});
+$("btn-ref-clear").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const name = refInfo.profile ? refInfo.profile.name : "";
+  try { await refClear(); } catch (err) { /* the next meter frame shows the state either way */ }
+  toast(`Cleared “${name}”. Auto-Master aims for the genre and the target again.`);
+});
+
+const CMP_BANDS = ["Low End", "Bass", "Low Mid", "Mid", "Upper Mid", "Presence", "Air"];
+// A compact table: the reference, your mix (as Auto-Master heard it) and the master.
+function refCompare(r) {
+  const ref = r.reference, mix = r.mixStats, mas = r.masterStats;
+  const wrap = document.createElement("div");
+  const table = document.createElement("table");
+  table.className = "l-cmp";
+  const add = (cells, header) => {
+    const tr = document.createElement("tr");
+    cells.forEach(([text, cls], i) => {
+      const c = document.createElement(header ? "th" : "td");
+      c.textContent = text;
+      if (cls) c.className = cls;
+      if (header && i === 0) c.style.textAlign = "left";
+      tr.appendChild(c);
+    });
+    table.appendChild(tr);
+  };
+  // Master column: green when it's within reach of the reference, red when it's still far off.
+  const closeness = (v, refV, near, far) => (Math.abs(v - refV) <= near ? "near" : Math.abs(v - refV) >= far ? "far" : "");
+  const side = (db) => (db <= -40 ? "mono" : fmtNum(db));
+  add([["", ""], ["REF", ""], ["MIX", ""], ["MASTER", ""]], true);
+  add([["Loudness (LUFS)"], [fmtNum(ref.lufs), "ref"], [fmtNum(r.inputLufs)], [fmtNum(r.outputLufs), closeness(r.outputLufs, ref.lufs, 1, 2.5)]]);
+  add([["Deep sub vs bass (dB)"], [signed(ref.subVsBass), "ref"], [signed(mix.subVsBass)], [signed(mas.subVsBass), closeness(mas.subVsBass, ref.subVsBass, 1.5, 3)]]);
+  add([["Bass stereo"], [`${Math.round(ref.bassWidth)} %`, "ref"], [`${Math.round(mix.bassWidth)} %`], [`${Math.round(mas.bassWidth)} %`, ""]]);
+  add([["Mids width (dB)"], [side(ref.midSide), "ref"], [side(mix.midSide)], [side(mas.midSide), closeness(mas.midSide, ref.midSide, 1.5, 4)]]);
+  add([["Highs width (dB)"], [side(ref.highSide), "ref"], [side(mix.highSide)], [side(mas.highSide), closeness(mas.highSide, ref.highSide, 1.5, 4)]]);
+  wrap.appendChild(table);
+  const tone = document.createElement("table");
+  tone.className = "l-cmp";
+  tone.style.marginTop = "8px";
+  const tr0 = document.createElement("tr");
+  for (const [i, t] of ["TONE vs REF (dB)", "MIX", "MASTER"].entries()) { const th = document.createElement("th"); th.textContent = t; if (i === 0) th.style.textAlign = "left"; tr0.appendChild(th); }
+  tone.appendChild(tr0);
+  CMP_BANDS.forEach((name, b) => {
+    const dm = mix.bandDb[b] - ref.bandDb[b], dM = mas.bandDb[b] - ref.bandDb[b];
+    const tr = document.createElement("tr");
+    for (const [text, cls] of [[name, ""], [signed(dm), ""], [signed(dM), Math.abs(dM) <= 1.5 ? "near" : Math.abs(dM) >= 4 ? "far" : ""]]) {
+      const td = document.createElement("td"); td.textContent = text; if (cls) td.className = cls; tr.appendChild(td);
+    }
+    tone.appendChild(tr);
+  });
+  wrap.appendChild(tone);
+  wrap.appendChild(para("l-cmp-note", "Tone: how much more (+) or less (−) of each range than the reference, all at the same loudness. "
+    + "Width: the stereo part against the center (closer to 0 = wider). Deep sub vs bass: 30–60 Hz against 60–120 Hz (higher = the 808 reaches lower). "
+    + "Auto-Master closes part of each gap on purpose: copying a reference exactly would fight your own mix."));
+  return wrap;
+}
+
+function howToUseRef() {
+  const d = tip("HOW TO USE IT", "A reference is a released song you want your master to sound like.", true);
+  const ol = document.createElement("ol");
+  ol.className = "l-steps";
+  for (const st of ["Pick a commercial trap song with the sound you want: the released WAV, FLAC or MP3 (a good-quality file, not a phone recording).",
+                    "Click Match ref (next to the targets) and choose the file. Polisher measures its loudest part in a few seconds.",
+                    "Play the loudest part of YOUR song (the chorus or the drop) and press Auto-Master.",
+                    "Turn on MATCH and A/B. The dashed line on the spectrum is the reference's tone; the × on the pill goes back to the genre targets."]) {
+    const li = document.createElement("li"); li.textContent = st; ol.appendChild(li);
+  }
+  d.appendChild(ol);
+  return d;
+}
+
+function renderRefLearn(body) {
+  const p = refInfo.profile;
+  const link = document.createElement("button");
+  link.type = "button";
+  link.className = "l-link";
+  const toReport = !!(amReport && amReport.ok);
+  link.textContent = toReport ? "← AUTO-MASTER REPORT" : "← BACK";
+  link.addEventListener("click", () => { learnView = toReport ? "report" : "module"; renderLearn(); });
+  body.appendChild(link);
+  body.appendChild(head("MATCH A REFERENCE"));
+  if (M.refState === 1 || refInfo.state === 1) {
+    body.appendChild(para("l-p", "Reading the song and measuring its loudest part… This takes a few seconds (longer for a long MP3). Your music keeps playing."));
+    body.appendChild(howToUseRef());
+    return;
+  }
+  if (!p) {
+    body.appendChild(para("l-p", "Load a released song you like the sound of, and Auto-Master aims for its tone, loudness, stereo width and low end instead of the typical balance of your genre."));
+    body.appendChild(howToUseRef());
+    return;
+  }
+  body.appendChild(para("l-p", `Matching “${p.name}”. Polisher measured its loudest ${Math.round(p.partSeconds)} s (from ${mmss(p.startSeconds)}): ${fmtNum(p.lufs)} LUFS, the whole song ${fmtNum(p.trackLufs)} LUFS. Only these measurements are saved with your project, not the song.`));
+  body.appendChild(item("What Auto-Master takes from it", null,
+    "The tone (all seven EQ bands), the loudness (kept between −16 and −6 LUFS), the stereo width of the mids and highs, and the low end: how stereo the bass is and how deep the 808 reaches. Your genre still decides compression, saturation, clipping and punch, which a reference can't show."));
+  const r = amReport;
+  if (r && r.ok && r.reference && r.reference.name === p.name && r.mixStats && r.masterStats) {
+    body.appendChild(sep());
+    body.appendChild(head("REFERENCE vs YOUR MIX vs MASTER"));
+    body.appendChild(refCompare(r));
+  } else {
+    body.appendChild(tip("COMPARE IT", "Play the loudest part of your song and press Auto-Master. It aims for this reference, and this panel then compares the reference, your mix and the master side by side.", true));
+  }
+  body.appendChild(howToUseRef());
+}
+
 const AM_MODULES = [["ul", "UNLIMITER"], ["eq", "TONAL EQ"], ["stem", "STEM EQ"], ["ts", "TONE STEADY"], ["rt", "RESONANCE TAMER"], ["bass", "BASS CONTROL"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
 function notesAsTips(body) {
   for (const raw of amReport.notes || []) {
@@ -1802,6 +1985,10 @@ function renderReport(body) {
   const meta = para("l-meta", `${r.genre} · ${r.intensity} · ${r.target}`);
   body.appendChild(meta);
   body.appendChild(para("l-p", r.summary));
+  if (r.reference && r.mixStats && r.masterStats) {
+    body.appendChild(head(`REFERENCE vs YOUR MIX vs MASTER`));
+    body.appendChild(refCompare(r));
+  }
   notesAsTips(body);
   for (const [id, label] of AM_MODULES) {
     const list = (r.reasons || []).filter((x) => x.module === id);
@@ -2086,6 +2273,8 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
     fetchReport(!first);
   }
   if (wasAm !== M.amState || M.amState === 1) updateAmButton();
+  if (M.refVersion !== refSeenVersion) { refSeenVersion = M.refVersion; fetchReference(); }
+  else if (M.refState === 1) refreshRefPill();
   if (P.levelMatch.getValue()) refreshMatch();
   watchLouderPart();
   if (M.momentary > -70 || M.peakL > -80) lastAudioTime = performance.now();
@@ -2101,6 +2290,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   updateOutputMeter();
   updateLiveReadouts();
   $("sp-mix").setAttribute("d", spectrumPath(M.mix));
+  drawRefCurve();
   const master = spectrumPath(M.master);
   $("sp-master").setAttribute("d", master);
   $("sp-master-glow").setAttribute("d", master);

@@ -59,6 +59,7 @@
                 <path id="eq-fill" fill="rgba(156,203,240,.13)" stroke="none"/>
                 <path id="eq-curve" fill="none" stroke="#9CCBF0" stroke-width="2.2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
               </g>
+              <path id="sp-ref" fill="none" stroke="#FFD27A" stroke-width="1.8" stroke-dasharray="6 4" opacity=".9" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
               <path id="sp-mix" fill="none" stroke="#FFFFFF" stroke-width="1.6" opacity=".85"/>
               <path id="sp-master-glow" fill="none" stroke="#FF2A35" stroke-width="7" opacity=".22" stroke-linejoin="round"/>
               <path id="sp-master" fill="none" stroke="#FF3B45" stroke-width="2.6" stroke-linejoin="round"/>
@@ -72,6 +73,7 @@
         <div class="legend">
           <span><i class="sw sw-white"></i>Your mix</span>
           <span><i class="sw sw-red"></i>Master</span>
+          <span id="legend-ref" hidden title="The reference's average tone, shown at the loudness of what's playing"><i class="sw sw-ref"></i>Reference</span>
           <span id="legend-eq" hidden><i class="sw sw-blue"></i>EQ curve (±12 dB)</span>
           <span class="dim">4.5 dB/oct tilt</span>
         </div>
@@ -133,7 +135,7 @@
         <div class="choice-row" id="row-intensity"><span class="choice-label">INTENSITY</span>
           <button type="button" class="pill pill-blue" data-i="0" title="Transparent: small EQ moves, no clipping, little limiting">Gentle</button><button type="button" class="pill pill-red" data-i="1" title="The usual choice: clear, loud and punchy">Balanced</button><button type="button" class="pill pill-blue" data-i="2" title="Louder and denser: more clipping and limiting allowed">Punchy</button></div>
         <div class="choice-row" id="row-target"><span class="choice-label">TARGET</span>
-          <button type="button" class="pill pill-blue" data-i="0" title="Spotify and YouTube play at about −14 LUFS, Apple Music at about −16">Stream −14</button><button type="button" class="pill pill-red" data-i="1" title="Competitive loudness for hip-hop, pop and EDM releases">Loud −9</button><button type="button" class="pill pill-blue" data-i="2" title="Very loud, for DJs and club play">Club −7</button><button type="button" class="pill pill-blue is-disabled" title="Match a reference song: coming in a later build" disabled>Match ref</button></div>
+          <button type="button" class="pill pill-blue" data-i="0" title="Spotify and YouTube play at about −14 LUFS, Apple Music at about −16">Stream −14</button><button type="button" class="pill pill-red" data-i="1" title="Competitive loudness for hip-hop, pop and EDM releases">Loud −9</button><button type="button" class="pill pill-blue" data-i="2" title="Very loud, for DJs and club play">Club −7</button><span class="ref-wrap"><button type="button" id="btn-ref" class="pill pill-blue ref-pill" title="Match a reference: load a released song you want your master to sound like">Match ref</button><button type="button" id="btn-ref-clear" class="ref-clear" aria-label="Clear the reference" title="Clear the reference: back to the genre targets" hidden>&times;</button></span></div>
       </div>
       <div class="grow"></div>
       <div class="meters" id="meters"></div>
@@ -157,6 +159,7 @@
     </div>
     <ul>
       <li><b>Auto-Master:</b> pick your genre (top), an intensity and a target, then play the loudest part of your song and press Auto-Master. It listens for 12 seconds, sets every module and explains why in Learn. The undo arrow puts everything back.</li>
+      <li><b>Match ref:</b> click <b>Match ref</b> (next to the targets) and load a released song you want to sound like (WAV, AIFF, FLAC or MP3). Polisher measures its loudest part; then play the loudest part of <i>your</i> song and press Auto-Master: it aims for the reference's tone, loudness, width and low end instead of the genre's. The dashed line on the spectrum is the reference's tone. The &times; on the pill clears it.</li>
       <li><b>Knobs:</b> drag up/down. Hold Shift for fine control. Double-click to reset. Mouse wheel works too.</li>
       <li><b>A / B:</b> A plays your original mix (bypassed), B plays the master. Turn on <b>MATCH</b> first and play B for about 10 seconds: the louder side is turned down so both play at the same loudness, and your original is kept from clipping. Then you compare tone and punch, not volume. On B the meters show the real master (on A, your original mix), never the matched level. MATCH switches itself off when you close Polisher and during a normal export; for a Realtime Export, switch MATCH off and make sure B is on first.</li>
       <li><b>Maximizer:</b> makes the master loud. Drive pushes the mix into the limiter; Ceiling is the highest peak allowed (−1 dBTP, or −1.5 for loud masters, leaves room for streaming's MP3/AAC copies). Input Trim turns a mix that is already too loud down before the whole chain. Watch Short-term while you turn Drive.</li>

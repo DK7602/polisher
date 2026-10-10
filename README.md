@@ -42,7 +42,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | Validation: independent 16x true-peak checks, plug-in-level tests (block sizes, offline, latency, allocation, state), sanitizers, UI test, blind-test tool | Done (v0.14) |
 | Stem EQ model v3: trained on all of MUSDB with augmentation and synthetic trap 808s; as good as v2 on ordinary songs, 3-5 dB better on the Bass knob when an 808 plays, beats the best fixed EQ on every test (tools/stem/README.md) | Done (v0.14.1) |
 | Module-by-module audit fixes: Imager and Mono Below keep panned sounds in place; click-free Clipper; no Tube thump; Punch ignores 808 notes; Sub Tame and Tone Steady leave the first notes and a drop alone; consistent, band-only Unlimiter that Auto-Master only keeps when the punch survives the Maximizer; matched-magnitude EQ with a subsonic filter and band-overlap-aware Auto-Master gains; Stem EQ at 176.4/192 kHz; host bypass = latency-matched A | Done (v0.15) |
-| Match ref (reference-track matching) | Planned |
+| Match ref: load a released song (WAV / AIFF / FLAC / MP3); its loudest 30 s is measured (tone, loudness, width, low end) and saved with the project (no audio); Auto-Master aims for it instead of the genre (part of the way, same limits), says honestly when it can't get as loud, and Learn compares reference / mix / master; dashed reference curve on the spectrum | Done (v0.15) |
 
 ## Validation
 

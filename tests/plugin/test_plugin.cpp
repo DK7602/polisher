@@ -435,6 +435,133 @@ TEST_CASE ("Plug-in: a state saved before a control existed puts that control ba
     CHECK (p->parameters.getRawParameterValue ("drive")->load() == 0.0f);    // from the preset
 }
 
+TEST_CASE ("Plug-in: the Match ref reference is saved with the project and comes back", "[plugin][reference]")
+{
+    // Only the measurements and the name are kept: a song with a non-ASCII name, measured once.
+    auto profile = polisher::analyseReference (testsig::musicLike (48000.0, 35.0, -12.0, 5));
+    REQUIRE (profile.valid);
+    profile.name = juce::String::fromUTF8 ("Beyonc\xC3\xA9 \xE2\x80\x93 Ref").toStdString();
+
+    auto a = makeProcessor (48000.0, 512, false);
+    a->reference.setProfile (profile);
+    CHECK (a->reference.getState() == ReferenceTrack::loaded);
+    juce::MemoryBlock state;
+    a->getStateInformation (state);
+    CHECK (state.getSize() < 64 * 1024);   // a summary, not audio
+
+    auto b = makeProcessor (48000.0, 512, false);
+    const int before = b->reference.getVersion();
+    b->setStateInformation (state.getData(), (int) state.getSize());
+    CHECK (b->reference.getVersion() > before);   // the editor sees the change
+    const auto got = b->reference.getProfile();
+    REQUIRE (got.valid);
+    // Numbers go through JSON text (15 significant digits): equal to far below anything audible.
+    auto same = [] (double x, double y) { return std::abs (x - y) <= 1.0e-9 * std::max (1.0, std::abs (y)); };
+    CHECK (got.name == profile.name);
+    CHECK (same (got.lufs, profile.lufs));
+    CHECK (same (got.trackLufs, profile.trackLufs));
+    for (size_t k = 0; k < profile.bandDb.size(); ++k)
+        CHECK (same (got.bandDb[k], profile.bandDb[k]));
+    REQUIRE (got.displayDb.size() == profile.displayDb.size());
+    for (size_t k = 0; k < profile.displayDb.size(); ++k)
+        CHECK (same (got.displayDb[k], profile.displayDb[k]));
+    CHECK (same (got.bassWidthPercent, profile.bassWidthPercent));
+    CHECK (same (got.midSideDb, profile.midSideDb));
+    CHECK (same (got.highSideDb, profile.highSideDb));
+    CHECK (same (got.subVsBassDb, profile.subVsBassDb));
+    CHECK (same (got.startSeconds, profile.startSeconds));
+
+    // A project or preset without a reference (also every state from before Match ref) clears it:
+    // Auto-Master goes back to the genre targets, and every control still loads.
+    auto none = makeProcessor (48000.0, 512, false);
+    set (*none, "drive", 4.0f);
+    juce::MemoryBlock plain;
+    none->getStateInformation (plain);
+    auto xml = juce::AudioProcessor::getXmlFromBinary (plain.getData(), (int) plain.getSize());
+    REQUIRE (xml != nullptr);
+    CHECK_FALSE (xml->hasAttribute ("amReference"));
+    b->setStateInformation (plain.getData(), (int) plain.getSize());
+    CHECK_FALSE (b->reference.getProfile().valid);
+    CHECK (b->reference.getState() == ReferenceTrack::empty);
+    CHECK (b->parameters.getRawParameterValue ("drive")->load() == 4.0f);
+
+    // A damaged or future-format reference is ignored rather than half-read.
+    xml->setAttribute ("amReference", "{\"format\": 9, \"name\": \"x\"}");
+    juce::MemoryBlock odd;
+    juce::AudioProcessor::copyXmlToBinary (*xml, odd);
+    b->setStateInformation (odd.getData(), (int) odd.getSize());
+    CHECK_FALSE (b->reference.getProfile().valid);
+}
+
+TEST_CASE ("Plug-in: a reference file is read in the background and its loudest part measured", "[plugin][reference]")
+{
+    // MP3 support is compiled in (JUCE_USE_MP3AUDIOFORMAT), next to WAV, AIFF and FLAC.
+    {
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+        for (const char* ext : { ".wav", ".aiff", ".flac", ".mp3" })
+        {
+            INFO (ext);
+            CHECK (formats.findFormatForFileExtension (ext) != nullptr);
+        }
+    }
+
+    // A 50 s song: quiet 15 s intro, loud 35 s, written as a 44.1 kHz 24-bit WAV.
+    const double sr = 44100.0;
+    auto song = testsig::musicLike (sr, 15.0, -34.0, 1);
+    const auto chorus = testsig::musicLike (sr, 35.0, -14.0, 2);
+    for (size_t c = 0; c < 2; ++c)
+        song.channels[c].insert (song.channels[c].end(), chorus.channels[c].begin(), chorus.channels[c].end());
+    const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("PolisherRefTest");
+    dir.createDirectory();
+    const auto file = dir.getChildFile ("My Reference.wav");
+    file.deleteFile();
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::OutputStream> out = file.createOutputStream();
+        REQUIRE (out != nullptr);
+        auto writer = wav.createWriterFor (out, juce::AudioFormatWriterOptions{}.withSampleRate (sr).withNumChannels (2).withBitsPerSample (24));
+        REQUIRE (writer != nullptr);
+        const float* ptrs[] = { song.channels[0].data(), song.channels[1].data() };
+        REQUIRE (writer->writeFromFloatArrays (ptrs, 2, song.numSamples()));
+    }
+
+    juce::String error;
+    const auto direct = ReferenceTrack::analyseFile (file, error);
+    INFO (error);
+    REQUIRE (direct.valid);
+    CHECK (direct.name == "My Reference");
+    CHECK (std::abs (direct.trackSeconds - 50.0) < 0.05);
+    CHECK (direct.startSeconds >= 15.0 - 0.1);                 // inside the loud part, not the intro
+    CHECK (direct.startSeconds <= 20.0 + 0.1);
+    CHECK (std::abs (direct.partSeconds - polisher::kReferencePartSeconds) < 0.01);
+    CHECK (std::abs (direct.lufs - polisher::measure (chorus).integratedLufs) < 0.5);
+
+    // The real thing: load() returns at once, the reading happens on a background thread.
+    ReferenceTrack ref;
+    ref.load (file);
+    for (int i = 0; i < 600 && ref.getState() == ReferenceTrack::loading; ++i)
+        juce::Thread::sleep (50);
+    REQUIRE (ref.getState() == ReferenceTrack::loaded);
+    CHECK (ref.getProfile().lufs == direct.lufs);              // the same result, every time
+    CHECK (ref.getLastFolder() == dir);
+
+    // A file it can't read leaves the loaded reference in place and says why in plain words.
+    const auto junk = dir.getChildFile ("notes.wav");
+    junk.replaceWithText ("not audio");
+    ref.load (junk);
+    for (int i = 0; i < 600 && ref.getState() == ReferenceTrack::loading; ++i)
+        juce::Thread::sleep (50);
+    CHECK (ref.getState() == ReferenceTrack::loaded);
+    CHECK (ref.getProfile().name == "My Reference");
+    CHECK (ref.getMessage().contains ("can't read"));
+
+    ref.clear();
+    CHECK (ref.getState() == ReferenceTrack::empty);
+    CHECK_FALSE (ref.getProfile().valid);
+    dir.deleteRecursively();
+}
+
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:
 // a function-local static would be torn down after JUCE's own shutdown objects and crash on exit.
 int main (int argc, char* argv[])
