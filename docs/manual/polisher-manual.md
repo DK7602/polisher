@@ -60,7 +60,7 @@ Leave headroom going in. A good input is about **−17 LUFS integrated with peak
 
 ### Exporting
 
-Export as usual with **File > Export > Audio Mixdown**. MATCH switches itself off during export, so your file is always the real master. Polisher reports its delay to Cubase, which lines everything up for you.
+Export as usual with **File > Export > Audio Mixdown**. MATCH switches itself off during a normal (offline) export, so your file is the real master. For a Realtime Export, switch MATCH off and make sure B is on before you start: in real time Polisher can't tell an export from playback. Polisher reports its delay to Cubase, which lines everything up for you.
 
 ## The signal chain
 
@@ -246,7 +246,7 @@ Shaves the tallest drum peaks before the Maximizer, so the limiter works less. T
 | --- | --- | --- |
 | Clip Level | −9 to +3 dB (0) | Measured from the Maximizer ceiling. Lower = more peaks shaved. |
 | Softness | hard–soft, 0–100 % (50) | A rounder knee sounds like punch, not distortion. |
-| Oversampling | 1x, 2x, 4x, 8x (4x) | Stops harsh aliasing. 4x is the mastering default; 8x is cleanest. |
+| Oversampling | 1x, 2x, 4x, 8x (4x) | Cuts down harsh aliasing. 4x is the mastering default; 8x is cleanest. |
 | Clipping meter | 0 to −6 dB | Peak reduction. Aim for 1–3 dB on the drums. |
 
 ### 11 Maximizer
@@ -257,7 +257,7 @@ The final true-peak limiter. It makes the master loud and guarantees nothing goe
 | --- | --- | --- |
 | Drive | 0–24 dB (0) | Pushes the mix into the limiter. More Drive = louder. |
 | Input Trim | −24–0 dB (0) | Turns your mix down **before the whole chain**. Drive only pushes up, so this is how Polisher masters a mix that already arrives louder than your target. Auto-Master sets it when needed; at 0 dB the mix goes in as it is. A (bypass) ignores it. |
-| Ceiling | −3 to 0 dBTP (−1) | The highest peak allowed, between samples too. −1 keeps streaming MP3/AAC from clipping. |
+| Ceiling | −3 to 0 dBTP (−1) | The highest peak allowed, between samples too. −1 suits most masters; loud ones (−9 LUFS and up) are safer at −1.5 to −2, because their MP3/AAC copies peak higher. |
 | Release | 10–1000 ms (120) | How fast the limiter lets go. Shorter = louder but can distort bass. |
 | Release Mode | Adaptive (default) or Fixed | Adaptive recovers fast after drum hits and slowly on 808s and pads, so it doesn't pump. |
 | GR | meter | Gain reduction. Under about 4 dB is comfortable. |
@@ -272,7 +272,7 @@ Louder always sounds better, so compare at equal loudness: turn on **MATCH**, th
 - With MATCH on, play **B for about 10 seconds** first. Polisher learns how much louder the master is, then turns the louder side **down** to match. It never turns anything up, so B can't go past its ceiling.
 - If your original mix peaks above 0 dBFS, both sides are turned down together so A doesn't clip your audio interface and sound worse than it is.
 - Now judge tone and punch, not volume. Ask: is B clearer, fuller, punchier? Did the kick or vocal lose anything?
-- The meters always show the **real master**, not the matched level.
+- On B the meters show the **real master**, never the matched level. On A they show your original mix.
 - MATCH switches itself off when you close Polisher and during export.
 
 On headphones, compare at a low, comfortable volume and take breaks. Ears tire fast, and tired ears like everything brighter.
@@ -350,7 +350,7 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 
 **Will Auto-Master change my Stem EQ?** Never. It may suggest a Vocals move with an APPLY button; you decide.
 
-**Why −1 dBTP for the ceiling?** Streaming services convert to MP3/AAC, which can push peaks up. −1 dBTP leaves room so the streamed version doesn't clip.
+**Why −1 dBTP for the ceiling?** Streaming services convert to MP3/AAC, which pushes peaks up, and the louder the master the more. −1 dBTP leaves enough room for most masters; Auto-Master uses −1.5 for Loud −9 (Spotify asks for −2 dBTP on masters louder than −14 LUFS). No ceiling makes clipping after conversion impossible, only unlikely.
 
 **Can I trust my headphones?** For tone and punch, yes, if you use MATCH and moderate volume. For loudness, trust the meters. Check on a phone and in a car too.
 

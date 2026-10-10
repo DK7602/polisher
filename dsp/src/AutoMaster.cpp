@@ -890,7 +890,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         const double got = harmonicsAt (sat.driveDb);
         const std::string modeName = sat.mode == SaturationMode::tube ? "Tube" : "Tape";
         reason ("sat", "Mode", modeName,
-                sat.mode == SaturationMode::tube ? "Tube adds mostly the 2nd harmonic: the 808 and vocals sound fuller and the bass shows up on phone speakers, which " + genre + " needs."
+                sat.mode == SaturationMode::tube ? "Tube leans on the 2nd harmonic: the 808 and vocals sound fuller and the bass shows up on phone speakers, which " + genre + " needs."
                                                  : "Tape rounds off the loudest moments and adds smooth odd harmonics: warmth without changing the character of " + genre + ".");
         reason ("sat", "Drive", num (sat.driveDb, true) + " dB",
                 "Set by measuring your mix: at this Drive the harmonics sit about " + num (-got) + " dB below your music" +
@@ -924,7 +924,9 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                                                     : (s.genre == Genre::trapHipHop || s.genre == Genre::edm) ? 1.0 : 0.0);
 
     // --- Maximizer ---------------------------------------------------------------------------------
-    chain.limiter.ceilingDbtp = s.target == LoudnessTarget::club ? -0.5 : -1.0;
+    // MP3/AAC/Ogg copies of a loud master peak higher than the master itself (measured: a −9 LUFS master
+    // at −1 dBTP decodes to about 0 dBTP as MP3 and +1 as Ogg), so the loud target gets more room.
+    chain.limiter.ceilingDbtp = s.target == LoudnessTarget::loud ? -1.5 : -1.0;
     chain.limiter.releaseMs = 120.0;
     chain.limiter.adaptiveRelease = true;
     const double ceiling = chain.limiter.ceilingDbtp;
@@ -1009,6 +1011,16 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         drive = lo;
         budgetLimited = true;
     }
+    // A clipper whose level the recurring peaks never reach would only be makeup gain (and its report
+    // would read "shaves about 0.0 dB"): put that gain into Drive instead and leave the clipper off.
+    // Below its threshold the clipper is exactly that gain, so the master stays the same.
+    if (rest.clipper.enabled && recurring + drive - (ceiling + clipLevel) < 0.3)
+    {
+        drive += rest.clipper.makeupDb;
+        rest.clipper.enabled = false;
+        clipLevel = 0.0;
+        setClipLevel (0.0);
+    }
     drive = std::round (drive * 10.0) / 10.0;
     out = evaluate (drive);
     cost = costOf (drive, out);
@@ -1026,24 +1038,26 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         const double limitDb = std::max (0.0, clipLevel);
         const bool drumsy = s.genre == Genre::trapHipHop || s.genre == Genre::edm || s.genre == Genre::pop || s.genre == Genre::rnb;
         reason ("clip", "Soft Clipper", "On",
-                "Your mix has " + num (plr) + " dB between its peaks and its average loudness" + std::string (plr > 14.0 ? " (sharp peaks)" : "") +
+                std::string (chain.unlimiter.amount > 0.0 ? "With the punch the Unlimiter puts back, your mix has " : "Your mix has ") +
+                num (plr) + " dB between its peaks and its average loudness" + std::string (plr > 14.0 ? " (sharp peaks)" : "") +
                 ". The clipper shaves about " + num (clipDb) + " dB off the " + (drumsy ? "drum hits" : "peaks") + " that keep coming back" +
                 (limitDb > 0.05 ? ", and the Maximizer handles the last " + num (limitDb) + " dB" : "") +
                 ". Sharing the work this way gets you loud without either one being heard.");
         reason ("clip", "Clip Level", num (clipLevel, true) + " dB",
                 clipLevel > 0.05 ? "Clipping starts " + num (clipLevel) + " dB above the ceiling, so only the biggest peaks are touched: about as much clipping as " +
                                    genre + " hides well (" + num (clipShare) + " dB)."
-                : clipLevel > -0.05 ? "Clipping starts right at the ceiling: the clipper takes the peaks and the Maximizer just polishes what's left."
+                : clipLevel > -0.05 ? "The clip level sits right at the ceiling (Softness starts rounding peaks a few dB below it): the clipper takes the peaks and the Maximizer just polishes what's left."
                 : "Clipping starts " + num (-clipLevel) + " dB below the ceiling for extra density (" + std::string (rules.name) + ", " +
                   targetName (s.target) + "); the level comes back up so peaks still use the full headroom.");
         reason ("clip", "Softness", "50 %", "A medium knee: rounds peaks gently, heard as punch rather than distortion.");
-        reason ("clip", "Oversampling", "4x", "Keeps the clipping clean (no harsh aliasing) at a sensible CPU cost.");
+        reason ("clip", "Oversampling", "4x", "Keeps the clipping clean (far less harsh aliasing) at a sensible CPU cost.");
     }
     else
     {
         reason ("clip", "Soft Clipper", "Off",
                 s.intensity == Intensity::gentle ? "Gentle leaves peak control to the Maximizer alone, for the most transparent sound."
                 : plr < 9.0 ? "Your mix is already dense (only " + num (plr) + " dB between peaks and average), so clipping would only add distortion."
+                : loudTarget || plr > 16.0 ? "At the Drive this target needs, no peak would reach the clip level, so the Maximizer handles the peaks alone."
                             : "For a streaming target the Maximizer alone reaches the level cleanly, so no clipping is needed.");
     }
 
@@ -1086,7 +1100,15 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                    (s.intensity == Intensity::punchy ? "To go louder, tame the drum peaks in the mix."
                                                      : "Choose Punchy to go louder, or tame the drum peaks in the mix.");
     else
+    {
         driveWhy = "Even the maximum Drive only reaches " + num (out.integratedLufs) + " LUFS on this mix.";
+        r.notes.push_back ("HEADS UP: your mix arrives very quiet (" + num (arrivesLufs) + " LUFS), so even the maximum Drive leaves the master at "
+                           + num (out.integratedLufs) + " LUFS, short of the " + std::string (targetName (s.target)) + " target (" + num (r.targetLufs) + " LUFS)."
+                           "\nNEED: Yes, if you want the target loudness."
+                           "\nSTEP: Turn the mix up before Polisher: raise the Stereo Out fader, or the track faders, by about "
+                           + num (std::ceil (r.targetLufs - out.integratedLufs), false, 0) + " dB."
+                           "\nSTEP: Run Auto-Master again.");
+    }
     if (trimDb < 0.0)
         reason ("max", "Input Trim", num (trimDb, true) + " dB",
                 "Your mix arrives at " + num (arrivesLufs) + " LUFS" +
@@ -1097,8 +1119,9 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                 "the target instead of overshooting it, and every module works at the level it was set for.");
     reason ("max", "Drive", num (drive, true) + " dB", driveWhy);
     reason ("max", "Ceiling", num (chain.limiter.ceilingDbtp, false) + " dBTP",
-            s.target == LoudnessTarget::club ? "Club masters go to DJs and playback systems, not streaming encoders, so a little more headroom is used."
-                                             : "Leaves room for the MP3/AAC conversion streaming services do, so the streamed version won't clip.");
+            s.target == LoudnessTarget::loud ? "Loud masters peak higher after the MP3/AAC conversion streaming services do, so the ceiling sits lower (Spotify asks for −2 dBTP on masters this loud). This makes clipping in the streamed version much less likely."
+            : s.target == LoudnessTarget::club ? "DJs mostly play MP3/AAC files, which peak higher than the master. −1 dBTP keeps that small without giving up loudness."
+                                               : "Leaves room for the MP3/AAC conversion streaming services do, so the streamed version is very unlikely to clip.");
     reason ("max", "Release", "120 ms adaptive", "Recovers fast after drum hits and slowly on sustained bass, so the master doesn't pump.");
 
     if ((budgetLimited || peakLimited) && s.intensity != Intensity::punchy)
@@ -1120,7 +1143,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
 
     // --- Summary -------------------------------------------------------------------------------------
     char head[512];
-    std::snprintf (head, sizeof head, "Listened to %.0f s of the loudest part. ", a.seconds);
+    std::snprintf (head, sizeof head, "Listened to %.0f s of your mix. ", a.seconds);
     r.summary = head + std::string ("Your mix measured ") + num (arrivesLufs) + " LUFS with peaks at " +
                 num (arrivesPeak) + " dBTP. Settings: " + genre + ", " + rules.name + ", " + targetName (s.target) +
                 (trimDb < 0.0 ? ". To land on the target, Input Trim turns it down " + num (-trimDb) + " dB first" : std::string()) +
@@ -1176,6 +1199,7 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
         r = autoMasterAt (input, s, trim, want);
     }
     r.analysis.loudness = arriving;     // the untrimmed pass's reading, as before Input Trim existed
+    r.capturedLufs = measure (input).integratedLufs;
     return r;
 }
 

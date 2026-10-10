@@ -257,3 +257,37 @@ TEST_CASE ("Saturation Drive is calibrated for a mix peaking near full scale", "
     CHECK (medium > -30.0);       // clearly audible
     CHECK (tubeLight > -45.0);
 }
+
+TEST_CASE ("Tube saturation engages without a low thump", "[saturation]")
+{
+    // The tube curve's DC is removed by a 1 Hz high-pass; started cold, that filter let the DC out as a
+    // slow thump (-20 dBFS here, decaying over ~0.2 s) every time Tube engaged. Averaged over whole 60 Hz
+    // cycles (which removes the tone and all its harmonics), the output must stay near zero once the
+    // 20 ms fade-in is over.
+    const double sr = 48000.0;
+    const int period = 800, n = static_cast<int> (sr * 2.0);
+    for (double drive : { 6.0, 12.0, 18.0 })
+    {
+        Saturation sat; sat.prepare (sr, 2);
+        SaturationParams p; p.mode = SaturationMode::tube; p.driveDb = 0.0; p.mix = 100.0;
+        sat.setParams (p); sat.reset();
+        std::vector<double> out (static_cast<size_t> (n));
+        for (int i = 0; i < n; ++i)
+        {
+            if (i == n / 4) { p.driveDb = drive; sat.setParams (p); }
+            const double x = 0.9 * std::sin (2.0 * std::numbers::pi * 60.0 * i / sr);
+            double frame[2] = { x, x };
+            sat.processFrame (frame, 2);
+            out[static_cast<size_t> (i)] = frame[0];
+        }
+        double sum = 0.0, worst = 0.0;
+        for (int i = 0; i < n; ++i)
+        {
+            sum += out[static_cast<size_t> (i)];
+            if (i >= period) sum -= out[static_cast<size_t> (i - period)];
+            if (i >= n / 4 + static_cast<int> (0.1 * sr)) worst = std::max (worst, std::abs (sum / period));
+        }
+        INFO ("Drive " << drive << ": thump " << 20.0 * std::log10 (worst + 1e-12) << " dBFS");
+        CHECK (20.0 * std::log10 (worst + 1e-12) < -40.0);
+    }
+}

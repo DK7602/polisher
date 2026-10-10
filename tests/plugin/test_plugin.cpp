@@ -198,6 +198,16 @@ TEST_CASE ("Plug-in: the latency it reports is the real delay, at every sample r
     }
 }
 
+TEST_CASE ("Plug-in: the host's bypass button is Polisher's latency-matched A, and the tail covers the delay", "[plugin]")
+{
+    auto p = makeProcessor (48000.0, 512, false);
+    auto* hostBypass = p->getBypassParameter();
+    REQUIRE (hostBypass != nullptr);
+    CHECK (hostBypass == p->parameters.getParameter ("bypass"));
+    // A host that stops calling silent plug-ins must wait for the delayed audio and the release.
+    CHECK (p->getTailLengthSeconds() > p->getLatencySamples() / 48000.0 + 0.1);
+}
+
 TEST_CASE ("Plug-in: changing sample rate starts clean (same as a fresh plug-in)", "[plugin]")
 {
     const auto mix44 = testsig::musicLike (44100.0, 4.0, -6.0, 11);

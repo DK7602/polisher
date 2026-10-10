@@ -45,7 +45,11 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
+    // ~45 ms of audio still sits in the look-ahead buffers when the input stops, plus the limiter's
+    // release: a host that suspends silent plug-ins must keep calling us until it has come out.
+    double getTailLengthSeconds() const override { return tailSeconds; }
+    // The host's bypass button is Polisher's own A: latency-matched (no ~45 ms jump) and MATCH-aware.
+    juce::AudioProcessorParameter* getBypassParameter() const override { return parameters.getParameter ("bypass"); }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -140,6 +144,7 @@ private:
     std::atomic<float>* releaseParam = nullptr;
     std::atomic<float>* adaptiveParam = nullptr;
     std::atomic<float>* bypassParam = nullptr;
+    double tailSeconds = 0.25;
     std::atomic<float>* autoResetParam = nullptr;
     std::atomic<float>* clipOnParam = nullptr;
     std::atomic<float>* clipLevelParam = nullptr;

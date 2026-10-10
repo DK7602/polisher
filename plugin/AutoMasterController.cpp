@@ -261,6 +261,7 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         doc->setProperty ("targetLufs", r.targetLufs);
         doc->setProperty ("reachedTarget", r.reachedTarget);
         doc->setProperty ("inputLufs", r.analysis.loudness.integratedLufs);
+        doc->setProperty ("capturedLufs", r.capturedLufs);
         doc->setProperty ("bassWidth", r.analysis.bassWidthPercent);
     }
 

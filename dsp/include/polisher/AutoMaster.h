@@ -80,6 +80,7 @@ struct AutoMasterResult
     StemEQParams stemSuggestion;                // the full Stem EQ setting to offer (the user's, plus the move)
     LoudnessStats output;                       // what the master measures with them
     double targetLufs = 0.0;
+    double capturedLufs = -100.0;               // the 12 s it heard, as it arrived (before Input Trim and every module)
     double loudnessCostDb = 0.0;                // loudness given up to peak control (>= 0)
     bool reachedTarget = false;
 };

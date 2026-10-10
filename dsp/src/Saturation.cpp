@@ -58,6 +58,7 @@ void Saturation::prepare (double sampleRate, int numChannels)
     glideCoeff = 1.0 - std::exp (-1.0 / (0.030 * sampleRate));
     mixCoeff = 1.0 - std::exp (-4.0 / (0.020 * sampleRate));   // settles within ~20 ms
     hpCoeff = std::exp (-2.0 * std::numbers::pi * 1.0 / sampleRate);
+    dcWindow = static_cast<int> (0.05 * sampleRate);   // two cycles of the lowest 808 note
     reset();
 }
 
@@ -68,8 +69,9 @@ void Saturation::reset() noexcept
         for (auto& s : ch.stages) s.reset();
         std::fill (ch.dry.begin(), ch.dry.end(), 0.0);
         ch.dryPos = 0;
-        ch.hpX = ch.hpY = 0.0;
+        ch.hpX = ch.hpY = ch.dcSum = 0.0;
     }
+    dcCount = 0;
     bendTarget = std::pow (10.0, (kHeadroomDb - std::clamp (params.driveDb, 0.0, kMaxDriveDb)) / 20.0);
     bend = bendTarget;
     // Start fully in the requested state (offline renders and a fresh prepare): no fade-in.
@@ -95,7 +97,7 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
             for (auto& ch : channelState)
             {
                 for (auto& st : ch.stages) st.reset();   // start clean next time
-                ch.hpX = ch.hpY = 0.0;
+                ch.hpX = ch.hpY = ch.dcSum = 0.0;
             }
         }
     }
@@ -104,7 +106,9 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
         if (! running)
         {
             running = true;
-            warmup = 2 * kLatency;   // let the filters fill before any of the wet path is heard
+            // Let the filters fill, then measure the tube curve's DC for dcWindow, before any of the wet
+            // path is heard.
+            warmup = 2 * kLatency + dcWindow;
             bend = bendTarget;
         }
         if (warmup > 0)
@@ -113,6 +117,13 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
             mix += (mixTarget - mix) * mixCoeff;
         bend += (bendTarget - bend) * glideCoeff;
     }
+
+    // The 1 Hz DC filter would need ~0.5 s to settle from cold and let the DC out as a slow thump;
+    // instead it starts from the DC measured during the warm-up, as if it had been running all along.
+    const bool measuringDc = ! idle && warmup > 0 && warmup <= dcWindow;
+    const bool seedDc = ! idle && warmup == 0 && dcCount > 0;
+    // A Hann-weighted mean, so the bass itself (whatever its period) hardly leaks into the DC estimate.
+    const double dcWeight = measuringDc ? std::pow (std::sin (std::numbers::pi * (dcCount + 0.5) / dcWindow), 2.0) : 0.0;
 
     for (int c = 0; c < nch; ++c)
     {
@@ -143,6 +154,13 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
         const double res = ch.stages[0].downsample (ra, rb);
         // Only the tube curve is asymmetric and makes DC; a 1 Hz high-pass removes it without
         // shifting the bass part of the residual against the dry signal.
+        if (measuringDc) ch.dcSum += dcWeight * res;
+        if (seedDc)
+        {
+            ch.hpX = ch.dcSum / (0.5 * dcCount);   // the Hann weights sum to half the window
+            ch.hpY = 0.0;
+            ch.dcSum = 0.0;
+        }
         if (params.mode == SaturationMode::tube)
         {
             ch.hpY = hpCoeff * (ch.hpY + res - ch.hpX);
@@ -158,6 +176,7 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
         sigEnergy += dry * dry;
         frame[c] = dry + mix * ch.hpY;
     }
+    dcCount = measuringDc ? dcCount + 1 : 0;
 }
 
 } // namespace polisher

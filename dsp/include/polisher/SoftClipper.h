@@ -52,7 +52,10 @@ private:
     down-sampling filter).
 
     Latency is constant (kLatency samples) for every oversampling setting and when disabled, so
-    changing settings never shifts the audio in time. prepare() allocates; process() does not. */
+    changing settings never shifts the audio in time. Every change is click-free: the oversampled
+    path always runs, on/off cross-fades it with the time-aligned dry signal, a new oversampling
+    setting warms up next to the old one and then cross-fades in, and Clip Level / ceiling moves
+    glide over about 20 ms. prepare() allocates; process() does not. */
 class SoftClipper
 {
 public:
@@ -66,7 +69,7 @@ public:
         return threshold * std::pow (10.0, -std::clamp (softness, 0.0, 1.0) * kKneeDepthDb / 20.0);
     }
 
-    void prepare (int numChannels);
+    void prepare (int numChannels, double sampleRate = 48000.0);
     void reset() noexcept;
     void setParams (const ClipperParams& p) noexcept;
     const ClipperParams& getParams() const noexcept { return params; }
@@ -104,18 +107,34 @@ private:
     struct Channel
     {
         // Stage 0 runs at 2x (steep, 95 taps), stages 1 and 2 at 4x and 8x (gentler, 33 taps).
-        std::array<HalfbandStage, 3> stages { HalfbandStage (95), HalfbandStage (33), HalfbandStage (33) };
-        std::vector<double> delay;   // compensation so every setting has kLatency
+        std::array<std::array<HalfbandStage, 3>, 2> cascades {{
+            { HalfbandStage (95), HalfbandStage (33), HalfbandStage (33) },
+            { HalfbandStage (95), HalfbandStage (33), HalfbandStage (33) } }};
+        // Delay lines: the dry signal (kLatency) and each cascade's padding up to kLatency.
+        std::array<std::vector<double>, 3> delay;
         int delayPos = 0;
     };
 
+    using Cascade = std::array<HalfbandStage, 3>;
+
     double clipSample (double x) noexcept;
-    double processOversampled (Channel& ch, double x, int stages) noexcept;
+    double processOversampled (Cascade& cascade, double x, int stages, int depth) noexcept;
+    static void resetCascade (Cascade& c) noexcept { for (auto& s : c) s.reset(); }
 
     ClipperParams params;
     int channelCount = 2;
-    int activeStages = 2;             // log2(oversampling)
-    double threshold = 1.0, makeup = 1.0;
+    double sampleRate = 48000.0;
+    // Two cascades per channel: [current] plays, [1 - current] warms up after an oversampling change.
+    int stagesOf[2] { 2, 2 };         // log2(oversampling) of each cascade
+    int current = 0;
+    bool switching = false;
+    int warmup = 0;                   // samples left before the new cascade starts to fade in
+    double switchMix = 0.0;           // 0 = old cascade, 1 = new
+    double threshold = 1.0, makeup = 1.0, kneeRatio = 0.5;           // targets
+    double thresholdNow = 1.0, makeupNow = 1.0, kneeRatioNow = 0.5;  // gliding values
+    double mix = 0.0;                 // 0 = dry, 1 = clipped (glides toward enabled)
+    double glideCoeff = 0.001, fadeStep = 0.001;
+    bool snap = true;                 // the first setParams after reset() jumps instead of gliding
     std::vector<Channel> channelState;
     double maxReductionRatio = 1.0;
 };

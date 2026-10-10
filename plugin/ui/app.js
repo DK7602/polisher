@@ -155,7 +155,7 @@ const modules = [
     what: "Shaves the tallest drum peaks before the limiter so the limiter works less. This is how loud modern masters stay punchy.",
     cells: [["Threshold", "dBFS", "0.0 dB", 1], ["Softness", "knee", "70%", .7], ["Oversample", "quality", "8×", .8]],
     controls: [["Threshold", "Where clipping starts. Lower = more peaks shaved."], ["Softness", "Rounded knee: heard as punch, not distortion."],
-               ["Oversampling", "Stops harsh aliasing that clipping otherwise adds."]] },
+               ["Oversampling", "Cuts down the harsh aliasing that clipping otherwise adds."]] },
   { id: "max", name: "Maximizer", live: true },
 ];
 let selected = "max";
@@ -594,7 +594,7 @@ function satModeCell() {
   function refresh() {
     const idx = satModeIndex();
     buttons.forEach((b, i) => { b.className = "pill " + (i === idx ? "pill-red" : "pill-blue"); b.setAttribute("aria-pressed", String(i === idx)); });
-    note.textContent = ["smooth · warm", "rich · 2nd harmonic", "firm · bright"][idx];
+    note.textContent = ["smooth · warm", "rich · warm low end", "firm · bright"][idx];
   }
   P.satMode.valueChangedEvent.addListener(() => { refresh(); onParamsChanged(); });
   P.satMode.propertiesChangedEvent.addListener(refresh);
@@ -700,7 +700,7 @@ function renderModule() {
   if (m.live) {
     row.classList.remove("soon");
     ({ ul: ulCells, clip: clipperCells, eq: eqCells, stem: stemCells, ts: tsCells, rt: rtCells, bass: bassCells, dyn: dynCells(), img: imagerCells, sat: satCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
-    $("module-note").textContent = "Live · drag · Shift = fine · double-click knob = reset · double-click number = type";
+    $("module-note").textContent = "Live · drag · dbl-click number = type";
     refreshHeadButton();
   } else {
     row.classList.add("soon");
@@ -906,6 +906,11 @@ function renderLearn() {
   const peakGr = maxGrRecent();
   const avgGr = avgGrRecent();
 
+  if (louderPartDb > 0)
+    body.appendChild(tip("LOUDER THAN WHAT AUTO-MASTER HEARD",
+      `This part of your mix is about ${fmtNum(louderPartDb, 1)} dB louder than the 12 seconds Auto-Master listened to, so here the master is louder and more limited than it planned.`, false,
+      { need: "Yes, if this is the chorus or drop: Auto-Master should hear the loudest part.",
+        steps: ["Start playback a few seconds before this part.", "Click Auto-Master again while it plays."] }));
   body.appendChild(head("WHAT'S HAPPENING"));
   if (bypassed) {
     body.appendChild(para("l-p", "You're on A: the original mix, untouched. Switch to B to hear the Maximizer."));
@@ -935,8 +940,8 @@ function renderLearn() {
       : `Turns your mix down ${fmtNum(-trim, 1)} dB before the whole chain (all 11 modules). Drive can only push up; this is how Polisher masters a mix that would otherwise land above your target. A (bypass) ignores it.`));
   body.appendChild(item("Ceiling", `${fmtNum(ceiling, 1)} dBTP`,
     `Nothing leaves Polisher above ${fmtNum(ceiling, 1)} dBTP, including peaks that fall between samples. ` +
-    (ceiling > -0.95 ? "Above −1 dBTP, the MP3/AAC versions streaming services make can clip. −1.0 is the safe choice."
-                     : "That leaves room for the MP3/AAC conversion streaming services do, so the streamed version won't clip.")));
+    (ceiling > -0.95 ? "Above −1 dBTP, the MP3/AAC versions streaming services make are likely to clip. −1.0 is the usual choice; for loud masters (around −9 LUFS and louder) −1.5 to −2 is safer."
+                     : "That leaves room for the MP3/AAC conversion streaming services do. The louder the master, the higher its MP3/AAC copy peaks: at −9 LUFS and louder, −1.5 to −2 dBTP keeps the streamed version clean.")));
   body.appendChild(item("Release", `${release} ms`,
     adaptive
       ? `Adaptive around ${release} ms: recovers quickly after single hits (drums) and moves slowly on sustained sound (808s, pads), so it doesn't pump.`
@@ -974,9 +979,6 @@ function renderLearn() {
   } else {
     body.appendChild(tip("SOUNDS HEALTHY", "Limiting is moderate, so transients should stay intact. When you A/B, turn on MATCH so B isn't simply louder: louder always sounds \u201cbetter\u201d.", true));
   }
-  const note = para("l-p", "When Auto-Master arrives, this panel will explain its own choices for every module.");
-  note.style.cssText = "font-size:12px;color:var(--dim)";
-  body.appendChild(note);
   liftWarning(body);
   prependAmSection(body, "max");
 }
@@ -1109,7 +1111,7 @@ function renderImagerLearn(body) {
   body.appendChild(item("Lows", `${lo} %`, lo < 100 ? "Narrower low end: tighter bass that translates to club systems and phones." : lo > 100 ? "Wider low end: rarely a good idea on a master; bass loses focus and power in mono." : "Unchanged. For mono bass use Mono Below in Bass Control."));
   body.appendChild(item("Mids", `${mi} %`, mi > 100 ? "Wider mids: guitars, synths and backing vocals spread out. Small moves only (up to about 120 %), or the lead vocal can feel detached." : mi < 100 ? "Narrower mids: a more focused, centered sound." : "Unchanged."));
   body.appendChild(item("Highs", `${hi} %`, hi > 100 ? "Wider highs: hi-hats, reverbs and ad-libs open up. This is where width sounds best." : hi < 100 ? "Narrower highs: a more focused top." : "Unchanged."));
-  body.appendChild(item("Correlation", `${corr < 0 ? MINUS : "+"}${Math.abs(corr).toFixed(2)}`, "How mono-safe the master is: +1 is mono, around +0.3 to +0.7 is a healthy wide mix, below 0 means parts cancel when played on one speaker (phones, club PAs)."));
+  body.appendChild(item("Correlation", `${corr < 0 ? MINUS : "+"}${Math.abs(corr).toFixed(2)}`, "How mono-safe the sound is right after the Imager (the modules after it barely change it): +1 is mono, around +0.3 to +0.7 is a healthy wide mix, below 0 means parts cancel when played on one speaker (phones, club PAs)."));
   if (on && !bypassed && corr < 0.1 && performance.now() - lastAudioTime < 1500)
     body.appendChild(tip("HEADS UP", "Correlation is near or below zero: parts of the mix will cancel on mono speakers (phones, club PAs).", false,
       { need: "Yes.", steps: ["Set Mids and Highs back to 100 %.", "If Correlation is still low, check the mix for stereo wideners or out-of-phase effects: press Cubase's Mono button on the Stereo Out and listen for parts that disappear."] }));
@@ -1173,7 +1175,7 @@ function renderSatLearn(body) {
   body.appendChild(sep());
   body.appendChild(head("WHAT EACH CONTROL IS DOING"));
   body.appendChild(item("Mode", mode, mode === "Tape" ? "Smooth and warm: rounds off the loudest moments and adds odd harmonics. The safest choice on a full mix."
-    : mode === "Tube" ? "Rich: mostly the 2nd harmonic, which makes bass and vocals sound fuller and helps an 808 show up on phone speakers."
+    : mode === "Tube" ? "Rich: leans on the 2nd harmonic at light Drive (at +18 the 3rd takes over), which makes bass and vocals sound fuller and helps an 808 show up on phone speakers."
     : "Firm and bright: a harder knee with more upper harmonics. Adds edge and bite; use less Drive."));
   body.appendChild(item("Drive", `+${drive.toFixed(1)} dB`, drive < 0.05 ? "Off." : drive <= 6 ? "Light: only the loudest moments are shaped." : drive <= 12 ? "Medium: the master gets noticeably denser." : "Heavy: obvious color. Pull Mix back if it gets harsh."));
   body.appendChild(item("Mix", `${Math.round(mix)} %`, mix >= 99.5 ? "Fully saturated signal." : `Blends ${Math.round(mix)} % of the harmonics in and keeps the rest clean, so transients stay sharp while the harmonics fill in underneath.`));
@@ -1182,7 +1184,7 @@ function renderSatLearn(body) {
     body.appendChild(tip("HEADS UP", "The harmonics are strong. That's a sound, not a mistake, but on most masters it reads as distortion.", false,
       { need: "Only if it sounds harsh or crunchy to you.", steps: ["Turn on MATCH and flip A/B.", "If B sounds distorted: lower Drive by 3 dB, or Mix to about 30 %.", "Aim for the Harmonics meter around −25 to −35 dB."] }));
   else
-    body.appendChild(tip("TRY THIS", "Tape, Drive +9 dB, Mix 50 %: a little density you feel more than hear (the Harmonics meter around −35 dB). For thin bass on phones, try Tube instead. Always compare with MATCH on.", true));
+    body.appendChild(tip("TRY THIS", "Tape, Drive +6 dB, Mix 50 %: a little density you feel more than hear (the Harmonics meter around −35 to −30 dB). For thin bass on phones, try Tube instead. Always compare with MATCH on.", true));
 }
 
 // Auto-Master's Stem EQ suggestion (never applied by Auto-Master itself): one click sets the knobs.
@@ -1332,6 +1334,23 @@ function renderRtLearn(body) {
 }
 
 // Warnings go right under "What's happening" so they're seen without scrolling; friendly tips stay at the end.
+// Auto-Master plans from the 12 s it heard. When the incoming mix stays clearly louder than that for a few
+// seconds (playback started in the verse, the chorus came later), the Maximizer Learn says so.
+let louderPartDb = 0, louderSince = 0, louderReport = null;
+function watchLouderPart() {
+  const heard = amReport && amReport.ok ? amReport.capturedLufs : undefined;
+  if (amReport !== louderReport) { louderReport = amReport; louderPartDb = 0; louderSince = 0; }
+  if (heard === undefined || heard < -70 || M.inShort < -70 || M.amState === 1) { louderSince = 0; return; }
+  const over = M.inShort - heard;
+  if (over < 2) { louderSince = 0; return; }
+  const now = performance.now();
+  if (!louderSince) louderSince = now;
+  if (now - louderSince > 3000 && over > louderPartDb + 0.5) {
+    if (louderPartDb === 0) toast("This part is louder than what Auto-Master heard. See Learn (Maximizer).");
+    louderPartDb = over;
+  }
+}
+
 function liftWarning(body) {
   const warn = body.querySelector(".l-tip:not(.ok)"), firstSep = body.querySelector(".l-sep");
   if (warn && firstSep) { body.insertBefore(warn, firstSep); warn.style.marginTop = "10px"; }
@@ -1366,7 +1385,7 @@ function renderClipperLearn(body) {
     level > 0.05
       ? `Only peaks more than ${fmtNum(level, 1)} dB over the ${fmtNum(ceiling, 1)} dBTP ceiling get clipped; the Maximizer handles everything below that. Gentle.`
       : level > -0.05
-        ? `Clipping starts right at the ${fmtNum(ceiling, 1)} dBTP ceiling: the clipper takes the drum spikes and the Maximizer just polishes what's left.`
+        ? `The clip level sits right at the ${fmtNum(ceiling, 1)} dBTP ceiling (Softness starts rounding peaks a few dB below it): the clipper takes the drum spikes and the Maximizer just polishes what's left.`
         : `Clipping starts ${fmtNum(-level, 1)} dB below the ceiling, then the level comes back up by ${fmtNum(-level, 1)} dB so peaks still reach ${fmtNum(ceiling, 1)} dBTP. Lower = denser and louder, but more distortion.`));
   body.appendChild(item("Softness", `${soft} %`,
     soft < 25 ? "Hard knee: the most transparent on short drum hits, but it can crunch on sustained bass."
@@ -1374,7 +1393,7 @@ function renderClipperLearn(body) {
                           : "Medium knee: rounds the peaks gently, so you hear punch rather than distortion."));
   body.appendChild(item("Oversampling", os,
     os === "1x" ? "No oversampling: clipping creates inharmonic 'aliasing' tones that sound harsh and cheap. Use 4x or 8x for masters."
-                : `Runs the clipper at ${os} the sample rate so the new harmonics don't fold back as harsh tones. ${os === "8x" ? "Cleanest, uses the most CPU." : "A good balance of clean and CPU."}`));
+                : `Runs the clipper at ${os} the sample rate so far fewer of the new harmonics fold back as harsh tones. ${os === "8x" ? "Cleanest, uses the most CPU." : "A good balance of clean and CPU."}`));
 
   if (!on || bypassed || !playing) {
     body.appendChild(tip("TIP", "Turn the clipper on at 0 dB, then lower Clip Level until the Clipping meter shows 1–3 dB on the drums. Compare with the clipper off at the same Drive: it should be denser and louder, with the same peak level.", true));
@@ -2015,6 +2034,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   }
   if (wasAm !== M.amState || M.amState === 1) updateAmButton();
   if (P.levelMatch.getValue()) refreshMatch();
+  watchLouderPart();
   if (M.momentary > -70 || M.peakL > -80) lastAudioTime = performance.now();
   grWindow.push(M.gr);
   if (grWindow.length > 90) grWindow.shift();

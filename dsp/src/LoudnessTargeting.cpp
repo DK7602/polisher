@@ -270,7 +270,7 @@ AudioClip renderMaster (const AudioClip& input, const MasterChainParams& params)
     const int n = clip.numSamples();
 
     SoftClipper clipper;
-    clipper.prepare (nch);
+    clipper.prepare (nch, clip.sampleRate);
     clipper.setParams (params.clipper);
 
     TruePeakLimiter limiter;

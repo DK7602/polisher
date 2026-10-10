@@ -186,3 +186,39 @@ TEST_CASE ("Clip level below the ceiling makes the master louder, not quieter", 
     CHECK (atMinus4.truePeakDbtp <= ceiling + 0.05);
     CHECK (atMinus4.truePeakDbtp > ceiling - 0.5);   // peaks still use the headroom
 }
+
+TEST_CASE ("Clipper changes never click", "[clipper]")
+{
+    // A 100 Hz sine whose peaks the clipper shaves; any switch, oversampling change or level move while
+    // it plays must not step the output much more than the sine itself steps from sample to sample.
+    for (double sr : { 44100.0, 48000.0, 192000.0 })
+    {
+        const int n = static_cast<int> (sr * 1.2);
+        SoftClipper clipper;
+        clipper.prepare (2, sr);
+        ClipperParams p; p.enabled = true; p.thresholdDb = -8.0; p.makeupDb = 2.0; p.oversampling = 4;
+        clipper.setParams (p);
+        double prev = 0.0, worst = 0.0, natural = 0.0, lastIn = 0.0;
+        for (int i = 0; i < n; ++i)
+        {
+            const int step = i * 8 / n;   // a new change every 0.15 s
+            ClipperParams q = p;
+            q.enabled      = step != 1 && step != 5;
+            q.oversampling = step >= 3 ? 8 : step == 2 ? 1 : 4;
+            q.thresholdDb  = step >= 4 ? -5.0 : -8.0;
+            q.makeupDb     = step >= 4 ? 5.0 : 2.0;
+            q.softness     = step >= 6 ? 0.0 : 0.5;
+            clipper.setParams (q);
+            const double x = 0.5 * std::sin (2.0 * std::numbers::pi * 100.0 * i / sr);
+            natural = std::max (natural, std::abs (x - lastIn));
+            lastIn = x;
+            double frame[2] = { x, x };
+            clipper.processFrame (frame, 2);
+            if (i > SoftClipper::latencySamples() + 1)
+                worst = std::max (worst, std::abs (frame[0] - prev));
+            prev = frame[0];
+        }
+        INFO ("sample rate " << sr << ", natural step " << natural);
+        CHECK (worst < 3.0 * natural);
+    }
+}

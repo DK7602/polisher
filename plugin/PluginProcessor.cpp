@@ -205,7 +205,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     eq.setParams (eq.getParams());
     updateLimiterParams();
     limiter.prepare (sampleRate, channels);
-    clipper.prepare (channels);
+    clipper.prepare (channels, sampleRate);
     unlimiter.prepare (sampleRate, channels);
     eq.prepare (sampleRate, channels);
     stemEq.prepare (sampleRate, channels);
@@ -225,6 +225,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     // oversampling modes) + limiter look-ahead.
     setLatencySamples (unlimiter.latencySamples() + stemEq.latencySamples() + polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples()
                        + limiter.latencySamples());
+    tailSeconds = getLatencySamples() / sampleRate + 0.2;
 }
 
 void PolisherAudioProcessor::updateLimiterParams()

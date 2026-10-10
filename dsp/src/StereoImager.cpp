@@ -13,16 +13,16 @@ void StereoImager::prepare (double sr)
     glide = 1.0 - std::exp (-static_cast<double> (kUpdateInterval) / (0.02 * sampleRate));
     mixCoeff = 1.0 - std::exp (-1.0 / (0.02 * sampleRate));
     corrCoeff = 1.0 - std::exp (-1.0 / (0.3 * sampleRate));
-    for (auto& f : lp250) design::apply (f, design::butterworth (false, 250.0, sampleRate));
-    for (auto& f : hp250) design::apply (f, design::butterworth (true, 250.0, sampleRate));
-    for (auto* g : { &lp5k, &apLp }) for (auto& f : *g) design::apply (f, design::butterworth (false, 5000.0, sampleRate));
-    for (auto* g : { &hp5k, &apHp }) for (auto& f : *g) design::apply (f, design::butterworth (true, 5000.0, sampleRate));
+    for (auto* g : { &lp250, &mLp250 }) for (auto& f : *g) design::apply (f, design::butterworth (false, 250.0, sampleRate));
+    for (auto* g : { &hp250, &mHp250 }) for (auto& f : *g) design::apply (f, design::butterworth (true, 250.0, sampleRate));
+    for (auto* g : { &lp5k, &apLp, &mLp5k }) for (auto& f : *g) design::apply (f, design::butterworth (false, 5000.0, sampleRate));
+    for (auto* g : { &hp5k, &apHp, &mHp5k }) for (auto& f : *g) design::apply (f, design::butterworth (true, 5000.0, sampleRate));
     reset();
 }
 
 void StereoImager::reset() noexcept
 {
-    for (auto* g : { &lp250, &hp250, &lp5k, &hp5k, &apLp, &apHp })
+    for (auto* g : { &lp250, &hp250, &lp5k, &hp5k, &apLp, &apHp, &mLp250, &mHp250, &mLp5k, &mHp5k })
         for (auto& f : *g) f.reset();
     const bool neutral = ! params.enabled || (params.lowWidth == 100.0 && params.midWidth == 100.0 && params.highWidth == 100.0);
     gLow = params.enabled ? widthToGain (params.lowWidth) : 1.0;
@@ -46,7 +46,7 @@ void StereoImager::update() noexcept
         mixTarget = 1.0;
         if (! running)
         {
-            for (auto* g : { &lp250, &hp250, &lp5k, &hp5k, &apLp, &apHp })
+            for (auto* g : { &lp250, &hp250, &lp5k, &hp5k, &apLp, &apHp, &mLp250, &mHp250, &mLp5k, &mHp5k })
                 for (auto& f : *g) f.reset();
             running = true;
         }

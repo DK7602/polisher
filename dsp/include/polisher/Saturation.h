@@ -24,7 +24,7 @@ struct SaturationParams
 
     - Curves (per channel, 4x oversampled so the new harmonics don't fold back as aliasing):
         tape  y = S tanh(x / S)                          smooth, odd harmonics
-        tube  asymmetric tanh (bias 0.35), slope 1 at 0   warm, mostly 2nd harmonic
+        tube  asymmetric tanh (bias 0.35), slope 1 at 0   warm, 2nd-heavy at light Drive (3rd louder at +18)
         clip  y = x / (1 + |x/S|^4)^(1/4)                firmer knee, brighter odd harmonics
       S (where the curve bends) starts 7.5 dB above full scale at Drive 0 and comes down 1 dB per dB
       of Drive, so quiet material always passes at unity gain and only the louder moments are
@@ -45,7 +45,7 @@ public:
     static constexpr int kLatency = 55;          // 2x (95 taps) + 4x (33 taps) round trip
     static constexpr double kMaxDriveDb = 18.0;
     static constexpr double kHeadroomDb = 7.5;   // S at Drive 0, above full scale
-    static constexpr double kFadeInDb = 3.0;     // the effect fades in over the first dB of Drive
+    static constexpr double kFadeInDb = 3.0;     // the effect fades in over the first 3 dB of Drive
     static constexpr double kTubeBias = 0.35;
 
     void prepare (double sampleRate, int numChannels);
@@ -85,8 +85,6 @@ public:
         }
     }
 
-    /** Level of the added harmonics relative to the signal since the last call (dB; -100 when
-        nothing was added). */
     /** Energy of the added harmonics and of the signal since the last call (for meters that
         average over their own window: average energies, never dB, or quiet gaps drag it down). */
     void takeEnergies (double& residual, double& signal) noexcept
@@ -96,6 +94,8 @@ public:
         resEnergy = sigEnergy = 0.0;
     }
 
+    /** Level of the added harmonics relative to the signal since the last call (dB; -100 when
+        nothing was added). */
     double takeHarmonicsDb() noexcept
     {
         const double r = sigEnergy > 1e-20 ? resEnergy / sigEnergy : 0.0;
@@ -110,6 +110,7 @@ private:
         std::vector<double> dry;   // latency-matched dry path
         int dryPos = 0;
         double hpX = 0.0, hpY = 0.0;
+        double dcSum = 0.0;        // the residual summed over the warm-up's DC window
     };
 
     double curve (double x) const noexcept { return shape (x, params.mode, bend); }
@@ -120,7 +121,7 @@ private:
     double bend = 4.0, bendTarget = 4.0, glideCoeff = 0.0;
     double mix = 0.0, mixCoeff = 0.0, hpCoeff = 0.0;
     double resEnergy = 0.0, sigEnergy = 0.0;
-    int warmup = 0;
+    int warmup = 0, dcWindow = 1200, dcCount = 0;
     bool running = false;
 };
 
