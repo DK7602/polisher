@@ -29,6 +29,8 @@ Polisher goes on **Stereo Out**, the channel every track flows into, in the **la
 2. Copy **Polisher.vst3** into `C:\Program Files\Common Files\VST3`.
 3. Start Cubase. If Polisher doesn't show up, open **Studio > VST Plug-in Manager** and click **Update Plug-in Information**.
 
+Polisher's screen runs on the **Microsoft Edge WebView2 Runtime**. Windows 11 has it built in and Windows 10 gets it with Microsoft Edge, so you rarely need to do anything. If Polisher opens a small screen that says **BASIC VIEW**, the runtime is missing: click **GET WEBVIEW2**, install the free "Evergreen" runtime from Microsoft, then close and reopen Polisher. Your settings are kept, and the whole chain keeps processing audio in the basic view.
+
 ### Load it on Stereo Out
 
 1. Press **F3** to open the MixConsole.
@@ -323,6 +325,7 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Unlimiter does nothing | Your mix is open (Squash 12.5 dB or more) | Working as intended: it only restores audio that was squashed |
 | Integrated keeps restarting | The Settings switches restart it on play and after changes | Turn off those switches in Settings if you want one long reading |
 | Polisher isn't in the plug-in list | Cubase hasn't scanned it | Check the VST3 folder, then Studio > VST Plug-in Manager > Update |
+| Polisher opens a small screen that says BASIC VIEW | The Microsoft Edge WebView2 Runtime is missing on this PC | Click GET WEBVIEW2, install the runtime, close and reopen Polisher. Audio keeps working meanwhile |
 
 ## FAQ
 

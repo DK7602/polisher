@@ -6,8 +6,10 @@
 
 #include <array>
 
-/** Engineering editor for v0.1: working controls and live loudness readouts in the Polisher
-    colours. The liquid-glass UI replaces this once the WebView front end lands. */
+/** Basic fallback editor, shown only when no web view is available for the full screen (on Windows:
+    the Microsoft Edge WebView2 Runtime is missing). A notice says what is missing and how to get it,
+    and that the whole chain keeps working with its saved settings; the Maximizer controls and the
+    loudness readouts stay usable. */
 class PolisherAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                            private juce::Timer
 {
@@ -35,6 +37,8 @@ private:
     juce::ToggleButton adaptiveButton { "Adaptive release" }, bypassButton { "Bypass" },
                        autoResetButton { "Reset on play" };
     juce::TextButton resetButton { "Reset meter" };
+    juce::TextButton getWebViewButton { "GET WEBVIEW2" };
+    juce::Rectangle<int> noticeArea;
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;

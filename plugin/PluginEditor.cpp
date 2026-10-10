@@ -12,6 +12,18 @@ namespace Colours
 
 namespace
 {
+    // Microsoft's download page for the Evergreen WebView2 Runtime (free, a few MB).
+    const char* const webView2Url = "https://developer.microsoft.com/microsoft-edge/webview2/";
+
+   #if JUCE_WINDOWS
+    const char* const noticeText = "BASIC VIEW: Polisher's full screen needs the Microsoft Edge WebView2 Runtime. Click GET WEBVIEW2, "
+                                   "install it (free), then reopen Polisher. All 11 modules keep working meanwhile; Auto-Master and "
+                                   "Learn need the full screen.";
+   #else
+    const char* const noticeText = "BASIC VIEW: Polisher's full screen couldn't start because this system has no web view. "
+                                   "All 11 modules keep working with their saved settings; Auto-Master and Learn need the full screen.";
+   #endif
+
     juce::String formatLufs (float v, const char* unit)
     {
         return v <= -99.0f ? juce::String ("-inf ") + unit : juce::String (v, 1) + " " + unit;
@@ -47,6 +59,10 @@ PolisherAudioProcessorEditor::PolisherAudioProcessorEditor (PolisherAudioProcess
     addAndMakeVisible (autoResetButton);
     addAndMakeVisible (resetButton);
     resetButton.onClick = [this] { audioProcessor.requestMeterReset(); };
+   #if JUCE_WINDOWS
+    addAndMakeVisible (getWebViewButton);
+    getWebViewButton.onClick = [] { juce::URL (webView2Url).launchInDefaultBrowser(); };
+   #endif
 
     auto& apvts = audioProcessor.parameters;
     driveAttachment    = std::make_unique<SliderAttachment> (apvts, "drive", driveKnob);
@@ -60,7 +76,7 @@ PolisherAudioProcessorEditor::PolisherAudioProcessorEditor (PolisherAudioProcess
     for (size_t i = 0; i < readouts.size(); ++i)
         readouts[i].label = labels[i];
 
-    setSize (720, 400);
+    setSize (720, 460);
     startTimerHz (15);
 }
 
@@ -99,7 +115,18 @@ void PolisherAudioProcessorEditor::paint (juce::Graphics& g)
     g.drawText ("POLISHER", header, juce::Justification::centredLeft);
     g.setColour (Colours::muted);
     g.setFont (juce::FontOptions (13.0f));
-    g.drawText ("Maximizer + loudness meter  |  v0.1 engineering UI", header, juce::Justification::centredRight);
+    g.drawText ("Basic view  |  Maximizer + loudness meter  |  v" JucePlugin_VersionString, header, juce::Justification::centredRight);
+
+    g.setColour (Colours::red.withAlpha (0.18f));
+    g.fillRoundedRectangle (noticeArea.toFloat(), 8.0f);
+    g.setColour (Colours::red);
+    g.drawRoundedRectangle (noticeArea.toFloat().reduced (0.5f), 8.0f, 1.0f);
+    auto text = noticeArea.reduced (12, 6);
+    if (getWebViewButton.isVisible())
+        text.removeFromRight (getWebViewButton.getWidth() + 8);
+    g.setColour (Colours::pearl);
+    g.setFont (juce::FontOptions (13.0f));
+    g.drawFittedText (noticeText, text, juce::Justification::centredLeft, 3);
 
     for (const auto& r : readouts)
     {
@@ -142,6 +169,8 @@ void PolisherAudioProcessorEditor::resized()
 {
     auto area = getLocalBounds();
     area.removeFromTop (56);
+    noticeArea = area.removeFromTop (60).reduced (16, 4);
+    getWebViewButton.setBounds (noticeArea.reduced (10, 12).removeFromRight (120));
     area.removeFromBottom (44);
     area.reduce (16, 8);
 

@@ -5,7 +5,14 @@ every setting. Style: red / white / powder-blue liquid glass.
 
 Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 
-## Status — v0.10
+**System requirements.** Windows 10 or 11 (64-bit) or macOS 11+. On Windows the Polisher screen runs on
+the **Microsoft Edge WebView2 Runtime**: it ships with Windows 11 and comes with Microsoft Edge on
+Windows 10. Without it Polisher still processes audio but opens a basic view (Maximizer controls and
+meters only) with a button to Microsoft's free download page; install it and reopen Polisher.
+
+User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (also inside the plug-in: Quick Help > Open the full manual).
+
+## Status — v0.13
 
 | Piece | State |
 | --- | --- |
@@ -26,6 +33,10 @@ Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 | Dynamics: 4-band compressor (LR4 splits, zero latency, per-band threshold / ratio / attack / release / gain, program-dependent release, per-band reduction meters, Learn) | Done (v0.9) |
 | Saturation: tape / tube / clip, 4x oversampled (aliasing 119 dB down), Drive, Mix, harmonics meter, exact pass-through at Drive 0, Learn | Done (v0.9) |
 | Auto-Master sets Dynamics (per-band glue, thresholds found by running the compressor on your mix), Stereo Imager (opens narrow highs, never the lows, mono-safe) and Saturation (mode by genre, Drive found by measuring the harmonics against a target) | Done (v0.10) |
+| Stem EQ: per-stem level for vocals / drums / bass / other from a small built-in model (64 bands, ~40 ms latency, plain C++ inference), exact pass-through at 0 dB; Auto-Master suggests a vocal move | Done (v0.11) |
+| Tone Steady (keeps the tonal balance steady through the song) and Resonance Tamer (cuts ringing peaks), inside the Stem EQ's spectral stage (no extra latency); set by Auto-Master | Done (v0.12) |
+| Unlimiter: puts back the punch a limiter squashed out of a beat (only on squashed audio); set by Auto-Master | Done (v0.13) |
+| Validation in CI: pluginval at strictness 10 plus Steinberg's VST3 validator (537/537) | Done (v0.13) |
 | Match ref (reference-track matching) | Planned |
 
 ## Learn rule
@@ -52,13 +63,17 @@ dsp/        Framework-free C++20 engine (no JUCE): unit-testable, reusable offli
     SoftClipper.h        Oversampled soft-knee clipper (drive -> clipper -> limiter)
     LoudnessTargeting.h  Offline render + drive search used by Auto-Master
     LevelMatch.h         MATCH: loudness-matched, clip-free A/B gains
-plugin/     JUCE AudioProcessor, web-view editor (+ basic native fallback editor)
+    StemEQ.h             Stem EQ + Tone Steady + Resonance Tamer (one STFT stage, model in StemNetWeights.h)
+    Unlimiter.h          Restores hit contrast on squashed audio
+plugin/     JUCE AudioProcessor, web-view editor (+ basic native fallback editor when no web view exists)
   ui/       The liquid-glass interface: index.html, styles.css, app.js, images, fonts (OFL).
             Browser preview: copy JUCE's modules/juce_gui_extra/native/javascript/*.js into
             plugin/ui/juce/, run `python3 -m http.server` in plugin/ui and open
             http://localhost:8000 (mock.js simulates the plug-in and audio).
 tests/      Catch2 unit tests for the engine
-.github/workflows/build.yml   macOS + Windows build, tests, pluginval, auval, artifacts
+docs/manual/  User manual (bundled into the plug-in; its version line must match the release)
+tools/stem/   Stem EQ model training (Python / PyTorch; see tools/stem/README.md)
+.github/workflows/build.yml   Windows (every push) and macOS (manual run) builds, tests, validation, artifacts
 ```
 
 ## Build
@@ -82,9 +97,10 @@ cmake -S . -B build-tests -DPOLISHER_BUILD_PLUGIN=OFF && cmake --build build-tes
 
 Meter behaviour: the loudness meter resets automatically when the host transport starts ("Reset on play", on by default).
 
-Every push runs the GitHub Actions workflow: builds on macOS (universal arm64 + x86_64) and Windows,
-runs the unit tests, validates the VST3 with pluginval (strictness 5) and the AU with `auval`, and
-uploads the built plug-ins as downloadable artifacts.
+Every push runs the GitHub Actions workflow on Windows: build, unit tests, pluginval at strictness 10
+(the maximum) with Steinberg's VST3 validator, and the built plug-in as a downloadable artifact
+(Polisher-Windows). macOS (universal arm64 + x86_64, VST3 / AU / Standalone, pluginval + `auval`) builds
+on a manual run: Actions > Build & Test > Run workflow, "Also build macOS".
 
 ## Engine notes
 
@@ -101,7 +117,7 @@ uploads the built plug-ins as downloadable artifacts.
   can't be reached with limiting alone, it says so (Auto-Master will then add the clipper and saturation
   stages, and Learn will explain why).
 
-## Signing and release (later)
+## Signing and release (not done yet)
 
 - macOS: Apple Developer ID certificate + notarization in CI.
 - Windows: code-signing certificate (optional but reduces SmartScreen warnings).
