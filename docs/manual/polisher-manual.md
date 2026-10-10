@@ -117,17 +117,19 @@ Click a module in the **Signal Chain** (left) to open it. Each module has its ow
 
 ### 01 Unlimiter
 
-Puts back the punch a limiter or clipper squashed out of a beat, loop or mix. It lifts the start of each hit; the level between hits stays put. It can't rebuild a waveform a clipper flattened, but it restores the contrast between hits and the rest.
+Puts back the punch a limiter or clipper squashed out of a beat, loop or mix. It lifts the start of each hit; the level between hits stays put. Every clear hit gets about the same lift, so identical kicks come back alike. It can't rebuild a waveform a clipper flattened, but it restores the contrast between hits and the rest.
 
 | Control | Range (default) | What it does |
 | --- | --- | --- |
-| Amount | 0–100 % (0) | How much punch is put back. Start at 75 %. |
-| Length | 5–50 ms (15) | How long each lift lasts. Shorter if vocals or pads jump on each hit. |
-| Focus | Full, Kick, Snap | Which hits it listens for: every hit, kick and 808 (below 150 Hz), or snares and hats (above 1 kHz). |
-| Squash meter | open … wall | How flattened the incoming audio is. 12.5 dB or more = open (it rests); 8.5 dB or less = brickwalled (full strength). |
-| Restoring meter | 0–12 dB | The lift right now. |
+| Amount | 0–100 % (0) | How far each hit is lifted: up to 10 dB at 100 % on brickwalled audio, less on audio that measures less squashed. On a brickwalled beat, 50 % wins back about a third of the lost punch and 100 % about half (before the Maximizer). Start at 75 %. |
+| Length | 5–50 ms (15) | How long each lift is held before it lets go. Shorter if vocals or pads jump on each hit. |
+| Focus | Full, Kick, Snap | Which hits it listens for and what it lifts: every hit (the whole sound), kick and 808 (only the band below 150 Hz), or snares and hats (only the band above 1 kHz). |
+| Squash meter | open … wall | How flattened the incoming audio is: true peak minus the average level, plus a check that the peaks press flat against one ceiling. 12.5 dB or more = open (it rests); 8.5 dB or less = brickwalled (full strength). A loud 808 alone doesn't count as squashed. After Auto-Master it holds the reading Auto-Master took, so playback and export lift the same from the first bar. |
+| Restoring meter | 0–10 dB | The lift right now. |
 
 On an open, unmastered mix the Unlimiter rests on purpose, even with Amount up. Use it on beats or loops that arrive already loud and flat.
+
+The Maximizer makes the song loud again afterwards and presses part of the restored punch back down. The closer your target is to how loud the audio already arrives, the less survives: on a beat at −8 LUFS it pays off for Stream −14, little for Loud −9 and not at all for Club −7. Auto-Master tries it at your target and leaves it off when it wouldn't help. Judge it at the final loudness with **MATCH** on.
 
 ### 02 Tonal EQ
 
@@ -338,6 +340,7 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Harsh or crunchy top | Saturation, clipping or a big EQ boost | Lower Saturation Drive 3 dB or Mix to 30 %; raise Clip Level or Softness; keep EQ moves to 1–3 dB |
 | Bass disappears on a phone or in mono | Stereo bass or too much width | Mono Below at 100 Hz; Imager Lows at 100 %; keep Correlation above +0.3 |
 | Unlimiter does nothing | Your mix is open (Squash 12.5 dB or more) | Working as intended: it only restores audio that was squashed |
+| Auto-Master left the Unlimiter off on a squashed beat | Your target is about as loud as the beat already is, so the Maximizer would press the hits straight back down | Working as intended. Pick a quieter target (Stream −14) if you want the punch back |
 | Integrated keeps restarting | The Settings switches restart it on play and after changes | Turn off those switches in Settings if you want one long reading |
 | Polisher isn't in the plug-in list | Cubase hasn't scanned it | Check the VST3 folder, then Studio > VST Plug-in Manager > Update |
 | Polisher opens a small screen that says BASIC VIEW | The Microsoft Edge WebView2 Runtime is missing on this PC | Click GET WEBVIEW2, install the runtime, close and reopen Polisher. Audio keeps working meanwhile |
@@ -373,4 +376,4 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Mono | The same sound in both speakers. Bass is best mono. |
 | Correlation | How mono-safe the stereo is: +1 mono, 0 wide, below 0 parts cancel. |
 | Harmonics | Extra overtones that make sound feel fuller and help bass on small speakers. |
-| Squash | How flattened audio is: peaks minus the average level. |
+| Squash | How flattened audio is: peaks minus the average level, read as open when the peaks don't press against one ceiling. |

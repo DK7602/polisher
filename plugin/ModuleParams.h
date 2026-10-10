@@ -56,6 +56,11 @@ namespace ModuleParams
         layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "ulLength", 3 }, "Unlimiter Length", NormalisableRange<float> (5.0f, 50.0f, 0.1f, 0.6f), 15.0f,
                                                            AudioParameterFloatAttributes().withLabel ("ms").withStringFromValueFunction (msText)));
         layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "ulFocus", 3 }, "Unlimiter Focus", StringArray { "Full", "Kick", "Snap" }, 0));
+        // The Squash Auto-Master measured on what it heard (0 = none: the live meter decides). Set by
+        // Auto-Master, not a control: it makes the strength the same in playback and export, from the
+        // first bar. Version hint 5.
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "ulSquashSet", 5 }, "Unlimiter Squash (Auto-Master)", NormalisableRange<float> (0.0f, 30.0f, 0.01f), 0.0f,
+                                                           AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction (dbText).withAutomatable (false)));
 
         // Stem EQ (after Tonal EQ): level of each stem inside the mix, 0 dB = untouched. Version hint 2:
         // added after the first builds went out.
@@ -137,7 +142,7 @@ namespace ModuleParams
         void attach (juce::AudioProcessorValueTreeState& s)
         {
             auto get = [&s] (const juce::String& id) { auto* p = s.getRawParameterValue (id); jassert (p != nullptr); return p; };
-            ulOn = get ("ulOn"); ulAmount = get ("ulAmount"); ulLength = get ("ulLength"); ulFocus = get ("ulFocus");
+            ulOn = get ("ulOn"); ulAmount = get ("ulAmount"); ulLength = get ("ulLength"); ulFocus = get ("ulFocus"); ulSquashSet = get ("ulSquashSet");
             stemOn = get ("stemOn");
             tsOn = get ("tsOn"); tsAmount = get ("tsAmount"); tsRange = get ("tsRange"); tsSpeed = get ("tsSpeed");
             rtOn = get ("rtOn"); rtAmount = get ("rtAmount"); rtSens = get ("rtSens"); rtRelease = get ("rtRelease"); rtFocus = get ("rtFocus");
@@ -171,6 +176,7 @@ namespace ModuleParams
             p.amount = ulAmount->load();
             p.lengthMs = ulLength->load();
             p.focus = static_cast<polisher::UnlimiterFocus> (juce::jlimit (0, 2, juce::roundToInt (ulFocus->load())));
+            p.squashDb = ulSquashSet->load();
             return p;
         }
 
@@ -235,7 +241,7 @@ namespace ModuleParams
         }
 
     private:
-        std::atomic<float>* ulOn = nullptr; std::atomic<float>* ulAmount = nullptr; std::atomic<float>* ulLength = nullptr; std::atomic<float>* ulFocus = nullptr;
+        std::atomic<float>* ulOn = nullptr; std::atomic<float>* ulAmount = nullptr; std::atomic<float>* ulLength = nullptr; std::atomic<float>* ulFocus = nullptr; std::atomic<float>* ulSquashSet = nullptr;
         std::atomic<float>* stemOn = nullptr;
         std::atomic<float>* tsOn = nullptr; std::atomic<float>* tsAmount = nullptr; std::atomic<float>* tsRange = nullptr; std::atomic<float>* tsSpeed = nullptr;
         std::atomic<float>* rtOn = nullptr; std::atomic<float>* rtAmount = nullptr; std::atomic<float>* rtSens = nullptr;
