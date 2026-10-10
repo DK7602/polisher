@@ -387,6 +387,7 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   const end = () => { if (dragStart) { dragStart = null; state.sliderDragEnded(); } };
   knob.addEventListener("pointerup", end);
   knob.addEventListener("pointercancel", end);
+  knob.addEventListener("lostpointercapture", end);   // e.g. the window lost the mouse mid-drag: the undo step still closes
   knob.addEventListener("dblclick", () => { state.sliderDragStarted(); setNorm(scaledToNorm(state, def)); state.sliderDragEnded(); });
   knob.addEventListener("wheel", (e) => {
     e.preventDefault();
@@ -801,6 +802,7 @@ function tsTargetCell() {
     if (!M.tsTarget) return;
     try { await tsClearTarget(); } catch (e) { /* the next frame shows the state either way */ }
     M.tsTarget = 0;
+    userEdited();
     refresh(); renderLearn();
     toast("Tone Steady follows the music again (the last ~10 seconds).");
   });
@@ -908,8 +910,13 @@ const nodeEls = EQ_BANDS.map((band, b) => {
   };
   n.addEventListener("pointerup", end);
   n.addEventListener("pointercancel", end);
+  n.addEventListener("lostpointercapture", end);   // e.g. the window lost the mouse mid-drag: the undo step still closes
+  // Double-click: back to flat at the band's own frequency, as one undo step (both gestures overlap).
   n.addEventListener("dblclick", () => {
-    for (const [s, v] of [[P.eqGain[b], 0], [P.eqFreq[b], band.def]]) { s.sliderDragStarted(); s.setNormalisedValue(scaledToNorm(s, v)); s.sliderDragEnded(); }
+    const reset = [[P.eqGain[b], 0], [P.eqFreq[b], band.def]];
+    for (const [s] of reset) s.sliderDragStarted();
+    for (const [s, v] of reset) s.setNormalisedValue(scaledToNorm(s, v));
+    for (const [s] of reset) s.sliderDragEnded();
     eqCells[b].refresh(); onParamsChanged(); userEdited();
   });
   n.addEventListener("wheel", (e) => {
@@ -1097,11 +1104,11 @@ function renderLearnBody() {
     body.appendChild(para("l-p", "Press play in your DAW. As the music runs I'll describe what the Maximizer is doing to it."));
   } else {
     const st = M.shortTerm > -99 ? `${fmtNum(M.shortTerm)} LUFS` : "—";
-    const it = M.integrated > -99 ? `${fmtNum(M.integrated)} LUFS integrated` : "Integrated is still measuring";
+    const it = M.integrated > -99 ? `Its Integrated loudness (since the meter last restarted) is ${fmtNum(M.integrated)} LUFS.` : "Its Integrated loudness is still being measured.";
     const gain = louderBy();
     const vsMix = gain === null ? "" : `, ${gain >= 0 ? "+" : MINUS}${Math.abs(gain).toFixed(1)} dB ${gain >= 0 ? "louder" : "quieter"} than your mix`;
     const grText = peakGr < -0.2 ? `The limiter is taking up to ${fmtNum(-peakGr)} dB off the loudest moments.` : "The limiter is barely touching it: the peaks already fit under the ceiling.";
-    body.appendChild(para("l-p", `Your master is running at ${st} short-term${vsMix} (${it}). ${grText}`));
+    body.appendChild(para("l-p", `Your master is running at ${st} short-term${vsMix}. ${it} ${grText}`));
   }
 
   body.appendChild(sep());
@@ -1418,7 +1425,8 @@ function renderStemLearn(body) {
   const playing = performance.now() - lastAudioTime < 1500;
   const moves = stemMoves(), share = M.stemShare || [0, 0, 0, 0];
   const keep = !!P.stemKeep.getValue(), keepDb = Math.abs(M.stemKeep || 0) < 0.05 ? 0 : M.stemKeep || 0;
-  const heard = "of what you hear, " + STEMS.map((n, k) => `${n.toLowerCase()} ${share[k]} %`).join(", ");
+  const parts = STEMS.map((n, k) => `${n.toLowerCase()} ${share[k]} %`);
+  const heard = `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]} of the sound you hear`;   // "vocals 38 %, ... and other 21 % of the sound you hear"
   body.appendChild(head("WHAT'S HAPPENING"));
   body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
     : !on ? "Stem EQ is off, so every part of the mix passes untouched."
@@ -1645,6 +1653,7 @@ function watchListening(wasAm, wasTarget, wasFail) {
       if (M.tsLearnFail !== wasFail)
         toast("Tone Steady heard too little music at your song's level to learn its tone. Play more of the song, then press LEARN again.");
       else if (M.tsTarget) {
+        userEdited();
         toast(`Tone Steady learned your song's tone from ${fmtTime(M.tsTarget)} of music.`);
         if (learnView === "listen") learnView = "module";
       }
@@ -1761,8 +1770,8 @@ function listenWhat(m) {
   if (m === 2) return "what the Soft Clipper shaves off";
   if (m === 3) return "what Resonance Tamer cuts";
   if (m === 4) return "what the Maximizer takes off";
-  if (isSoloMode(m)) return `only the ${DYN_BANDS[m - 5].name.toUpperCase()} band of Dynamics`;
-  if (m >= 9 && m <= 12) return `what Dynamics takes off the ${DYN_BANDS[m - 9].name.toUpperCase()} band`;
+  if (isSoloMode(m)) return `only the ${DYN_BANDS[m - 5].short} band of Dynamics`;
+  if (m >= 9 && m <= 12) return `what Dynamics takes off the ${DYN_BANDS[m - 9].short} band`;
   return "";
 }
 function setMonitor(listen, mono = MON.mono, phone = MON.phone) {
@@ -1778,7 +1787,7 @@ function refreshListenButton() {
   b.className = "pill listen " + (on ? "pill-red on" : "pill-blue");
   b.setAttribute("aria-pressed", String(on));
   $("btn-listen-text").textContent = "LISTEN";
-  b.title = `Listen: hear only ${listenWhat(mode)} (a listening aid: never in your export)`;
+  b.title = `Listen: hear only ${listenWhat(mode)}. A listening aid: a normal export never contains it (switch it off before a Realtime Export)`;
 }
 $("btn-listen").addEventListener("click", () => {
   const mode = listenModeFor(selected), on = MON.listen !== mode;
@@ -1872,7 +1881,7 @@ function addMonitorLearn(body) {
     frag.appendChild(head("WHAT YOU'RE HEARING"));
     if (MON.listen) frag.appendChild(listenTip(MON.listen));
     if (MON.phone)
-      frag.appendChild(tip("PHONE CHECK", "A phone speaker, roughly: mono, almost nothing below 300 Hz or above 8 kHz, at about your master's loudness.", true,
+      frag.appendChild(tip("PHONE CHECK", "A phone speaker, roughly: mono, thin below 300 Hz (200 Hz is about 13 dB down, and almost nothing under 150 Hz comes through, so no 808 sub), soft above 8 kHz, at about your master's loudness. A loud, bright master is turned down a few dB here so the check can't clip.", true,
         { need: "Only if the 808 disappears. You'll hear its upper harmonics, not its sub; that's normal, and it's what Saturation (Tube is the fullest) and an 808's own distortion are for.",
           steps: ["Turn Saturation's Drive up a little, or add 1–2 dB of Bass on the Tonal EQ.", "Best fix, in the mix: a little distortion or saturation on the 808 track itself.", "Press PHONE again to go back."] }));
     else if (MON.mono)
@@ -1885,8 +1894,8 @@ function addMonitorLearn(body) {
   const mode = listenModeFor(selected);
   if (mode && MON.listen !== mode && !(selected === "dyn" && isSoloMode(MON.listen)))
     body.appendChild(tip("HEAR WHAT IT DOES", selected === "dyn"
-      ? "S next to a band plays only that band. LISTEN (headphones, top right of this panel) plays only what the picked band's compression takes off. Listening aids only: never in your export."
-      : `LISTEN (headphones, top right of this panel) plays only ${listenWhat(mode)}, so you can learn its sound. Quiet changes are turned up so you can hear them. A listening aid: never in your export.`, true));
+      ? "S next to a band plays only that band. LISTEN (headphones, top right of this panel) plays only what the picked band's compression takes off. Listening aids only: a normal export never contains them (switch them off before a Realtime Export)."
+      : `LISTEN (headphones, top right of this panel) plays only ${listenWhat(mode)}, so you can learn its sound. Quiet changes are turned up so you can hear them. A listening aid: a normal export never contains it (switch it off before a Realtime Export).`, true));
 }
 
 function refreshAB() {
@@ -2186,9 +2195,32 @@ async function stepHistory(redo) {
   try { r = await (redo ? histRedo() : histUndo()); } catch (e) { r = null; }
   if (r && typeof r === "object") { M.undo = r.undo || ""; M.redo = r.redo || ""; }
   refreshHistory();
-  if (r && r.done) toast(`${redo ? "Redone" : "Undone"}: ${r.done}`);
+  if (r && r.done) { toast(`${redo ? "Redone" : "Undone"}: ${r.done}`); userEdited(); }   // the sound changed: Integrated starts over
   refreshAllCells();
 }
+// Space and Enter. In Cubase, Space is play / stop: after clicking a button (Auto-Master, MATCH, a snapshot...)
+// pressing Space to start the song must not press that button again (it would cancel Auto-Master's listen,
+// turn MATCH off, recall the snapshot again). So a button clicked with the mouse doesn't keep the keyboard,
+// and Space / Enter only press buttons for someone moving around with Tab. A box you type a value into,
+// Enter on a focused knob (type a value) and the arrow keys work as always.
+let keyboardNav = false;   // Tab was pressed since the last mouse click
+document.addEventListener("pointerdown", () => { keyboardNav = false; }, true);
+document.addEventListener("click", (e) => {
+  if (e.detail === 0 || keyboardNav) return;   // a click made with Space / Enter keeps its focus ring
+  const el = document.activeElement;
+  if (el && el !== document.body && el.matches && el.matches("button, input[type=checkbox]")) el.blur();
+}, true);
+const isTyping = (t) => !!(t && t.closest && t.closest("input:not([type=checkbox]), textarea, [contenteditable]"));
+function swallowKey(e) {
+  if (e.key === "Tab") { if (e.type === "keydown") keyboardNav = true; return; }
+  if (e.key !== " " && e.key !== "Spacebar" && e.key !== "Enter") return;
+  if (isTyping(e.target) || keyboardNav) return;
+  if (e.key === "Enter" && e.target && e.target.closest && e.target.closest("[role=slider]")) return;   // Enter on a knob: type a value
+  e.preventDefault();
+  e.stopPropagation();
+}
+for (const type of ["keydown", "keypress", "keyup"]) document.addEventListener(type, swallowKey, true);
+
 $("btn-undo").addEventListener("click", () => stepHistory(false));
 $("btn-redo").addEventListener("click", () => stepHistory(true));
 // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (Cmd on a Mac) while Polisher's window has the keyboard. A box you are
@@ -2256,6 +2288,7 @@ document.querySelectorAll("#snaps .snap").forEach((b) => b.addEventListener("cli
   M.snapActive = k; M.snapModified = false;
   refreshSnapshots();
   refreshAllCells();
+  userEdited();
   toast(`Snapshot ${k + 1}: its settings glide in. The undo arrow goes back.`);
 }));
 $("btn-store").addEventListener("click", () => {
@@ -2272,6 +2305,7 @@ async function fetchReport(openIt) {
   if (openIt && amRequested && amReport && amReport.time !== amOpenedTime) {
     amOpenedTime = amReport.time;
     amRequested = false;
+    if (amReport.ok) userEdited();   // Auto-Master changed the sound: Integrated starts over
     learnView = "report";
     toast(amReport.ok ? "Auto-Master set every module. Learn explains each choice."
       : amReport.notAFullMix ? "That sounds like one track, not a full mix. Nothing was changed. See Learn."
@@ -2698,7 +2732,7 @@ function renderSnapLearn(body) {
   link.addEventListener("click", () => { learnView = "module"; renderLearn(); });
   body.appendChild(link);
   body.appendChild(head("SNAPSHOTS S1–S4"));
-  body.appendChild(para("l-p", "Each slot keeps a whole sound: every knob and switch in every module, plus the Auto-Master report that explains it. They're saved with your Cubase project."));
+  body.appendChild(para("l-p", "Each slot keeps a whole sound: every knob and switch in every module, plus the Auto-Master report that explains it and the song's tone Tone Steady learned (if it learned one). They're saved with your Cubase project."));
   body.appendChild(item("Empty slot", null, "Click it to keep the settings you hear now."));
   body.appendChild(item("Stored slot", null, "Click it to switch to those settings. They glide in like a knob move, so there's no click, and the undo arrow takes you back."));
   body.appendChild(item("Red slot", null, "The one playing. A dot (S1•) means you've changed something since. To keep the change, click STORE, then the slot (or Shift-click the slot)."));
@@ -2706,7 +2740,7 @@ function renderSnapLearn(body) {
   body.appendChild(sep());
   body.appendChild(head("A FAIR COMPARE WITH MATCH"));
   body.appendChild(para("l-p", "MATCH learns how loud each snapshot plays compared with your mix, over about 10 seconds of B. The first time you hear a snapshot, give it 10–15 seconds before you judge. After that MATCH remembers its level, so when you flip back it's matched at once. Right after a switch it holds the level for 3 seconds while the loudness reading catches up."));
-  body.appendChild(tip("TRY THIS", "Balanced vs Punchy: play your chorus, run Auto-Master on Balanced and click S1. Pick Punchy, run it again and click S2. Turn on MATCH and listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip S1 / S2 every few seconds: you hear punch and weight, not volume. Click the one you like and keep going.", true));
+  body.appendChild(tip("TRY THIS", "Balanced vs Punchy: pick Balanced, click Auto-Master and play your whole song from the start (it finishes by itself), then click S1. Pick Punchy, run Auto-Master the same way and click S2. Turn on MATCH, play your chorus and listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip S1 / S2 every few seconds: you hear punch and weight, not volume. Click the one you like and keep going.", true));
   body.appendChild(sep());
   body.appendChild(head("UNDO AND REDO"));
   body.appendChild(para("l-p", `The arrows at the top step back and forward through your changes, one at a time: a knob move, a switch, a typed value, an Auto-Master run, Apply, a snapshot. Point at an arrow to see what it will undo. ${IS_MAC ? "⌘Z undoes, ⇧⌘Z redoes" : "Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes"} (click inside Polisher first, or Cubase takes the keys). The last 100 steps are kept while Polisher's window is closed, but not when you close the project. Automation from Cubase is never in the list.`));

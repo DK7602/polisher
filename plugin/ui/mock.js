@@ -90,6 +90,9 @@
   });
   // The host's transport: the smoke test (and you, in the console) can stop it to see the history pause.
   const transport = { playing: true };
+  // Meter restarts the UI asked for: "stats" (Integrated after a change) or a full RESET. For the smoke test.
+  const resets = { stats: 0, full: 0 };
+  window.__mockResets = resets;
   window.__polisherMock = { setPlaying: (on) => { transport.playing = !!on; } };
   // Simulated Auto-Master: it "listens" to a 2:30 song 30x faster than real time (its loudest part at
   // 0:54), finishes by itself at the song's end (or on FINISH from 12 s of music on), then thinks for
@@ -126,12 +129,18 @@
   const NOT_SETTINGS = new Set(["bypass", "levelMatch", "autoreset", "resetOnChange", "amGenre", "amIntensity", "amTarget"]);
   const isSetting = (n) => !NOT_SETTINGS.has(n);
   const NAMES = { drive: "Drive", ceiling: "Ceiling", release: "Release", inTrim: "Input Trim", adaptive: "Adaptive Release",
-                  clipOn: "Clipper On", clipLevel: "Clipper Level", clipSoftness: "Clipper Softness", clipOversampling: "Clipper Oversampling",
+                  clipOn: "Clipper On", clipLevel: "Clip Level", clipSoftness: "Clipper Softness", clipOversampling: "Clipper Oversampling",
                   satOn: "Saturation On", satMode: "Saturation Mode", satFocus: "Saturation Focus", satDrive: "Saturation Drive", satMix: "Saturation Mix",
                   stemOn: "Stem EQ On", stemKeep: "Stem EQ Keep Loudness", stemVoc: "Stem EQ Vocals", stemDrums: "Stem EQ Drums", stemBass: "Stem EQ Bass", stemOther: "Stem EQ Other",
                   bassOn: "Bass On", bassMono: "Bass Mono Below", bassTame: "Bass Sub Tame", bassPunch: "Bass Punch", eqOn: "EQ On", imgOn: "Imager On",
                   imgLow: "Imager Low Width", imgMid: "Imager Mid Width", imgHigh: "Imager High Width", ulOn: "Unlimiter On", dynOn: "Dynamics On", tsOn: "Tone Steady On", rtOn: "Resonance Tamer On" };
   ["Low End", "Bass", "Low Mid", "Mid", "Upper Mid", "Presence", "Air"].forEach((b, i) => { NAMES["eqGain" + (i + 1)] = `EQ ${b} Gain`; NAMES["eqFreq" + (i + 1)] = `EQ ${b} Freq`; });
+  // Dynamics by the window's band names, like SettingsScope::displayName.
+  const DYN = ["LOW", "LO-MID", "HI-MID", "HIGH"];
+  DYN.forEach((band, i) => {
+    for (const [id, what] of [["dynThr", "Threshold"], ["dynRatio", "Ratio"], ["dynAtk", "Attack"], ["dynRel", "Release"], ["dynGain", "Gain"]]) NAMES[id + (i + 1)] = `Dynamics ${band} ${what}`;
+    if (i < 3) NAMES["dynX" + (i + 1)] = `Dynamics Split ${band} / ${DYN[i + 1]}`;
+  });
   const kindOf = (n) => (n in sliders ? "slider" : n in toggles ? "toggle" : n in combos ? "combo" : null);
   const getV = (n) => (kindOf(n) === "slider" ? sliders[n].value : kindOf(n) === "toggle" ? toggles[n] : combos[n].value);
   const setV = (n, v) => (kindOf(n) === "slider" ? setSlider(n, v) : kindOf(n) === "toggle" ? setToggle(n, v) : setComboValue(n, v));
@@ -148,10 +157,10 @@
     const { n, a, b } = changes[0];
     if (kindOf(n) === "toggle") return `${name(n).replace(/ On$/, "")} ${b ? "on" : "off"}`;
     if (kindOf(n) === "combo") { const c = combos[n]; return `${name(n)}: ${c.choices[Math.round(b * (c.choices.length - 1))]}`; }
+    // From -> to, the unit once: "Drive 4.5 → 8.0 dB", "Ceiling −1.00 → −1.90 dBTP" (like SettingsScope::describe).
     const s = sliders[n];
-    if (s.label === "dB" || s.label === "dBTP") { const d = b - a; return `${name(n)} ${d < 0 ? MINUS : "+"}${Math.abs(d).toFixed(Math.abs(d) < 0.095 ? 2 : 1)} dB`; }
-    const f = (v) => `${+v.toFixed(1)}${s.label ? " " + s.label : ""}`;
-    return `${name(n)} ${f(a)} → ${f(b)}`;
+    const f = (v) => (v < 0 ? MINUS : "") + (s.label === "dBTP" ? Math.abs(v).toFixed(2) : s.label === "dB" ? Math.abs(v).toFixed(1) : String(+Math.abs(v).toFixed(1)));
+    return `${name(n)} ${f(a)} → ${f(b)}${s.label ? " " + s.label : ""}`;
   }
   const hist = { steps: [], pos: 0, open: new Set(), pending: new Map(), group: null, applying: false, canMerge: false };
   window.__mockHistory = hist;
@@ -218,6 +227,7 @@
   function snapRecall(k) {
     const s = snaps.slots[k];
     if (!s) return false;
+    snaps.recalls = (snaps.recalls || 0) + 1;
     beginGroup(`Recall Snapshot ${k + 1}`);
     for (const [n, v] of Object.entries(s.values)) if (getV(n) !== v) setV(n, v);
     if (am.report !== s.report) { am.report = s.report; am.version++; }
@@ -323,7 +333,11 @@
         } else if (payload.eventType === "valueChanged" && c.value !== payload.value) { gestureBegin(name); c.value = payload.value; gestureEnd(name); }
       } else if (eventId === "__juce__invoke") {
         let result = true;
-        if (payload.name === "resetMeter") integratedAcc = [];   // (the mock has no separate short-term history)
+        if (payload.name === "resetMeter") {   // (the mock has no separate short-term history)
+          integratedAcc = [];
+          const stats = (payload.params || [])[0] === "stats";
+          resets[stats ? "stats" : "full"]++;
+        }
         if (payload.name === "startAutoMaster") {
           if (am.state === 2) result = false;
           else Object.assign(am, { state: 1, heard: 0, byItself: false, mode: (payload.params || [])[0] === "tone" ? 1 : 0 });

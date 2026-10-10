@@ -23,18 +23,35 @@ namespace SettingsScope
     inline const juce::String& minus() { static const auto s = juce::String::fromUTF8 ("\xE2\x88\x92"); return s; }
     inline const juce::String& arrow() { static const auto s = juce::String::fromUTF8 (" \xE2\x86\x92 "); return s; }
 
-    /** "+2.0 dB" / "−0.5 dB" (Unicode minus, like the UI). */
-    inline juce::String signedDb (double v)
+    /** A control's name as the window shows it (the parameter names are what a host's automation lanes
+        show): Dynamics bands by the window's band names ("Dynamics LO-MID Threshold" for "Dynamics
+        Threshold 2"), "Clip Level" as on the Soft Clipper's knob. */
+    inline juce::String displayName (const juce::RangedAudioParameter& p)
     {
-        const int digits = std::abs (v) < 0.095 ? 2 : 1;
-        return (v < 0.0 ? minus() : juce::String ("+")) + juce::String (std::abs (v), digits) + " dB";
+        static const char* const bands[] = { "LOW", "LO-MID", "HI-MID", "HIGH" };
+        const auto id = p.getParameterID();
+        if (id == "clipLevel")
+            return "Clip Level";
+        const int n = id.getTrailingIntValue();
+        if (id.startsWith ("dynX") && n >= 1 && n <= 3)   // the split between two bands
+            return juce::String ("Dynamics Split ") + bands[n - 1] + " / " + bands[n];
+        static const char* const perBand[] = { "dynThr", "dynRatio", "dynAtk", "dynRel", "dynGain" };
+        for (const char* prefix : perBand)
+            if (id.startsWith (prefix) && n >= 1 && n <= 4)
+            {
+                // "Dynamics Threshold 2" -> "Dynamics LO-MID Threshold"
+                const auto what = p.getName (64).upToLastOccurrenceOf (" ", false, false).fromFirstOccurrenceOf ("Dynamics ", false, false);
+                return juce::String ("Dynamics ") + bands[n - 1] + " " + what;
+            }
+        return p.getName (64);
     }
 
-    /** What one control did, in plain words: "Drive +2.0 dB", "Clipper on", "Saturation Mode: Tube",
-        "Bass Punch 0 % → 25 %". Values are the parameter's 0..1 values. */
+    /** What one control did, in plain words, from the value before to the value after:
+        "Drive 4.5 → 8.0 dB", "Ceiling −1.00 → −1.90 dBTP", "Clipper on", "Saturation Mode: Tube",
+        "Bass Mono Below Off → 100 Hz". Values are the parameter's 0..1 values. */
     inline juce::String describe (const juce::RangedAudioParameter& p, float before, float after)
     {
-        auto name = p.getName (64);
+        auto name = displayName (p);
         if (dynamic_cast<const juce::AudioParameterBool*> (&p) != nullptr)
         {
             if (name.endsWith (" On")) name = name.dropLastCharacters (3);
@@ -42,10 +59,20 @@ namespace SettingsScope
         }
         if (dynamic_cast<const juce::AudioParameterChoice*> (&p) != nullptr)
             return name + ": " + p.getText (after, 64);
-        const auto label = p.getLabel();
-        if (label == "dB" || label == "dBTP")
-            return name + " " + signedDb (static_cast<double> (p.convertFrom0to1 (after)) - static_cast<double> (p.convertFrom0to1 (before)));
-        return name + " " + p.getText (before, 64).replace ("-", minus()) + arrow() + p.getText (after, 64).replace ("-", minus());
+        const auto a = p.getText (before, 64).replace ("-", minus()), b = p.getText (after, 64).replace ("-", minus());
+        // The same unit on both sides is said once: "4.5 → 8.0 dB" rather than "4.5 dB → 8.0 dB".
+        const auto unitA = a.fromLastOccurrenceOf (" ", false, false), unitB = b.fromLastOccurrenceOf (" ", false, false);
+        if (a.containsChar (' ') && b.containsChar (' ') && unitA == unitB && unitA.isNotEmpty())
+            return name + " " + a.upToLastOccurrenceOf (" ", false, false) + arrow() + b.upToLastOccurrenceOf (" ", false, false) + " " + unitA;
+        return name + " " + a + arrow() + b;
+    }
+
+    /** The value a control takes when a snapshot doesn't have it (the control was added after the slot
+        was stored): its default, except Stem EQ Keep Loudness, which a song from before it existed plays
+        without (the same rule as PolisherAudioProcessor::setStateInformation). 0..1 value. */
+    inline float valueWhenMissing (const juce::RangedAudioParameter& p)
+    {
+        return p.getParameterID() == "stemKeep" ? 0.0f : p.getDefaultValue();
     }
 }
 
@@ -242,7 +269,7 @@ private:
         for (const auto& c : changes)
         {
             juce::StringArray words;
-            words.addTokens (params[static_cast<size_t> (c.index)]->getName (64), " ", "");
+            words.addTokens (SettingsScope::displayName (*params[static_cast<size_t> (c.index)]), " ", "");
             if (first) { common = words; first = false; continue; }
             int n = 0;
             while (n < common.size() && n < words.size() && common[n] == words[n]) ++n;
@@ -363,7 +390,10 @@ public:
     {
         for (auto* param : p.getParameters())
             if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (param))
+            {
                 byId[rp->getParameterID()] = rp;
+                numSettings += SettingsScope::isSetting (rp->getParameterID()) ? 1 : 0;
+            }
     }
 
     /** The slot whose exact settings are in place changed (a recall, an undo back onto a slot, a change
@@ -408,13 +438,14 @@ public:
             return false;
 
         history.beginGroup ("Recall Snapshot " + juce::String (slot + 1));
-        for (const auto& [id, plain] : s.values)
+        // Every setting gets the slot's value: the stored one or, for a control added after the slot was
+        // stored, the value a song from before that control plays with (so the slot sounds as it did).
+        // Stored controls this version doesn't have are ignored.
+        for (const auto& [id, p] : byId)
         {
-            const auto it = byId.find (id);
-            if (it == byId.end() || ! SettingsScope::isSetting (id))
-                continue;   // a control this version doesn't have (or no longer stores)
-            auto* p = it->second;
-            const float v = p->convertTo0to1 (plain);
+            if (! SettingsScope::isSetting (id))
+                continue;
+            const float v = slotValue (s, id, *p);
             if (juce::exactlyEqual (p->getValue(), v))
                 continue;
             p->beginChangeGesture();
@@ -550,24 +581,48 @@ private:
         return -1;
     }
 
-    /** True when every stored control is at its stored value now (controls this version lacks are ignored). */
+    /** A setting's plain value in a slot: stored, or SettingsScope::valueWhenMissing for a control the
+        slot doesn't have. */
+    static float slotPlain (const Slot& s, const juce::String& id, const juce::RangedAudioParameter& p)
+    {
+        const auto stored = std::find_if (s.values.begin(), s.values.end(), [&id] (const auto& v) { return v.first == id; });
+        return stored != s.values.end() ? stored->second : p.convertFrom0to1 (SettingsScope::valueWhenMissing (p));
+    }
+    static float slotValue (const Slot& s, const juce::String& id, const juce::RangedAudioParameter& p)
+    {
+        return p.convertTo0to1 (slotPlain (s, id, p));
+    }
+
+    /** True when every setting is at the slot's value now (see slotPlain). Called ~30 times a second. */
     bool matchesLocked (const Slot& s) const
     {
+        const auto near = [] (const juce::RangedAudioParameter& p, float want)
+        {
+            const auto& range = p.getNormalisableRange();
+            return std::abs (p.convertFrom0to1 (p.getValue()) - want) <= 1.0e-5f * std::max (1.0f, range.end - range.start);
+        };
+        int stored = 0;
         for (const auto& [id, plain] : s.values)
         {
             const auto it = byId.find (id);
             if (it == byId.end() || ! SettingsScope::isSetting (id))
-                continue;
-            const auto& range = it->second->getNormalisableRange();
-            const float cur = it->second->convertFrom0to1 (it->second->getValue());
-            if (std::abs (cur - plain) > 1.0e-5f * std::max (1.0f, range.end - range.start))
+                continue;   // a control this version doesn't have (or no longer stores)
+            ++stored;
+            if (! near (*it->second, plain))
                 return false;
         }
+        if (stored == numSettings)
+            return true;
+        // A slot stored before some controls existed: those must be at the value recall gives them.
+        for (const auto& [id, p] : byId)
+            if (SettingsScope::isSetting (id) && ! near (*p, slotPlain (s, id, *p)))
+                return false;
         return true;
     }
 
     SettingsHistory& history;
     std::map<juce::String, juce::RangedAudioParameter*> byId;
+    int numSettings = 0;   // how many of them a slot holds (SettingsScope::isSetting)
     mutable juce::CriticalSection lock;
     std::array<Slot, kSlots> slots {};
     int active = -1;      // the slot last stored or recalled (shown lit), -1 = none

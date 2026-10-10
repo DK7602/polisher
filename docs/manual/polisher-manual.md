@@ -58,6 +58,8 @@ Leave headroom going in. A good input is about **−17 LUFS integrated with peak
 - **Double-click the number** under a knob to type an exact value, then press **Enter** (**Esc** cancels). Units are optional: `-3`, `1.2k` for 1.2 kHz, `2.5` for a 2.5:1 ratio, `off` for a control's lowest setting. Values outside the range stop at its end. With a knob selected, **Enter** opens the box too.
 - The **mouse wheel** works too.
 - Changed your mind? The **undo arrow** at the top (or **Ctrl+Z**) takes back your last change; see [Undo, redo and snapshots](#undo-redo-and-snapshots).
+- **Space and Enter** never press a Polisher button a second time after you clicked it, so pressing Space to play the song can't cancel Auto-Master or switch MATCH off. If Space doesn't start Cubase while Polisher's window is in front, click Cubase's project window first. Moving around with **Tab**, Space and Enter press buttons as usual.
+- Drag the window's corner to resize it; everything scales together. It doesn't go smaller than 1120 × 630, where the small print would be too small to read.
 
 ### Exporting
 
@@ -330,7 +332,7 @@ Louder always sounds better, so compare at equal loudness: turn on **MATCH**, th
 - If your original mix peaks above 0 dBFS, both sides are turned down together so A doesn't clip your audio interface and sound worse than it is.
 - Now judge tone and punch, not volume. Ask: is B clearer, fuller, punchier? Did the kick or vocal lose anything?
 - On B the meters show the **real master**, never the matched level. On A they show your original mix.
-- MATCH switches itself off when you close Polisher and during export.
+- MATCH switches itself off when you close Polisher's window, when you open the project again, and during a normal (offline) export. For a Realtime Export, switch it off yourself first.
 
 On headphones, compare at a low, comfortable volume and take breaks. Ears tire fast, and tired ears like everything brighter.
 
@@ -350,7 +352,7 @@ To compare just one part (say 30 seconds from the hook at 1:00), run it from a c
 
 ### Undo and redo
 
-The two arrows at the top step **back and forward through your changes, one at a time**. Point at an arrow to see what it will do ("Undo: Drive +2.0 dB", "Undo: Auto-Master (Trap / Hip-Hop, Balanced)"); after a click, a note at the bottom says what was undone.
+The two arrows at the top step **back and forward through your changes, one at a time**. Point at an arrow to see what it will do ("Undo: Drive 4.5 → 6.5 dB" puts Drive back from 6.5 to 4.5 dB; "Undo: Auto-Master (Trap / Hip-Hop, Balanced)"); after a click, a note at the bottom says what was undone.
 
 - **One step per change**: a knob drag from press to release, a typed value, a switch, a choice, a dragged EQ point (its frequency and gain together). Quick mouse-wheel turns or arrow-key presses on one knob count as one step.
 - **Auto-Master** is one step that puts back everything it set (A / B included), Tone Steady's target and the report that was there before. **APPLY** of the Stem EQ suggestion, a **snapshot recall**, and Tone Steady's **LEARN** and **CLEAR** are one step each.
@@ -373,7 +375,7 @@ The **red** slot is the one playing; a dot after it (**S1•**) means you've cha
 
 **A fair compare with MATCH.** MATCH learns how loud the master plays compared with your original over about 10 seconds of B. The first time you hear a snapshot, give it **10–15 seconds** before judging. After that, MATCH **remembers each snapshot's level**: flip back to it and it is matched at once. Right after a switch MATCH holds its level for 3 seconds while the loudness reading (which looks at the last 3 seconds) catches up. Storing new settings in a slot makes MATCH learn that slot again.
 
-**Try this: Balanced vs Punchy.** Run Auto-Master on **Balanced** (play your song) and click **S1**. Pick **Punchy**, run it again and click **S2**. Turn on **MATCH**, listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip **S1 / S2** every few seconds: you hear punch and weight, not volume. Keep the one you like by clicking it (the undo arrow can always take you back).
+**Try this: Balanced vs Punchy.** Pick **Balanced**, click Auto-Master and play your whole song from the start (it finishes by itself), then click **S1**. Pick **Punchy**, run Auto-Master the same way and click **S2**. Turn on **MATCH**, play your chorus and listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip **S1 / S2** every few seconds: you hear punch and weight, not volume. Keep the one you like by clicking it (the undo arrow can always take you back).
 
 ## Listening aids: Listen, Solo, MONO and PHONE
 
@@ -393,16 +395,16 @@ Five modules have a headphones button, **LISTEN**, at the top right of their pan
 
 **Dynamics also has S (solo) buttons**, one per band: S plays only that band (after its compression, at its real level in the master), so you hear what lives in it. Move a band's Split until the kick and 808 sit in LOW and the vocal's body in LO-MID. The four solos add up to exactly what Dynamics puts out.
 
-What a module adds or removes is often 20–40 dB quieter than the music, too quiet to hear at your normal volume. So Polisher **turns quiet changes up** (toward 15 dB under the master, at most +24 dB) and says so on the banner ("+18 dB so you can hear it"); Learn tells you how far under the music it really sits ("In your master it sits about 33 dB under the music"). Judge the **character** (ticks or crackle, a ring or a note), and remember the real level. A change that would peak over the ceiling is turned down instead ("kept under the ceiling"); a solo plays at its real level. Each change is lined up with the master to the sample and given the same Drive and limiting it gets in the master. On **A** nothing is processed, so a Listen is silent there.
+What a module adds or removes is often 20–40 dB quieter than the music, too quiet to hear at your normal volume. So Polisher **turns quiet changes up** (toward 15 dB under the master, at most +24 dB) and says so on the banner ("+18 dB so you can hear it"); Learn tells you how far under the music it really sits ("In your master it sits about 33 dB under the music"). Judge the **character** (ticks or crackle, a ring or a note), and remember the real level. A change that would peak over the ceiling is turned down instead ("kept under the ceiling"); a solo plays at its real level. Each change is lined up with the master to the sample and given the same Drive, Soft Clipper level (a Clip Level below 0 adds level) and limiting it gets in the master. On **A** nothing is processed, so a Listen is silent there.
 
 ### MONO and PHONE: check how your master translates
 
 Next to MATCH, two small buttons check your master on other speakers. They work with A / B and MATCH (MATCH still compares fairly: both sides get the same check).
 
 - **MONO** plays left and right mixed together on both speakers, like a club PA or a phone. If a part gets much quieter or disappears (often wide synths, reverbs or doubled vocals), it is out of phase and will vanish on mono speakers: bring the Stereo Imager's Mids and Highs toward 100 %, or narrow that part in the mix.
-- **PHONE** plays your master like a phone speaker: mono, almost nothing below about 300 Hz or above 8 kHz (gentle slopes), with a small bump around 2 kHz, at about the same loudness on a balanced mix (a mix whose weight is all sub gets quieter, as on a real phone). **Does the 808 still come through?** You hear its upper harmonics, not its sub; that's normal, and it's what Saturation (Tube is the fullest) and an 808's own distortion are for. If the 808 disappears, add a little Saturation Drive or 1–2 dB of Bass on the Tonal EQ, or saturate the 808 track in the mix.
+- **PHONE** plays your master like a phone speaker: mono, thin below about 300 Hz (200 Hz is about 13 dB down and almost nothing under 150 Hz comes through, so no 808 sub), soft above 8 kHz, with a small bump around 2 kHz, at about the same loudness on a balanced mix (a mix whose weight is all sub gets quieter, as on a real phone). **Does the 808 still come through?** You hear its upper harmonics, not its sub; that's normal, and it's what Saturation (Tube is the fullest) and an 808's own distortion are for. If the 808 disappears, add a little Saturation Drive or 1–2 dB of Bass on the Tonal EQ, or saturate the 808 track in the mix.
 
-While any check or Listen is on, nothing leaves Polisher above 0 dBFS.
+While any check or Listen is on, nothing leaves Polisher above 0 dBFS. A loud, bright master can go over on PHONE (the 2 kHz bump): then the whole check is turned down a few dB, smoothly rather than peak by peak, so what you hear is your master and not the check distorting. It lets go as soon as you switch the check off.
 
 ## Learn and Quick Help
 
