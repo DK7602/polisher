@@ -736,7 +736,7 @@ const ulCells = [
   liveKnobCell({ label: "Length", sub: "each hit", state: P.ulLength, def: 15, minText: "5", maxText: "50", fmt: fmtMs }),
   segCell({ label: "Focus", sub: "hits to find", state: P.ulFocus, labels: UL_FOCUS, notes: ["every hit", "kick · 808 < 150 Hz", "snare · hats > 1 kHz"] }),
   barCell({ label: "Squash", sub: "your audio", minText: "open", maxText: "wall", id: "ulsquash" }),
-  barCell({ label: "Restoring", sub: "lift now", minText: "0", maxText: "12 dB", id: "ulmeter" }),
+  barCell({ label: "Restoring", sub: "lift now", minText: "0", maxText: "10 dB", id: "ulmeter" }),
 ];
 
 function renderModule() {
@@ -1320,19 +1320,19 @@ function renderUlLearn(body) {
     : `Lifting each hit by up to ${fmtNum(lift)} dB: your audio measures ${squashWord(sq)} (Squash ${sqText}), so the hits get back some of the height the limiter took.`));
   body.appendChild(sep());
   body.appendChild(head("WHAT EACH CONTROL IS DOING"));
-  body.appendChild(item("Squash", sq ? sqText : "–", "How far the peaks stand above the average level over the last 3 seconds. 12.5 dB or more is an open, unmastered mix; 8.5 dB or less is brickwalled (limited hard). The more squashed, the harder the Unlimiter works; on an open mix it does nothing."));
-  body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `Puts back about ${Math.round(amount)} % of the punch the limiter took away, scaled by how squashed the audio measures.`));
-  body.appendChild(item("Length", fmtMs(len), len < 12 ? "Short: just the click and snap of each hit comes back. Cleanest." : len > 30 ? "Long: the body of each hit comes back too. Bigger, but the music around the hits pumps a little." : "A middle setting: the attack and a little body of each hit."));
-  body.appendChild(item("Focus", focus, focus === "Full" ? "Listens for every hit." : focus === "Kick" ? "Listens for the kick and 808 (below 150 Hz), so only those hits come back up." : "Listens for snares, claps and hats (above 1 kHz), so only those hits come back up."));
-  body.appendChild(item("Good to know", "", "Like the limiter it undoes, it lifts the whole sound at each hit, not just the drum. It can't rebuild a waveform a clipper cut flat; it brings back the contrast between the hits and the rest."));
+  body.appendChild(item("Squash", sq ? sqText : "–", "How far the peaks stand above the average level, and whether they press flat against one ceiling the way a limiter leaves them. 12.5 dB or more is an open, unmastered mix; 8.5 dB or less is brickwalled (limited hard). A loud 808 can sit close to the peaks of a mix nobody limited; then the peaks don't press against a ceiling and it still reads open. After Auto-Master it holds the reading Auto-Master took, so playback and export get the same lift from the first bar; before that it measures the last 3 seconds. The more squashed, the harder the Unlimiter works; on an open mix it does nothing."));
+  body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `Sets how far each hit is lifted: ${sq ? `up to ${fmtNum(10 * amount / 100 * scale)} dB on your audio` : "up to 10 dB"} (10 dB at 100 % on brickwalled audio, less the less squashed it measures). On a brickwalled beat, 50 % wins back about a third of the punch the limiter took and 100 % about half, before the Maximizer. How much survives the Maximizer depends on your target: the louder the target, the less.`));
+  body.appendChild(item("Length", fmtMs(len), `Each lift is held for about ${fmtMs(len)}, then lets go. ` + (len < 12 ? "Short: just the click and snap of each hit comes back. Cleanest." : len > 30 ? "Long: the body of each hit comes back too. Bigger, but the music around the hits pumps a little." : "A middle setting: the attack and a little body of each hit.")));
+  body.appendChild(item("Focus", focus, focus === "Full" ? "Listens for every hit and lifts the whole sound, like the limiter it undoes." : focus === "Kick" ? "Listens for the kick and 808 (below 150 Hz) and lifts only that band: hats, snare and vocal above it are left alone." : "Listens for snares, claps and hats (above 1 kHz) and lifts only that band: the kick and 808 below it are left alone."));
+  body.appendChild(item("Good to know", "", "It can't rebuild a waveform a clipper cut flat; it brings back the contrast between the hits and the rest. The Maximizer then makes the song loud again and presses part of that contrast back down: the closer your target is to how loud the audio already arrives, the less is left. Judge it at the final loudness, with MATCH on."));
   if (on && !bypassed && playing && amount > 0.5 && sq && scale === 0)
     body.appendChild(tip("GOOD TO KNOW", "Your audio isn't squashed, so the Unlimiter has nothing to undo and stays out of the way.", true,
       { need: "No. It is resting on purpose.", steps: ["You can leave it as it is, or set Amount to 0."] }));
-  else if (on && !bypassed && playing && lift > 9)
-    body.appendChild(tip("HEADS UP", `It's lifting some hits by more than 9 dB. That much can make the music around the hits pump.`, false,
-      { need: "Only if you hear the vocal or pads jump on each drum hit.", steps: ["Turn on MATCH and flip A/B.", "If B pumps: lower Amount by 20 %, or Length to about 10 ms.", "Or try Focus Kick so only the kick hits are lifted."] }));
+  else if (on && !bypassed && playing && lift > 6 && focus === "Full")
+    body.appendChild(tip("HEADS UP", `It's lifting the whole sound by up to ${fmtNum(lift)} dB at each hit. That much can make the vocal or pads jump with the drums.`, false,
+      { need: "Only if you hear the vocal or pads jump on each drum hit.", steps: ["Turn on MATCH and flip A/B.", "If B pumps: try Focus Kick (or Snap), which lifts only the drums' band.", "Or lower Amount by 20 %, or Length to about 10 ms."] }));
   else
-    body.appendChild(tip("TRY THIS", "Got a beat that's already loud and flat? Amount 75 %, Length 15 ms, Focus Full, then compare with MATCH on: the drums should hit harder while the level between them stays the same.", true));
+    body.appendChild(tip("TRY THIS", "Got a beat that's already loud and flat? Amount 75 %, Length 15 ms, Focus Full, then compare at the final loudness with MATCH on: the drums should hit harder while the level between them stays the same. If your target is about as loud as the beat already is (Loud \u22129 or Club \u22127 on a beat at \u22128 LUFS), the Maximizer presses the hits back down: it pays off on quieter targets like Stream \u221214.", true));
 }
 
 function renderTsLearn(body) {
@@ -2019,7 +2019,7 @@ function updateLiveReadouts() {
     usf.style.width = (sq ? clamp((16 - sq) / 10, 0, 1) * 100 : 0).toFixed(1) + "%";
     $("ulsquash-val").textContent = !sq ? "listening" : `${fmtNum(sq)} dB \u00b7 ${squashWord(sq)}`;
     const v = ulIsNeutral() || P.bypass.getValue() ? 0 : M.ulBoost || 0;
-    $("ulmeter-fill").style.width = (clamp(v / 12, 0, 1) * 100).toFixed(1) + "%";
+    $("ulmeter-fill").style.width = (clamp(v / 10, 0, 1) * 100).toFixed(1) + "%";
     $("ulmeter-val").textContent = v < 0.3 ? "resting" : `+${v.toFixed(1)} dB`;
   }
   const rts = $("read-ts");

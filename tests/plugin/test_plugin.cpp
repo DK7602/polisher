@@ -376,6 +376,42 @@ TEST_CASE ("Plug-in: Input Trim turns the mix down before the chain, and A ignor
     CHECK (errA < 1.0e-6);
 }
 
+TEST_CASE ("Plug-in: the Unlimiter lifts the first bar of an export like the rest of the song", "[plugin]")
+{
+    // A brickwalled beat, turned down so the lifted hits stay under the Maximizer's ceiling.
+    const double sr = 48000.0;
+    polisher::LimiterParams lp; lp.driveDb = 14.0; lp.ceilingDbtp = -0.3; lp.releaseMs = 30.0; lp.adaptiveRelease = false;
+    const auto beat = polisher::withGain (polisher::renderLimited (testsig::musicLike (sr, 4.0, -6.0, 4), lp), -12.0);
+    // Level of the second hit (0.5 s, inside the first second, while a fresh meter is still listening).
+    auto secondHitDb = [&] (const AudioClip& out, int latency)
+    {
+        double e = 0.0;
+        for (int i = static_cast<int> (0.5 * sr) + latency; i < static_cast<int> (0.53 * sr) + latency; ++i)
+            e += (double) out.channels[0][(size_t) i] * out.channels[0][(size_t) i];
+        return 10.0 * std::log10 (e + 1.0e-30);
+    };
+    auto exportAfter = [&] (float squashSet, bool playedBefore)
+    {
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "ulAmount", 100.0f);
+        set (*p, "ulSquashSet", squashSet);
+        if (playedBefore) renderFixed (*p, beat, 512);
+        p->prepareToPlay (sr, 512);    // the export starts here
+        return secondHitDb (renderFixed (*p, beat, 512), p->getLatencySamples());
+    };
+    auto off = makeProcessor (sr, 512, false);
+    const double untouched = secondHitDb (renderFixed (*off, beat, 512), off->getLatencySamples());
+    const double fresh = exportAfter (0.0f, false);
+    const double latched = exportAfter ((float) polisher::Unlimiter::measureSquashDb (beat.channels, sr), false);
+    const double replayed = exportAfter (0.0f, true);
+    INFO ("second hit: untouched " << untouched << " dB, fresh meter " << fresh << ", Auto-Master's Squash " << latched << ", after playback " << replayed);
+    CHECK (fresh - untouched < 0.5);        // a meter that has heard nothing yet can't know (it used to be this way after every prepare)
+    CHECK (latched - untouched > 1.5);      // Auto-Master's reading lifts it at once...
+    CHECK (replayed - untouched > 1.5);     // ...and so does the last reading from playback
+    CHECK (std::abs (latched - replayed) < 1.0);
+    CHECK (! off->parameters.getParameter ("ulSquashSet")->isAutomatable());   // set by Auto-Master, not a control
+}
+
 TEST_CASE ("Plug-in: a state saved before a control existed puts that control back to its default", "[plugin]")
 {
     // A v0.13 preset has no Input Trim. Loaded into a running Polisher whose trim Auto-Master set to

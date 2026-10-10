@@ -127,6 +127,10 @@ constexpr double kNotAMixExcessDb = 14.0;
 constexpr double kTrimMarginDb = 0.5;
 // How close to the target counts as landing on it.
 constexpr double kTargetToleranceLu = 0.3;
+// The Unlimiter is only switched on when, after the Maximizer has made the song as loud as the
+// target, its hits still jump out at least this much further than without it. Below about 1 dB you
+// can't hear the difference, and the Maximizer just works harder.
+constexpr double kMinPunchKeptDb = 1.0;
 
 struct IntensityRules
 {
@@ -236,6 +240,43 @@ double recurringPeakDb (const AudioClip& clip)
     for (size_t i = 0; i < peaks.size(); ++i)
         if (energy[i] >= gate) loud.push_back (peaks[i]);
     return percentile (loud.empty() ? peaks : loud, 0.99);
+}
+
+/** How far the hits jump out of what plays just before them (dB): the level of each 5 ms against
+    the average of the 20 ... 100 ms before it, 99th percentile over the clip. A limiter shrinks it;
+    the Unlimiter grows it back. */
+double hitJumpDb (const AudioClip& clip)
+{
+    const int n = clip.numSamples(), frame = std::max (1, static_cast<int> (clip.sampleRate * 0.005));
+    std::vector<double> level, jumps;
+    for (int start = 0; start + frame <= n; start += frame)
+    {
+        double e = 0.0;
+        for (const auto& ch : clip.channels)
+            for (int i = start; i < start + frame; ++i)
+                e += static_cast<double> (ch[static_cast<size_t> (i)]) * ch[static_cast<size_t> (i)];
+        level.push_back (e / frame);
+    }
+    for (size_t i = 20; i < level.size(); ++i)
+    {
+        double before = 0.0;
+        for (size_t k = i - 20; k < i - 4; ++k) before += level[k];
+        jumps.push_back (toDb (level[i]) - toDb (before / 16.0));
+    }
+    return percentile (jumps, 0.99);
+}
+
+/** hitJumpDb after the Maximizer has made the clip targetLufs loud, as the master will be. */
+double hitJumpAtTargetDb (const AudioClip& clip, double targetLufs, double ceilingDbtp)
+{
+    LimiterParams lp;
+    lp.ceilingDbtp = ceilingDbtp;
+    lp.releaseMs = 120.0;
+    lp.adaptiveRelease = true;
+    // Start well below the target, so Drive does all the work whatever level the clip arrives at.
+    const AudioClip quiet = withGain (clip, targetLufs - 12.0 - measure (clip).integratedLufs);
+    lp.driveDb = findDriveForTarget (quiet, targetLufs, lp).driveDb;
+    return hitJumpDb (renderLimited (quiet, lp));
 }
 
 } // namespace
@@ -690,30 +731,60 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     };
     auto& chain = r.chain;
 
-    // --- Unlimiter: only when the audio arrives already squashed --------------------------------------
-    // An unmastered mix keeps its hits well above the rest (Squash 14 dB or more); a beat or mix that
-    // was limited or clipped before Polisher has lost that. Everything after this hears the restored mix.
+    // --- Unlimiter: only when the audio arrives already squashed, and only if the punch survives ----
+    // An unmastered mix keeps its peaks well above the average level (Squash 12.5 dB or more) or at
+    // least doesn't press them flat against one ceiling; a beat or mix that was limited or clipped
+    // before Polisher has lost that. The Maximizer then has to make the restored hits loud again, and
+    // the closer the target is to the loudness the audio arrives at, the more of them it presses
+    // straight back down. So the Unlimiter is tried at the target and kept only when the hits still
+    // jump out clearly further than without it. Everything after this hears the restored mix.
+    // MP3/AAC/Ogg copies of a loud master peak higher than the master itself (measured: a −9 LUFS master
+    // at −1 dBTP decodes to about 0 dBTP as MP3 and +1 as Ogg), so the loud target gets more room.
+    const double maxCeiling = s.target == LoudnessTarget::loud ? -1.5 : -1.0;
     {
         const double squash = Unlimiter::measureSquashDb (input.channels, input.sampleRate);   // as the plug-in sees it, before Stem EQ
         auto& ul = chain.unlimiter;
         ul = UnlimiterParams {};
+        ul.squashDb = squash;   // the strength comes from this reading, in playback and export alike
+        const double tryAmount = s.intensity == Intensity::gentle ? 50.0 : s.intensity == Intensity::punchy ? 100.0 : 75.0;
+        const bool wall = squash <= Unlimiter::kFullSquashDb + 0.5;
+        const std::string arrives = std::string ("Your audio arrives ") + (wall ? "brickwalled" : "already squashed") + " (Squash " + num (squash) +
+                                    " dB; an unmastered mix reads 12.5 dB or more), so something limited or clipped it before Polisher. ";
         if (Unlimiter::squashScale (squash) < 0.25)
-            reason ("ul", "Amount", "0 %", "Your mix still has its punch: the hits stand " + num (squash) + " dB above the average level, "
-                    "like an unmastered mix, so there is nothing to undo and the Unlimiter stays off.");
+            reason ("ul", "Amount", "0 %", "Your mix still has its punch (Squash " + num (squash) + " dB, like an unmastered mix: its peaks stand well "
+                    "above the average level, or don't press flat against one ceiling the way a limiter leaves them), so there is nothing "
+                    "to undo and the Unlimiter stays off.");
         else
         {
-            ul.amount = s.intensity == Intensity::gentle ? 50.0 : s.intensity == Intensity::punchy ? 100.0 : 75.0;
-            const bool wall = squash <= Unlimiter::kFullSquashDb + 0.5;
-            reason ("ul", "Amount", pct (ul.amount), std::string ("Your audio arrives ") + (wall ? "brickwalled" : "already squashed") +
-                    ": the hits stand only " + num (squash) + " dB above the average level (an unmastered mix sits at 12.5 dB or more). "
-                    "Something limited or clipped it before Polisher. " + pct (ul.amount) + " puts back " +
-                    (ul.amount >= 100.0 ? "the punch it lost" : ul.amount >= 75.0 ? "most of the punch it lost" : "part of the punch it lost") +
-                    ", so the Maximizer can make it loud again without flattening it twice.");
-            r.notes.push_back ("SQUASHED INPUT: your audio was already limited or clipped before Polisher (Squash " + num (squash) +
-                               " dB). The Unlimiter puts back much of the punch, but the cleanest result comes from the unlimited mix."
-                               "\nNEED: Optional. The master works as it is."
-                               "\nSTEP: If it's your own mix, turn off the limiter or clipper on Stereo Out before Polisher (or export the beat without it)."
-                               "\nSTEP: Then set the Unlimiter Amount back to 0 and run Auto-Master again.");
+            UnlimiterParams on = ul;
+            on.amount = tryAmount;
+            const double kept = hitJumpAtTargetDb (renderUnlimiter (input, on), r.targetLufs, maxCeiling)
+                              - hitJumpAtTargetDb (input, r.targetLufs, maxCeiling);
+            if (kept < kMinPunchKeptDb)
+            {
+                reason ("ul", "Amount", "0 %", arrives + "But at your " + std::string (targetName (s.target)) + " target the Maximizer would press "
+                        "the restored hits straight back down: tried at " + pct (tryAmount) + ", they'd jump out only " + num (std::max (0.0, kept)) +
+                        " dB further than without it, too little to hear, so the Unlimiter stays off. It pays off when the target is a few dB "
+                        "below the " + num (arrivesLufs) + " LUFS your audio arrives at, for example Stream \xE2\x88\x92" "14.");
+                r.notes.push_back ("SQUASHED INPUT: your audio was already limited or clipped before Polisher (Squash " + num (squash) +
+                                   " dB), and it arrives about as loud as your target, so there is little punch left to win back."
+                                   "\nNEED: Optional. The master works as it is."
+                                   "\nSTEP: If it's your own mix, turn off the limiter or clipper on Stereo Out before Polisher (or export the beat without it)."
+                                   "\nSTEP: Then run Auto-Master again.");
+            }
+            else
+            {
+                ul.amount = tryAmount;
+                reason ("ul", "Amount", pct (ul.amount), arrives + "Tried at your " + std::string (targetName (s.target)) + " target, " +
+                        pct (ul.amount) + " makes the hits jump out about " + num (kept) + " dB further than without it, after the Maximizer has made "
+                        "the song loud again. Compare at the final loudness with MATCH on: the drums should hit harder while the level "
+                        "between them stays the same.");
+                r.notes.push_back ("SQUASHED INPUT: your audio was already limited or clipped before Polisher (Squash " + num (squash) +
+                                   " dB). The Unlimiter wins back part of the punch, but the cleanest result comes from the unlimited mix."
+                                   "\nNEED: Optional. The master works as it is."
+                                   "\nSTEP: If it's your own mix, turn off the limiter or clipper on Stereo Out before Polisher (or export the beat without it)."
+                                   "\nSTEP: Then set the Unlimiter Amount back to 0 and run Auto-Master again.");
+            }
         }
     }
     // Plug-in order: Unlimiter first, then the user's Stem EQ (the Unlimiter is not linear, so the order matters).
@@ -721,7 +792,11 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     const AudioClip clip = Unlimiter::isNeutral (chain.unlimiter) ? heard : renderStemEq (restored, s.stem);
     if (! Unlimiter::isNeutral (chain.unlimiter))
     {
-        r.analysis = analyseMix (clip);   // the rest of the chain is set for the restored mix
+        // The rest of the chain is set for the restored mix; the report still quotes the loudness of
+        // the mix as it arrives (the same whether or not the Unlimiter ends up on).
+        const auto arriving = r.analysis.loudness;
+        r.analysis = analyseMix (clip);
+        r.analysis.loudness = arriving;
         if (stemMoved) r.analysis.bandDb = analyseMix (restored).bandDb;   // tone: before Stem EQ, as above
     }
 
@@ -1146,9 +1221,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                                                     : (s.genre == Genre::trapHipHop || s.genre == Genre::edm) ? 1.0 : 0.0);
 
     // --- Maximizer ---------------------------------------------------------------------------------
-    // MP3/AAC/Ogg copies of a loud master peak higher than the master itself (measured: a −9 LUFS master
-    // at −1 dBTP decodes to about 0 dBTP as MP3 and +1 as Ogg), so the loud target gets more room.
-    chain.limiter.ceilingDbtp = s.target == LoudnessTarget::loud ? -1.5 : -1.0;
+    chain.limiter.ceilingDbtp = maxCeiling;
     chain.limiter.releaseMs = 120.0;
     chain.limiter.adaptiveRelease = true;
     const double ceiling = chain.limiter.ceilingDbtp;

@@ -338,12 +338,58 @@ TEST_CASE ("Auto-Master turns the Unlimiter on only for squashed audio", "[autom
     CHECK (r.chain.unlimiter.amount == 0.0);
     CHECK (std::any_of (r.reasons.begin(), r.reasons.end(), [] (const AutoMasterReason& x) { return x.module == "ul"; }));
 
+    // An open trap loop whose held 808 sits close to its peaks (peak minus average alone reads about
+    // 9 dB, "squashed"): nothing limited it, so the Unlimiter stays off and doesn't claim otherwise.
+    {
+        AudioClip trap = testsig::silence (48000.0, 2, 12.0);
+        std::mt19937 rng (3);
+        std::normal_distribution<double> white (0.0, 1.0);
+        double ph = 0.0, phk = 0.0;
+        for (size_t i = 0; i < trap.channels[0].size(); ++i)
+        {
+            const double t = static_cast<double> (i) / 48000.0, tk = std::fmod (t, 1.0), th = std::fmod (t, 0.125);
+            ph += 2.0 * std::numbers::pi * 45.0 / 48000.0;
+            phk += 2.0 * std::numbers::pi * (50.0 + 120.0 * std::exp (-tk * 40.0)) / 48000.0;
+            const double v = 0.3 * std::tanh (1.5 * std::sin (ph)) + 0.3 * std::exp (-tk * 18.0) * std::sin (phk) + 0.1 * white (rng) * std::exp (-th * 120.0)
+                           + 0.05 * std::sin (2.0 * std::numbers::pi * 330.0 * t);
+            trap.channels[0][i] = trap.channels[1][i] = static_cast<float> (v);
+        }
+        double e = 0.0;
+        for (float v : trap.channels[0]) e += static_cast<double> (v) * v;
+        const double crest = measure (trap).truePeakDbtp - 10.0 * std::log10 (e / static_cast<double> (trap.channels[0].size()));
+        UNSCOPED_INFO ("808 loop: peak minus average " << crest << " dB, Squash " << Unlimiter::measureSquashDb (trap.channels, 48000.0) << " dB");
+        CHECK (crest < Unlimiter::kOpenSquashDb - 2.0);   // read on peaks and average alone, it would count as squashed
+        const auto t = autoMaster (trap, {});
+        REQUIRE (t.ok);
+        CHECK (t.chain.unlimiter.amount == 0.0);
+        for (const auto& x : t.reasons)
+            if (x.module == "ul") { INFO (x.why); CHECK (x.why.find ("limited") == std::string::npos); }
+        for (const auto& n : t.notes) CHECK (n.find ("SQUASHED INPUT") == std::string::npos);
+    }
+
+    // A brickwalled beat (about -7.7 LUFS): mastered for Stream -14 the Unlimiter wins back punch the
+    // Maximizer keeps. For Loud -9 or Club -7 the Maximizer would press the restored hits straight back
+    // down (it used to switch on anyway and leave the hits flatter than without it), so it stays off
+    // and says why. Either way its Squash reading is stored, so playback and export lift alike.
     LimiterParams lp; lp.driveDb = 16.0; lp.ceilingDbtp = -0.3; lp.releaseMs = 30.0; lp.adaptiveRelease = false;
     const auto wall = renderLimited (testsig::musicLike (48000.0, 12.0, -6.0, 4), lp);
-    const auto w = autoMaster (wall, {});
-    REQUIRE (w.ok);
-    CHECK (w.chain.unlimiter.amount == 75.0);
-    CHECK (w.output.truePeakDbtp <= w.chain.limiter.ceilingDbtp + 0.05);
+    for (auto target : { LoudnessTarget::stream, LoudnessTarget::loud, LoudnessTarget::club })
+    {
+        AutoMasterSettings s;
+        s.target = target;
+        const auto w = autoMaster (wall, s);
+        REQUIRE (w.ok);
+        CHECK (w.chain.unlimiter.amount == (target == LoudnessTarget::stream ? 75.0 : 0.0));
+        CHECK (w.chain.unlimiter.squashDb > 0.0);
+        CHECK (w.chain.unlimiter.squashDb < Unlimiter::kOpenSquashDb);
+        CHECK (w.output.truePeakDbtp <= w.chain.limiter.ceilingDbtp + 0.05);
+        for (const auto& x : w.reasons)
+            if (x.module == "ul")
+            {
+                INFO (x.why);
+                CHECK (x.why.find (target == LoudnessTarget::stream ? "MATCH" : "straight back down") != std::string::npos);
+            }
+    }
 }
 
 TEST_CASE ("Auto-Master's loudness matches the plug-in with Stem EQ moves on squashed input", "[automaster]")
@@ -353,6 +399,7 @@ TEST_CASE ("Auto-Master's loudness matches the plug-in with Stem EQ moves on squ
     for (double move : { -6.0, 6.0 })
     {
         AutoMasterSettings s;
+        s.target = LoudnessTarget::stream;   // where the Unlimiter pays off on a beat this loud
         s.stem.gainDb[kStemDrums] = move;
         s.stem.gainDb[kStemBass] = -move;
         const auto r = autoMaster (wall, s);

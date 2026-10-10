@@ -196,6 +196,7 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         set ("ulAmount", static_cast<float> (c.unlimiter.amount));
         set ("ulLength", static_cast<float> (c.unlimiter.lengthMs));
         set ("ulFocus", static_cast<float> (static_cast<int> (c.unlimiter.focus)));
+        setParam ("ulSquashSet", static_cast<float> (c.unlimiter.squashDb));   // not a control: kept out of the report's values
         set ("tsOn", 1.0f);
         set ("tsAmount", static_cast<float> (c.steady.amount));
         set ("tsRange", static_cast<float> (c.steady.rangeDb));
