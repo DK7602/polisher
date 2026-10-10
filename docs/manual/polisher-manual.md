@@ -55,6 +55,7 @@ Leave headroom going in. A good input is about **−17 LUFS integrated with peak
 
 - Drag a knob **up or down**. Hold **Shift** for fine moves.
 - **Double-click** a knob to reset it.
+- **Double-click the number** under a knob to type an exact value, then press **Enter** (**Esc** cancels). Units are optional: `-3`, `1.2k` for 1.2 kHz, `2.5` for a 2.5:1 ratio, `off` for a control's lowest setting. Values outside the range stop at its end. With a knob selected, **Enter** opens the box too.
 - The **mouse wheel** works too.
 
 ### Exporting

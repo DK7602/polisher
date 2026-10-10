@@ -147,7 +147,9 @@ img { -webkit-user-drag: none; }
 .knob .pointer span { position: absolute; left: 44.2px; top: 10px; width: 3.6px; height: 21px; border-radius: 2px;
   background: var(--red-hot); box-shadow: 0 0 4px #FF6A70, 0 0 10px rgba(255,40,50,.9); }
 .minmax { width: 100px; display: flex; justify-content: space-between; font-size: 10px; color: var(--dim); }
-.cell-value { font-size: 15px; font-weight: 600; }
+.cell-value { font-size: 15px; font-weight: 600; cursor: text; }
+.value-input { width: 92px; font-size: 15px; font-weight: 600; text-align: center; color: inherit; background: rgba(5, 15, 34, 0.85);
+               border: 1px solid var(--red, #e0141e); border-radius: 6px; padding: 1px 4px; outline: none; }
 .cell-toggle { height: 34px; width: 108px; font-size: 13px; font-weight: 700; letter-spacing: .06em; margin: 20px 0; }
 .power { width: 30px; height: 30px; }
 .soon-badge { position: absolute; left: 50%; top: 58%; transform: translate(-50%,-50%); display: flex; flex-direction: column; align-items: center; gap: 6px;

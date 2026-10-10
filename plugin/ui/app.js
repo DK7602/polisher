@@ -259,6 +259,21 @@ function knobMarkup(angle) {
 }
 const angleFor = (norm) => -135 + 270 * clamp(norm, 0, 1);
 
+// A typed value -> the control's own units. Accepts "−3", "-3 dB", "1.2k" / "1.2 kHz", "2.5:1", "120 ms",
+// "off" (the control's minimum); keeps it in range. A control that only goes up from a positive start
+// (Tone Steady Range) takes "-3" as 3. Returns null when there is no number.
+function parseTyped(text, state) {
+  const { start, end } = state.properties;
+  const t = String(text).trim().toLowerCase().replace(/\u2212/g, "-").replace(",", ".");
+  if (t === "off") return start;
+  const m = /([-+]?\d*\.?\d+)\s*(k(?!hz)|khz)?/.exec(t);
+  if (!m) return null;
+  let v = parseFloat(m[1]) * (m[2] ? 1000 : 1);
+  if (!Number.isFinite(v)) return null;
+  if (start >= 0 && v < 0) v = -v;
+  return clamp(v, Math.min(start, end), Math.max(start, end));
+}
+
 function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   const cell = document.createElement("div");
   cell.className = "cell";
@@ -301,10 +316,42 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
     setNorm(state.getNormalisedValue() + (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 0.002 : 0.01));
     state.sliderDragEnded();
   }, { passive: false });
+  // Double-click the number (or press Enter on the knob) to type an exact value.
+  const typeIn = () => {
+    if (cell.querySelector(".value-input")) return;
+    const input = document.createElement("input");
+    input.className = "value-input mono";
+    input.type = "text";
+    input.value = value.textContent;
+    input.setAttribute("aria-label", `${label}: type a value`);
+    value.hidden = true;
+    value.after(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      const v = commit ? parseTyped(input.value, state) : null;
+      input.remove();
+      value.hidden = false;
+      if (v !== null) { state.sliderDragStarted(); setNorm(scaledToNorm(state, v)); state.sliderDragEnded(); }
+      knob.focus();
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+      e.stopPropagation();
+    });
+    input.addEventListener("blur", () => finish(true));
+  };
+  value.title = "Double-click to type a value";
+  value.addEventListener("dblclick", typeIn);
   knob.addEventListener("keydown", (e) => {
     const step = e.shiftKey ? 0.002 : 0.01;
     if (e.key === "ArrowUp" || e.key === "ArrowRight") setNorm(state.getNormalisedValue() + step);
     else if (e.key === "ArrowDown" || e.key === "ArrowLeft") setNorm(state.getNormalisedValue() - step);
+    else if (e.key === "Enter") typeIn();
     else return;
     e.preventDefault();
   });
@@ -653,7 +700,7 @@ function renderModule() {
   if (m.live) {
     row.classList.remove("soon");
     ({ ul: ulCells, clip: clipperCells, eq: eqCells, stem: stemCells, ts: tsCells, rt: rtCells, bass: bassCells, dyn: dynCells(), img: imagerCells, sat: satCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
-    $("module-note").textContent = "Live · drag up/down · Shift = fine · double-click = reset";
+    $("module-note").textContent = "Live · drag · Shift = fine · double-click knob = reset · double-click number = type";
     refreshHeadButton();
   } else {
     row.classList.add("soon");
