@@ -1384,6 +1384,11 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         const bool tubeGenre = s.genre == Genre::trapHipHop || s.genre == Genre::rnb || s.genre == Genre::edm || s.genre == Genre::pop;
         sat.mode = tubeGenre ? SaturationMode::tube : SaturationMode::tape;
         sat.mix = 50.0;
+        // 808-led genres: harmonics on the low end only, so the 808 reads on phone speakers while vocals
+        // and hats stay clean. The same harmonics target applies (Bass only's Drive is calibrated to read
+        // about the same on the Harmonics meter as Full).
+        const bool bassLed = s.genre == Genre::trapHipHop || s.genre == Genre::rnb;
+        sat.focus = bassLed ? SaturationFocus::bass : SaturationFocus::full;
         // Harmonics level to land on (dB below the music, at this Mix). Trap / Balanced is set by ear:
         // Tube at about -25 dB was the favourite in testing.
         double harmTarget = 0.0;
@@ -1406,8 +1411,13 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         {
             SaturationParams p = sat;
             p.driveDb = drive;
-            return Saturation::estimateHarmonicsDb (beforeSat.channels, p);
+            return Saturation::estimateHarmonicsDb (beforeSat.channels, p, beforeSat.sampleRate);
         };
+        // Too little low end for Bass only to reach the target even at full Drive (no 808 in what I heard):
+        // the whole mix gets the harmonics instead.
+        const bool thinLow = bassLed && harmonicsAt (Saturation::kMaxDriveDb) < harmTarget - 6.0;
+        if (thinLow) sat.focus = SaturationFocus::full;
+        const bool bassOnly = sat.focus == SaturationFocus::bass;
         double dlo = 0.0, dhi = Saturation::kMaxDriveDb;
         if (harmonicsAt (dhi) < harmTarget)
             sat.driveDb = dhi;
@@ -1423,11 +1433,20 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         const double got = harmonicsAt (sat.driveDb);
         const std::string modeName = sat.mode == SaturationMode::tube ? "Tube" : "Tape";
         reason ("sat", "Mode", modeName,
-                sat.mode == SaturationMode::tube ? "Tube leans on the 2nd harmonic: the 808 and vocals sound fuller and the bass shows up on phone speakers, which " + genre + " needs."
-                                                 : "Tape rounds off the loudest moments and adds smooth odd harmonics: warmth without changing the character of " + genre + ".");
+                sat.mode != SaturationMode::tube ? "Tape rounds off the loudest moments and adds smooth odd harmonics: warmth without changing the character of " + genre + "."
+                : bassOnly ? "Tube leans on the 2nd harmonic: the 808 sounds fuller and richer, which " + genre + " needs."
+                           : "Tube leans on the 2nd harmonic: the bass and vocals sound fuller and the bass shows up on phone speakers, which " + genre + " needs.");
+        reason ("sat", "Focus", bassOnly ? "Bass only" : "Full",
+                bassOnly ? "Harmonics go on the 808 and kick only, so the 808 shows up on phone and laptop speakers (they can't play its low notes, "
+                           "but they play its harmonics). Vocals and hats stay clean."
+                : thinLow ? "There's very little low end in what I heard (no 808 to speak of), so Bass only would have nothing to work on: "
+                            "the whole mix gets the harmonics instead."
+                          : "The whole mix gets a little density. In " + genre + " the low end doesn't carry the song alone, so there's no need to aim the harmonics at it.");
         reason ("sat", "Drive", num (sat.driveDb, true) + " dB",
                 "Set by measuring your mix: at this Drive the harmonics sit about " + num (-got) + " dB below your music" +
-                (got > -30.0 ? ", enough to make the master denser without sounding distorted." : ", density you feel more than hear.") +
+                (got > -30.0 ? (bassOnly ? ", enough for the 808 to come through on small speakers without sounding distorted."
+                                         : ", enough to make the master denser without sounding distorted.")
+                             : (bassOnly ? ", a light touch: the 808 gets a little more presence on small speakers." : ", density you feel more than hear.")) +
                 (dense ? " Your mix is already dense, so it's kept lighter." : ""));
         reason ("sat", "Mix", "50 %", "Half the harmonics are blended in and the rest stays clean, so drum hits keep their snap while the harmonics fill in underneath.");
     }
@@ -1715,7 +1734,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                   "which headphones show far more than phones and laptops."
                   "\nNEED: Optional. The master works as it is; this is how to get the reference's punchier low end."
                   "\nSTEP: On the 808 track, cut 30\xE2\x80\x93" "45 Hz a little, or boost 80\xE2\x80\x93" "100 Hz."
-                  "\nSTEP: Or add a little saturation to the 808 so it reads on small speakers."
+                  "\nSTEP: Or give the 808 more harmonics so it reads on small speakers: Saturation with Focus Bass only and a little more Drive."
                   "\nSTEP: Run Auto-Master again.");
         r.masterAnalysis = analyseMix (renderMaster (shaped, rest));   // rest is at the final Drive and clip level
     }

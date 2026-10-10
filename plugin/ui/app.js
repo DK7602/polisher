@@ -59,6 +59,7 @@ const P = {
   dynGain: [1, 2, 3, 4].map((b) => Juce.getSliderState("dynGain" + b)),
   satOn: Juce.getToggleState("satOn"),
   satMode: Juce.getComboBoxState("satMode"),
+  satFocus: Juce.getComboBoxState("satFocus"),
   satDrive: Juce.getSliderState("satDrive"),
   satMix: Juce.getSliderState("satMix"),
   ulOn: Juce.getToggleState("ulOn"),
@@ -154,8 +155,9 @@ const modules = [
                ["Highs", "Where width sounds best: hats, reverbs, ad-libs."]] },
   { id: "sat", name: "Saturation", live: true, soon: "",
     what: "Adds harmonics (tape, tube or clip styles) so bass translates on small speakers and the master feels denser.",
-    cells: [["Mode", "character", "Tape", .5], ["Drive", "input", "0.0 dB", 0], ["Mix", "wet / dry", "0%", 0]],
-    controls: [["Mode", "Tape = soft and warm. Tube = richer. Clip = aggressive."], ["Drive", "How many harmonics are generated."],
+    cells: [["Mode", "character", "Tape", .5], ["Focus", "which part", "Full", 0], ["Drive", "input", "0.0 dB", 0], ["Mix", "wet / dry", "0%", 0]],
+    controls: [["Mode", "Tape = soft and warm. Tube = richer. Clip = aggressive."], ["Focus", "Full = the whole mix. Bass only = the 808 and kick, so they show up on phone speakers."],
+               ["Drive", "How many harmonics are generated."],
                ["Mix", "Blend keeps transients clean while harmonics fill in underneath."]] },
   { id: "clip", name: "Soft Clipper", live: true, soon: "",
     what: "Shaves the tallest drum peaks before the limiter so the limiter works less. This is how loud modern masters stay punchy.",
@@ -633,6 +635,8 @@ const satModeIndex = () => clamp(Math.round(P.satMode.value * 2), 0, 2);
 const satDriveAt = () => P.satDrive.getScaledValue();
 const satMixAt = () => P.satMix.getScaledValue();
 const satIsNeutral = () => satDriveAt() < 0.05 || satMixAt() < 0.05;
+const SAT_FOCUS = ["Full", "Bass only"];
+const satBassOnly = () => P.satFocus.value >= 0.5;   // two choices: 0 = Full, 1 = Bass only
 function satModeCell() {
   const cell = document.createElement("div");
   cell.className = "cell";
@@ -660,6 +664,7 @@ function satModeCell() {
 }
 const satCells = [
   satModeCell(),
+  segCell({ label: "Focus", sub: "which part", state: P.satFocus, labels: SAT_FOCUS, notes: ["whole mix", "808 · kick → phones"] }),
   liveKnobCell({ label: "Drive", sub: "harmonics", state: P.satDrive, def: 0, minText: "0", maxText: "+18", fmt: (v) => `+${v.toFixed(1)} dB` }),
   liveKnobCell({ label: "Mix", sub: "wet / dry", state: P.satMix, def: 100, minText: "dry", maxText: "wet", fmt: (v) => `${Math.round(v)} %` }),
   barCell({ label: "Harmonics", sub: "added vs signal", minText: `${MINUS}60`, maxText: `${MINUS}10 dB`, id: "harmmeter" }),
@@ -1232,28 +1237,34 @@ function renderDynLearn(body) {
 function renderSatLearn(body) {
   const on = !!P.satOn.getValue(), bypassed = !!P.bypass.getValue();
   const playing = performance.now() - lastAudioTime < 1500;
-  const mode = SAT_MODES[satModeIndex()], drive = satDriveAt(), mix = satMixAt(), harm = M.satHarm;
+  const mode = SAT_MODES[satModeIndex()], drive = satDriveAt(), mix = satMixAt(), harm = M.satHarm, bass = satBassOnly();
+  const what = bass ? `${mode} (Bass only)` : mode;
   body.appendChild(head("WHAT'S HAPPENING"));
   body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
     : !on ? "Saturation is off, so nothing is added."
     : drive < 0.05 ? "Drive is at 0, so Saturation passes the sound untouched. Turn Drive up to add harmonics."
     : mix < 0.05 ? "Mix is at 0 %, so you only hear the dry signal."
     : !playing ? "Press play to see how much Saturation is adding."
-    : harm <= -60 ? `${mode} is on, but the mix is too quiet for it to add much yet.`
-    : `${mode} is adding harmonics about ${fmtNum(-harm, 0)} dB below the music${harm > -25 ? ": clearly audible, the master is getting denser" : harm > -40 ? ": felt more than heard, the usual sweet spot" : ": very subtle"}.`));
+    : harm <= -60 ? `${what} is on, but ${bass ? "the low end" : "the mix"} is too quiet for it to add much yet.`
+    : `${what} is adding harmonics about ${fmtNum(-harm, 0)} dB below the music${harm > -25 ? (bass ? ": clearly audible, the 808 is getting louder on small speakers" : ": clearly audible, the master is getting denser") : harm > -40 ? ": felt more than heard, the usual sweet spot" : ": very subtle"}.`));
   body.appendChild(sep());
   body.appendChild(head("WHAT EACH CONTROL IS DOING"));
   body.appendChild(item("Mode", mode, mode === "Tape" ? "Smooth and warm: rounds off the loudest moments and adds odd harmonics. The safest choice on a full mix."
-    : mode === "Tube" ? "Rich: leans on the 2nd harmonic at light Drive (at +18 the 3rd takes over), which makes bass and vocals sound fuller and helps an 808 show up on phone speakers."
+    : mode === "Tube" ? `Rich: leans on the 2nd harmonic at light Drive (at +18 the 3rd takes over), which ${bass ? "makes the 808 sound fuller and helps it" : "makes bass and vocals sound fuller and helps an 808"} show up on phone speakers.`
     : "Firm and bright: a harder knee with more upper harmonics. Adds edge and bite; use less Drive."));
-  body.appendChild(item("Drive", `+${drive.toFixed(1)} dB`, drive < 0.05 ? "Off." : drive <= 6 ? "Light: only the loudest moments are shaped." : drive <= 12 ? "Medium: the master gets noticeably denser." : "Heavy: obvious color. Pull Mix back if it gets harsh."));
+  body.appendChild(item("Focus", SAT_FOCUS[bass ? 1 : 0], bass
+    ? "Only the low end (below about 150 Hz: 808 and kick) gets harmonics. Phone and laptop speakers can't play an 808's low notes, but they do play its harmonics, so you hear the 808 there. Vocals, hats and snares stay clean, and the deep sub stays as it was."
+    : "The whole mix gets harmonics: more density and glue, but a lot of Drive also colours vocals and hats. For an 808 that disappears on phones, try Bass only."));
+  body.appendChild(item("Drive", `+${drive.toFixed(1)} dB`, drive < 0.05 ? "Off." : drive <= 6 ? (bass ? "Light: only the loudest 808 notes get harmonics." : "Light: only the loudest moments are shaped.") : drive <= 12 ? `Medium: ${bass ? "the 808 gets noticeably richer" : "the master gets noticeably denser"}.` : "Heavy: obvious color. Pull Mix back if it gets harsh."));
   body.appendChild(item("Mix", `${Math.round(mix)} %`, mix >= 99.5 ? "Fully saturated signal." : `Blends ${Math.round(mix)} % of the harmonics in and keeps the rest clean, so transients stay sharp while the harmonics fill in underneath.`));
-  body.appendChild(item("Level", "", "Quiet parts pass at the same level, so turning Drive up changes color, not volume. It reacts to how hot your mix is: louder mixes saturate more at the same Drive."));
+  body.appendChild(item("Level", "", bass ? "The 808's level stays put: only its harmonics are added, so on big speakers and headphones it sounds about the same, and on small speakers it comes through." : "Quiet parts pass at the same level, so turning Drive up changes color, not volume. It reacts to how hot your mix is: louder mixes saturate more at the same Drive."));
   if (on && !bypassed && playing && harm > -18)
     body.appendChild(tip("HEADS UP", "The harmonics are strong. That's a sound, not a mistake, but on most masters it reads as distortion.", false,
       { need: "Only if it sounds harsh or crunchy to you.", steps: ["Turn on MATCH and flip A/B.", "If B sounds distorted: lower Drive by 3 dB, or Mix to about 30 %.", "Aim for the Harmonics meter around −25 to −35 dB."] }));
+  else if (bass)
+    body.appendChild(tip("TRY THIS", "Bass only, Tube, Drive +9: play the song on your phone or laptop speakers and compare the 808 with MATCH (A/B). On B it should come through; on headphones it should sound about the same.", true));
   else
-    body.appendChild(tip("TRY THIS", "Tape, Drive +6 dB, Mix 50 %: a little density you feel more than hear (the Harmonics meter around −35 to −30 dB). For thin bass on phones, try Tube instead. Always compare with MATCH on.", true));
+    body.appendChild(tip("TRY THIS", "Tape, Drive +6 dB, Mix 50 %: a little density you feel more than hear (the Harmonics meter around −35 to −30 dB). If your 808 disappears on phones, try Focus Bass only with Tube instead. Always compare with MATCH on.", true));
 }
 
 // Auto-Master's Stem EQ suggestion (never applied by Auto-Master itself): one click sets the knobs.
@@ -2042,6 +2053,7 @@ function paramValue(id) {
   const band = /^dyn(X|Thr|Ratio|Atk|Rel|Gain)(\d)$/.exec(id);
   if (band) return P["dyn" + band[1]][Number(band[2]) - 1].getScaledValue();
   if (id === "satMode") return satModeIndex();
+  if (id === "satFocus") return satBassOnly() ? 1 : 0;
   if (id === "tsSpeed") return comboIndex(P.tsSpeed);
   if (id === "ulFocus") return comboIndex(P.ulFocus);
   if (id === "rtFocus") return comboIndex(P.rtFocus);
@@ -2187,7 +2199,7 @@ function updateLiveReadouts() {
                    : selected === "eq" ? (!eqEnabled() ? "OFF" : eqIsFlat() ? "FLAT" : "SHAPING")
  : selected === "img" ? (!P.imgOn.getValue() ? "OFF" : `CORR ${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`)
                    : selected === "dyn" ? (!P.dynOn.getValue() ? "OFF" : dynIsNeutral() ? "1:1" : `GR ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`)
-                   : selected === "sat" ? (!P.satOn.getValue() ? "OFF" : satIsNeutral() ? "CLEAN" : SAT_MODES[satModeIndex()].toUpperCase())
+                   : selected === "sat" ? (!P.satOn.getValue() ? "OFF" : satIsNeutral() ? "CLEAN" : SAT_MODES[satModeIndex()].toUpperCase() + (satBassOnly() ? " · BASS" : ""))
                    : selected === "ul" ? (!P.ulOn.getValue() ? "OFF" : ulIsNeutral() ? "IDLE" : !M.ulSquash ? "LISTENING" : (M.ulBoost || 0) < 0.3 ? "RESTING" : `LIFT +${fmtNum(M.ulBoost)} dB`)
                    : selected === "ts" ? (!P.tsOn.getValue() ? "OFF" : tsIsNeutral() ? "IDLE" : Math.abs(M.tsDb || 0) < 0.3 ? "RESTING" : `STEADY ${fmtNum(M.tsDb)} dB`)
                    : selected === "rt" ? (!P.rtOn.getValue() ? "OFF" : rtIsNeutral() ? "IDLE" : (M.rtCut || 0) > -0.3 ? "RESTING" : `CUT ${fmtNum(M.rtCut)} dB`)
@@ -2270,7 +2282,7 @@ function updateLiveReadouts() {
     $("sh-val-" + k).textContent = `${Math.round(v)} %`;
   }
   const rs = $("read-sat");
-  if (rs) rs.textContent = P.bypass.getValue() ? "Bypassed" : !P.satOn.getValue() ? "Off" : satIsNeutral() ? neutralText("sat") : `${SAT_MODES[satModeIndex()]} +${satDriveAt().toFixed(1)} dB`;
+  if (rs) rs.textContent = P.bypass.getValue() ? "Bypassed" : !P.satOn.getValue() ? "Off" : satIsNeutral() ? neutralText("sat") : `${SAT_MODES[satModeIndex()]} +${satDriveAt().toFixed(1)} dB${satBassOnly() ? " · bass" : ""}`;
   const hf = $("harmmeter-fill");
   if (hf) {
     const active = P.satOn.getValue() && !satIsNeutral() && !P.bypass.getValue();

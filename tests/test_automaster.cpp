@@ -5,6 +5,7 @@
 #include "polisher/AutoMaster.h"
 #include "polisher/FilterDesign.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <numbers>
@@ -280,6 +281,7 @@ TEST_CASE ("Auto-Master sets Dynamics, Stereo Imager and Saturation and explains
 
         // Saturation: the mode fits the genre and the drive lands near the genre's harmonics target.
         CHECK (r.chain.saturation.mode == (genre == Genre::trapHipHop ? SaturationMode::tube : SaturationMode::tape));
+        CHECK (r.chain.saturation.focus == (genre == Genre::trapHipHop ? SaturationFocus::bass : SaturationFocus::full));
         CHECK (r.chain.saturation.driveDb > 0.0);
         CHECK (r.chain.saturation.mix == 50.0);
 
@@ -458,4 +460,70 @@ TEST_CASE ("A mix already louder than the target is turned down with Input Trim 
     // A mix below the target keeps Input Trim at 0 dB.
     const auto quiet = autoMaster (testsig::musicLike (48000.0, 12.0, -20.0), s);
     CHECK (quiet.chain.trimDb == 0.0);
+}
+
+TEST_CASE ("Auto-Master gives the 808 Bass only harmonics for trap and lands the harmonics target", "[automaster][saturation]")
+{
+    const auto beat = testsig::trapLike (48000.0, 12.0);
+    for (auto genre : { Genre::trapHipHop, Genre::rnb, Genre::pop })
+    {
+        AutoMasterSettings s;
+        s.genre = genre;
+        const auto r = autoMaster (beat, s);
+        INFO (genreName (genre) << ": " << r.summary);
+        for (const auto& x : r.reasons) if (x.module == "sat") INFO ("sat " << x.control << " " << x.value << ": " << x.why);
+        checkWellFormed (r);
+        const auto& sat = r.chain.saturation;
+        const bool bassLed = genre != Genre::pop;
+        CHECK (sat.focus == (bassLed ? SaturationFocus::bass : SaturationFocus::full));
+        const auto focus = std::find_if (r.reasons.begin(), r.reasons.end(), [] (const auto& x) { return x.module == "sat" && x.control == "Focus"; });
+        REQUIRE (focus != r.reasons.end());
+        CHECK (focus->value == (bassLed ? "Bass only" : "Full"));
+        if (bassLed) CHECK (focus->why.find ("phone") != std::string::npos);
+
+        // What the plug-in's Harmonics meter will read on the music reaching Saturation, against the target.
+        const auto drive = std::find_if (r.reasons.begin(), r.reasons.end(), [] (const auto& x) { return x.module == "sat" && x.control == "Drive"; });
+        REQUIRE (drive != r.reasons.end());
+        const bool dense = drive->why.find ("already dense") != std::string::npos;
+        const double target = (genre == Genre::trapHipHop ? -25.0 : -28.0) - (dense ? 4.0 : 0.0);
+        MasterChainParams pre = r.chain;
+        pre.saturation = SaturationParams {};
+        const auto beforeSat = renderPreDrive (beat, pre);
+        Saturation meter;
+        meter.prepare (beforeSat.sampleRate, beforeSat.numChannels());
+        meter.setParams (sat);
+        meter.reset();
+        auto c = beforeSat;
+        float* ch[2] = { c.channels[0].data(), c.channels[1].data() };
+        meter.process (ch, 2, c.numSamples());
+        const double reads = meter.takeHarmonicsDb();
+        INFO ("Drive " << sat.driveDb << " dB: the meter reads " << reads << " dB, target " << target);
+        CHECK (sat.driveDb > 0.0);
+        CHECK (sat.driveDb < Saturation::kMaxDriveDb);
+        CHECK_THAT (reads, WithinAbs (target, 2.0));
+    }
+
+    // A trap song with no 808 in the part heard (everything below 150 Hz filtered out): Bass only would have
+    // nothing to work on, so the whole mix gets the harmonics, and the report says why.
+    AudioClip thin = beat;
+    for (auto& ch : thin.channels)
+    {
+        std::array<Biquad, 4> f {};
+        for (auto& q : f) design::apply (q, design::butterworth (true, 150.0, thin.sampleRate));
+        for (auto& v : ch)
+        {
+            double x = v;
+            for (auto& q : f) x = q.process (x);
+            v = static_cast<float> (x);
+        }
+    }
+    AutoMasterSettings s;
+    const auto r = autoMaster (thin, s);
+    INFO (r.summary);
+    REQUIRE (r.ok);
+    CHECK (r.chain.saturation.focus == SaturationFocus::full);
+    const auto focus = std::find_if (r.reasons.begin(), r.reasons.end(), [] (const auto& x) { return x.module == "sat" && x.control == "Focus"; });
+    REQUIRE (focus != r.reasons.end());
+    INFO (focus->why);
+    CHECK (focus->why.find ("very little low end") != std::string::npos);
 }

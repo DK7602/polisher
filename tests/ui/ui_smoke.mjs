@@ -88,6 +88,34 @@ await page.evaluate(() => [...document.querySelectorAll('#knob-row .cell')].find
 await page.waitForTimeout(150);
 check((await keepState()).keep, 'second click turns Keep Loudness back on');
 
+// Saturation's Focus: Full by default; BASS ONLY flips satFocus only, and Learn explains it with its TRY THIS.
+await pick('Saturation');
+await page.waitForTimeout(120);
+const satFocusState = () => page.evaluate(async () => {
+  const juce = await import('./juce/index.js');
+  const cell = [...document.querySelectorAll('#knob-row .cell')].find((c) => c.querySelector('.cell-label').textContent === 'Focus');
+  const pressed = cell ? [...cell.querySelectorAll('button')].find((b) => b.getAttribute('aria-pressed') === 'true') : null;
+  return { found: !!cell, buttons: cell ? [...cell.querySelectorAll('button')].map((b) => b.textContent) : [],
+           focus: juce.getComboBoxState('satFocus').getChoiceIndex(), mode: juce.getComboBoxState('satMode').getChoiceIndex(),
+           pressed: pressed ? pressed.textContent : '', note: cell ? cell.querySelector('.os-note').textContent : '',
+           learn: document.getElementById('learn-body').textContent };
+});
+const clickFocus = (label) => page.evaluate((l) => [...document.querySelectorAll('#knob-row .cell')]
+  .find((c) => c.querySelector('.cell-label').textContent === 'Focus').querySelectorAll('button').forEach((b) => { if (b.textContent === l) b.click(); }), label);
+const f0 = await satFocusState();
+check(f0.found && f0.buttons.join('/') === 'FULL/BASS ONLY', `Saturation shows a Focus choice (${f0.buttons.join(' / ')})`);
+check(f0.focus === 0 && f0.pressed === 'FULL' && f0.note === 'whole mix', `Focus starts on Full ("${f0.pressed}", "${f0.note}")`);
+await clickFocus('BASS ONLY');
+await page.waitForTimeout(150);
+const f1 = await satFocusState();
+check(f1.focus === 1 && f1.mode === f0.mode && f1.pressed === 'BASS ONLY', `BASS ONLY sets satFocus only ("${f1.pressed}", mode ${f1.mode})`);
+check(/Focus\s*Bass only/.test(f1.learn) && /phone/.test(f1.learn), 'Learn explains Bass only');
+check(/Bass only, Tube, Drive \+9/.test(f1.learn) && /MATCH/.test(f1.learn), 'Learn gives the Bass only TRY THIS (phone speakers, MATCH)');
+await clickFocus('FULL');
+await page.waitForTimeout(150);
+const f2 = await satFocusState();
+check(f2.focus === 0 && f2.pressed === 'FULL', 'FULL puts Focus back');
+
 // The A / B buttons drive the global bypass.
 await page.click('#btn-a'); await page.waitForTimeout(100);
 check((await state()).globalA, 'A selects the original mix');
@@ -136,6 +164,19 @@ await page.waitForTimeout(1000);
 r = await ref();
 check(r.pill === 'Second Reference' && r.curve > 100, `loading a reference shows the new song ("${r.pill}")`);
 check(/MATCH A REFERENCE/.test(r.learn) && /HOW TO USE IT/.test(r.learn), 'Learn explains the reference and how to use it');
+
+// Auto-Master (mock: Trap) put Saturation on Tube, Bass only: the Focus button, the chain readout and
+// Learn's Auto-Master section show it, and undo puts Full back.
+await pick('Saturation');
+await page.waitForTimeout(150);
+const f3 = await satFocusState();
+const readSat = await page.evaluate(() => document.getElementById('read-sat').textContent);
+check(f3.focus === 1 && f3.pressed === 'BASS ONLY', `after Auto-Master, Focus shows Bass only ("${f3.pressed}")`);
+check(/bass/.test(readSat), `the chain row says it works on the bass ("${readSat}")`);
+check(/Harmonics go on the 808/.test(f3.learn), 'Learn shows Auto-Master\'s reason for Bass only');
+await page.click('#btn-undo');
+await page.waitForTimeout(300);
+check((await satFocusState()).focus === 0, 'undo puts Focus back to Full');
 
 check(errors.length === 0, `no script errors (${errors.join(' | ')})`);
 await browser.close();

@@ -275,9 +275,14 @@ Adds harmonics so bass translates on small speakers and the master feels denser.
 | Control | Range (default) | What it does |
 | --- | --- | --- |
 | Mode | Tape, Tube, Clip (Tape) | Tape = smooth and warm. Tube = rich, fuller bass. Clip = firm and bright. |
+| Focus | Full, Bass only (Full) | Full = the whole mix gets harmonics. Bass only = only the low end (below about 150 Hz: 808 and kick). |
 | Drive | 0–18 dB (0) | How many harmonics. 0 = off. |
 | Mix | 0–100 % (100) | Blend with the clean sound. |
 | Harmonics meter | −60 to −10 dB | What was added. Aim for about −25 to −35 dB. |
+
+**Bass only ("808 to phone").** Phone and laptop speakers can't play an 808's low notes, so on them the 808 disappears. They can play its harmonics (the 2nd, 3rd, 4th... overtones, roughly 90–600 Hz), and your ear fills in the low note. With Focus on Bass only, Saturation adds those harmonics to the 808 and kick only: vocals, hats and snares stay clean (even at full Drive), the clean sound itself is never filtered, and no extra sub is added, so the 808 sounds about the same on headphones and big speakers. The Harmonics meter reads about the same as Full at the same Drive. Switching between Full and Bass only is click-free. Auto-Master picks Bass only (with Tube) for Trap / Hip-Hop and R&B, unless the part it heard has almost no low end.
+
+Try it: Bass only, Tube, Drive +9. Play the song on your phone or laptop speakers and flip A/B with MATCH on: on B the 808 should come through. Songs saved before Focus existed open on Full and sound exactly as before.
 
 ### 10 Soft Clipper
 

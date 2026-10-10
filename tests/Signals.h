@@ -4,6 +4,7 @@
 
 #include "polisher/LoudnessTargeting.h"
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 #include <random>
@@ -71,6 +72,69 @@ inline AudioClip musicLike (double sr, double seconds, double levelDb, unsigned 
             ch[i] = static_cast<float> (scale * (pink + kick) * 0.35);
         }
     }
+    return clip;
+}
+
+/** A trap-like beat at 140 BPM: a long sine 808 (F1 / G1 / E1 / A1 notes with a quick pitch drop),
+    kick with a click, snare, hats and a vocal-like buzz (160-220 Hz with formants), the 808 loudest,
+    peaks at -1 dBFS. */
+inline AudioClip trapLike (double sr, double seconds, unsigned seed = 11)
+{
+    std::mt19937 rng (seed);
+    std::normal_distribution<double> white (0.0, 1.0);
+    AudioClip clip = silence (sr, 2, seconds);
+    const double beat = 60.0 / 140.0, twoPi = 2.0 * std::numbers::pi;
+    const double notes[4] = { 43.65, 49.0, 41.2, 55.0 };
+    double p808 = 0.0, pKick = 0.0, pVox = 0.0, hatHp[2] = { 0.0, 0.0 }, hatPrev[2] = { 0.0, 0.0 }, snHp = 0.0, snPrev = 0.0;
+    double f1[2] = { 0.0, 0.0 }, f2[2] = { 0.0, 0.0 };   // vocal formant resonators (state)
+    double f1b[2] = { 0.0, 0.0 }, f2b[2] = { 0.0, 0.0 };
+    // Formant resonators, scaled to about unity gain at their centre.
+    struct Reson { double a, b, g; };
+    const auto reson = [&] (double fc, double bw)
+    {
+        const double r = std::exp (-std::numbers::pi * bw / sr), w = twoPi * fc / sr;
+        return Reson { 2.0 * r * std::cos (w), -r * r, (1.0 - r) * 2.0 * std::sin (w) };
+    };
+    const Reson r1 = reson (700.0, 150.0), r2 = reson (2500.0, 300.0);
+    const int n = clip.numSamples();
+    for (int i = 0; i < n; ++i)
+    {
+        const double t = i / sr;
+        const double t808 = std::fmod (t, 2.0 * beat), tBeat = std::fmod (t, beat), tHat = std::fmod (t, beat / 2.0);
+        const int note = static_cast<int> (t / (2.0 * beat)) % 4;
+        p808 += twoPi * notes[note] * (1.0 + std::exp (-t808 / 0.012)) / sr;
+        const double s808 = 0.62 * std::min (1.0, t808 / 0.002) * std::exp (-t808 * 1.2) * std::sin (p808);
+        const bool kickBeat = static_cast<int> (t / beat) % 2 == 0;
+        pKick += twoPi * (50.0 + 80.0 * std::exp (-tBeat * 35.0)) / sr;
+        const double kick = kickBeat ? 0.45 * std::exp (-tBeat * 14.0) * std::sin (pKick) + 0.08 * std::exp (-tBeat * 900.0) * std::sin (twoPi * 3200.0 * tBeat) : 0.0;
+        const double w = white (rng);
+        snHp = 0.97 * (snHp + w - snPrev);
+        snPrev = w;
+        const double snare = ! kickBeat ? std::exp (-tBeat * 22.0) * (0.22 * snHp + 0.18 * std::sin (twoPi * 190.0 * tBeat)) : 0.0;
+        // Vocal: phrases of 1.5 s on, 0.5 s off; f0 glides 160-220 Hz; a buzz through two formants.
+        const double tv = std::fmod (t, 2.0);
+        const double f0 = 190.0 + 30.0 * std::sin (twoPi * 0.7 * t) + 3.0 * std::sin (twoPi * 5.5 * t);
+        pVox += twoPi * f0 / sr;
+        const double buzz = std::fmod (pVox / twoPi, 1.0) * 2.0 - 1.0;
+        const double voxGate = tv < 1.5 ? std::min (1.0, tv / 0.03) * std::min (1.0, (1.5 - tv) / 0.03) : 0.0;
+        for (int c = 0; c < 2; ++c)
+        {
+            const double hw = white (rng);
+            hatHp[c] = 0.6 * (hatHp[c] + hw - hatPrev[c]);
+            hatPrev[c] = hw;
+            const double hat = 0.1 * std::exp (-tHat * 70.0) * (hatHp[c] - 0.6 * hatPrev[c]);
+            const double y1 = buzz + r1.a * f1[c] + r1.b * f1b[c];
+            f1b[c] = f1[c]; f1[c] = y1;
+            const double y2 = buzz + r2.a * f2[c] + r2.b * f2b[c];
+            f2b[c] = f2[c]; f2[c] = y2;
+            const double vox = voxGate * (0.6 * r1.g * y1 + 0.35 * r2.g * y2 + 0.06 * buzz);
+            clip.channels[static_cast<size_t> (c)][static_cast<size_t> (i)] = static_cast<float> (s808 + kick + snare + hat + vox);
+        }
+    }
+    double peak = 0.0;
+    for (auto& ch : clip.channels) for (float v : ch) peak = std::max (peak, static_cast<double> (std::abs (v)));
+    const auto g = static_cast<float> (std::pow (10.0, -1.0 / 20.0) / peak);
+    for (auto& ch : clip.channels) for (auto& v : ch) v *= g;
     return clip;
 }
 

@@ -34,7 +34,7 @@ namespace ModuleParams
         return ids;
     }
     inline juce::StringArray toggleIds() { return { "ulOn", "stemOn", "stemKeep", "tsOn", "rtOn", "dynOn", "dynAdaptive", "satOn" }; }
-    inline juce::StringArray comboIds()  { return { "satMode", "tsSpeed", "rtFocus", "ulFocus" }; }
+    inline juce::StringArray comboIds()  { return { "satMode", "satFocus", "tsSpeed", "rtFocus", "ulFocus" }; }
 
     inline void addTo (juce::AudioProcessorValueTreeState::ParameterLayout& layout)
     {
@@ -130,6 +130,10 @@ namespace ModuleParams
         // Saturation (after the Stereo Imager, before Drive). Drive 0 = untouched.
         layout.add (std::make_unique<AudioParameterBool> (ParameterID { "satOn", 1 }, "Saturation On", true));
         layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "satMode", 1 }, "Saturation Mode", StringArray { "Tape", "Tube", "Clip" }, 0));
+        // Focus: the whole mix, or the low end only (harmonics of the 808 for phone speakers). Version hint 7.
+        // The default, Full, is also what a state saved before Focus existed loads as (JUCE gives a control
+        // missing from a state its default), which is exactly how it sounded then.
+        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "satFocus", 7 }, "Saturation Focus", StringArray { "Full", "Bass only" }, 0));
         layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "satDrive", 1 }, "Saturation Drive",
                                                            NormalisableRange<float> (0.0f, static_cast<float> (polisher::Saturation::kMaxDriveDb), 0.1f), 0.0f,
                                                            AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction (dbText)));
@@ -166,6 +170,7 @@ namespace ModuleParams
             }
             satOn = get ("satOn");
             satMode = get ("satMode");
+            satFocus = get ("satFocus");
             satDrive = get ("satDrive");
             satMix = get ("satMix");
             imgOn = get ("imgOn");
@@ -233,6 +238,7 @@ namespace ModuleParams
             p.mode = static_cast<polisher::SaturationMode> (juce::jlimit (0, 2, juce::roundToInt (satMode->load())));
             p.driveDb = satDrive->load();
             p.mix = satMix->load();
+            p.focus = satFocus->load() > 0.5f ? polisher::SaturationFocus::bass : polisher::SaturationFocus::full;
             return p;
         }
 
@@ -260,6 +266,7 @@ namespace ModuleParams
         std::array<std::atomic<float>*, polisher::kDynBands> thr {}, ratio {}, atk {}, rel {}, gain {};
         std::atomic<float>* satOn = nullptr;
         std::atomic<float>* satMode = nullptr;
+        std::atomic<float>* satFocus = nullptr;
         std::atomic<float>* satDrive = nullptr;
         std::atomic<float>* satMix = nullptr;
         std::atomic<float>* imgOn = nullptr;

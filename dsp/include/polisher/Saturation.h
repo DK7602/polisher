@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Biquad.h"
 #include "SoftClipper.h"   // HalfbandStage
 
 #include <algorithm>
@@ -11,12 +12,17 @@ namespace polisher {
 
 enum class SaturationMode { tape = 0, tube = 1, clip = 2 };
 
+/** What the curve hears: the whole mix, or only the low end (harmonics of the 808 and kick, so they
+    show up on phone and laptop speakers, while vocals and hats stay clean). */
+enum class SaturationFocus { full = 0, bass = 1 };
+
 struct SaturationParams
 {
     bool enabled = true;
     SaturationMode mode = SaturationMode::tape;
     double driveDb = 0.0;   // 0 = off (exact pass-through) ... kMaxDriveDb
     double mix = 100.0;     // % of the saturated signal (parallel blend)
+    SaturationFocus focus = SaturationFocus::full;
 };
 
 /** Mastering saturation: adds harmonics that make a master feel denser and help bass translate
@@ -34,8 +40,18 @@ struct SaturationParams
     - Only what the curve adds (harmonics and peak rounding) goes through the oversampling filters
       (and, for tube only, a 1 Hz high-pass that removes the DC its asymmetry creates); it is mixed
       back onto the dry signal, so the clean signal is never filtered and Mix is a true parallel blend.
+    - Focus Bass only ("808 to phone"): the curve hears only the low end (a Linkwitz-Riley 4th-order
+      low-pass at kBassSplitHz), so the 808 and kick get harmonics and vocals, hats and snares stay
+      clean. What it adds is high-passed (2nd order at kBassResidualHz), so it keeps the 2nd, 3rd,
+      4th... harmonics (what phone and laptop speakers can play) but adds no sub and leaves the 808's
+      fundamental alone. The dry signal is still the plain delay: no crossover on the clean path. The
+      low end alone is quieter than the whole mix, so Bass only bends kBassDriveDb earlier at the same
+      Drive: on a trap mix the Harmonics meter reads about what Full reads at that Drive.
     - Constant latency (kLatency) in every state; exact pass-through (delayed) when off, at Drive 0
       or Mix 0, with 20 ms cross-fades (after reset() it starts fully in the set state). Drive glides, so moves never zipper.
+      Switching Focus warms the other path up next to the one playing (~50 ms, unheard), then
+      cross-fades to it over 30 ms (raised cosine): no click, no thump. Full is bit-for-bit what it
+      was before Focus.
 
     prepare() allocates; process() does not. */
 class Saturation
@@ -47,6 +63,10 @@ public:
     static constexpr double kHeadroomDb = 7.5;   // S at Drive 0, above full scale
     static constexpr double kFadeInDb = 3.0;     // the effect fades in over the first 3 dB of Drive
     static constexpr double kTubeBias = 0.35;
+    static constexpr double kBassSplitHz = 150.0;     // Bass only: the curve hears below this (LR4)
+    static constexpr double kBassResidualHz = 70.0;   // Bass only: what it adds is high-passed here (2nd order)
+    static constexpr double kBassDriveDb = 6.0;       // Bass only: the curve bends this much earlier
+    static constexpr double kFocusFadeSeconds = 0.03; // Full <-> Bass only cross-fade
 
     void prepare (double sampleRate, int numChannels);
     void reset() noexcept;
@@ -66,9 +86,16 @@ public:
     /** The static curve at a given bend point S (exposed for tests and the UI). */
     static double shape (double x, SaturationMode mode, double s) noexcept;
 
+    /** Where the curve bends (S) at a Drive, for a Focus. */
+    static double bendFor (double driveDb, SaturationFocus focus) noexcept
+    {
+        return std::pow (10.0, (kHeadroomDb - std::clamp (driveDb, 0.0, kMaxDriveDb) - (focus == SaturationFocus::bass ? kBassDriveDb : 0.0)) / 20.0);
+    }
+
     /** Quick estimate of the harmonics level (dB, at the set Mix) a clip would get, without
-        oversampling: for choosing a Drive offline, where speed matters more than the last dB. */
-    static double estimateHarmonicsDb (const std::vector<std::vector<float>>& channels, const SaturationParams& p);
+        oversampling: for choosing a Drive offline, where speed matters more than the last dB.
+        (The sample rate places the Bass only filters.) */
+    static double estimateHarmonicsDb (const std::vector<std::vector<float>>& channels, const SaturationParams& p, double sampleRate);
 
     void processFrame (double* frame, int numChannels) noexcept;
 
@@ -111,17 +138,32 @@ private:
         int dryPos = 0;
         double hpX = 0.0, hpY = 0.0;
         double dcSum = 0.0;        // the residual summed over the warm-up's DC window
+        // Bass only: its own oversampling, the low-pass in front of the curve, the high-pass after it.
+        std::array<HalfbandStage, 2> bassStages { HalfbandStage (95), HalfbandStage (33) };
+        std::array<Biquad, 2> split {};
+        Biquad bassHp {};
+    };
+    /** One way of making the residual (Full or Bass only): runs while it is heard or warming up. */
+    struct Path
+    {
+        bool active = false;
+        int warm = 0;   // samples left before it may be heard
     };
 
     double curve (double x) const noexcept { return shape (x, params.mode, bend); }
+    void startPath (bool bass, int warmSamples) noexcept;
+    void stopPath (bool bass) noexcept;
 
     SaturationParams params;
     int channelCount = 2;
     std::vector<Channel> channelState;
     double bend = 4.0, bendTarget = 4.0, glideCoeff = 0.0;
     double mix = 0.0, mixCoeff = 0.0, hpCoeff = 0.0;
+    double focus = 0.0;   // 0 = the Full path is heard, 1 = Bass only, between = cross-fading
+    double focusStep = 0.001, bassBendScale = 0.5;
     double resEnergy = 0.0, sigEnergy = 0.0;
-    int warmup = 0, dcWindow = 1200, dcCount = 0;
+    int dcWindow = 1200, dcCount = 0;
+    Path fullPath, bassPath;
     bool running = false;
 };
 

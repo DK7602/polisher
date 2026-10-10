@@ -4,7 +4,10 @@
 #include "Signals.h"
 #include "polisher/Saturation.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <functional>
 #include <numbers>
 
 using namespace polisher;
@@ -46,13 +49,160 @@ double folded (double f, double sr)
     return f > sr / 2 ? sr - f : f;
 }
 
-SaturationParams with (SaturationMode m, double drive, double mix = 100.0)
+SaturationParams with (SaturationMode m, double drive, double mix = 100.0, SaturationFocus focus = SaturationFocus::full)
 {
     SaturationParams p;
     p.mode = m;
     p.driveDb = drive;
     p.mix = mix;
+    p.focus = focus;
     return p;
+}
+
+SaturationParams bassOnly (SaturationMode m, double drive, double mix = 100.0) { return with (m, drive, mix, SaturationFocus::bass); }
+
+/** Saturation exactly as it was before Focus (v0.15.0), kept as the reference that Full must still match
+    bit for bit. Same curves (Saturation::shape), same filters, same order of operations. */
+class LegacySaturation
+{
+public:
+    void prepare (double sampleRate, int numChannels)
+    {
+        channelCount = numChannels;
+        channelState.assign (static_cast<size_t> (channelCount), Channel {});
+        for (auto& ch : channelState) ch.dry.assign (Saturation::kLatency + 1, 0.0);
+        glideCoeff = 1.0 - std::exp (-1.0 / (0.030 * sampleRate));
+        mixCoeff = 1.0 - std::exp (-4.0 / (0.020 * sampleRate));
+        hpCoeff = std::exp (-2.0 * std::numbers::pi * 1.0 / sampleRate);
+        dcWindow = static_cast<int> (0.05 * sampleRate);
+        reset();
+    }
+    void setParams (const SaturationParams& p) { params = p; }
+    void reset()
+    {
+        for (auto& ch : channelState)
+        {
+            for (auto& st : ch.stages) st.reset();
+            std::fill (ch.dry.begin(), ch.dry.end(), 0.0);
+            ch.dryPos = 0;
+            ch.hpX = ch.hpY = ch.dcSum = 0.0;
+        }
+        dcCount = 0;
+        bendTarget = std::pow (10.0, (Saturation::kHeadroomDb - std::clamp (params.driveDb, 0.0, Saturation::kMaxDriveDb)) / 20.0);
+        bend = bendTarget;
+        running = ! Saturation::isNeutral (params);
+        mix = Saturation::effectiveMix (params);
+        warmup = 0;
+    }
+    void processFrame (double* frame, int nch)
+    {
+        const double mixTarget = Saturation::effectiveMix (params);
+        bendTarget = std::pow (10.0, (Saturation::kHeadroomDb - std::clamp (params.driveDb, 0.0, Saturation::kMaxDriveDb)) / 20.0);
+        const bool idle = mix < 1.0e-6 && mixTarget == 0.0 && warmup == 0;
+        if (idle)
+        {
+            if (mix != 0.0 || running)
+            {
+                mix = 0.0;
+                running = false;
+                for (auto& ch : channelState)
+                {
+                    for (auto& st : ch.stages) st.reset();
+                    ch.hpX = ch.hpY = ch.dcSum = 0.0;
+                }
+            }
+        }
+        else
+        {
+            if (! running)
+            {
+                running = true;
+                warmup = 2 * Saturation::kLatency + dcWindow;
+                bend = bendTarget;
+            }
+            if (warmup > 0) --warmup;
+            else mix += (mixTarget - mix) * mixCoeff;
+            bend += (bendTarget - bend) * glideCoeff;
+        }
+        const bool measuringDc = ! idle && warmup > 0 && warmup <= dcWindow;
+        const bool seedDc = ! idle && warmup == 0 && dcCount > 0;
+        const double dcWeight = measuringDc ? std::pow (std::sin (std::numbers::pi * (dcCount + 0.5) / dcWindow), 2.0) : 0.0;
+        for (int c = 0; c < nch; ++c)
+        {
+            auto& ch = channelState[static_cast<size_t> (c)];
+            const double x = frame[c];
+            const int size = static_cast<int> (ch.dry.size());
+            ch.dry[static_cast<size_t> (ch.dryPos)] = x;
+            const double dry = ch.dry[static_cast<size_t> ((ch.dryPos + 1) % size)];
+            ch.dryPos = (ch.dryPos + 1) % size;
+            if (idle) { frame[c] = dry; continue; }
+            double a, b, u[4];
+            ch.stages[0].upsample (x, a, b);
+            ch.stages[1].upsample (a, u[0], u[1]);
+            ch.stages[1].upsample (b, u[2], u[3]);
+            for (double& v : u) v = Saturation::shape (v, params.mode, bend) - v;
+            const double ra = ch.stages[1].downsample (u[0], u[1]);
+            const double rb = ch.stages[1].downsample (u[2], u[3]);
+            const double res = ch.stages[0].downsample (ra, rb);
+            if (measuringDc) ch.dcSum += dcWeight * res;
+            if (seedDc) { ch.hpX = ch.dcSum / (0.5 * dcCount); ch.hpY = 0.0; ch.dcSum = 0.0; }
+            if (params.mode == SaturationMode::tube) { ch.hpY = hpCoeff * (ch.hpY + res - ch.hpX); ch.hpX = res; }
+            else { ch.hpY = res; ch.hpX = 0.0; }
+            frame[c] = dry + mix * ch.hpY;
+        }
+        dcCount = measuringDc ? dcCount + 1 : 0;
+    }
+
+private:
+    struct Channel
+    {
+        std::array<HalfbandStage, 2> stages { HalfbandStage (95), HalfbandStage (33) };
+        std::vector<double> dry;
+        int dryPos = 0;
+        double hpX = 0.0, hpY = 0.0, dcSum = 0.0;
+    };
+    SaturationParams params;
+    int channelCount = 2;
+    std::vector<Channel> channelState;
+    double bend = 4.0, bendTarget = 4.0, glideCoeff = 0.0, mix = 0.0, mixCoeff = 0.0, hpCoeff = 0.0;
+    int warmup = 0, dcWindow = 1200, dcCount = 0;
+    bool running = false;
+};
+
+/** Runs a processor block by block (256), asking for the params at each block's first sample. */
+template <typename Sat>
+AudioClip render (AudioClip c, const std::function<SaturationParams (int)>& paramsAt, bool startWithReset)
+{
+    Sat s;
+    s.prepare (c.sampleRate, c.numChannels());
+    s.setParams (paramsAt (0));
+    if (startWithReset) s.reset();
+    const int n = c.numSamples(), block = 256;
+    for (int start = 0; start < n; start += block)
+    {
+        s.setParams (paramsAt (start));
+        for (int i = start; i < std::min (n, start + block); ++i)
+        {
+            double frame[2] = { c.channels[0][static_cast<size_t> (i)], c.channels[1][static_cast<size_t> (i)] };
+            s.processFrame (frame, 2);
+            for (int ch = 0; ch < 2; ++ch) c.channels[static_cast<size_t> (ch)][static_cast<size_t> (i)] = static_cast<float> (frame[ch]);
+        }
+    }
+    return c;
+}
+
+/** Harmonics meter reading (dB) for a whole clip, starting from reset(). */
+double meterDb (const AudioClip& clip, const SaturationParams& p)
+{
+    Saturation s;
+    s.prepare (clip.sampleRate, clip.numChannels());
+    s.setParams (p);
+    s.reset();
+    auto c = clip;
+    std::vector<float*> ch;
+    for (auto& v : c.channels) ch.push_back (v.data());
+    s.process (ch.data(), c.numChannels(), c.numSamples());
+    return s.takeHarmonicsDb();
 }
 
 } // namespace
@@ -60,7 +210,9 @@ SaturationParams with (SaturationMode m, double drive, double mix = 100.0)
 TEST_CASE ("Saturation at Drive 0 or Mix 0 is an exact, delayed pass-through", "[saturation]")
 {
     const auto mix = testsig::musicLike (48000.0, 1.0, -3.0);
-    for (const auto& p : { SaturationParams {}, with (SaturationMode::tube, 12.0, 0.0), [] { auto q = with (SaturationMode::clip, 12.0); q.enabled = false; return q; }() })
+    for (const auto& p : { SaturationParams {}, with (SaturationMode::tube, 12.0, 0.0), [] { auto q = with (SaturationMode::clip, 12.0); q.enabled = false; return q; }(),
+                           bassOnly (SaturationMode::tube, 0.0), bassOnly (SaturationMode::tube, 12.0, 0.0),
+                           [] { auto q = bassOnly (SaturationMode::clip, 12.0); q.enabled = false; return q; }() })
     {
         const auto out = saturate (mix, p);
         for (int c = 0; c < 2; ++c)
@@ -74,9 +226,10 @@ TEST_CASE ("Saturation keeps the reported latency and leaves quiet signals alone
 {
     // A quiet mix at full Drive: the curve is linear there, so the output is the input, delayed.
     const auto quiet = testsig::musicLike (48000.0, 1.0, -50.0);
+    for (auto focus : { SaturationFocus::full, SaturationFocus::bass })
     for (auto m : { SaturationMode::tape, SaturationMode::tube, SaturationMode::clip })
     {
-        const auto out = saturate (quiet, with (m, Saturation::kMaxDriveDb));
+        const auto out = saturate (quiet, with (m, Saturation::kMaxDriveDb, 100.0, focus));
         double err = 0.0, sig = 0.0;
         for (int i = 4800; i < quiet.numSamples(); ++i)
         {
@@ -84,7 +237,7 @@ TEST_CASE ("Saturation keeps the reported latency and leaves quiet signals alone
             err += d * d;
             sig += static_cast<double> (quiet.channels[0][static_cast<size_t> (i)]) * quiet.channels[0][static_cast<size_t> (i)];
         }
-        INFO ("mode " << static_cast<int> (m));
+        INFO ("mode " << static_cast<int> (m) << " focus " << static_cast<int> (focus));
         CHECK (10.0 * std::log10 (err / sig) < -50.0);
     }
 }
@@ -141,11 +294,35 @@ TEST_CASE ("Saturation doesn't alias and adds no DC", "[saturation]")
             for (int i = out.numSamples() / 2; i < out.numSamples(); ++i) dc += out.channels[0][static_cast<size_t> (i)];
             CHECK (std::abs (dc / (out.numSamples() / 2)) < 1e-4);
         }
+
+        // Bass only, pushed as hard as it goes on a full-scale low note: its harmonics reach far up
+        // (3 kHz and beyond) but nothing folds back, and no DC.
+        const double fb = 97.0;
+        const auto low = testsig::sine (sr, 2, fb, -1.0, 2.0);
+        for (auto m : { SaturationMode::tape, SaturationMode::tube, SaturationMode::clip })
+        {
+            const auto out = saturate (low, bassOnly (m, Saturation::kMaxDriveDb));
+            const int first = static_cast<int> (std::ceil (sr / 2 / fb));
+            double worst = -200.0;
+            for (int k = first; k <= first + 40; ++k)
+            {
+                const double a = folded (k * fb, sr);
+                if (std::abs (std::remainder (a, fb)) < 3.0) continue;   // lands on a real harmonic
+                worst = std::max (worst, levelAt (out, std::round (a)));
+            }
+            INFO ("Bass only: sr " << sr << " mode " << static_cast<int> (m) << " worst alias " << worst << ", 31st harmonic " << levelAt (out, 31 * fb));
+            CHECK (worst < -100.0);
+            CHECK (levelAt (out, 31 * fb) > -120.0);   // the harmonics really are generated up there
+            double dc = 0.0;
+            for (int i = out.numSamples() / 2; i < out.numSamples(); ++i) dc += out.channels[0][static_cast<size_t> (i)];
+            CHECK (std::abs (dc / (out.numSamples() / 2)) < 1e-4);
+        }
     }
 }
 
 TEST_CASE ("Saturation glides: no clicks when Drive or Mix move, stable at every rate", "[saturation]")
 {
+    for (auto focus : { SaturationFocus::full, SaturationFocus::bass })
     for (double sr : { 44100.0, 48000.0, 96000.0, 192000.0 })
     {
         auto c = testsig::sine (sr, 2, 100.0, -6.0, 1.0);
@@ -158,7 +335,7 @@ TEST_CASE ("Saturation glides: no clicks when Drive or Mix move, stable at every
         {
             // Jump between off and full Drive every 0.1 s.
             const bool on = (start / static_cast<int> (0.1 * sr)) % 2 == 1;
-            s.setParams (with (SaturationMode::clip, on ? Saturation::kMaxDriveDb : 0.0));
+            s.setParams (with (SaturationMode::clip, on ? Saturation::kMaxDriveDb : 0.0, 100.0, focus));
             float* p[2] = { ch[0] + start, ch[1] + start };
             s.process (p, 2, std::min (block, n - start));
         }
@@ -170,7 +347,7 @@ TEST_CASE ("Saturation glides: no clicks when Drive or Mix move, stable at every
             maxStep = std::max (maxStep, std::abs (v - c.channels[0][static_cast<size_t> (i - 1)]));
         }
         // A 100 Hz sine at -6 dBFS moves at most 2*pi*100/sr*0.5 per sample; allow a little more.
-        INFO ("sr " << sr << " max step " << maxStep);
+        INFO ("focus " << static_cast<int> (focus) << " sr " << sr << " max step " << maxStep);
         CHECK (maxStep < 1.3 * 2.0 * std::numbers::pi * 100.0 / sr * 0.5);
     }
 }
@@ -266,10 +443,11 @@ TEST_CASE ("Tube saturation engages without a low thump", "[saturation]")
     // 20 ms fade-in is over.
     const double sr = 48000.0;
     const int period = 800, n = static_cast<int> (sr * 2.0);
+    for (auto focus : { SaturationFocus::full, SaturationFocus::bass })
     for (double drive : { 6.0, 12.0, 18.0 })
     {
         Saturation sat; sat.prepare (sr, 2);
-        SaturationParams p; p.mode = SaturationMode::tube; p.driveDb = 0.0; p.mix = 100.0;
+        SaturationParams p; p.mode = SaturationMode::tube; p.driveDb = 0.0; p.mix = 100.0; p.focus = focus;
         sat.setParams (p); sat.reset();
         std::vector<double> out (static_cast<size_t> (n));
         for (int i = 0; i < n; ++i)
@@ -287,7 +465,206 @@ TEST_CASE ("Tube saturation engages without a low thump", "[saturation]")
             if (i >= period) sum -= out[static_cast<size_t> (i - period)];
             if (i >= n / 4 + static_cast<int> (0.1 * sr)) worst = std::max (worst, std::abs (sum / period));
         }
-        INFO ("Drive " << drive << ": thump " << 20.0 * std::log10 (worst + 1e-12) << " dBFS");
+        INFO ("focus " << static_cast<int> (focus) << " Drive " << drive << ": thump " << 20.0 * std::log10 (worst + 1e-12) << " dBFS");
         CHECK (20.0 * std::log10 (worst + 1e-12) < -40.0);
     }
+}
+
+TEST_CASE ("Saturation Full is bit for bit what it was before Focus", "[saturation][focus]")
+{
+    // The v0.15.0 algorithm (LegacySaturation above) against Full through Drive sweeps, on / off, Mix
+    // moves and mode changes, from reset() and from a cold start, at three rates: identical samples.
+    for (double sr : { 44100.0, 48000.0, 96000.0 })
+        for (int sig = 0; sig < 3; ++sig)
+        {
+            const AudioClip in = sig == 0 ? testsig::musicLike (sr, 2.0, -3.0) : sig == 1 ? testsig::trapLike (sr, 2.0) : testsig::sine (sr, 2, 60.0, -1.0, 2.0);
+            for (int scenario = 0; scenario < 4; ++scenario)
+            {
+                const auto paramsAt = [&] (int i)
+                {
+                    const double t = i / sr;
+                    const auto m = static_cast<SaturationMode> (scenario == 3 ? static_cast<int> (t * 3.0) % 3 : scenario % 3);
+                    const double d = scenario == 0 ? 9.0 : scenario == 1 ? 18.0 * std::fmod (t, 1.0) : (std::fmod (t, 0.6) < 0.3 ? 12.0 : 0.0);
+                    auto p = with (m, d, scenario == 2 ? 50.0 + 50.0 * std::sin (t * 7.0) : 60.0);
+                    p.enabled = ! (scenario == 1 && t > 1.2 && t < 1.5);
+                    return p;
+                };
+                for (bool fromReset : { true, false })
+                {
+                    const auto now = render<Saturation> (in, paramsAt, fromReset);
+                    const auto before = render<LegacySaturation> (in, paramsAt, fromReset);
+                    int differ = 0;
+                    for (size_t c = 0; c < 2; ++c)
+                        differ += std::memcmp (now.channels[c].data(), before.channels[c].data(), sizeof (float) * static_cast<size_t> (in.numSamples())) != 0 ? 1 : 0;
+                    INFO ("sr " << sr << " signal " << sig << " scenario " << scenario << " reset " << fromReset);
+                    CHECK (differ == 0);
+                }
+            }
+        }
+}
+
+TEST_CASE ("Saturation Bass only gives the 808 harmonics and leaves the vocal clean", "[saturation][focus]")
+{
+    // An 808 note (45 Hz): harmonics at 90, 135, 180 Hz appear; the note itself keeps its level.
+    const auto sub = testsig::sine (48000.0, 2, 45.0, -6.0, 3.0);
+    CHECK (levelAt (sub, 135.0) < -100.0);   // (none of them were there before)
+    for (auto m : { SaturationMode::tube, SaturationMode::tape })
+    {
+        const auto out = saturate (sub, bassOnly (m, 12.0));
+        INFO ("mode " << static_cast<int> (m) << ": 45 Hz " << levelAt (out, 45) << ", 90 Hz " << levelAt (out, 90) << ", 135 Hz " << levelAt (out, 135)
+                      << ", 180 Hz " << levelAt (out, 180) << ", 225 Hz " << levelAt (out, 225));
+        CHECK_THAT (levelAt (out, 45.0), WithinAbs (-6.0, 0.5));   // adds no sub, takes none away
+        CHECK (levelAt (out, 135.0) > -40.0);                       // the 3rd (every curve)
+        CHECK (levelAt (out, 225.0) > -60.0);                       // and on up the series
+        if (m == SaturationMode::tube)
+        {
+            CHECK (levelAt (out, 90.0) > -40.0);                    // tube: the 2nd and 4th too
+            CHECK (levelAt (out, 180.0) > -50.0);
+        }
+    }
+
+    // A vocal-like 2 kHz tone at -3 dBFS, Drive +18: Full distorts it clearly, Bass only doesn't touch it.
+    const auto voice = testsig::sine (48000.0, 2, 2000.0, -3.0, 2.0);
+    for (auto m : { SaturationMode::tape, SaturationMode::tube, SaturationMode::clip })
+    {
+        const auto thd = [&] (const SaturationParams& p)
+        {
+            const auto out = saturate (voice, p);
+            double h = 0.0;
+            for (int k = 2; k <= 10; ++k) h += std::pow (10.0, levelAt (out, 2000.0 * k) / 10.0);
+            return 10.0 * std::log10 (h + 1e-30) - levelAt (out, 2000.0);
+        };
+        const double full = thd (with (m, Saturation::kMaxDriveDb)), bass = thd (bassOnly (m, Saturation::kMaxDriveDb));
+        INFO ("mode " << static_cast<int> (m) << ": THD Full " << full << " dB, Bass only " << bass << " dB");
+        CHECK (full > -30.0);
+        CHECK (bass < -80.0);
+    }
+
+    // The 808 under the vocal: in Full the 808 modulates the vocal (sidebands at 1 kHz +/- n x 45 Hz);
+    // Bass only keeps the vocal clean.
+    auto both = testsig::sine (48000.0, 2, 45.0, -4.0, 2.0);
+    const auto tone = testsig::sine (48000.0, 2, 1000.0, -20.0, 2.0);
+    for (size_t c = 0; c < 2; ++c)
+        for (size_t i = 0; i < both.channels[c].size(); ++i) both.channels[c][i] += tone.channels[c][i];
+    const auto sidebands = [&] (const SaturationParams& p)
+    {
+        const auto out = saturate (both, p);
+        double e = 0.0;
+        for (int k = -4; k <= 4; ++k)
+            if (k != 0) e += std::pow (10.0, levelAt (out, 1000.0 + 45.0 * k) / 10.0);
+        return 10.0 * std::log10 (e + 1e-30) - levelAt (out, 1000.0);
+    };
+    const double imFull = sidebands (with (SaturationMode::tube, 12.0)), imBass = sidebands (bassOnly (SaturationMode::tube, 12.0));
+    INFO ("808 sidebands on the vocal: Full " << imFull << " dB, Bass only " << imBass << " dB");
+    CHECK (imFull > -30.0);
+    CHECK (imBass < -70.0);
+}
+
+TEST_CASE ("Saturation Bass only Drive reads like Full on a trap beat, and the level stays put", "[saturation][focus]")
+{
+    const auto beat = testsig::trapLike (48000.0, 6.0);
+    for (auto m : { SaturationMode::tube, SaturationMode::tape })
+        for (double drive : { 6.0, 12.0 })
+        {
+            const double full = meterDb (beat, with (m, drive, 50.0)), bass = meterDb (beat, bassOnly (m, drive, 50.0));
+            const double estimate = Saturation::estimateHarmonicsDb (beat.channels, bassOnly (m, drive, 50.0), beat.sampleRate);
+            INFO ("mode " << static_cast<int> (m) << " Drive " << drive << ": Full " << full << " dB, Bass only " << bass << " dB (estimate " << estimate << ")");
+            CHECK (std::abs (bass - full) < 2.5);
+            CHECK (std::abs (estimate - bass) < 0.5);   // Auto-Master's quick estimate matches the meter
+        }
+
+    // Tube +12, Mix 50 % (Auto-Master's usual trap setting): loudness and peaks hardly move.
+    const auto out = saturate (beat, bassOnly (SaturationMode::tube, 12.0, 50.0));
+    AudioClip aligned = beat;
+    for (auto& ch : aligned.channels)
+    {
+        ch.insert (ch.begin(), static_cast<size_t> (Saturation::kLatency), 0.0f);
+        ch.resize (ch.size() - static_cast<size_t> (Saturation::kLatency));
+    }
+    const auto a = measure (aligned), b = measure (out);
+    INFO ("loudness " << b.integratedLufs - a.integratedLufs << " LU, true peak " << b.truePeakDbtp - a.truePeakDbtp << " dB");
+    CHECK (std::abs (b.integratedLufs - a.integratedLufs) < 0.3);
+    CHECK (b.truePeakDbtp - a.truePeakDbtp < 0.5);
+}
+
+TEST_CASE ("Saturation Focus switches without clicks or thumps, at constant latency", "[saturation][focus]")
+{
+    const double sr = 48000.0;
+    // Second difference: the sharpest bend in the waveform. A click bends far more sharply than the music.
+    const auto sharpest = [] (const AudioClip& c, int from)
+    {
+        const auto& x = c.channels[0];
+        double worst = 0.0;
+        for (size_t i = static_cast<size_t> (std::max (2, from)); i < x.size(); ++i)
+            worst = std::max (worst, std::abs (static_cast<double> (x[i]) - 2.0 * x[i - 1] + x[i - 2]));
+        return worst;
+    };
+    for (auto m : { SaturationMode::tube, SaturationMode::clip })
+    {
+        const auto note = testsig::sine (sr, 2, 50.0, -3.0, 2.0);
+        const auto steadyFull = render<Saturation> (note, [&] (int) { return with (m, 18.0); }, true);
+        const auto steadyBass = render<Saturation> (note, [&] (int) { return bassOnly (m, 18.0); }, true);
+        const auto switching = render<Saturation> (note, [&] (int i) { return (i / static_cast<int> (0.2 * sr)) % 2 ? bassOnly (m, 18.0) : with (m, 18.0); }, true);
+        const double limit = std::max (sharpest (steadyFull, 4800), sharpest (steadyBass, 4800));
+        INFO ("mode " << static_cast<int> (m) << ": sharpest bend switching " << sharpest (switching, 4800) << ", steady " << limit);
+        CHECK (sharpest (switching, 4800) < 1.1 * limit);
+        // Each switch lands on the other setting's sound within 0.15 s (the cross-fade finishes).
+        double err = 0.0, sig = 0.0;
+        for (size_t i = static_cast<size_t> (0.35 * sr); i < static_cast<size_t> (0.4 * sr); ++i)
+        {
+            const double d = switching.channels[0][i] - steadyBass.channels[0][i];
+            err += d * d;
+            sig += static_cast<double> (steadyBass.channels[0][i]) * steadyBass.channels[0][i];
+        }
+        INFO ("after the switch: " << 10.0 * std::log10 (err / sig + 1e-30) << " dB from steady Bass only");
+        CHECK (10.0 * std::log10 (err / sig + 1e-30) < -60.0);
+    }
+
+    // Tube, Drive +18 on a loud 60 Hz note: switching Full -> Bass only -> Full lets out no DC (averaged over
+    // whole cycles, which removes the note and all its harmonics), once each change is through (warm-up and
+    // cross-fade, 0.1 s; during the cross-fade the two sounds' notes don't cancel within a cycle, which isn't DC).
+    // Engaged while playing, as in the test above.
+    const int period = 800, n = static_cast<int> (sr * 2.0);
+    const int changes[] = { 1, n / 4, 5 * n / 8 };   // engage (Full), to Bass only, back to Full
+    Saturation sat;
+    sat.prepare (sr, 2);
+    auto p = with (SaturationMode::tube, 0.0);
+    sat.setParams (p);
+    sat.reset();
+    std::vector<double> out (static_cast<size_t> (n));
+    for (int i = 0; i < n; ++i)
+    {
+        if (std::find (std::begin (changes), std::end (changes), i) != std::end (changes))
+        {
+            p.driveDb = 18.0;
+            p.focus = i == n / 4 ? SaturationFocus::bass : SaturationFocus::full;
+            sat.setParams (p);
+        }
+        const double x = 0.9 * std::sin (2.0 * std::numbers::pi * 60.0 * i / sr);
+        double frame[2] = { x, x };
+        sat.processFrame (frame, 2);
+        out[static_cast<size_t> (i)] = frame[0];
+    }
+    double sum = 0.0, worst = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        sum += out[static_cast<size_t> (i)];
+        if (i >= period) sum -= out[static_cast<size_t> (i - period)];
+        const bool settled = std::all_of (std::begin (changes), std::end (changes), [&] (int at) { return i < at || i >= at + static_cast<int> (0.1 * sr); });
+        if (settled && i >= period) worst = std::max (worst, std::abs (sum / period));
+    }
+    INFO ("thump while switching Focus: " << 20.0 * std::log10 (worst + 1e-12) << " dBFS");
+    CHECK (20.0 * std::log10 (worst + 1e-12) < -40.0);
+
+    // Latency: the same in both settings and while switching (a quiet signal passes delayed, unchanged).
+    const auto quiet = testsig::musicLike (sr, 1.0, -50.0);
+    const auto moved = render<Saturation> (quiet, [&] (int i) { return (i / 4800) % 2 ? bassOnly (SaturationMode::tube, 18.0) : with (SaturationMode::tube, 18.0); }, true);
+    double err = 0.0, sig = 0.0;
+    for (size_t i = 4800; i < quiet.channels[0].size(); ++i)
+    {
+        const double d = moved.channels[0][i] - quiet.channels[0][i - static_cast<size_t> (Saturation::kLatency)];
+        err += d * d;
+        sig += static_cast<double> (quiet.channels[0][i]) * quiet.channels[0][i];
+    }
+    CHECK (10.0 * std::log10 (err / sig) < -50.0);
 }

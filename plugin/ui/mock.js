@@ -49,6 +49,7 @@
   const combos = {
     clipOversampling: { choices: ["1x", "2x", "4x", "8x"], value: 2 / 3 },
     satMode: { choices: ["Tape", "Tube", "Clip"], value: 0 },
+    satFocus: { choices: ["Full", "Bass only"], value: 0 },
     ulFocus: { choices: ["Full", "Kick", "Snap"], value: 0 },
     tsSpeed: { choices: ["Slow", "Medium", "Fast"], value: 0.5 },
     rtFocus: { choices: ["Full", "Boxiness", "Harshness"], value: 0 },
@@ -75,11 +76,17 @@
   const am = { state: 0, progress: 0, undo: false, version: 0, report: "", snapshot: null };
   const setSlider = (name, v) => { sliders[name].value = v; send("__juce__slider" + name, { eventType: "valueChanged", value: v }); };
   const setToggle = (name, v) => { toggles[name] = v; send("__juce__toggle" + name, { eventType: "valueChanged", value: v }); };
+  const setCombo = (name, index) => {   // by choice index, like the plug-in's Auto-Master
+    const c = combos[name];
+    c.value = c.choices.length > 1 ? index / (c.choices.length - 1) : 0;
+    send("__juce__comboBox" + name, { eventType: "valueChanged", value: c.value });
+  };
   function amFinish() {
-    am.snapshot = { sliders: JSON.parse(JSON.stringify(sliders)), toggles: { ...toggles } };
+    am.snapshot = { sliders: JSON.parse(JSON.stringify(sliders)), toggles: { ...toggles }, combos: Object.fromEntries(Object.entries(combos).map(([k, c]) => [k, c.value])) };
     const values = { eqGain1: 0, eqGain2: 0, eqGain3: -1.4, eqGain4: 0, eqGain5: 0, eqGain6: 0.8, eqGain7: 1.6,
-                     bassMono: 100, bassTame: 40, bassPunch: 25, clipOn: 1, clipLevel: -1, clipSoftness: 50, drive: 9.4, ceiling: -1, release: 120 };
-    for (const [k, v] of Object.entries(values)) (k === "clipOn" ? setToggle(k, !!v) : setSlider(k, v));
+                     bassMono: 100, bassTame: 40, bassPunch: 25, satMode: 1, satFocus: 1, satDrive: 11.4, satMix: 50,
+                     clipOn: 1, clipLevel: -1, clipSoftness: 50, drive: 9.4, ceiling: -1, release: 120 };
+    for (const [k, v] of Object.entries(values)) (k === "clipOn" ? setToggle(k, !!v) : k in combos ? setCombo(k, v) : setSlider(k, v));
     const R = (module, control, value, why) => ({ module, control, value, why });
     const rp = ref.profile;
     const refPart = rp ? {
@@ -101,6 +108,10 @@
         R("bass", "Mono Below", "100 Hz", "Your bass is 42 % stereo below 150 Hz. Club systems and phones play bass in mono, so stereo bass partly cancels there. Making it mono below 100 Hz keeps it solid everywhere."),
         R("bass", "Sub Tame", "40 %", "Your loudest bass moments rise about 6.3 dB above the typical bass level, so some 808 notes leap out. Sub Tame evens those notes out."),
         R("bass", "Punch", "25 %", "Your low end is fairly sustained, so kicks can get lost under it. Punch adds thump to the start of each kick (it spots kicks by their click), so 808 notes and the sub aren't turned up."),
+        R("sat", "Mode", "Tube", "Tube leans on the 2nd harmonic: the 808 sounds fuller and richer, which Trap / Hip-Hop needs."),
+        R("sat", "Focus", "Bass only", "Harmonics go on the 808 and kick only, so the 808 shows up on phone and laptop speakers (they can't play its low notes, but they play its harmonics). Vocals and hats stay clean."),
+        R("sat", "Drive", "+11.4 dB", "Set by measuring your mix: at this Drive the harmonics sit about 25.0 dB below your music, enough for the 808 to come through on small speakers without sounding distorted."),
+        R("sat", "Mix", "50 %", "Half the harmonics are blended in and the rest stays clean, so drum hits keep their snap while the harmonics fill in underneath."),
         R("clip", "Soft Clipper", "On", "Your mix has 17.4 dB between its peaks and its average loudness (spiky drums). Shaving the sharpest drum peaks before the Maximizer gets you loud with less limiting."),
         R("clip", "Clip Level", "\u22121.0 dB", "Clipping starts 1.0 dB below the ceiling for the Loud \u22129 target; the level comes back up so peaks still use the full headroom."),
         R("max", "Drive", "+9.4 dB", "+9.4 dB of Drive lands this part at \u22129.0 LUFS, your Loud \u22129 target. Holding the peaks down costs about 2.1 dB of loudness, within the Balanced limit of 3.5 dB, so the drums keep their punch."),
@@ -161,6 +172,8 @@
           if (am.snapshot) {
             for (const [k, v] of Object.entries(am.snapshot.sliders)) setSlider(k, v.value);
             for (const [k, v] of Object.entries(am.snapshot.toggles)) setToggle(k, v);
+            for (const [k, v] of Object.entries(am.snapshot.combos || {}))
+              if (combos[k].value !== v) { combos[k].value = v; send("__juce__comboBox" + k, { eventType: "valueChanged", value: v }); }
           }
           am.undo = false; am.report = ""; am.version++;
         }

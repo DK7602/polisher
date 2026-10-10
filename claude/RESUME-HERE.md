@@ -55,6 +55,20 @@ IMPORTANT finding: at the same final loudness (-9 LUFS) the master balance is id
 changes at fixed Drive: Maximizer limiting 4.4 vs 8.7 LU (+6), 4.1 vs 13.7 LU (+12); stage TP stays put.
 UI: Keep Loudness toggle cell + "Keeping level: -x dB" readout (meter stemKeep), Learn texts for both states.
 
+## Saturation Focus "Bass only" / 808 to phone (after v0.15.0, worktree agent)
+Param satFocus (choice Full / Bass only, hint 7, default Full = what old states load as: JUCE default, no
+setStateInformation code). Engine: SaturationParams::focus. Bass only feeds the curve LR4-low-passed at 150 Hz,
+own 4x oversampling, residual high-passed 2nd order at 70 Hz (no sub added, 808 fundamental untouched, tube DC
+gone in ms), added to the same exact dry delay; S bends kBassDriveDb = 6 dB earlier so the Harmonics meter reads
+like Full at the same Drive on a trap beat (Tube +6/+12: within 0.6 dB; Tape +6 reads 2.3 dB hotter). Switching: the other path warms up
+(~52 ms, unheard, Full re-seeds its tube DC), then a 30 ms raised-cosine cross-fade; only one path runs at rest.
+Full = the v0.15.0 algorithm bit for bit (test against an embedded legacy copy). Measured: 2 kHz tone at Drive
++18 THD -156 dB (Full -13 dB); 808 sidebands on a 1 kHz vocal tone -75 dB (Full -8 dB); 45 Hz note Tube +12:
+fundamental -0.25 dB, 2nd/3rd harmonics at -22 dB re the note; trap beat Tube +12 Mix 50: -0.05 LU.
+Auto-Master: Trap and R&B -> Bass only (falls back to Full when the part heard has almost no low end), same
+harmonics targets, lands them within 0.2 dB (test +-2). UI: Focus seg cell, Learn + TRY THIS, chain readout
+"· bass". NOT YET HEARD by the user: ask for a phone-speaker A/B (Bass only, Tube, Drive +9, MATCH).
+
 ## 2026-10-10 session (user asked: do all five of the audit follow-ups, one after the other, overnight)
 1. Unlimiter header button fixed: it toggled the GLOBAL bypass (A) instead of ulOn. app.js now has one table
    HEAD_POWER of every module's own switch (the Maximizer's button stays the global bypass); ulOn host changes

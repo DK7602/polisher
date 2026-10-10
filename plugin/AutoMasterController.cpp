@@ -245,6 +245,7 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         set ("imgHigh", static_cast<float> (c.imager.highWidth));
         set ("satOn", 1.0f);
         set ("satMode", static_cast<float> (static_cast<int> (c.saturation.mode)));
+        set ("satFocus", static_cast<float> (static_cast<int> (c.saturation.focus)));
         set ("satDrive", static_cast<float> (c.saturation.driveDb));
         set ("satMix", static_cast<float> (c.saturation.mix));
         set ("clipOn", c.clipper.enabled ? 1.0f : 0.0f);

@@ -469,6 +469,66 @@ TEST_CASE ("Plug-in: Stem EQ Keep loudness is on for a new instance, off for a s
     CHECK (old->parameters.getRawParameterValue ("stemBass")->load() == 6.0f);
 }
 
+TEST_CASE ("Plug-in: Saturation Focus is Full for a new instance and for a song saved before it existed", "[plugin][saturation]")
+{
+    const double sr = 48000.0;
+    auto focusOf = [] (PolisherAudioProcessor& p) { return p.parameters.getRawParameterValue ("satFocus")->load(); };
+    auto fresh = makeProcessor (sr, 512, false);
+    CHECK (focusOf (*fresh) == 0.0f);
+
+    // Bass only survives a save and load.
+    set (*fresh, "satMode", 1.0f);
+    set (*fresh, "satDrive", 12.0f);
+    set (*fresh, "satMix", 50.0f);
+    set (*fresh, "satFocus", 1.0f);
+    juce::MemoryBlock state;
+    fresh->getStateInformation (state);
+    auto again = makeProcessor (sr, 512, false);
+    again->setStateInformation (state.getData(), (int) state.getSize());
+    CHECK (focusOf (*again) == 1.0f);
+
+    // A v0.15.0 song (no satFocus in its state, Tube +12) loads as Full in a Polisher set to Bass only,
+    // and plays exactly like the old version did (Full is the old algorithm, bit for bit).
+    set (*fresh, "satFocus", 0.0f);
+    fresh->getStateInformation (state);
+    auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+    REQUIRE (xml != nullptr);
+    for (auto* child : xml->getChildIterator())
+        if (child->getStringAttribute ("id") == "satFocus") { xml->removeChildElement (child, true); break; }
+    juce::MemoryBlock v0150;
+    juce::AudioProcessor::copyXmlToBinary (*xml, v0150);
+    auto old = makeProcessor (sr, 512, false);
+    set (*old, "satFocus", 1.0f);
+    old->setStateInformation (v0150.getData(), (int) v0150.getSize());
+    CHECK (focusOf (*old) == 0.0f);
+    CHECK (old->parameters.getRawParameterValue ("satDrive")->load() == 12.0f);   // from the song
+
+    const auto beat = testsig::trapLike (sr, 3.0);
+    fresh->prepareToPlay (sr, 512);
+    old->prepareToPlay (sr, 512);
+    CHECK (maxAbsDiff (renderFixed (*fresh, beat, 512), renderFixed (*old, beat, 512)) == 0.0);
+}
+
+TEST_CASE ("Plug-in: Saturation Bass only reaches the engine (a vocal tone passes clean, Full distorts it)", "[plugin][saturation]")
+{
+    const double sr = 48000.0;
+    const auto voice = testsig::sine (sr, 2, 2000.0, -6.0, 1.0);
+    auto renderWith = [&] (float drive, float focus)
+    {
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "satMode", 1.0f);
+        set (*p, "satDrive", drive);
+        set (*p, "satFocus", focus);
+        p->prepareToPlay (sr, 512);
+        return renderFixed (*p, voice, 512);
+    };
+    const auto clean = renderWith (0.0f, 0.0f), bass = renderWith (18.0f, 1.0f), full = renderWith (18.0f, 0.0f);
+    const int settled = 4800;   // after the tone's first 0.1 s (its abrupt start has a little low end of its own)
+    INFO ("Bass only vs untouched " << maxAbsDiff (bass, clean, settled) << ", Full vs untouched " << maxAbsDiff (full, clean, settled));
+    CHECK (maxAbsDiff (bass, clean, settled) < 1.0e-5);
+    CHECK (maxAbsDiff (full, clean, settled) > 1.0e-2);
+}
+
 TEST_CASE ("Plug-in: Stem EQ Keep loudness holds the level of a Bass move and shows how much", "[plugin]")
 {
     const double sr = 48000.0;
