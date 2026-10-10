@@ -36,6 +36,10 @@
       <div class="grow"></div>
       <button type="button" id="learn-toggle" class="pill pill-red learn-toggle" aria-pressed="true">LEARN ON</button>
       <button type="button" id="btn-match" class="pill pill-blue match" aria-pressed="false" title="Level match: plays the master at your original's loudness, so A/B compares tone, not volume">MATCH</button>
+      <div class="checks" role="group" aria-label="Listening checks">
+        <button type="button" id="btn-mono" class="pill pill-blue check-pill" aria-pressed="false" title="MONO check: both speakers play left + right together, like a club PA or a phone. Listening only: never in your export">MONO</button>
+        <button type="button" id="btn-phone" class="pill pill-blue check-pill" aria-pressed="false" title="PHONE check: hear your master on a phone speaker (mono, about 300 Hz to 8 kHz). Listening only: never in your export">PHONE</button>
+      </div>
       <button type="button" id="btn-a" class="imgbtn" aria-label="A: original mix (bypass)" title="A: hear your original mix"><img src="assets/btn_a.png" alt=""></button>
       <button type="button" id="btn-b" class="imgbtn" aria-label="B: master" title="B: hear the master"><img src="assets/btn_b.png" alt=""></button>
       <button type="button" id="btn-undo" class="imgbtn is-disabled" aria-label="Undo Auto-Master" title="Undo Auto-Master" disabled><img src="assets/btn_undo.png" alt=""></button>
@@ -47,6 +51,13 @@
   <!-- SPECTRUM -->
   <section id="spectrum" class="panel" aria-label="Spectrum">
     <img class="panel-bg" src="assets/panel_spectrum.png" alt="">
+    <!-- Shown while any listening aid is on (Listen / Solo, MONO, PHONE), so it is never forgotten. -->
+    <div class="monitor-banner" id="monitor-banner" role="status" aria-live="polite" hidden>
+      <svg class="mb-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1v-6h3zM3 19a2 2 0 0 0 2 2h1v-6H3z"/></svg>
+      <span class="mb-text" id="monitor-text"></span>
+      <span class="mb-level mono" id="monitor-level"></span>
+      <button type="button" class="mb-stop" id="monitor-stop" title="Turn every listening aid off and hear the master">BACK TO MASTER</button>
+    </div>
     <div class="spectrum-row">
       <div class="screen spectrum-screen">
         <div class="band-labels" id="band-labels"></div>
@@ -100,6 +111,10 @@
         <span class="pill pill-blue mono chip" id="module-chip">GR 0.0 dB</span>
         <div class="grow"></div>
         <span class="module-note" id="module-note" title="Drag a knob (Shift = fine). Double-click a knob to reset it; double-click its number to type a value.">Live · drag · dbl-click number = type</span>
+        <button type="button" id="btn-listen" class="pill pill-blue listen" aria-pressed="false" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1v-6h3zM3 19a2 2 0 0 0 2 2h1v-6H3z"/></svg>
+          <span id="btn-listen-text">LISTEN</span>
+        </button>
         <button type="button" id="btn-bypass" class="pill pill-blue bypass">BYPASS</button>
       </div>
       <div class="knob-row" id="knob-row"></div>
@@ -162,6 +177,8 @@
       <li><b>Match ref:</b> click <b>Match ref</b> (next to the targets) and load a released song you want to sound like (WAV, AIFF, FLAC or MP3). Polisher measures its loudest part; then play the loudest part of <i>your</i> song and press Auto-Master: it aims for the reference's tone, loudness, width and low end instead of the genre's. The dashed line on the spectrum is the reference's tone. The &times; on the pill clears it.</li>
       <li><b>Knobs:</b> drag up/down. Hold Shift for fine control. Double-click to reset. Mouse wheel works too.</li>
       <li><b>A / B:</b> A plays your original mix (bypassed), B plays the master. Turn on <b>MATCH</b> first and play B for about 10 seconds: the louder side is turned down so both play at the same loudness, and your original is kept from clipping. Then you compare tone and punch, not volume. On B the meters show the real master (on A, your original mix), never the matched level. MATCH switches itself off when you close Polisher and during a normal export; for a Realtime Export, switch MATCH off and make sure B is on first.</li>
+      <li><b>MONO / PHONE:</b> listening checks next to MATCH. MONO plays left + right together (club PAs, phones): anything that disappears is out of phase. PHONE plays your master like a phone speaker (mono, about 300 Hz to 8 kHz): does the 808 still come through? You hear its harmonics, not its sub; that's what Saturation is for. They work with A/B and MATCH, switch off when you close Polisher and are never in a normal export (for a Realtime Export, switch them off first). A red banner shows while any listening aid is on.</li>
+      <li><b>Listen (headphones button):</b> on Saturation, Soft Clipper, Resonance Tamer, Maximizer and Dynamics, it plays only what that module adds or takes off, so you learn what it does. Quiet changes are turned up so you can hear them (the banner says by how much). On Dynamics, the S buttons solo one band. One at a time; BACK TO MASTER on the banner (or the button again) returns to the master.</li>
       <li><b>Maximizer:</b> makes the master loud. Drive pushes the mix into the limiter; Ceiling is the highest peak allowed (−1 dBTP, or −1.5 for loud masters, leaves room for streaming's MP3/AAC copies). Input Trim turns a mix that is already too loud down before the whole chain. Watch Short-term while you turn Drive.</li>
       <li><b>Loudness:</b> watch Short-term while you turn Drive (it follows the last 3 seconds). Integrated averages the whole time since it started, so it restarts a moment after you change a control (Settings). True Peak stays at or below the Ceiling.</li>
       <li><b>Unlimiter:</b> for a beat, loop or mix that arrives already loud and flat (limited or clipped). It lifts the start of each hit so the drums punch again; the level between hits stays put. Squash shows how flattened your audio is: 12.5 dB or more is open (nothing to undo, it rests), 8.5 dB or less is brickwalled. Start at Amount 75 % and compare with MATCH.</li>

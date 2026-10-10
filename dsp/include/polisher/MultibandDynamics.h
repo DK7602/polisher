@@ -63,15 +63,38 @@ public:
     const DynamicsParams& getParams() const noexcept { return params; }
     static bool isNeutral (const DynamicsParams& p) noexcept;
 
+    /** Listen hook (the plug-in's Solo / Listen buttons): band 0..3, or -1 for none. Solo: that band
+        after its compression and gain; removed: what its compression takes off it (before the gain).
+        While set, the split runs even when the module is neutral or off (a solo is then the plain band;
+        the module's own output stays an exact pass-through). */
+    void setMonitorBand (int bandIndex, bool removed) noexcept
+    {
+        monitorBand = bandIndex >= 0 && bandIndex < kDynBands ? bandIndex : -1;
+        monitorRemoved = removed;
+    }
+
     template <typename Sample>
     void process (Sample* const* ch, int numChannels, int numSamples) noexcept
+    {
+        process (ch, numChannels, numSamples, nullptr);
+    }
+
+    /** The same, also writing the monitored band (see setMonitorBand) to monitorOut[c][0 .. numSamples)
+        for the first two channels (zeros when no band is set). */
+    template <typename Sample>
+    void process (Sample* const* ch, int numChannels, int numSamples, double* const* monitorOut) noexcept
     {
         const int nch = std::min ({ numChannels, channelCount, 2 });
         for (int i = 0; i < numSamples; ++i)
         {
             if (countdown-- <= 0) { update(); countdown = kUpdateInterval - 1; }
-            if (! running)
+            const bool monitoring = monitorOut != nullptr && monitorBand >= 0;
+            if (! clocking)
+            {
+                if (monitorOut != nullptr)
+                    for (int c = 0; c < nch; ++c) monitorOut[c][i] = 0.0;
                 continue;
+            }
 
             std::array<std::array<double, kDynBands>, 2> band {};
             std::array<double, 2> dry {};
@@ -89,6 +112,15 @@ public:
                 b[1] = s.x1hp[1].process (s.x1hp[0].process (lo));
                 b[2] = s.x3lp[1].process (s.x3lp[0].process (hi));
                 b[3] = s.x3hp[1].process (s.x3hp[0].process (hi));
+            }
+
+            if (! running)
+            {
+                // Neutral or off, split only for a solo: the plain band; the output stays untouched.
+                if (monitorOut != nullptr)
+                    for (int c = 0; c < nch; ++c)
+                        monitorOut[c][i] = monitoring && ! monitorRemoved ? band[static_cast<size_t> (c)][static_cast<size_t> (monitorBand)] : 0.0;
+                continue;
             }
 
             std::array<double, kDynBands> gain {};
@@ -128,6 +160,17 @@ public:
                     wet += b[k] * gain[k];
                 const double x = dry[static_cast<size_t> (c)];
                 ch[c][i] = static_cast<Sample> (x + (wet - x) * mix);
+            }
+            if (monitorOut != nullptr)
+            {
+                // Solo: the band as it is inside the output (the four solos add up to the output once
+                // the module has faded in). Removed: what the gain reduction takes off it.
+                const auto k = static_cast<size_t> (monitoring ? monitorBand : 0);
+                const double g = ! monitoring ? 0.0
+                               : monitorRemoved ? (1.0 - std::pow (10.0, det[k].grDb / 20.0)) * mix
+                                                : 1.0 + (gain[k] - 1.0) * mix;
+                for (int c = 0; c < nch; ++c)
+                    monitorOut[c][i] = band[static_cast<size_t> (c)][k] * g;
             }
         }
     }
@@ -187,12 +230,16 @@ private:
     void update() noexcept;
     void applyCrossovers() noexcept;
     void resetFilters() noexcept;
+    void resetDetectors() noexcept;
 
     DynamicsParams params;
     double sampleRate = 48000.0;
     int channelCount = 2;
     int countdown = 0;
-    bool running = false;
+    bool running = false;    // compressing (or fading in / out)
+    bool clocking = false;   // the split filters run: running, or a band is monitored
+    int monitorBand = -1;
+    bool monitorRemoved = false;
     double mix = 0.0, mixTarget = 0.0, mixCoeff = 0.0, glideCoeff = 0.0, makeupCoeff = 0.0, averageCoeff = 0.0;
     std::array<double, kDynBands - 1> logFreq {}, targetLogFreq {};
     std::array<Channel, 2> chan {};

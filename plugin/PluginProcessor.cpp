@@ -194,7 +194,7 @@ bool PolisherAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts)
     return layouts.getMainInputChannelSet() == out;
 }
 
-void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerBlock*/)
+void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     const int channels = juce::jmax (1, getTotalNumOutputChannels());
     // Every module gets its current settings before it is prepared, so it starts in the saved state.
@@ -226,6 +226,57 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     setLatencySamples (unlimiter.latencySamples() + stemEq.latencySamples() + polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples()
                        + limiter.latencySamples());
     tailSeconds = getLatencySamples() / sampleRate + 0.2;
+
+    // Monitoring: starts on the plain master; the editor's request (if any) is picked up again.
+    monCapacity = juce::jmax (512, samplesPerBlock);
+    for (auto* v : { &monPre, &monSig, &monAux })
+        for (auto& ch : *v) ch.assign (static_cast<size_t> (monCapacity), 0.0);
+    monLimGain.assign (static_cast<size_t> (monCapacity), 1.0);
+    monClipGain.assign (static_cast<size_t> (monCapacity), 1.0);
+    const int longest = polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples() + limiter.latencySamples();
+    monForm.prepare (longest);
+    monOut.prepare (longest);
+    listenMix.prepare (sampleRate);
+    monitorOut.prepare (sampleRate);
+    stemEq.setTamerDelta (false);
+    dynamics.setMonitorBand (-1, false);
+}
+
+namespace
+{
+    /** For a listen mode: the delay that lines its module's input up with its output (form) and the one
+        that carries the result on to the output, past the modules after it (out). */
+    std::pair<int, int> listenDelays (int mode, int limiterLatency) noexcept
+    {
+        namespace L = polisher::listen;
+        const int sat = polisher::Saturation::latencySamples(), clip = polisher::SoftClipper::latencySamples();
+        if (mode == L::satAdded)    return { sat, clip + limiterLatency };
+        if (mode == L::clipRemoved) return { clip, limiterLatency };
+        if (mode == L::maxRemoved)  return { limiterLatency, 0 };
+        return { 0, sat + clip + limiterLatency };   // Resonance Tamer and Dynamics: formed inside the module
+    }
+}
+
+int PolisherAudioProcessor::listenArmSamples (int mode) const noexcept
+{
+    namespace L = polisher::listen;
+    if (mode == L::off)
+        return 0;
+    // The monitored signal is complete once its delay lines are full (plus a little margin); the
+    // spectral stage needs ~1.25 frames to overlap-add a whole output, the Dynamics split ~30 ms to settle.
+    const double sr = juce::jmax (8000.0, getSampleRate());
+    const auto [form, out] = listenDelays (mode, limiter.latencySamples());
+    int extra = 32;
+    if (mode == L::tamerRemoved) extra += 2 * polisher::StemEQ::fftSizeFor (sr);
+    if (L::isDynamics (mode)) extra += static_cast<int> (0.03 * sr);
+    return form + out + extra;
+}
+
+void PolisherAudioProcessor::startListenMode (int mode) noexcept
+{
+    const auto [form, out] = listenDelays (mode, limiter.latencySamples());
+    monForm.setDelay (form);
+    monOut.setDelay (out);
 }
 
 void PolisherAudioProcessor::updateLimiterParams()
@@ -341,6 +392,42 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     const int numChannels = buffer.getNumChannels();
     const int numSamples = buffer.getNumSamples();
 
+    // Monitoring: the listen mode whose signal is formed this block (off: the plain master, and the
+    // hooks below cost nothing). An offline export never contains any of it.
+    namespace L = polisher::listen;
+    const bool offline = isNonRealtime();
+    int lm = L::off;
+    if (offline)
+    {
+        if (listenMix.isActive() || monitorOut.isActive())
+        {
+            listenMix.reset();
+            monitorOut.reset();
+        }
+    }
+    else if (numChannels > 0 && numSamples <= monCapacity)
+    {
+        const int wanted = listenRequest.load();
+        listenMix.setAutoLevel (listenAutoLevel.load());
+        listenMix.request (wanted, listenArmSamples (wanted));
+        monitorOut.setMono (monoRequest.load());
+        monitorOut.setPhone (phoneRequest.load());
+        lm = listenMix.beginBlock();
+        if (listenMix.startedArming())
+            startListenMode (lm);
+    }
+    stemEq.setTamerDelta (lm == L::tamerRemoved);
+    dynamics.setMonitorBand (L::isDynamics (lm) ? L::dynBand (lm) : -1, lm >= L::dynRemoved);
+    double* pre[2] = { monPre[0].data(), monPre[1].data() };
+    double* sig[2] = { monSig[0].data(), monSig[1].data() };
+    double* aux[2] = { monAux[0].data(), monAux[1].data() };
+    const auto in = [&buffer, numChannels] (int c, int i) { return static_cast<double> (buffer.getSample (juce::jmin (c, numChannels - 1), i)); };
+    const auto copyPre = [&]
+    {
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < numSamples; ++i) pre[c][i] = in (c, i);
+    };
+
     double inputPeak = 0.0;
     for (int c = 0; c < juce::jmin (numIn, numChannels); ++c)
         inputPeak = juce::jmax (inputPeak, static_cast<double> (buffer.getMagnitude (c, 0, numSamples)));
@@ -358,19 +445,89 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
 
     unlimiter.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     eq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
-    stemEq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+    if (lm == L::tamerRemoved)
+        stemEq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, aux);   // + what the tamer cut
+    else
+        stemEq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     bass.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
-    dynamics.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+    if (L::isDynamics (lm))
+        dynamics.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, aux);  // + the monitored band
+    else
+        dynamics.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     imager.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+    if (lm == L::satAdded) copyPre();
     saturation.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
 
     // Drive (ramped per block so knob moves don't click) -> Soft Clipper -> limiter.
     const double newGain = targetDriveGain();
+    if (lm != L::off && lm != L::clipRemoved && lm != L::maxRemoved)
+    {
+        // Monitored signals formed before Drive: what Saturation added (output minus its aligned input),
+        // or the tamer's cut / the Dynamics band (with mono input, channel 1 repeats channel 0). They get
+        // the same Drive the master gets here, then travel on to the output.
+        const double driveStep = (newGain - currentDriveGain) / numSamples;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            double l, r;
+            if (lm == L::satAdded)
+            {
+                double dl = pre[0][i], dr = pre[1][i];
+                monForm.process (dl, dr);
+                l = in (0, i) - dl;
+                r = in (1, i) - dr;
+            }
+            else
+            {
+                l = aux[0][i];
+                r = numChannels > 1 ? aux[1][i] : l;
+            }
+            const double g = currentDriveGain + driveStep * i;
+            l *= g;
+            r *= g;
+            monOut.process (l, r);
+            sig[0][i] = l;
+            sig[1][i] = r;
+        }
+    }
     buffer.applyGainRamp (0, numSamples, static_cast<Sample> (currentDriveGain), static_cast<Sample> (newGain));
     currentDriveGain = newGain;
 
-    clipper.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
-    limiter.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+    if (lm == L::clipRemoved) copyPre();
+    clipper.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, lm == L::clipRemoved ? monClipGain.data() : nullptr);
+    if (lm == L::clipRemoved)
+    {
+        // What the clipping shaved off: the aligned input at the clipper's clean gain (its makeup) minus its output.
+        for (int i = 0; i < numSamples; ++i)
+        {
+            double l = pre[0][i], r = pre[1][i];
+            monForm.process (l, r);
+            l = l * monClipGain[static_cast<size_t> (i)] - in (0, i);
+            r = r * monClipGain[static_cast<size_t> (i)] - in (1, i);
+            monOut.process (l, r);
+            sig[0][i] = l;
+            sig[1][i] = r;
+        }
+    }
+    if (lm == L::maxRemoved) copyPre();
+    limiter.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, lm != L::off ? monLimGain.data() : nullptr);
+    if (lm == L::maxRemoved)
+    {
+        // What the limiter took off: its aligned input minus its output.
+        for (int i = 0; i < numSamples; ++i)
+        {
+            double l = pre[0][i], r = pre[1][i];
+            monForm.process (l, r);
+            sig[0][i] = l - in (0, i);
+            sig[1][i] = r - in (1, i);
+        }
+    }
+    else if (lm != L::off)
+    {
+        // Everything formed before the limiter is turned down with the master, sample by sample, so it
+        // plays at the level it really has in the master.
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < numSamples; ++i) sig[c][i] *= monLimGain[static_cast<size_t> (i)];
+    }
     outputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     outputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
 
@@ -397,23 +554,56 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     meters.matchDb.store (static_cast<float> (sideGainDb));
     meters.correlation.store (static_cast<float> (imager.correlation()));
 
+    // Listen / Solo: the monitored signal takes the master's place (after every meter and the spectrum,
+    // which keep showing the real master).
+    const bool listening = ! offline && listenMix.isActive();
+    if (listening)
+        listenMix.process (buffer.getArrayOfWritePointers(), numChannels, sig, numSamples,
+                           juce::Decibels::decibelsToGain (static_cast<double> (ceilingParam->load())));
+    meters.listenPlaying.store (listening ? listenMix.audible() : 0);
+    meters.listenGainDb.store (static_cast<float> (listening ? listenMix.appliedGainDb() : 0.0));
+    meters.listenUnderDb.store (static_cast<float> (listening ? listenMix.levelUnderMasterDb() : -100.0));
+
     // ...and while MATCH is on, turn the louder side down to the quieter one, with headroom so A
     // doesn't clip the interface (never during offline export).
-    const bool matching = levelMatchParam->load() > 0.5f && ! isNonRealtime();
+    const bool matching = levelMatchParam->load() > 0.5f && ! offline;
     const double targetGain = matching ? juce::Decibels::decibelsToGain (sideGainDb) : 1.0;
     if (targetGain != 1.0 || currentMatchGain != 1.0)
         buffer.applyGainRamp (0, numSamples, static_cast<Sample> (currentMatchGain), static_cast<Sample> (targetGain));
     currentMatchGain = targetGain;
+
+    // MONO / PHONE checks at the very end (after MATCH, so A and B get the same treatment), and the
+    // 0 dBFS safety of all monitoring.
+    if (! offline && (listening || monitorOut.isActive()))
+        monitorOut.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, true);
+}
+
+template <typename Sample>
+void PolisherAudioProcessor::processInChunks (juce::AudioBuffer<Sample>& buffer)
+{
+    const int total = buffer.getNumSamples();
+    if (total <= monCapacity || monCapacity <= 0)
+    {
+        processAnyPrecision (buffer);
+        return;
+    }
+    // A host block longer than prepareToPlay announced: process it in parts the monitoring buffers hold
+    // (the chain streams sample by sample, so the master is the same either way).
+    for (int start = 0; start < total; start += monCapacity)
+    {
+        juce::AudioBuffer<Sample> part (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), start, juce::jmin (monCapacity, total - start));
+        processAnyPrecision (part);
+    }
 }
 
 void PolisherAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
-    processAnyPrecision (buffer);
+    processInChunks (buffer);
 }
 
 void PolisherAudioProcessor::processBlock (juce::AudioBuffer<double>& buffer, juce::MidiBuffer&)
 {
-    processAnyPrecision (buffer);
+    processInChunks (buffer);
 }
 
 void PolisherAudioProcessor::publishMeters()

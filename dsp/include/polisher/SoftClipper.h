@@ -82,6 +82,15 @@ public:
     template <typename Sample>
     void process (Sample* const* channels, int numChannels, int numSamples) noexcept
     {
+        process (channels, numChannels, numSamples, nullptr);
+    }
+
+    /** The same, also writing for each output sample the gain the clipper would have applied if nothing
+        clipped (1 + on/off fade x (makeup - 1)) to cleanGainOut[0 .. numSamples): the delayed input times
+        it, minus the output, is exactly what the clipping shaved off (the plug-in's "Listen: removed"). */
+    template <typename Sample>
+    void process (Sample* const* channels, int numChannels, int numSamples, double* cleanGainOut) noexcept
+    {
         std::array<double, kMaxChannels> frame {};
         const int nch = numChannels < channelCount ? numChannels : channelCount;
         for (int i = 0; i < numSamples; ++i)
@@ -89,6 +98,8 @@ public:
             for (int c = 0; c < nch; ++c) frame[static_cast<size_t> (c)] = static_cast<double> (channels[c][i]);
             processFrame (frame.data(), nch);
             for (int c = 0; c < nch; ++c) channels[c][i] = static_cast<Sample> (frame[static_cast<size_t> (c)]);
+            if (cleanGainOut != nullptr)
+                cleanGainOut[i] = 1.0 + mix * (makeupNow - 1.0);
         }
     }
 

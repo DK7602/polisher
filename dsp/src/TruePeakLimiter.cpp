@@ -107,6 +107,7 @@ void TruePeakLimiter::reset() noexcept
     gain = 1.0;
     sustain = 1.0;
     minGainSinceRead = 1.0;
+    lastGain = 1.0;
 }
 
 void TruePeakLimiter::setParams (const LimiterParams& p) noexcept
@@ -147,7 +148,10 @@ void TruePeakLimiter::processFrame (const double* in, double* out, int numChanne
     delayPos = (delayPos + 1) % delayLength;
 
     if (params.bypassed)
+    {
+        lastGain = 1.0;
         return;
+    }
 
     // 2. Gain computer.
     const double required = peak > ceilingSafe ? ceilingSafe / peak : 1.0;
@@ -169,6 +173,7 @@ void TruePeakLimiter::processFrame (const double* in, double* out, int numChanne
 
     // 4. Apply, trim and a final sample-level safety clamp at the ceiling.
     const double g = gain * outputGain;
+    lastGain = g;
     for (int c = 0; c < nch; ++c)
         out[c] = std::clamp (out[c] * g, -ceiling, ceiling);
 }

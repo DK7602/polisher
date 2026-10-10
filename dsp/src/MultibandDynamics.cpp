@@ -44,6 +44,10 @@ void MultibandDynamics::resetFilters() noexcept
         c.apX1.reset();
         c.apX3.reset();
     }
+}
+
+void MultibandDynamics::resetDetectors() noexcept
+{
     for (auto& d : det)
     {
         d.meanSquare = 0.0;
@@ -55,10 +59,12 @@ void MultibandDynamics::resetFilters() noexcept
 void MultibandDynamics::reset() noexcept
 {
     resetFilters();
+    resetDetectors();
     for (size_t k = 0; k < kDynBands - 1; ++k)
         logFreq[k] = targetLogFreq[k] = std::log (std::clamp (params.crossoverHz[k], kDynCrossoverRange[k][0], kDynCrossoverRange[k][1]));
     applyCrossovers();
     running = ! isNeutral (params);
+    clocking = running || monitorBand >= 0;
     mix = mixTarget = running ? 1.0 : 0.0;
     for (size_t k = 0; k < kDynBands; ++k)
     {
@@ -111,10 +117,9 @@ void MultibandDynamics::update() noexcept
         mixTarget = 1.0;
         if (! running)
         {
-            // Starting from a clean state; the cross-fade hides the filters settling.
-            resetFilters();
-            logFreq = targetLogFreq;
-            moved = true;
+            // Starting from a clean state; the cross-fade hides the filters settling. (Filters a solo
+            // is already running are left alone below, so the solo doesn't click.)
+            resetDetectors();
             running = true;
         }
     }
@@ -127,6 +132,14 @@ void MultibandDynamics::update() noexcept
             mix = 0.0;
         }
     }
+    const bool split = running || monitorBand >= 0;
+    if (split && ! clocking)
+    {
+        resetFilters();
+        logFreq = targetLogFreq;
+        moved = true;
+    }
+    clocking = split;
     if (moved)
         applyCrossovers();
 

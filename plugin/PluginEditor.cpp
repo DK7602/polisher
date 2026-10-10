@@ -84,6 +84,7 @@ PolisherAudioProcessorEditor::~PolisherAudioProcessorEditor()
 {
     stopTimer();
     setLookAndFeel (nullptr);
+    audioProcessor.resetMonitoring();   // listening aids never outlive a window
 }
 
 void PolisherAudioProcessorEditor::timerCallback()
