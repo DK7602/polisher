@@ -48,6 +48,7 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     releaseParam  = parameters.getRawParameterValue (ParamIDs::release);
     adaptiveParam = parameters.getRawParameterValue (ParamIDs::adaptive);
     bypassParam   = parameters.getRawParameterValue (ParamIDs::bypass);
+    trimParam     = parameters.getRawParameterValue ("inTrim");
     autoResetParam = parameters.getRawParameterValue (ParamIDs::autoReset);
     clipOnParam   = parameters.getRawParameterValue (ParamIDs::clipOn);
     clipLevelParam = parameters.getRawParameterValue (ParamIDs::clipLevel);
@@ -216,6 +217,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerB
     inputMeter.prepare (sampleRate, channels);
     updateLimiterParams();
     currentDriveGain = targetDriveGain();
+    currentTrimGain = targetTrimGain();
     // Constant latency whatever the settings: Unlimiter + Stem EQ look-ahead + saturation + clipper (all
     // oversampling modes) + limiter look-ahead.
     setLatencySamples (unlimiter.latencySamples() + stemEq.latencySamples() + polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples()
@@ -286,6 +288,11 @@ void PolisherAudioProcessor::updateLimiterParams()
         clipper.setParams (c);
 }
 
+double PolisherAudioProcessor::targetTrimGain() const
+{
+    return bypassParam->load() > 0.5f ? 1.0 : juce::Decibels::decibelsToGain (static_cast<double> (trimParam->load()));
+}
+
 double PolisherAudioProcessor::targetDriveGain() const
 {
     return bypassParam->load() > 0.5f ? 1.0 : juce::Decibels::decibelsToGain (static_cast<double> (driveParam->load()));
@@ -337,6 +344,13 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     inputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     inputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     autoMaster.capture (buffer);   // the untouched mix, while Auto-Master is listening
+
+    // Input Trim (ramped per block): turns a too-hot mix down before the whole chain. The input meter,
+    // the spectrum's "your mix" line, MATCH and Auto-Master all take the mix as it arrives, above.
+    const double newTrim = targetTrimGain();
+    if (newTrim != 1.0 || currentTrimGain != 1.0)
+        buffer.applyGainRamp (0, numSamples, static_cast<Sample> (currentTrimGain), static_cast<Sample> (newTrim));
+    currentTrimGain = newTrim;
 
     unlimiter.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     eq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);

@@ -237,6 +237,7 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
             set ("clipSoftness", static_cast<float> (c.clipper.softness * 100.0));
             set ("clipOversampling", c.clipper.oversampling >= 8 ? 3.0f : c.clipper.oversampling >= 4 ? 2.0f : c.clipper.oversampling >= 2 ? 1.0f : 0.0f);
         }
+        set ("inTrim", static_cast<float> (c.trimDb));
         set ("drive", static_cast<float> (c.driveDb));
         set ("ceiling", static_cast<float> (c.limiter.ceilingDbtp));
         set ("release", static_cast<float> (c.limiter.releaseMs));

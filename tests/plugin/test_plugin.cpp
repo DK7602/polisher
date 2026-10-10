@@ -338,6 +338,33 @@ TEST_CASE ("Plug-in: double-precision hosts get the same master as single precis
 }
 
 
+TEST_CASE ("Plug-in: Input Trim turns the mix down before the chain, and A ignores it", "[plugin]")
+{
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, false);
+    set (*p, "ceiling", 0.0f);
+    set (*p, "inTrim", -6.0f);
+    p->prepareToPlay (sr, 512);                          // starts at -6 dB (no ramp from 0)
+    const int latency = p->getLatencySamples();
+    const auto mix = testsig::musicLike (sr, 2.0, -24.0);
+    const auto out = renderFixed (*p, mix, 512);
+    const double g = std::pow (10.0, -6.0 / 20.0);
+    double err = 0.0;
+    for (int c = 0; c < 2; ++c)
+        for (int i = latency; i < mix.numSamples(); ++i)
+            err = std::max (err, std::abs ((double) out.channels[(size_t) c][(size_t) i] - g * mix.channels[(size_t) c][(size_t) (i - latency)]));
+    CHECK (err < 1.0e-6);
+
+    // A (global bypass) plays the original mix: no trim.
+    set (*p, "bypass", 1.0f);
+    p->prepareToPlay (sr, 512);
+    const auto a = renderFixed (*p, mix, 512);
+    double errA = 0.0;
+    for (int c = 0; c < 2; ++c)
+        for (int i = latency; i < mix.numSamples(); ++i)
+            errA = std::max (errA, std::abs ((double) a.channels[(size_t) c][(size_t) i] - mix.channels[(size_t) c][(size_t) (i - latency)]));
+    CHECK (errA < 1.0e-6);
+}
 
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:
 // a function-local static would be torn down after JUCE's own shutdown objects and crash on exit.

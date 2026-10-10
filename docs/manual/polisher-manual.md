@@ -1,6 +1,6 @@
 # Polisher User Manual
 
-Version 0.13.0 · October 2026
+Version 0.14.0 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
@@ -8,7 +8,7 @@ Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d7
 
 Polisher is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds eleven modules in one window, and **Auto-Master** can set all of them for you in about 12 seconds.
 
-This manual covers version 0.13.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.14.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 
@@ -66,12 +66,12 @@ Export as usual with **File > Export > Audio Mixdown**. MATCH switches itself of
 The order is fixed, from repair to loudness: fix the mix's dynamics first, then tone, then low end, compression and width, then colour, and finally peaks and loudness.
 
 ```
-01 Unlimiter -> 02 Tonal EQ -> [03 Stem EQ / 04 Tone Steady / 05 Resonance Tamer] -> 06 Bass Control
+Input Trim -> 01 Unlimiter -> 02 Tonal EQ -> [03 Stem EQ / 04 Tone Steady / 05 Resonance Tamer] -> 06 Bass Control
 -> 07 Dynamics -> 08 Stereo Imager -> 09 Saturation -> Drive -> 10 Soft Clipper -> 11 Maximizer -> your master
 (03-05 share one stage, ~40 ms; MATCH gain sits at the very end, for listening only)
 ```
 
-The Maximizer's **Drive** sits just before the Soft Clipper, so the clipper and limiter share the peak work. MATCH only changes what you hear while comparing; it is off during export.
+The Maximizer's **Drive** sits just before the Soft Clipper, so the clipper and limiter share the peak work. Its **Input Trim** (on the Maximizer screen) sits before everything: it turns a mix that is already too loud down before the first module. MATCH only changes what you hear while comparing; it is off during export.
 
 ## Auto-Master
 
@@ -101,6 +101,7 @@ Auto-Master listens to 12 seconds of your song, then sets every module except St
 
 ### What to expect
 
+- If your mix is **already louder than the target** (for example a −8 LUFS beat with Stream −14 picked), it turns the mix down with **Input Trim** before the chain, then sets every module for that level, so the master lands on the target instead of overshooting it.
 - It may stop **short of the target** on purpose. If reaching it would crush the drums past the intensity's limit, it keeps the punch and tells you. On a trap mix at about −17 LUFS in, Loud −9 typically lands near −9.7 LUFS.
 - A module marked **Checked · kept** was measured and needed no change.
 - **Stem EQ** is never changed. If your vocal sits unusually low or loud for the genre, it suggests a Vocals move (up to ±3 dB) with an **APPLY** button.
@@ -254,6 +255,7 @@ The final true-peak limiter. It makes the master loud and guarantees nothing goe
 | Control | Range (default) | What it does |
 | --- | --- | --- |
 | Drive | 0–24 dB (0) | Pushes the mix into the limiter. More Drive = louder. |
+| Input Trim | −24–0 dB (0) | Turns your mix down **before the whole chain**. Drive only pushes up, so this is how Polisher masters a mix that already arrives louder than your target. Auto-Master sets it when needed; at 0 dB the mix goes in as it is. A (bypass) ignores it. |
 | Ceiling | −3 to 0 dBTP (−1) | The highest peak allowed, between samples too. −1 keeps streaming MP3/AAC from clipping. |
 | Release | 10–1000 ms (120) | How fast the limiter lets go. Shorter = louder but can distort bass. |
 | Release Mode | Adaptive (default) or Fixed | Adaptive recovers fast after drum hits and slowly on 808s and pads, so it doesn't pump. |
@@ -325,7 +327,7 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Problem | Likely cause | Fix |
 | --- | --- | --- |
 | Master is too loud or squashed even at Drive 0; input reads far above 0 dBTP | Your old chain (EQ, saturator, compressor, limiter) is still on Stereo Out before Polisher, so the mix arrives already limited and hot | Bypass every other insert on Stereo Out, keep Polisher in the last slot, and run Auto-Master again |
-| Input is hot even with nothing else on Stereo Out | The mix itself is too loud | Turn the mix down about 6 dB before Polisher (aim for about −17 LUFS, peaks near −1 dBTP). Drive can't go below 0 dB, so Polisher can't turn a too-hot mix down for you |
+| Input is hot even with nothing else on Stereo Out | The mix itself is too loud | Run Auto-Master: it turns the mix down with Input Trim when it's louder than your target. Or set Input Trim yourself (Maximizer screen) so the mix arrives around −17 LUFS with peaks near −1 dBTP |
 | Auto-Master says "This doesn't sound like a full mix" | Polisher is on one track, not Stereo Out | Remove it from the track, load it in Stereo Out's last insert slot (F3 > Stereo Out), play the chorus and run Auto-Master again |
 | Auto-Master doesn't finish or says it heard too little | The song stopped or was mostly silence | Keep the loudest part playing until it's done (it needs 12 s of music, at least 3 s) |
 | Master lands quieter than the target | Auto-Master protected the drums within the intensity's limit | Fine as it is. To go louder, choose Punchy, or tame the drum peaks in the mix |

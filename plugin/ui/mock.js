@@ -6,6 +6,7 @@
 
   const sliders = {
     drive:   { start: 0,  end: 24,   skew: 1,   interval: 0.01, value: 4.5, label: "dB" },
+    inTrim:  { start: -24, end: 0,   skew: 1,   interval: 0.1,  value: 0,   label: "dB" },
     ceiling: { start: -3, end: 0,    skew: 1,   interval: 0.01, value: -1,  label: "dBTP" },
     release: { start: 10, end: 1000, skew: 0.4, interval: 0.1,  value: 120, label: "ms" },
     clipLevel: { start: -9, end: 3, skew: 1, interval: 0.01, value: 0, label: "dB" },

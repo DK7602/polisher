@@ -200,9 +200,23 @@ SpectralStats measureSpectral (const AudioClip& clip, const ToneSteadyParams& st
     return stage->takeSpectralStats();
 }
 
+AudioClip withGain (const AudioClip& clip, double gainDb)
+{
+    AudioClip out = clip;
+    if (gainDb != 0.0)
+    {
+        const double g = std::pow (10.0, gainDb / 20.0);
+        for (auto& ch : out.channels)
+            for (auto& v : ch)
+                v = static_cast<float> (v * g);
+    }
+    return out;
+}
+
 AudioClip renderPreDrive (const AudioClip& input, const MasterChainParams& params)
 {
-    AudioClip out = renderBass (renderSpectral (renderEq (renderUnlimiter (input, params.unlimiter), params.eq), params.stem, params.steady, params.resonance), params.bass);
+    const AudioClip trimmed = withGain (input, std::clamp (params.trimDb, kMinTrimDb, 0.0));
+    AudioClip out = renderBass (renderSpectral (renderEq (renderUnlimiter (trimmed, params.unlimiter), params.eq), params.stem, params.steady, params.resonance), params.bass);
     const int nch = out.numChannels(), n = out.numSamples();
     if (nch == 0)
         return out;

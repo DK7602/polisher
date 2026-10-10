@@ -313,3 +313,39 @@ TEST_CASE ("Auto-Master's loudness matches the plug-in with Stem EQ moves on squ
         CHECK_THAT (check.integratedLufs, WithinAbs (r.output.integratedLufs, 0.05));
     }
 }
+
+TEST_CASE ("A mix already louder than the target is turned down with Input Trim and lands on it", "[automaster]")
+{
+    // A finished-sounding, hot mix (limited to about -6 LUFS) mastered for Stream -14: Drive can't go
+    // below 0 dB, so without Input Trim the master would stay ~8 dB over the target.
+    LimiterParams hot;
+    hot.driveDb = 14.0;
+    hot.ceilingDbtp = -0.3;
+    const auto mix = renderLimited (testsig::musicLike (48000.0, 12.0, -6.0), hot);
+    const double mixLufs = measure (mix).integratedLufs;
+    REQUIRE (mixLufs > -9.0);
+
+    AutoMasterSettings s;
+    s.target = LoudnessTarget::stream;
+    const auto r = autoMaster (mix, s);
+    checkWellFormed (r);
+    INFO ("mix " << mixLufs << " LUFS, trim " << r.chain.trimDb << " dB, drive " << r.chain.driveDb << " dB, master " << r.output.integratedLufs);
+    CHECK (r.chain.trimDb < -4.0);
+    CHECK (r.chain.trimDb >= kMinTrimDb);
+    CHECK (r.reachedTarget);
+    CHECK_THAT (r.output.integratedLufs, WithinAbs (-14.0, 0.3));
+    // The plug-in's chain (trim included) gives what Auto-Master measured...
+    CHECK_THAT (measure (renderMaster (mix, r.chain)).integratedLufs, WithinAbs (r.output.integratedLufs, 0.1));
+    // ...the report describes the mix as it arrives, and explains the trim.
+    AutoMasterSettings club = s;
+    club.target = LoudnessTarget::club;                       // louder than this mix: no trim
+    const auto untrimmed = autoMaster (mix, club);
+    CHECK (untrimmed.chain.trimDb == 0.0);
+    CHECK_THAT (r.analysis.loudness.integratedLufs, WithinAbs (untrimmed.analysis.loudness.integratedLufs, 0.01));
+    CHECK (r.summary.find ("Input Trim") != std::string::npos);
+    CHECK (std::any_of (r.reasons.begin(), r.reasons.end(), [] (const auto& x) { return x.module == "max" && x.control == "Input Trim"; }));
+
+    // A mix below the target keeps Input Trim at 0 dB.
+    const auto quiet = autoMaster (testsig::musicLike (48000.0, 12.0, -20.0), s);
+    CHECK (quiet.chain.trimDb == 0.0);
+}

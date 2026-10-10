@@ -23,6 +23,7 @@ fit();
 // Parameters (live in this build: the Maximizer).
 const P = {
   drive: Juce.getSliderState("drive"),
+  inTrim: Juce.getSliderState("inTrim"),
   ceiling: Juce.getSliderState("ceiling"),
   release: Juce.getSliderState("release"),
   adaptive: Juce.getToggleState("adaptive"),
@@ -354,6 +355,8 @@ const maximizerCells = [
   liveKnobCell({ label: "Release", sub: "base time", state: P.release, def: 120, minText: "10", maxText: "1000",
                  fmt: (v) => `${Math.round(v)} ms` }),
   toggleCell({ label: "Release Mode", sub: "program dependent", state: P.adaptive, onText: "ADAPTIVE", offText: "FIXED" }),
+  liveKnobCell({ label: "Input Trim", sub: "before the chain", state: P.inTrim, def: 0, minText: `${MINUS}24`, maxText: "0",
+                 fmt: (v) => `${fmtNum(v, 1)} dB` }),
 ];
 
 function oversamplingCell() {
@@ -878,6 +881,11 @@ function renderLearn() {
       : P.clipOn.getValue()
         ? `Pushing the mix ${drive.toFixed(1)} dB into the Soft Clipper and then the limiter. The quiet and medium parts come up by that much; the loud hits are shaved and held at the ceiling.`
         : `Pushing the mix ${drive.toFixed(1)} dB into the limiter. The quiet and medium parts come up by that much; the loud hits are held at the ceiling.`));
+  const trim = P.inTrim.getScaledValue();
+  body.appendChild(item("Input Trim", `${fmtNum(trim, 1)} dB`,
+    trim > -0.05
+      ? "Your mix goes into the chain as it is. Auto-Master turns this down only when your mix is already louder than the target."
+      : `Turns your mix down ${fmtNum(-trim, 1)} dB before the whole chain (all 11 modules), because it arrives louder than the target. Drive can only push up; this is how Polisher turns a too-hot mix down.`));
   body.appendChild(item("Ceiling", `${fmtNum(ceiling, 1)} dBTP`,
     `Nothing leaves Polisher above ${fmtNum(ceiling, 1)} dBTP, including peaks that fall between samples. ` +
     (ceiling > -0.95 ? "Above −1 dBTP, the MP3/AAC versions streaming services make can clip. −1.0 is the safe choice."
@@ -910,7 +918,7 @@ function renderLearn() {
       `Your master is at ${fmtNum(M.integrated)} LUFS, louder than your ${["Stream", "Loud", "Club"][clamp(Math.round(P.amTarget.value * 2), 0, 2)]} ${fmtNum(tgt, 0)} target. Spotify and YouTube play everything at about −14 LUFS, so extra loudness is turned down there: it buys density, not volume.`, false,
       { need: "Only if it sounds squashed. Loud is a style choice (common in Trap), not a mistake.",
         steps: ["Turn on MATCH and flip A/B. If B sounds flatter or the drums weaker, it's too loud.",
-                "To bring it down: lower Drive (above) until Integrated reads your target, or click Auto-Master again.",
+                "To bring it down: lower Drive (above) until Integrated reads your target; at Drive 0, lower Input Trim. Or click Auto-Master again.",
                 "For streaming only, choose Stream −14 or Loud −9 as the Target and run Auto-Master again."] }));
   } else if (M.integrated > -99 && M.integrated < -16) {
     body.appendChild(tip("SOUNDS CLEAN", "Plenty of dynamics left. For a streaming release, you can push Drive until Integrated reaches around −14 to −10 LUFS.", true));
@@ -1689,7 +1697,7 @@ function renderReport(body) {
 function paramValue(id) {
   if (id.startsWith("eqGain")) return eqGainAt(Number(id.slice(6)) - 1);
   if (id.startsWith("eqFreq")) return eqFreqAt(Number(id.slice(6)) - 1);
-  const map = { drive: P.drive, ceiling: P.ceiling, release: P.release, clipLevel: P.clipLevel, clipSoftness: P.clipSoftness,
+  const map = { drive: P.drive, inTrim: P.inTrim, ceiling: P.ceiling, release: P.release, clipLevel: P.clipLevel, clipSoftness: P.clipSoftness,
                 bassMono: P.bassMono, bassTame: P.bassTame, bassPunch: P.bassPunch,
                 imgLow: P.imgLow, imgMid: P.imgMid, imgHigh: P.imgHigh, satDrive: P.satDrive, satMix: P.satMix,
                 ulAmount: P.ulAmount, ulLength: P.ulLength, tsAmount: P.tsAmount, tsRange: P.tsRange, rtAmount: P.rtAmount, rtSens: P.rtSens, rtRelease: P.rtRelease,
@@ -1707,7 +1715,7 @@ function paramValue(id) {
   if (id === "clipOversampling") return osIndex();
   return null;
 }
-const MODULE_PARAMS = { ul: /^ul/, stem: /^stem/, ts: /^ts/, rt: /^rt/, eq: /^eq/, bass: /^bass/, dyn: /^dyn/, img: /^img/, sat: /^sat/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive)$/ };
+const MODULE_PARAMS = { ul: /^ul/, stem: /^stem/, ts: /^ts/, rt: /^rt/, eq: /^eq/, bass: /^bass/, dyn: /^dyn/, img: /^img/, sat: /^sat/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive|inTrim)$/ };
 function moduleUnchanged(module) {
   const values = (amReport && amReport.values) || {};
   return Object.entries(values).every(([id, v]) => {

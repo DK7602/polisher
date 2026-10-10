@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "polisher/LoudnessTargeting.h"
 #include "polisher/MultibandDynamics.h"
 #include "polisher/Saturation.h"
 #include "polisher/StemEQ.h"
@@ -10,7 +11,7 @@
 
 #include <array>
 
-/** Parameters of the Unlimiter, Stem EQ, Dynamics and Saturation modules: IDs, layout and a reader that turns
+/** Parameters of the Input Trim and the Unlimiter, Stem EQ, Dynamics and Saturation modules: IDs, layout and a reader that turns
     the current values into engine params. Shared by the processor, Auto-Master and the web editor. */
 namespace ModuleParams
 {
@@ -24,7 +25,7 @@ namespace ModuleParams
     {
         juce::StringArray ids;
         for (auto* id : stemIds) ids.add (id);
-        for (const char* id : { "tsAmount", "tsRange", "rtAmount", "rtSens", "rtRelease", "ulAmount", "ulLength" }) ids.add (id);
+        for (const char* id : { "tsAmount", "tsRange", "rtAmount", "rtSens", "rtRelease", "ulAmount", "ulLength", "inTrim" }) ids.add (id);
         for (int x = 0; x < polisher::kDynBands - 1; ++x) ids.add (band ("dynX", x));
         for (const char* p : { "dynThr", "dynRatio", "dynAtk", "dynRel", "dynGain" })
             for (int b = 0; b < polisher::kDynBands; ++b) ids.add (band (p, b));
@@ -41,6 +42,11 @@ namespace ModuleParams
         auto dbText = [] (float v, int) { return String (v, 1) + " dB"; };
         auto msText = [] (float v, int) { return v < 10.0f ? String (v, 1) + " ms" : String (roundToInt (v)) + " ms"; };
         auto hzText = [] (float v, int) { return v >= 1000.0f ? String (v / 1000.0f, 2) + " kHz" : String (roundToInt (v)) + " Hz"; };
+
+        // Input Trim (before the whole chain): turns a too-hot mix down; 0 dB = untouched. Version hint 4.
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "inTrim", 4 }, "Input Trim",
+                                                           NormalisableRange<float> (static_cast<float> (polisher::kMinTrimDb), 0.0f, 0.1f), 0.0f,
+                                                           AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction (dbText)));
 
         // Unlimiter (first in the chain): Amount 0 = untouched. Version hint 3.
         auto pctText0 = [] (float v, int) { return String (roundToInt (v)) + " %"; };

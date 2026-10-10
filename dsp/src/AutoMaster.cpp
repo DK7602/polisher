@@ -121,6 +121,10 @@ const char* const kCulprit[kEqBands] = {
 // Finished mixes stay within about 6 dB of it; a lone synth or vocal measures 20 dB and more.
 constexpr double kNotAMixExcessDb = 14.0;
 
+// When a mix is louder than the target, Input Trim turns it this much further down than the bare
+// minimum, so Drive has a little to do and the target is still reached after the modules re-adapt.
+constexpr double kTrimMarginDb = 0.5;
+
 struct IntensityRules
 {
     const char* name;
@@ -421,8 +425,15 @@ MixAnalysis analyseMix (const AudioClip& clip)
 // Decisions
 // =================================================================================================
 
-AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s)
+namespace {
+
+/** One Auto-Master pass on the mix turned down by trimDb at the input (Input Trim, <= 0). wantTrimDb
+    returns how much further down the input must go for the master to reach the target at Drive 0
+    (0 when no further trim is needed). */
+AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s, double trimDb, double& wantTrimDb)
 {
+    const AudioClip input = withGain (raw, trimDb);
+    wantTrimDb = 0.0;
     // Stem EQ is the user's call: Auto-Master keeps their moves and hears the mix with them (Stem
     // EQ and Tonal EQ only scale frequencies, so applying it first is close to the plug-in's order).
     const AudioClip heard = renderStemEq (input, s.stem);
@@ -430,6 +441,8 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
     r.targetLufs = targetLufs (s.target);
     r.analysis = analyseMix (heard);
     const auto& a = r.analysis;
+    // The mix as it arrives, before the Input Trim: what the report quotes.
+    const double arrivesLufs = a.loudness.integratedLufs - trimDb, arrivesPeak = a.loudness.truePeakDbtp - trimDb;
     const auto rules = rulesFor (s.intensity);
     const std::string genre = genreName (s.genre);
 
@@ -1032,18 +1045,21 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
                             : "For a streaming target the Maximizer alone reaches the level cleanly, so no clipping is needed.");
     }
 
-    if (a.loudness.truePeakDbtp > 0.0)
-        r.notes.push_back ("HEADS UP: your mix peaks at " + num (a.loudness.truePeakDbtp, true) + " dBTP before Polisher. That's fine inside your DAW, "
+    if (arrivesPeak > 0.0)
+        r.notes.push_back ("HEADS UP: your mix peaks at " + num (arrivesPeak, true) + " dBTP before Polisher. That's fine inside your DAW, "
                            "but if you export the unmastered mix (for example to send to someone), turn the master fader down so it peaks below "
                            "\xE2\x88\x92" "1 dB, or the file will clip."
                            "\nNEED: Not for the master: Polisher handles it. Only before exporting the unmastered mix."
-                           "\nSTEP: Put a gain plug-in (or lower every track fader) before Polisher by about " + num (std::ceil (a.loudness.truePeakDbtp + 1.0), false, 0) + " dB."
+                           "\nSTEP: Put a gain plug-in (or lower every track fader) before Polisher by about " + num (std::ceil (arrivesPeak + 1.0), false, 0) + " dB."
                            "\nSTEP: Run Auto-Master again; the master comes out the same.");
 
     std::string driveWhy;
     if (found.driveDb < 0.0 && drive == 0.0)
-        driveWhy = "Your mix is already louder (" + num (a.loudness.integratedLufs) + " LUFS) than the " + std::string (targetName (s.target)) +
-                   " target. Polisher doesn't turn masters down; streaming services will do that for you.";
+    {
+        wantTrimDb = found.driveDb - kTrimMarginDb;
+        driveWhy = "Your mix is already louder (" + num (arrivesLufs) + " LUFS) than the " + std::string (targetName (s.target)) +
+                   " target, even with Input Trim at its " + num (kMinTrimDb) + " dB limit. Turn the mix down before Polisher.";
+    }
     else if (r.reachedTarget)
         driveWhy = num (drive, true) + " dB of Drive lands this part at " + num (out.integratedLufs) + " LUFS, your " + targetName (s.target) +
                    " target. " + (cost < 0.3 ? std::string ("At this level the peaks barely need controlling, so the master stays completely clean.")
@@ -1064,6 +1080,11 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
                                                      : "Choose Punchy to go louder, or tame the drum peaks in the mix.");
     else
         driveWhy = "Even the maximum Drive only reaches " + num (out.integratedLufs) + " LUFS on this mix.";
+    if (trimDb < 0.0)
+        reason ("max", "Input Trim", num (trimDb, true) + " dB",
+                "Your mix arrives at " + num (arrivesLufs) + " LUFS, already louder than the " + std::string (targetName (s.target)) + " target (" +
+                num (r.targetLufs) + " LUFS). Input Trim turns it down " + num (-trimDb) + " dB before the whole chain, so the master lands on "
+                "the target instead of overshooting it, and every module works at the level it was set for.");
     reason ("max", "Drive", num (drive, true) + " dB", driveWhy);
     reason ("max", "Ceiling", num (chain.limiter.ceilingDbtp, false) + " dBTP",
             s.target == LoudnessTarget::club ? "Club masters go to DJs and playback systems, not streaming encoders, so a little more headroom is used."
@@ -1090,8 +1111,9 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
     // --- Summary -------------------------------------------------------------------------------------
     char head[512];
     std::snprintf (head, sizeof head, "Listened to %.0f s of the loudest part. ", a.seconds);
-    r.summary = head + std::string ("Your mix measured ") + num (a.loudness.integratedLufs) + " LUFS with peaks at " +
-                num (a.loudness.truePeakDbtp) + " dBTP. Settings: " + genre + ", " + rules.name + ", " + targetName (s.target) +
+    r.summary = head + std::string ("Your mix measured ") + num (arrivesLufs) + " LUFS with peaks at " +
+                num (arrivesPeak) + " dBTP. Settings: " + genre + ", " + rules.name + ", " + targetName (s.target) +
+                (trimDb < 0.0 ? ". It was louder than the target, so Input Trim turns it down " + num (-trimDb) + " dB first" : std::string()) +
                 ". The master now measures " + num (out.integratedLufs) + " LUFS with true peak " + num (out.truePeakDbtp) +
                 " dBTP. The full song will read about 1 LU lower than this loud section, which is normal.";
     // --- Stem EQ: suggest a vocal move, never apply it -------------------------------------------------
@@ -1123,7 +1145,27 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
     }
 
     chain.stem = s.stem;
+    chain.trimDb = trimDb;
     r.ok = true;
+    return r;
+}
+
+} // namespace
+
+AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s)
+{
+    // A mix already louder than the target at Drive 0 is turned down at the input (Input Trim), then
+    // every module is decided again for the level it will hear: Dynamics thresholds, Saturation Drive
+    // and the loudness search all depend on it. At most two refinements.
+    double want = 0.0, trim = 0.0;
+    auto r = autoMasterAt (input, s, 0.0, want);
+    const auto arriving = r.analysis.loudness;
+    for (int pass = 0; pass < 2 && r.ok && want < -0.05 && trim > kMinTrimDb; ++pass)
+    {
+        trim = std::max (kMinTrimDb, std::round ((trim + want) * 10.0) / 10.0);
+        r = autoMasterAt (input, s, trim, want);
+    }
+    r.analysis.loudness = arriving;     // the report describes the mix as it arrives
     return r;
 }
 

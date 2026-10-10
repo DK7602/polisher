@@ -61,10 +61,11 @@ AudioClip renderBass (const AudioClip& clip, const BassParams& params);
 /** Renders a clip through the Unlimiter alone, latency compensated (a copy when neutral). */
 AudioClip renderUnlimiter (const AudioClip& clip, const UnlimiterParams& params);
 
-/** The mastering chain as the plug-in runs it: Unlimiter -> Tonal EQ -> Stem EQ / Tone Steady / Resonance Tamer -> Bass Control -> Dynamics ->
-    Stereo Imager -> Saturation -> drive -> Soft Clipper -> Maximizer. */
+/** The mastering chain as the plug-in runs it: Input Trim -> Unlimiter -> Tonal EQ -> Stem EQ / Tone Steady / Resonance Tamer -> Bass Control ->
+    Dynamics -> Stereo Imager -> Saturation -> drive -> Soft Clipper -> Maximizer. */
 struct MasterChainParams
 {
+    double trimDb = 0.0;        // Input Trim: turns the mix down before the whole chain (kMinTrimDb .. 0)
     UnlimiterParams unlimiter;  // Amount 0 by default (pass-through)
     TonalEQParams eq;           // flat by default
     StemEQParams stem;          // 0 dB everywhere by default (pass-through, latency kept)
@@ -79,7 +80,12 @@ struct MasterChainParams
     LimiterParams limiter;      // limiter.driveDb is ignored here; driveDb above is used
 };
 
-/** Renders a clip through everything before the drive (Unlimiter -> EQ -> Stem EQ -> Bass -> Dynamics -> Imager
+inline constexpr double kMinTrimDb = -24.0;
+
+/** The clip turned up or down by gainDb (a copy; exact when gainDb is 0). */
+AudioClip withGain (const AudioClip& clip, double gainDb);
+
+/** Renders a clip through everything before the drive (Input Trim -> Unlimiter -> EQ -> Stem EQ -> Bass -> Dynamics -> Imager
     -> Saturation), latency compensated. */
 AudioClip renderPreDrive (const AudioClip& clip, const MasterChainParams& params);
 

@@ -20,7 +20,7 @@
 #include <array>
 #include <atomic>
 
-/** Polisher: Unlimiter -> Tonal EQ -> Stem EQ -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
+/** Polisher: Input Trim -> Unlimiter -> Tonal EQ -> Stem EQ -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
     -> Maximizer (true-peak limiter), plus EBU R128
     meters, spectrum taps and Auto-Master (which listens to the incoming mix and sets the chain). */
 class PolisherAudioProcessor final : public juce::AudioProcessor
@@ -116,6 +116,7 @@ private:
 
     void updateLimiterParams();
     double targetDriveGain() const;
+    double targetTrimGain() const;
     void publishMeters();
 
     polisher::Unlimiter unlimiter;
@@ -128,12 +129,13 @@ private:
     ModuleParams::Reader moduleParams;
     polisher::SoftClipper clipper;
     polisher::TruePeakLimiter limiter;
-    double currentDriveGain = 1.0;
+    double currentDriveGain = 1.0, currentTrimGain = 1.0;
     polisher::LoudnessMeter outputMeter;
     polisher::LoudnessMeter inputMeter;   // the incoming mix, so Learn can say how much louder the master is
     std::atomic<bool> meterResetRequested { false }, statsResetRequested { false };
 
     std::atomic<float>* driveParam = nullptr;
+    std::atomic<float>* trimParam = nullptr;
     std::atomic<float>* ceilingParam = nullptr;
     std::atomic<float>* releaseParam = nullptr;
     std::atomic<float>* adaptiveParam = nullptr;

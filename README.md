@@ -12,7 +12,7 @@ meters only) with a button to Microsoft's free download page; install it and reo
 
 User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (also inside the plug-in: Quick Help > Open the full manual).
 
-## Status — v0.13
+## Status — v0.14
 
 | Piece | State |
 | --- | --- |
@@ -37,6 +37,9 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | Tone Steady (keeps the tonal balance steady through the song) and Resonance Tamer (cuts ringing peaks), inside the Stem EQ's spectral stage (no extra latency); set by Auto-Master | Done (v0.12) |
 | Unlimiter: puts back the punch a limiter squashed out of a beat (only on squashed audio); set by Auto-Master | Done (v0.13) |
 | Validation in CI: pluginval at strictness 10 plus Steinberg's VST3 validator (537/537) | Done (v0.13) |
+| Unlimiter's on/off switch fixed (it bypassed the whole chain); every module starts in its saved state on load | Done (v0.14) |
+| Input Trim: Auto-Master turns a mix that is already louder than the target down before the chain, then sets every module for that level | Done (v0.14) |
+| Validation: independent 16x true-peak checks, plug-in-level tests (block sizes, offline, latency, allocation, state), sanitizers, UI test, blind-test tool | Done (v0.14) |
 | Match ref (reference-track matching) | Planned |
 
 ## Validation
