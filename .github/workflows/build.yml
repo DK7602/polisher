@@ -145,8 +145,10 @@ jobs:
 
   # The engine tests under AddressSanitizer + UndefinedBehaviorSanitizer: out-of-bounds reads and writes,
   # use after free, leaks, overflow and other undefined behaviour fail the run.
+  # ~20 Linux minutes, so not on every push (private-repo minutes): pull requests and manual runs only.
   sanitizers:
     name: Engine tests (ASan + UBSan)
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

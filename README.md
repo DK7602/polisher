@@ -55,7 +55,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
   reported latency = real delay at 44.1-192 kHz and the same in bypass, a sample-rate change starts like a
   fresh plug-in, no memory allocation on the audio thread, saved state restores every control, every control
   jumping at random never gives NaN or passes the ceiling, double precision = single precision.
-- **Sanitizers** (CI, Linux): the engine tests under AddressSanitizer + UndefinedBehaviorSanitizer.
+- **Sanitizers** (CI, Linux; pull requests and manual runs): the engine tests under AddressSanitizer + UndefinedBehaviorSanitizer.
 - **UI smoke test** (CI, `tests/ui/`): the web UI in headless Chromium: every module's on/off switch, A / B,
   host changes, no script errors.
 - **pluginval** at strictness 10 + Steinberg's VST3 validator (CI, Windows).

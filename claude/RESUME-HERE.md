@@ -1,10 +1,42 @@
-# Polisher — resume here (updated 2026-10-01)
+# Polisher — resume here (updated 2026-10-10)
 
-Read this first in a new chat. Code: github.com/DK7602/polisher, branch `claude/gracious-wright-tgs0no`
-(merge to `main` when ready). Every push builds Mac + Windows; download Polisher-Windows from the
+Read this first in a new chat. Code: github.com/DK7602/polisher. Newest work: branch
+`claude/eloquent-einstein-sscadx` (v0.14.0, 2026-10-10 session below; it fast-forwarded from
+`claude/gracious-wright-tgs0no`, which is older). Merge to `main` when ready. Every push builds Mac + Windows; download Polisher-Windows from the
 latest green Actions run.
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
+
+## 2026-10-10 session (user asked: do all five of the audit follow-ups, one after the other, overnight)
+1. Unlimiter header button fixed: it toggled the GLOBAL bypass (A) instead of ulOn. app.js now has one table
+   HEAD_POWER of every module's own switch (the Maximizer's button stays the global bypass); ulOn host changes
+   refresh it. tests/ui/ui_smoke.mjs (Playwright, mock.js) checks every module's switch flips only its param.
+2. Stem EQ model: see "Stem EQ, 2026-10-10" below.
+3. Release polish: README at v0.14 + requirements + validation section; COMPANY_WEBSITE (example.com) removed;
+   basic fallback editor shows a WebView2 notice + GET WEBVIEW2 button (Windows); manual install note.
+4. Validation: tests/test_validation.cpp + tests/ReferenceTruePeak.h (independent 16x meter: Maximizer holds
+   its ceiling on tones to 20 kHz; on hard-clipped audio it sits at the ceiling by BS.1770 and within ~0.9 dB on
+   a wideband reconstruction -> why -1 dBTP is the default), more EBU 3341/3342 cases. tests/plugin/
+   (polisher_plugin_tests, juce_add_console_app, POLISHER_HEADLESS): block sizes 1..4096 + random, offline =
+   realtime, latency at 44.1-192k and in bypass, sample-rate change = fresh, no operator-new on the audio
+   thread, state round trip (and an older state without a new control -> its default: JUCE does this),
+   automation torture (true peak), double = float, Input Trim. FOUND + FIXED: prepareToPlay set module params
+   after prepare -> Bass/Dynamics/Imager/spectral faded in from neutral over ~0.3 s on load/export start; now
+   params go in first (and TonalEQ only arms "land instantly" when it had no params yet). ASan+UBSan: engine
+   tests clean (CI job, PRs/manual only to save minutes). tools/blindtest = PolisherBlindTest.exe (in the
+   Windows artifact, BlindTest/): drag 2-8 exported masters on it -> loudness-matched (down only, no clipping),
+   shuffled Sample A/B/..., Score sheet + Answer key. Manual: "Blind test" section.
+5. Input Trim (v0.14.0, param inTrim -24..0 dB, hint 4): at the very start of the chain (after input meter,
+   spectrum tap, Auto-Master capture; off in A). Auto-Master: if Drive 0 still overshoots the target by more
+   than 0.3 LU, sets trim (0.5 dB past the minimum) and re-decides everything (<= 2 refinements); report quotes
+   the mix as it arrives. Knob on the Maximizer screen + Learn; manual updated.
+Two fresh-eyes review agents ran (items 1/3/4 and 5); all real findings fixed (plug-in test app crashed on exit
+from a static JUCE initialiser; Windows MSVC compile error in BlindTest; mono files 3 dB loud in BlindTest; false
+"-24 dB limit" text; DIMINISHING RETURNS counting the trim). One claim (stale trim from old presets) was
+checked and is not a bug in JUCE 8.0.15 -> pinned by a test instead.
+CI NOTE: from the 6722dd0 push on, GitHub Actions jobs fail in 2 s without a runner (runner_id 0, no log),
+also on re-run: almost certainly the private repo's Actions minutes / spending limit. Everything up to
+6417e09 was green on Windows incl. pluginval 10 + VST3 validator; later commits verified locally (Linux).
 
 ## Status: v0.13.0 — eleven modules (Unlimiter new, slot 01); Auto-Master sets all but Stem EQ (suggests vocals)
 Chain: Unlimiter -> Tonal EQ -> Stem EQ / Tone Steady / Resonance Tamer -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
