@@ -16,7 +16,9 @@
     C++ -> JS: parameters through JUCE web relays, plus a "polisherMeters" event at 30 Hz with
                loudness readings and two spectra (mix and master).
     JS -> C++: parameter changes through the relays, and native functions (meter reset, Auto-Master,
-               Match ref: loadReference / clearReference / getReference). */
+               Match ref: loadReference / clearReference / getReference, getGenreCurve for the
+               spectrum's dotted genre line, undo / redo: historyUndo / historyRedo / historyGroup,
+               snapshots: snapshotStore / snapshotRecall). */
 class PolisherWebEditor final : public juce::AudioProcessorEditor,
                                 private juce::Timer
 {
@@ -57,6 +59,8 @@ private:
 
     void timerCallback() override;
     juce::var makeSpectrum (const SpectrumTap& tap, Analyser& state);
+    juce::var historyResult (const juce::String& done);
+    void addHistoryState (juce::DynamicObject& frame);
     static juce::WebBrowserComponent::Options makeBaseOptions();
     juce::WebBrowserComponent::Options makeEditorOptions();
     static std::optional<juce::WebBrowserComponent::Resource> getResource (const juce::String& url);
@@ -97,6 +101,7 @@ private:
     std::vector<std::unique_ptr<juce::WebComboBoxParameterAttachment>> moduleComboAttachments;
 
     std::unique_ptr<juce::FileChooser> referenceChooser;   // Match ref: the open dialog, while it's open
+    bool pageGroupOpen = false;                            // the page opened an undo group (historyGroup)
 
     // Same size and points as polisher::spectrumDisplayCurve, so a reference's curve lines up with the live ones.
     static_assert (kFftSize == polisher::kDisplayFftSize && kSpectrumPoints == polisher::kDisplayPoints);
@@ -109,6 +114,7 @@ private:
     double satResHold = 0.0, satSigHold = 0.0;
     std::array<double, polisher::kStems> stemHold {};
     float rtHold = 0.0f, rtHzHold = 0.0f, tsHold = 0.0f, tsHzHold = 0.0f, ulHold = 0.0f;
+    juce::uint32 lastSoundMs = 0;   // when the output last carried sound (the loudness history's "playing")
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherWebEditor)
 };

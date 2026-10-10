@@ -26,7 +26,32 @@ public:
         gap = 0.0;
         inEnergy = outEnergy = 0.0;
         inputPeakDb = -120.0;
+        holdSamples = 0;
+        learnedSamples = 0.0;
+        seedGap = false;
     }
+
+    /** True once a gap has been learned (B has played music). */
+    bool hasLearned() const noexcept { return inEnergy > 0.0; }
+
+    /** Jump to a gap learned earlier for the same settings (a snapshot heard before), then keep learning
+        from it: the original's loudness stays, the master's is set to match. */
+    void setGapDb (double gapDb) noexcept
+    {
+        gap = std::clamp (gapDb, -kMaxGapDb, kMaxGapDb);
+        if (inEnergy > 0.0)
+            outEnergy = inEnergy * std::pow (10.0, gap / 10.0);
+        else
+            seedGap = true;   // the first reading sets the original's loudness, the gap is kept
+    }
+
+    /** Keep the current gap, without learning, for the next `samples` (the short-term readings still hold
+        the settings from before a switch for ~3 s). Restarts learnedSeconds(). */
+    void holdLearning (int samples) noexcept { holdSamples = std::max (holdSamples, samples); learnedSamples = 0; }
+
+    /** How long the gap has been learning (B playing music) since the last hold or restart. */
+    double learnedSeconds() const noexcept { return learnedSamples / sr; }
+    void restartLearnedSeconds() noexcept { learnedSamples = 0; }
 
     /** Forget the original's peak level (a new playback pass, or the mix changed). */
     void resetPeak() noexcept { inputPeakDb = -120.0; }
@@ -39,6 +64,12 @@ public:
         if (inputBlockPeak > 0.0)
             inputPeakDb = std::max (inputPeakDb, 20.0 * std::log10 (inputBlockPeak));
 
+        if (holdSamples > 0)
+        {
+            holdSamples -= numSamples;
+            return;
+        }
+
         if (listeningToB && std::isfinite (inShort) && std::isfinite (outShort) && inShort > -60.0 && outShort > -60.0)
         {
             const double k = 1.0 - std::exp (-numSamples / (kSmoothingSeconds * sr));
@@ -46,10 +77,11 @@ public:
             // and quiet sections are limited differently, and one steady match level is what makes the
             // comparison fair (the gain must not ride the music).
             const double inE = std::pow (10.0, inShort / 10.0), outE = std::pow (10.0, outShort / 10.0);
-            if (inEnergy <= 0.0) { inEnergy = inE; outEnergy = outE; }
+            if (inEnergy <= 0.0) { inEnergy = inE; outEnergy = seedGap ? inE * std::pow (10.0, gap / 10.0) : outE; seedGap = false; }
             inEnergy += (inE - inEnergy) * k;
             outEnergy += (outE - outEnergy) * k;
             gap = std::clamp (10.0 * std::log10 (outEnergy / inEnergy), -kMaxGapDb, kMaxGapDb);
+            learnedSamples = std::min (learnedSamples + static_cast<double> (numSamples), 1.0e12);
         }
     }
 
@@ -76,6 +108,9 @@ private:
     double gap = 0.0;
     double inEnergy = 0.0, outEnergy = 0.0;
     double inputPeakDb = -120.0;
+    int holdSamples = 0;
+    double learnedSamples = 0.0;
+    bool seedGap = false;
 };
 
 } // namespace polisher

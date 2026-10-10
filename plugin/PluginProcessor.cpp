@@ -70,6 +70,16 @@ PolisherAudioProcessor::PolisherAudioProcessor()
         eqGainParams[static_cast<size_t> (b)] = parameters.getRawParameterValue (ParamIDs::eqGain (b));
         eqFreqParams[static_cast<size_t> (b)] = parameters.getRawParameterValue (ParamIDs::eqFreq (b));
     }
+
+    // Undo / redo: an Auto-Master run is one step, and it carries the report and Tone Steady's target
+    // (undo brings back the ones before; snapshots store and recall them too). Snapshots tell MATCH which
+    // slot is playing (see handleMatchRequests).
+    history.setExtraState ([this] { return captureExtraState(); },
+                           [this] (const juce::String& extra) { restoreExtraState (extra); });
+    autoMaster.onApplyBegin = [this] (const juce::String& label) { history.beginGroup (label); };
+    autoMaster.onApplyEnd = [this] { history.endGroup(); };
+    snapshots.onSwitch = [this] (int leaving, int entering) { matchSwitchRequest.store (0x100 | (leaving + 1) | ((entering + 1) << 4)); };
+    snapshots.onStore = [this] (int slot) { matchForgetRequest.fetch_or (1 << slot); };
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::createParameterLayout()
@@ -374,17 +384,19 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
         buffer.clear (c, 0, buffer.getNumSamples());
 
     // Fresh loudness measurement each time the host transport starts (optional).
-    bool isPlaying = wasPlaying;
+    bool isPlaying = wasPlaying, hostTransport = false;
     double hostSeconds = -1.0;   // where this block sits on the DAW's timeline (Auto-Master's report), if known
     if (auto* hostPlayHead = getPlayHead())
         if (auto position = hostPlayHead->getPosition())
         {
             isPlaying = position->getIsPlaying();
+            hostTransport = true;
             if (const auto t = position->getTimeInSeconds(); t.hasValue() && isPlaying)
                 hostSeconds = *t;
         }
     const bool justStarted = isPlaying && ! wasPlaying;
     wasPlaying = isPlaying;
+    meters.transport.store (hostTransport ? (isPlaying ? 1 : 0) : -1);   // the loudness history pauses while stopped
 
     const bool resetPressed = meterResetRequested.exchange (false);
     if (resetPressed || (justStarted && autoResetParam->load() > 0.5f))
@@ -563,6 +575,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
 
     // Level-matched A/B. Learn the loudness gap while the master plays (both readings are taken
     // before this gain, so the meters and spectrum always show the real master)...
+    handleMatchRequests();
     const bool bypassed = bypassParam->load() > 0.5f;
     levelMatch.update (inputMeter.shortTermLufs(), outputMeter.shortTermLufs(), inputPeak, numSamples, ! bypassed);
     const double sideGainDb = bypassed ? levelMatch.gainForADb() : levelMatch.gainForBDb();
@@ -591,6 +604,79 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     // 0 dBFS safety of all monitoring.
     if (! offline && (listening || monitorOut.isActive()))
         monitorOut.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, true);
+}
+
+void PolisherAudioProcessor::clearToneTarget()
+{
+    if (! toneTarget.isSet())
+        return;
+    history.beginGroup ("Tone Steady: follow the music");
+    toneTarget.clear();
+    history.endGroup();
+    // Not a parameter: tell the host the song changed, so the project asks to be saved.
+    updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+}
+
+juce::String PolisherAudioProcessor::captureExtraState() const
+{
+    // Besides the controls, an undo step or a snapshot carries what explains and shapes the sound without
+    // being a parameter: the Auto-Master report and Tone Steady's stored target (the song's tone).
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("polisherExtra", 1);
+    o->setProperty ("report", autoMaster.getReportForSaving());
+    o->setProperty ("tone", toneTarget.toJson());
+    return juce::JSON::toString (juce::var (o), true);
+}
+
+void PolisherAudioProcessor::restoreExtraState (const juce::String& extra)
+{
+    const auto v = extra.isNotEmpty() ? juce::JSON::parse (extra) : juce::var();
+    if (! v.isObject() || ! v.hasProperty ("polisherExtra"))
+    {
+        autoMaster.restoreReport (extra);   // a snapshot stored before Tone Steady targets: the report alone
+        return;
+    }
+    autoMaster.restoreReport (v["report"].toString());
+    const auto tone = v["tone"].toString();
+    if (tone != toneTarget.toJson())
+    {
+        toneTarget.restoreFromJson (tone);
+        // Not a parameter: tell the host the song changed, so the project asks to be saved.
+        updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+    }
+}
+
+void PolisherAudioProcessor::handleMatchRequests() noexcept
+{
+    // New settings stored in a slot (or another project): forget what MATCH learned for it, and count
+    // the learning time afresh (what it learned so far belongs to the settings before).
+    if (const int forget = matchForgetRequest.exchange (0); forget != 0)
+    {
+        for (size_t k = 0; k < matchMemory.size(); ++k)
+            if ((forget >> k) & 1) matchMemory[k].valid = false;
+        levelMatch.restartLearnedSeconds();
+    }
+    const int req = matchSwitchRequest.exchange (0);
+    if (req == 0)
+        return;
+    // The slot in place changed (a recall, or an undo / redo onto or off a slot). Keep the level MATCH
+    // learned for the slot that played, if it played long enough for the level to be its own; start a
+    // slot heard before from its level; and hold the level while the 3 s short-term readings still hold
+    // the settings from before.
+    const int leaving = (req & 15) - 1, entering = ((req >> 4) & 15) - 1;
+    const auto slots = static_cast<int> (matchMemory.size());
+    if (leaving >= 0 && leaving < slots && levelMatch.hasLearned() && levelMatch.learnedSeconds() >= kMatchLearnSeconds)
+        matchMemory[static_cast<size_t> (leaving)] = { true, levelMatch.gapDb() };
+    if (entering >= 0 && entering < slots)
+    {
+        if (matchMemory[static_cast<size_t> (entering)].valid)
+            levelMatch.setGapDb (matchMemory[static_cast<size_t> (entering)].gapDb);
+        levelMatch.holdLearning (static_cast<int> (kMatchHoldSeconds * juce::jmax (8000.0, getSampleRate())));
+    }
+    else
+    {
+        levelMatch.restartLearnedSeconds();   // a change left the slot: MATCH keeps learning as always
+    }
 }
 
 template <typename Sample>
@@ -690,6 +776,9 @@ void PolisherAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
         // Tone Steady's stored target (the song's own tone). Absent when it follows the music.
         if (const auto tone = toneTarget.toJson(); tone.isNotEmpty())
             xml->setAttribute ("toneTarget", tone);
+        // Snapshots S1..S4 (a child element with a format version). Absent while every slot is empty.
+        if (auto snaps = snapshots.toXml())
+            xml->addChildElement (snaps.release());
         copyXmlToBinary (*xml, destData);
     }
 }
@@ -705,6 +794,13 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
             xml->removeAttribute ("amReport");
             xml->removeAttribute ("amReference");
             xml->removeAttribute ("toneTarget");
+            // Snapshots: their own element ("" in states from before snapshots: every slot empty).
+            std::unique_ptr<juce::XmlElement> savedSnapshots;
+            if (auto* e = xml->getChildByName (SettingsSnapshots::kTag))
+            {
+                savedSnapshots = std::make_unique<juce::XmlElement> (*e);
+                xml->removeChildElement (e, true);
+            }
             // Stem EQ Keep loudness (added after v0.15.0) is on for new instances, but a song saved before it
             // existed was mixed without it: load that state with it off, so it sounds as it did.
             // (JUCE would give a control missing from the state its default, which is on.)
@@ -721,6 +817,10 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
             autoMaster.onStateRestored (savedReport);
             reference.restoreFromJson (savedReference);
             toneTarget.restoreFromJson (savedTone);
+            snapshots.fromXml (savedSnapshots.get());
+            // Another project or preset: undo steps and MATCH's per-snapshot levels no longer apply.
+            history.requestClear();
+            matchForgetRequest.store ((1 << SettingsSnapshots::kSlots) - 1);
         }
 }
 

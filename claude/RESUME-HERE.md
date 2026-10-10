@@ -91,15 +91,34 @@ updateLimiterParams, allocation-free). In target mode the stage measures the fra
 tamer cuts, tsLong = target (no learning, no re-learn), arrangement guard: below 160 Hz |drift| 4->6 dB fades
 the correction (808 in/out), elsewhere only lifts fade 6->9 dB (missing parts not faked back; harsh/muddy drifts
 still cut). Running mode untouched (no target). Stored as XML attribute "toneTarget" (JSON, format 1) by
-plugin/ToneTargetStore (SpinLock; audio thread try-locks in fetch); no attribute = follows the music (old songs);
-Auto-Master undo restores the previous target (one level; the snapshots/undo agent should fold it into
-multi-step undo). Measured: chorus rendered from bar 1 vs from the chorus (on the STFT grid) 9e-7 with a target
+plugin/ToneTargetStore (SpinLock; audio thread try-locks in fetch); no attribute = follows the music (old songs).
+Undo / snapshots: the history's extra state is now JSON {polisherExtra:1, report, tone} (processor
+captureExtraState / restoreExtraState), so the Auto-Master step, LEARN ("Tone Steady: learn the song's tone")
+and CLEAR ("Tone Steady: follow the music", processor clearToneTarget) steps and snapshot store / recall all
+carry the target; a snapshot's plain report from before restores the report and leaves the target. Measured: chorus rendered from bar 1 vs from the chorus (on the STFT grid) 9e-7 with a target
 vs 2e-3 following the music after 20 s; 808 after a 16 s intro: low end -0.0..+0.4 dB; 808 only 15 s of 75:
 >= -0.26 dB; a muddy passage still cut -2.2 dB. Off-grid start points still differ slightly (any STFT stage).
 UI: listening view in Learn (heard, loudest part so far, FINISH NOW / CANCEL), button text, green bar from 12 s,
 Tone Steady Target cell (LEARN / CLEAR, "your song · 2:47" / "following the music") + Learn texts, report lines.
 Frame props amMode/amHeard/amLoudAt/amLoudLufs/amCanFinish/amByItself/tsTarget/tsLearnFail; native functions
 finishAutoMaster, clearToneTarget, startAutoMaster("tone"). NOT YET HEARD by the user.
+## Spectrum genre line + loudness history (after v0.15.0, worktree agent)
+Engine: polisher::BalanceCurve (AutoMaster.h) turns 7 band levels into a smooth monotone cubic (pchip through
+the band centres, end slopes carried on, 24 dB/oct below 20 Hz) whose nodes are fitted so each band, measured
+like analyseMix (mean power per Hz + tilt at the centre), reads its norm exactly (so at the centres it can sit
+0.5-5 dB off the raw numbers where the balance is steep: Rock's Low End). balanceDisplayCurve / genreDisplayCurve:
+the display's EXPECTED reading for a steady master with that balance in both channels at `lufs` (K-weighting
+integrated analytically, KWeighting::powerGain / Biquad::powerGain added; Hann kernel +/- 8 bins, same bins
+and +/- 1/12 oct as the display). Checked against shaped noise through spectrumDisplayCurve: live reads
++0.2..+1.2 dB above (the display's fast-rise smoothing), mono-sum display means wide highs read ~1 dB under.
+~5 ms per call. Editor native fn getGenreCurve(genre) -> JSON; UI draws it dotted (mint) shifted by
+(short-term - lufs) like the reference; hidden by default while a reference is loaded (legend click toggles,
+remembered per case in localStorage). Loudness HISTORY view (toggle at the legend's right): 0.5 s points from
+the meter frames, 2 min of PLAYED time, master/mix short-term, Maximizer GR from the top (orange past 6 dB),
+target line; pauses on the frame's new "playing" flag (Meters::transport set in processBlock; editor also
+requires sound within 1 s, standalone = sound present); 3 s settle after play; RESET clears it. Learn: EQ
+"Dotted line" item; HISTORY opens its own Learn page (reading + HEAVY LIMITING / SECTIONS FLATTENED tips).
+Also fixed: the "Reference" legend entry never hid (CSS display:flex beat [hidden]). NOT YET SEEN by the user.
 
 ## 2026-10-10 session (user asked: do all five of the audit follow-ups, one after the other, overnight)
 1. Unlimiter header button fixed: it toggled the GLOBAL bypass (A) instead of ulOn. app.js now has one table

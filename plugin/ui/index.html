@@ -42,7 +42,15 @@
       </div>
       <button type="button" id="btn-a" class="imgbtn" aria-label="A: original mix (bypass)" title="A: hear your original mix"><img src="assets/btn_a.png" alt=""></button>
       <button type="button" id="btn-b" class="imgbtn" aria-label="B: master" title="B: hear the master"><img src="assets/btn_b.png" alt=""></button>
-      <button type="button" id="btn-undo" class="imgbtn is-disabled" aria-label="Undo Auto-Master" title="Undo Auto-Master" disabled><img src="assets/btn_undo.png" alt=""></button>
+      <button type="button" id="btn-undo" class="imgbtn is-disabled" aria-label="Nothing to undo" title="Nothing to undo" disabled><img src="assets/btn_undo.png" alt=""></button>
+      <button type="button" id="btn-redo" class="imgbtn redo is-disabled" aria-label="Nothing to redo" title="Nothing to redo" disabled><img src="assets/btn_undo.png" alt=""></button>
+      <!-- Snapshots S1..S4: whole settings, saved with the project (not A/B, which is original vs master). -->
+      <div class="snaps" id="snaps" role="group" aria-label="Snapshots S1 to S4: keep and switch between whole settings">
+        <div class="snap-row">
+          <button type="button" class="pill pill-blue snap empty" data-slot="0" aria-pressed="false">S1</button><button type="button" class="pill pill-blue snap empty" data-slot="1" aria-pressed="false">S2</button><button type="button" class="pill pill-blue snap empty" data-slot="2" aria-pressed="false">S3</button><button type="button" class="pill pill-blue snap empty" data-slot="3" aria-pressed="false">S4</button>
+        </div>
+        <button type="button" id="btn-store" class="pill pill-blue snap-store" aria-pressed="false" title="Store: click, then pick a slot (S1 to S4) to keep the settings you hear now in it">STORE</button>
+      </div>
       <button type="button" id="btn-settings" class="imgbtn" aria-label="Settings" title="Settings"><img src="assets/btn_gear.png" alt=""></button>
       <button type="button" id="btn-help" class="imgbtn" aria-label="Help" title="Help"><img src="assets/btn_help.png" alt=""></button>
     </div>
@@ -59,34 +67,61 @@
       <button type="button" class="mb-stop" id="monitor-stop" title="Turn every listening aid off and hear the master">BACK TO MASTER</button>
     </div>
     <div class="spectrum-row">
-      <div class="screen spectrum-screen">
-        <div class="band-labels" id="band-labels"></div>
+      <div class="screen spectrum-screen" id="spectrum-screen">
+        <div class="band-labels spec-only" id="band-labels"></div>
+        <div class="hist-top mono hist-only" id="hist-top"><span>LOUDNESS · LAST 2 MIN PLAYED</span><span id="hist-stats"></span></div>
         <div class="plot-row">
           <div class="plot-wrap" id="plot-wrap">
             <svg id="spectrum-svg" viewBox="0 0 860 200" preserveAspectRatio="none" role="img" aria-label="Live spectrum of your mix and the master">
-              <g id="grid" stroke="rgba(140,192,234,.12)" stroke-width="1"></g>
-              <g id="eq-layer" hidden>
-                <line id="eq-zero" x1="0" y1="100" x2="860" y2="100" stroke="rgba(156,203,240,.35)" stroke-width="1" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
-                <path id="eq-fill" fill="rgba(156,203,240,.13)" stroke="none"/>
-                <path id="eq-curve" fill="none" stroke="#9CCBF0" stroke-width="2.2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+              <g id="spec-layer">
+                <g id="grid" stroke="rgba(140,192,234,.12)" stroke-width="1"></g>
+                <g id="eq-layer" hidden>
+                  <line id="eq-zero" x1="0" y1="100" x2="860" y2="100" stroke="rgba(156,203,240,.35)" stroke-width="1" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+                  <path id="eq-fill" fill="rgba(156,203,240,.13)" stroke="none"/>
+                  <path id="eq-curve" fill="none" stroke="#9CCBF0" stroke-width="2.2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+                </g>
+                <path id="sp-genre" fill="none" stroke="#7EE0C3" stroke-width="2" stroke-dasharray="0.1 5" stroke-linecap="round" opacity=".7" vector-effect="non-scaling-stroke"/>
+                <path id="sp-ref" fill="none" stroke="#FFD27A" stroke-width="1.8" stroke-dasharray="6 4" opacity=".9" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+                <path id="sp-mix" fill="none" stroke="#FFFFFF" stroke-width="1.6" opacity=".85"/>
+                <path id="sp-master-glow" fill="none" stroke="#FF2A35" stroke-width="7" opacity=".22" stroke-linejoin="round"/>
+                <path id="sp-master" fill="none" stroke="#FF3B45" stroke-width="2.6" stroke-linejoin="round"/>
               </g>
-              <path id="sp-ref" fill="none" stroke="#FFD27A" stroke-width="1.8" stroke-dasharray="6 4" opacity=".9" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
-              <path id="sp-mix" fill="none" stroke="#FFFFFF" stroke-width="1.6" opacity=".85"/>
-              <path id="sp-master-glow" fill="none" stroke="#FF2A35" stroke-width="7" opacity=".22" stroke-linejoin="round"/>
-              <path id="sp-master" fill="none" stroke="#FF3B45" stroke-width="2.6" stroke-linejoin="round"/>
+              <g id="hist-layer">
+                <g id="hist-grid" stroke="rgba(140,192,234,.12)" stroke-width="1" vector-effect="non-scaling-stroke"></g>
+                <clipPath id="hist-deep-clip"><rect id="hist-deep-rect" x="0" y="50" width="860" height="150"/></clipPath>
+                <path id="hist-gr" fill="rgba(156,203,240,.26)" stroke="rgba(156,203,240,.75)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+                <path id="hist-gr-deep" clip-path="url(#hist-deep-clip)" fill="rgba(255,138,92,.5)" stroke="none"/>
+                <line id="hist-gr6" x1="0" x2="16" stroke="rgba(255,138,92,.8)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+                <line id="hist-target" x1="0" x2="860" stroke="#DCE8F5" stroke-width="1.2" stroke-dasharray="7 5" opacity=".7" vector-effect="non-scaling-stroke"/>
+                <g id="hist-gaps" stroke="rgba(220,232,245,.35)" stroke-width="1" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"></g>
+                <path id="hist-in" fill="none" stroke="#FFFFFF" stroke-width="1.4" opacity=".55" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+                <path id="hist-master-glow" fill="none" stroke="#FF2A35" stroke-width="7" opacity=".2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+                <path id="hist-master" fill="none" stroke="#FF3B45" stroke-width="2.4" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+              </g>
             </svg>
             <div id="eq-nodes" hidden></div>
             <div id="eq-readout" class="mono" hidden></div>
+            <div class="hist-note mono hist-only" id="hist-gr6-label">GR −6 dB</div>
+            <div class="hist-note mono hist-only" id="hist-target-label"></div>
+            <div class="hist-empty hist-only" id="hist-empty">Press play: the master's loudness is drawn here as your song runs.</div>
           </div>
-          <div class="db-scale mono" id="db-scale"></div>
+          <div class="db-scale mono spec-only" id="db-scale"></div>
+          <div class="db-scale mono hist-only" id="hist-scale" title="Short-term loudness, LUFS"></div>
         </div>
-        <div class="freq-labels mono" id="freq-labels"></div>
+        <div class="freq-labels mono spec-only" id="freq-labels"></div>
+        <div class="freq-labels mono hist-only" id="time-labels"></div>
         <div class="legend">
           <span><i class="sw sw-white"></i>Your mix</span>
           <span><i class="sw sw-red"></i>Master</span>
-          <span id="legend-ref" hidden title="The reference's average tone, shown at the loudness of what's playing"><i class="sw sw-ref"></i>Reference</span>
-          <span id="legend-eq" hidden><i class="sw sw-blue"></i>EQ curve (±12 dB)</span>
-          <span class="dim">4.5 dB/oct tilt</span>
+          <span id="legend-ref" class="spec-only" hidden title="The reference's average tone, shown at the loudness of what's playing"><i class="sw sw-ref"></i>Reference</span>
+          <button type="button" id="legend-genre" class="legend-btn spec-only" aria-pressed="true" title="The tone typical masters in your genre have (what Auto-Master's EQ aims for), at the loudness of what's playing. Click to show or hide it."><i class="sw sw-genre"></i><span id="legend-genre-name">Trap target</span></button>
+          <span id="legend-eq" class="spec-only" hidden><i class="sw sw-blue"></i>EQ curve (±12 dB)</span>
+          <span class="dim spec-only">4.5 dB/oct tilt</span>
+          <span class="hist-only"><i class="sw sw-gr"></i>Maximizer GR</span>
+          <span class="hist-only" id="legend-target"><i class="sw sw-target"></i>Target</span>
+          <div class="view-toggle" role="group" aria-label="Spectrum or loudness history">
+            <button type="button" id="view-spectrum" aria-pressed="true" title="The tone of your mix and the master, live">SPECTRUM</button><button type="button" id="view-history" aria-pressed="false" title="The master's loudness over the last 2 minutes of playback, with the Maximizer's gain reduction">HISTORY</button>
+          </div>
         </div>
       </div>
       <div class="screen outmeter">
@@ -174,7 +209,10 @@
     </div>
     <ul>
       <li><b>Auto-Master:</b> pick your genre (top), an intensity and a target, press Auto-Master and play your whole song from the start. It finds the loudest part by itself, finishes a few seconds after the song ends (or click it again any time after 12 seconds to use what it heard), sets every module and explains why in Learn. The undo arrow puts everything back.</li>
+      <li><b>Undo / redo:</b> the arrows at the top step back and forward through your changes one at a time (a knob move, a switch, an Auto-Master run, a snapshot). Point at an arrow to see what it will undo. Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes (click inside Polisher first). Kept while the window is closed; not saved with the project.</li>
+      <li><b>Snapshots S1–S4:</b> each keeps a whole sound (every setting and Tone Steady's target, plus its Auto-Master report). Click an empty slot to keep what you hear; click a stored one to switch to it (it glides, and undo goes back); STORE then a slot (or Shift-click) replaces it. Red = playing, S1• = changed since. They're not A/B and never change A/B, MATCH or the listening aids. Try Balanced in S1 vs Punchy in S2 with MATCH on: play each for 15 s once, then flip; MATCH remembers each one's level.</li>
       <li><b>Match ref:</b> click <b>Match ref</b> (next to the targets) and load a released song you want to sound like (WAV, AIFF, FLAC or MP3). Polisher measures its loudest part; then press Auto-Master and play <i>your</i> song: it aims for the reference's tone, loudness, width and low end instead of the genre's. The dashed line on the spectrum is the reference's tone. The &times; on the pill clears it.</li>
+      <li><b>Spectrum / History:</b> the dotted line (e.g. <b>Trap target</b>) is the tone typical masters in your genre have: where your red master line sits above it, your master has more of that range (1–2 dB either way is normal); click its name to show or hide it. <b>HISTORY</b> (under the spectrum) shows your master's loudness over the last 2 minutes of playback, with the Maximizer's gain reduction hanging from the top (orange = more than 6 dB, heavy limiting).</li>
       <li><b>Knobs:</b> drag up/down. Hold Shift for fine control. Double-click to reset. Mouse wheel works too.</li>
       <li><b>A / B:</b> A plays your original mix (bypassed), B plays the master. Turn on <b>MATCH</b> first and play B for about 10 seconds: the louder side is turned down so both play at the same loudness, and your original is kept from clipping. Then you compare tone and punch, not volume. On B the meters show the real master (on A, your original mix), never the matched level. MATCH switches itself off when you close Polisher and during a normal export; for a Realtime Export, switch MATCH off and make sure B is on first.</li>
       <li><b>MONO / PHONE:</b> listening checks next to MATCH. MONO plays left + right together (club PAs, phones): anything that disappears is out of phase. PHONE plays your master like a phone speaker (mono, about 300 Hz to 8 kHz): does the 808 still come through? You hear its harmonics, not its sub; that's what Saturation is for. They work with A/B and MATCH, switch off when you close Polisher and are never in a normal export (for a Realtime Export, switch them off first). A red banner shows while any listening aid is on.</li>

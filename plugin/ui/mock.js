@@ -78,29 +78,163 @@
   window.__mockMonitor = mon;
   const monGain = [0, 18, 12, 20, 9, 0, 0, 0, 0, 15, 15, 15, 15];
   const monUnder = [-100, -33, -27, -35, -24, -6, -9, -14, -20, -30, -30, -30, -30];
+  // Simulated getGenreCurve (the plug-in's engine computes the real one from Auto-Master's genre norms):
+  // a smooth made-up tilted balance at -9 LUFS, with each genre's sub and air a little different.
+  const mockGenre = (g) => Array.from({ length: 96 }, (_, i) => {
+    const f = 20 * Math.pow(1000, i / 95), o = Math.log2(f / 1000);
+    const sub = [0, -1.5, -3.5, -0.5, -5.5, -7.5][g], air = [0, 0, 0.5, 1, -0.5, -1][g];
+    const hump = 2.6 * Math.exp(-Math.pow(Math.log2(f / 105), 2) / 1.2);
+    const low = f < 60 ? -(6 - sub * 0.6) * Math.log2(60 / f) + sub : 0;
+    const top = f > 3000 ? -(2.2 - air * 0.3) * Math.pow(Math.log2(f / 3000), 1.4) : 0;
+    return +(-30.5 + hump + low + top - 0.1 * o).toFixed(1);
+  });
+  // The host's transport: the smoke test (and you, in the console) can stop it to see the history pause.
+  const transport = { playing: true };
+  window.__polisherMock = { setPlaying: (on) => { transport.playing = !!on; } };
   // Simulated Auto-Master: it "listens" to a 2:30 song 30x faster than real time (its loudest part at
   // 0:54), finishes by itself at the song's end (or on FINISH from 12 s of music on), then thinks for
-  // 0.9 s. Mode 1 is Tone Steady's LEARN: it only stores the song's tone (toneTarget: seconds heard).
+  // 0.9 s. Mode 1 is Tone Steady's LEARN: it only stores the song's tone (toneTarget: seconds heard),
+  // as an undo step of its own.
   const SONG = 150, LOUD_AT = 54;
-  const am = { state: 0, mode: 0, heard: 0, byItself: false, undo: false, version: 0, report: "", snapshot: null,
-               toneTarget: 0, toneBefore: 0, toneFail: 0 };
+  const am = { state: 0, mode: 0, heard: 0, byItself: false, version: 0, report: "", toneTarget: 0, toneFail: 0 };
   window.__mockAm = am;
   const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
   function amDecide(byItself) {
     am.byItself = byItself;
-    if (am.mode === 1) { am.toneTarget = am.heard; am.state = 0; return; }
+    if (am.mode === 1) {
+      beginGroup("Tone Steady: learn the song's tone");
+      am.toneTarget = am.heard;
+      endGroup();
+      am.state = 0;
+      return;
+    }
     am.state = 2;
     setTimeout(amFinish, 900);
   }
   const setSlider = (name, v) => { sliders[name].value = v; send("__juce__slider" + name, { eventType: "valueChanged", value: v }); };
   const setToggle = (name, v) => { toggles[name] = v; send("__juce__toggle" + name, { eventType: "valueChanged", value: v }); };
+  const setComboValue = (name, v) => { combos[name].value = v; send("__juce__comboBox" + name, { eventType: "valueChanged", value: v }); };
   const setCombo = (name, index) => {   // by choice index, like the plug-in's Auto-Master
     const c = combos[name];
-    c.value = c.choices.length > 1 ? index / (c.choices.length - 1) : 0;
-    send("__juce__comboBox" + name, { eventType: "valueChanged", value: c.value });
+    setComboValue(name, c.choices.length > 1 ? index / (c.choices.length - 1) : 0);
   };
+
+  // Simulated undo / redo and snapshots, like plugin/SettingsHistory.h: a step per gesture from the UI
+  // (slider drag start..end; a toggle or choice is a complete gesture), quick repeats of one control merge,
+  // groups (Auto-Master, Apply, recall) are one step and carry the report; A/B, MATCH, the meter settings
+  // and Auto-Master's choices are not settings. Exposed for the UI smoke test as __mockHistory / __mockSnaps.
+  const NOT_SETTINGS = new Set(["bypass", "levelMatch", "autoreset", "resetOnChange", "amGenre", "amIntensity", "amTarget"]);
+  const isSetting = (n) => !NOT_SETTINGS.has(n);
+  const NAMES = { drive: "Drive", ceiling: "Ceiling", release: "Release", inTrim: "Input Trim", adaptive: "Adaptive Release",
+                  clipOn: "Clipper On", clipLevel: "Clipper Level", clipSoftness: "Clipper Softness", clipOversampling: "Clipper Oversampling",
+                  satOn: "Saturation On", satMode: "Saturation Mode", satFocus: "Saturation Focus", satDrive: "Saturation Drive", satMix: "Saturation Mix",
+                  stemOn: "Stem EQ On", stemKeep: "Stem EQ Keep Loudness", stemVoc: "Stem EQ Vocals", stemDrums: "Stem EQ Drums", stemBass: "Stem EQ Bass", stemOther: "Stem EQ Other",
+                  bassOn: "Bass On", bassMono: "Bass Mono Below", bassTame: "Bass Sub Tame", bassPunch: "Bass Punch", eqOn: "EQ On", imgOn: "Imager On",
+                  imgLow: "Imager Low Width", imgMid: "Imager Mid Width", imgHigh: "Imager High Width", ulOn: "Unlimiter On", dynOn: "Dynamics On", tsOn: "Tone Steady On", rtOn: "Resonance Tamer On" };
+  ["Low End", "Bass", "Low Mid", "Mid", "Upper Mid", "Presence", "Air"].forEach((b, i) => { NAMES["eqGain" + (i + 1)] = `EQ ${b} Gain`; NAMES["eqFreq" + (i + 1)] = `EQ ${b} Freq`; });
+  const kindOf = (n) => (n in sliders ? "slider" : n in toggles ? "toggle" : n in combos ? "combo" : null);
+  const getV = (n) => (kindOf(n) === "slider" ? sliders[n].value : kindOf(n) === "toggle" ? toggles[n] : combos[n].value);
+  const setV = (n, v) => (kindOf(n) === "slider" ? setSlider(n, v) : kindOf(n) === "toggle" ? setToggle(n, v) : setComboValue(n, v));
+  const allNames = () => [...Object.keys(sliders), ...Object.keys(toggles), ...Object.keys(combos)];
+  const MINUS = "−";
+  function describe(changes) {
+    const name = (n) => NAMES[n] || n;
+    if (changes.length > 1) {
+      const words = changes.map((c) => name(c.n).split(" "));
+      let k = 0;
+      while (k < words[0].length && words.every((w) => w[k] === words[0][k])) k++;
+      return (k ? words[0].slice(0, k).join(" ") + " " : "") + `(${changes.length} controls)`;
+    }
+    const { n, a, b } = changes[0];
+    if (kindOf(n) === "toggle") return `${name(n).replace(/ On$/, "")} ${b ? "on" : "off"}`;
+    if (kindOf(n) === "combo") { const c = combos[n]; return `${name(n)}: ${c.choices[Math.round(b * (c.choices.length - 1))]}`; }
+    const s = sliders[n];
+    if (s.label === "dB" || s.label === "dBTP") { const d = b - a; return `${name(n)} ${d < 0 ? MINUS : "+"}${Math.abs(d).toFixed(Math.abs(d) < 0.095 ? 2 : 1)} dB`; }
+    const f = (v) => `${+v.toFixed(1)}${s.label ? " " + s.label : ""}`;
+    return `${name(n)} ${f(a)} → ${f(b)}`;
+  }
+  const hist = { steps: [], pos: 0, open: new Set(), pending: new Map(), group: null, applying: false, canMerge: false };
+  window.__mockHistory = hist;
+  const undoLabel = () => (hist.pos > 0 ? hist.steps[hist.pos - 1].label : "");
+  const redoLabel = () => (hist.pos < hist.steps.length ? hist.steps[hist.pos].label : "");
+  function histPush(step) {
+    step.at = performance.now();
+    hist.steps.splice(hist.pos);
+    hist.steps.push(step);
+    if (hist.steps.length > 100) hist.steps.shift();
+    hist.pos = hist.steps.length;
+  }
+  function commitGesture() {
+    const changes = [...hist.pending].map(([n, a]) => ({ n, a, b: getV(n) })).filter((c) => c.a !== c.b);
+    hist.pending.clear();
+    if (!changes.length) return;
+    const now = performance.now(), top = hist.steps[hist.steps.length - 1];
+    if (hist.canMerge && top && top.gesture && hist.pos === hist.steps.length && now - top.at < 1000
+        && top.changes.length === changes.length && top.changes.every((c, i) => c.n === changes[i].n)) {
+      changes.forEach((c, i) => { top.changes[i].b = c.b; });
+      top.changes = top.changes.filter((c) => c.a !== c.b);
+      top.at = now;
+      if (!top.changes.length) { hist.steps.pop(); hist.pos = hist.steps.length; hist.canMerge = false; }
+      else top.label = describe(top.changes);
+      return;
+    }
+    histPush({ label: describe(changes), changes, gesture: true });
+    hist.canMerge = true;
+  }
+  const watching = (n) => !hist.applying && !hist.group && isSetting(n);
+  function gestureBegin(n) { if (!watching(n)) return; hist.open.add(n); if (!hist.pending.has(n)) hist.pending.set(n, getV(n)); }
+  function gestureEnd(n) { if (!watching(n)) return; hist.open.delete(n); if (!hist.open.size) commitGesture(); }
+  const captureAll = () => Object.fromEntries(allNames().map((n) => [n, getV(n)]));
+  function beginGroup(label) { if (!hist.group) hist.group = { label, before: captureAll(), report: am.report, tone: am.toneTarget }; }
+  function endGroup() {
+    const g = hist.group;
+    if (!g) return;
+    hist.group = null;
+    const changes = allNames().filter((n) => (isSetting(n) || n === "bypass") && g.before[n] !== getV(n)).map((n) => ({ n, a: g.before[n], b: getV(n) }));
+    // The extra state: the report and Tone Steady's target (the plug-in's captureExtraState).
+    const report = g.report !== am.report || g.tone !== am.toneTarget ? { a: g.report, b: am.report, ta: g.tone, tb: am.toneTarget } : null;
+    if (changes.length || report) histPush({ label: g.label, changes, report, gesture: false });
+    hist.canMerge = false;
+  }
+  function applyStep(step, forward) {
+    hist.applying = true;
+    const list = forward ? step.changes : [...step.changes].reverse();
+    for (const c of list) setV(c.n, forward ? c.b : c.a);
+    if (step.report) { am.report = forward ? step.report.b : step.report.a; am.toneTarget = forward ? step.report.tb : step.report.ta; am.version++; }
+    hist.applying = false;
+    hist.canMerge = false;
+  }
+  function histUndo() { if (!hist.pos) return ""; const s = hist.steps[--hist.pos]; applyStep(s, false); return s.label; }
+  function histRedo() { if (hist.pos >= hist.steps.length) return ""; const s = hist.steps[hist.pos++]; applyStep(s, true); return s.label; }
+  const snaps = { slots: [null, null, null, null], active: -1 };
+  window.__mockSnaps = snaps;
+  const matches = (s) => Object.entries(s.values).every(([n, v]) => (typeof v === "number" ? Math.abs(getV(n) - v) < 1e-6 : getV(n) === v));
+  function snapStore(k) {
+    if (!(k >= 0 && k < 4)) return;
+    snaps.slots[k] = { values: Object.fromEntries(allNames().filter(isSetting).map((n) => [n, getV(n)])), report: am.report, tone: am.toneTarget,
+                       time: new Date().toISOString(), note: undoLabel() };
+    snaps.active = k;
+  }
+  function snapRecall(k) {
+    const s = snaps.slots[k];
+    if (!s) return false;
+    beginGroup(`Recall Snapshot ${k + 1}`);
+    for (const [n, v] of Object.entries(s.values)) if (getV(n) !== v) setV(n, v);
+    if (am.report !== s.report) { am.report = s.report; am.version++; }
+    am.toneTarget = s.tone || 0;
+    endGroup();
+    snaps.active = k;
+    return true;
+  }
+  function snapStatus() {
+    let now = snaps.active >= 0 && snaps.slots[snaps.active] && matches(snaps.slots[snaps.active]) ? snaps.active : snaps.slots.findIndex((s) => s && matches(s));
+    if (now >= 0) snaps.active = now;
+    return { snaps: snaps.slots.map((s) => (s ? { filled: true, time: s.time, note: s.note } : { filled: false, time: "", note: "" })),
+             snapActive: snaps.active, snapModified: snaps.active >= 0 && now !== snaps.active };
+  }
+
   function amFinish() {
-    am.snapshot = { sliders: JSON.parse(JSON.stringify(sliders)), toggles: { ...toggles }, combos: Object.fromEntries(Object.entries(combos).map(([k, c]) => [k, c.value])) };
+    beginGroup(`Auto-Master (${combos.amGenre.choices[Math.round(combos.amGenre.value * 5)]}, ${combos.amIntensity.choices[Math.round(combos.amIntensity.value * 2)]})`);
     const values = { eqGain1: 0, eqGain2: 0, eqGain3: -1.4, eqGain4: 0, eqGain5: 0, eqGain6: 0.8, eqGain7: 1.6,
                      bassMono: 100, bassTame: 40, bassPunch: 25, satMode: 1, satFocus: 1, satDrive: 11.4, satMix: 50,
                      clipOn: 1, clipLevel: -1, clipSoftness: 50, drive: 9.4, ceiling: -1, release: 120 };
@@ -112,7 +246,6 @@
       mixStats: { bandDb: [-6.1, 4.4, 2.9, 0.3, -1.4, -4.6, -11.5], bassWidth: 42, midSide: -15.2, highSide: -11.0, subVsBass: -0.8 },
       masterStats: { bandDb: [-4.7, 3.6, 1.5, 0.1, -1.0, -3.1, -8.2], bassWidth: 3, midSide: -13.9, highSide: -8.3, subVsBass: 0.1 },
     } : {};
-    am.toneBefore = am.toneTarget;
     if (!(am.heard < 30 && am.heard < am.toneTarget)) am.toneTarget = am.heard;   // a short listen keeps a longer-learned tone
     const whole = am.heard >= 14, loudAt = whole ? Math.min(LOUD_AT, am.heard - 12) : 0;
     am.report = JSON.stringify({
@@ -143,7 +276,8 @@
         R("max", "Ceiling", "\u22121.0 dBTP", "Leaves room for the MP3/AAC conversion streaming services do, so the streamed version is very unlikely to clip."),
       ],
     });
-    am.undo = true; am.version++; am.state = 0;
+    am.version++; am.state = 0;
+    endGroup();
   }
   setInterval(() => {
     if (am.state !== 1) return;
@@ -156,8 +290,9 @@
   window.__JUCE__ = {
     initialisationData: {
       __juce__platform: [],
-      __juce__functions: ["resetMeter", "startAutoMaster", "finishAutoMaster", "cancelAutoMaster", "undoAutoMaster", "getAutoMasterReport", "clearToneTarget",
-                          "loadReference", "clearReference", "getReference", "setMonitor"],
+      __juce__functions: ["resetMeter", "startAutoMaster", "finishAutoMaster", "cancelAutoMaster", "getAutoMasterReport", "clearToneTarget",
+                          "loadReference", "clearReference", "getReference", "setMonitor",
+                          "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve"],
       __juce__registeredGlobalEventIds: [],
       __juce__sliders: Object.keys(sliders),
       __juce__toggles: Object.keys(toggles),
@@ -172,16 +307,20 @@
                           numSteps: 1000, interval: s.interval, parameterIndex: 0 });
           send(eventId, { eventType: "valueChanged", value: s.value });
         } else if (payload.eventType === "valueChanged") s.value = payload.value;
+        else if (payload.eventType === "sliderDragStarted") gestureBegin(name);
+        else if (payload.eventType === "sliderDragEnded") gestureEnd(name);
       } else if (eventId.startsWith("__juce__toggle")) {
         const name = eventId.slice("__juce__toggle".length);
         if (payload.eventType === "requestInitialUpdate") send(eventId, { eventType: "valueChanged", value: toggles[name] });
-        else if (payload.eventType === "valueChanged") toggles[name] = payload.value;
+        else if (payload.eventType === "valueChanged" && toggles[name] !== payload.value) {   // a complete gesture
+          gestureBegin(name); toggles[name] = payload.value; gestureEnd(name);
+        }
       } else if (eventId.startsWith("__juce__comboBox")) {
         const name = eventId.slice("__juce__comboBox".length), c = combos[name];
         if (payload.eventType === "requestInitialUpdate") {
           send(eventId, { eventType: "propertiesChanged", name, parameterIndex: 0, choices: c.choices });
           send(eventId, { eventType: "valueChanged", value: c.value });
-        } else if (payload.eventType === "valueChanged") c.value = payload.value;
+        } else if (payload.eventType === "valueChanged" && c.value !== payload.value) { gestureBegin(name); c.value = payload.value; gestureEnd(name); }
       } else if (eventId === "__juce__invoke") {
         let result = true;
         if (payload.name === "resetMeter") integratedAcc = [];   // (the mock has no separate short-term history)
@@ -191,7 +330,7 @@
         }
         if (payload.name === "finishAutoMaster") { result = am.state === 1 && am.heard >= 12; if (result) amDecide(false); }
         if (payload.name === "cancelAutoMaster" && am.state === 1) am.state = 0;
-        if (payload.name === "clearToneTarget") am.toneTarget = 0;
+        if (payload.name === "clearToneTarget" && am.toneTarget) { beginGroup("Tone Steady: follow the music"); am.toneTarget = 0; endGroup(); }
         if (payload.name === "getAutoMasterReport") result = am.report;
         if (payload.name === "setMonitor") {
           const [listen, mono, phone] = payload.params || [];
@@ -199,22 +338,25 @@
           mon.mono = !!mono; mon.phone = !!phone;
         }
         if (payload.name === "getReference") result = JSON.stringify({ state: ref.state, message: ref.message, profile: ref.profile || undefined });
+        if (payload.name === "getGenreCurve") {
+          const g = Math.max(0, Math.min(5, Number(payload.params && payload.params[0]) || 0));
+          result = JSON.stringify({ genre: g, name: combos.amGenre.choices[g], lufs: -9, sr: 48000, displayDb: mockGenre(g) });
+        }
         if (payload.name === "clearReference") { ref.profile = null; ref.state = 0; ref.message = ""; ref.version++; }
         if (payload.name === "loadReference") {   // no file dialog in a browser: "pick" the next mock song
           ref.state = 1; ref.version++;
           setTimeout(() => { ref.profile = refSongs[ref.next++ % refSongs.length]; ref.state = 2; ref.message = ""; ref.version++; }, 600);
         }
-        if (payload.name === "undoAutoMaster") {
-          result = am.undo;
-          if (am.snapshot) {
-            for (const [k, v] of Object.entries(am.snapshot.sliders)) setSlider(k, v.value);
-            for (const [k, v] of Object.entries(am.snapshot.toggles)) setToggle(k, v);
-            for (const [k, v] of Object.entries(am.snapshot.combos || {}))
-              if (combos[k].value !== v) { combos[k].value = v; send("__juce__comboBox" + k, { eventType: "valueChanged", value: v }); }
-          }
-          am.undo = false; am.report = ""; am.version++;
-          am.toneTarget = am.toneBefore;   // Tone Steady's reference as it was, too
+        if (payload.name === "historyUndo" || payload.name === "historyRedo") {
+          const done = payload.name === "historyUndo" ? histUndo() : histRedo();
+          result = { done, undo: undoLabel(), redo: redoLabel() };
         }
+        if (payload.name === "historyGroup") {
+          const [begin, label] = payload.params || [];
+          if (begin) beginGroup(label || "Changes"); else endGroup();
+        }
+        if (payload.name === "snapshotStore") snapStore((payload.params || [])[0]);
+        if (payload.name === "snapshotRecall") result = snapRecall((payload.params || [])[0]);
         send("__juce__complete", { promiseId: payload.resultId, result });
       }
     },
@@ -233,9 +375,11 @@
     const bypass = toggles.bypass;
     const drive = bypass ? 0 : sliders.drive.value;
     const beat = Math.pow(Math.max(0, Math.sin(t * Math.PI * 2 * 1.2)), 8);   // kick every ~0.8 s
-    const gr = bypass ? 0 : -Math.max(0, drive - 2.5) * (0.35 + 0.65 * beat);
-    const base = -16.5 + 1.5 * Math.sin(t / 6);
-    const loud = base + 11 * (1 - Math.exp(-drive / 11));   // diminishing returns, like a real limiter
+    const chorus = Math.floor(t / 12) % 2;                                     // 12 s verse, 12 s chorus, ...
+    const gr = bypass ? 0 : -Math.max(0, drive - 2.5 + 2 * chorus) * (0.35 + 0.65 * beat);
+    const base = -18 + 3 * chorus + 0.8 * Math.sin(t / 3);
+    // Diminishing returns, like a real limiter: the louder chorus is held down a little more than the verse.
+    const loud = base + 11 * (1 - Math.exp(-drive / 11)) - 1.2 * chorus * Math.min(1, drive / 6);
     integratedAcc.push(loud); if (integratedAcc.length > 3000) integratedAcc.shift();
     const mix = [], master = [];
     for (let i = 0; i < 96; i++) {
@@ -253,14 +397,15 @@
       peakL: +(-7 + drive * 0.5 + 5 * beat).toFixed(1),
       peakR: +(-7.5 + drive * 0.5 + 5 * beat).toFixed(1),
       gr: +(toggles.clipOn ? gr * 0.55 : gr).toFixed(1),
-      inShort: +base.toFixed(1), inIntegrated: -16.5, sr: 48000,
+      inShort: +base.toFixed(1), inIntegrated: -16.5, sr: 48000, playing: transport.playing,
       tame: toggles.bassOn && sliders.bassTame.value > 0 ? +(-sliders.bassTame.value / 100 * 5 * beat).toFixed(1) : 0,
       punch: toggles.bassOn && sliders.bassPunch.value > 0 ? +(sliders.bassPunch.value / 100 * 4 * beat).toFixed(1) : 0,
       bassWidth: 42, corr: +(0.55 - (sliders.imgMid.value + sliders.imgHigh.value - 200) / 400).toFixed(2), matchDb: +(-(11 * (1 - Math.exp(-drive / 11)))).toFixed(1),
-      amState: am.state, amProgress: am.state === 1 ? +Math.min(1, am.heard / 12).toFixed(2) : 0, amHearing: true, amUndo: am.undo, amReport: am.version,
+      amState: am.state, amProgress: am.state === 1 ? +Math.min(1, am.heard / 12).toFixed(2) : 0, amHearing: true, amReport: am.version,
       amMode: am.mode, amHeard: am.heard, amCanFinish: am.state === 1 && am.heard >= 12, amByItself: am.byItself,
       amLoudAt: am.heard < 12 ? -1 : Math.min(LOUD_AT, am.heard - 12), amLoudLufs: am.heard >= LOUD_AT + 12 ? -17.6 : -21.2,
       tsTarget: am.toneTarget, tsLearnFail: am.toneFail,
+      undo: undoLabel(), redo: redoLabel(), ...snapStatus(),
       refVersion: ref.version, refState: ref.state,
       clip: toggles.clipOn && !bypass ? +(-Math.max(0, drive - 1.5 + sliders.clipLevel.value * -0.5) * 0.5 * (0.3 + 0.7 * beat)).toFixed(1) : 0,
       dynGr: [1, 2, 3, 4].map((b) => {

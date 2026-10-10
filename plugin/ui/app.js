@@ -83,12 +83,18 @@ const resetMeter = Juce.getNativeFunction("resetMeter");
 const amStart = Juce.getNativeFunction("startAutoMaster");
 const amCancel = Juce.getNativeFunction("cancelAutoMaster");
 const amFinish = Juce.getNativeFunction("finishAutoMaster");     // "use what you've heard" (12 s of music on)
-const tsClearTarget = Juce.getNativeFunction("clearToneTarget");  // Tone Steady follows the music again
-const amUndo = Juce.getNativeFunction("undoAutoMaster");
+const tsClearTarget = Juce.getNativeFunction("clearToneTarget");  // Tone Steady follows the music again (an undo step)
+// Undo / redo (the plug-in keeps the history, so it survives closing this window) and snapshots S1..S4.
+const histUndo = Juce.getNativeFunction("historyUndo");
+const histRedo = Juce.getNativeFunction("historyRedo");
+const histGroup = Juce.getNativeFunction("historyGroup");
+const snapStore = Juce.getNativeFunction("snapshotStore");
+const snapRecall = Juce.getNativeFunction("snapshotRecall");
 const amGetReport = Juce.getNativeFunction("getAutoMasterReport");
 const refLoad = Juce.getNativeFunction("loadReference");
 const refClear = Juce.getNativeFunction("clearReference");
 const refGet = Juce.getNativeFunction("getReference");
+const genreGet = Juce.getNativeFunction("getGenreCurve");
 
 function scaledToNorm(state, v) {
   const { start, end, skew } = state.properties;
@@ -101,9 +107,10 @@ const M = {
   momentary: -100, shortTerm: -100, integrated: -100, range: 0, truePeak: -100,
   peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
   inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
-  amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0, matchDb: 0, corr: 1,
+  amState: 0, amProgress: 0, amHearing: false, amReport: 0, matchDb: 0, corr: 1,
   // Whole-song listen (mode 0 Auto-Master, 1 learn Tone Steady's target only) and the stored target (s of song, 0 = none).
   amMode: 0, amHeard: 0, amLoudAt: -1, amLoudLufs: -100, amCanFinish: false, amByItself: false, tsTarget: 0, tsLearnFail: 0,
+  undo: "", redo: "", snaps: [{}, {}, {}, {}], snapActive: -1, snapModified: false,
   dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], stemKeep: 0, rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
   ulBoost: 0, ulSquash: 0, refVersion: 0, refState: 0,
   listen: 0, mono: false, phone: false, listenNow: 0, listenGain: 0, listenUnder: -100,
@@ -180,7 +187,7 @@ const modules = [
   { id: "max", name: "Maximizer", live: true },
 ];
 let selected = "max";
-let learnView = "module";      // "module", "report" (the Auto-Master report) or "ref" (Match ref)
+let learnView = "module";      // "module", "report" (the Auto-Master report), "ref" (Match ref) or "history" (loudness history)
 let amReport = null;           // last Auto-Master report (parsed), or null
 
 // ---------------------------------------------------------------------------------------------
@@ -418,10 +425,12 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   };
   value.title = "Double-click to type a value";
   value.addEventListener("dblclick", typeIn);
+  // Each key press is one gesture (the plug-in's undo merges quick repeats into one step).
+  const nudge = (d) => { state.sliderDragStarted(); setNorm(state.getNormalisedValue() + d); state.sliderDragEnded(); };
   knob.addEventListener("keydown", (e) => {
     const step = e.shiftKey ? 0.002 : 0.01;
-    if (e.key === "ArrowUp" || e.key === "ArrowRight") setNorm(state.getNormalisedValue() + step);
-    else if (e.key === "ArrowDown" || e.key === "ArrowLeft") setNorm(state.getNormalisedValue() - step);
+    if (e.key === "ArrowUp" || e.key === "ArrowRight") nudge(step);
+    else if (e.key === "ArrowDown" || e.key === "ArrowLeft") nudge(-step);
     else if (e.key === "Enter") typeIn();
     else return;
     e.preventDefault();
@@ -1037,6 +1046,8 @@ function renderLearnBody() {
   if (learnView === "listen") learnView = "module";
   if (learnView === "report" && amReport) { renderReport(body); return; }
   if (learnView === "ref") { renderRefLearn(body); return; }
+  if (learnView === "history") { renderHistoryLearn(body); return; }
+  if (learnView === "snap") { renderSnapLearn(body); return; }
 
   const m = modules.find((x) => x.id === selected);
   if (!m.live) {
@@ -1151,6 +1162,17 @@ function renderLearnBody() {
   prependAmSection(body, "max");
 }
 
+// How to read the dotted genre line on the spectrum (EQ Learn).
+function genreLineItem() {
+  const full = genreCurve ? genreCurve.name : GENRES[comboIndex(P.amGenre)];
+  const read = `Where your red master line sits above the dotted line, your master has more of that range than typical ${genreShort(full) === "Trap" ? "trap" : genreShort(full)}; below it, less. Small differences (1–2 dB) are normal, and below about 60 Hz all the lines get rough.`;
+  if (refInfo.profile && !genreLineOn())
+    return item(`Dotted line · ${genreShort(full)} target`, null, `Hidden while a reference is loaded: Auto-Master aims for the reference (the yellow dashed line) instead. Click "${genreShort(full)} target" under the spectrum to show it too. ${read}`);
+  if (!genreLineOn())
+    return item(`Dotted line · ${genreShort(full)} target`, null, `The typical tone of ${full} masters, the one Auto-Master's EQ aims for. It's switched off: click "${genreShort(full)} target" under the spectrum to show it.`);
+  return item(`Dotted line · ${genreShort(full)} target`, null, `The typical tone of ${full} masters, the one Auto-Master's EQ aims for, shown at the loudness of what's playing. ${read}`);
+}
+
 function renderEqLearn(body) {
   const bypassed = !!P.bypass.getValue();
   const on = eqEnabled();
@@ -1168,6 +1190,7 @@ function renderEqLearn(body) {
   body.appendChild(head("WHAT EACH CONTROL IS DOING"));
   if (moved.length && on) moved.forEach((x) => body.appendChild(item(`${x.band.name} · ${fmtHz(x.f)}`, sgn(x.g), x.g > 0 ? x.band.boost : x.band.cut)));
   else modules.find((m) => m.id === "eq").controls.forEach(([n, w]) => body.appendChild(item(n, null, w)));
+  body.appendChild(genreLineItem());
 
   if (bypassed || !on) {
     body.appendChild(tip("TIP", "Cut before you boost: a 1–2 dB Low Mid cut often sounds clearer than boosting the highs. It can end up louder too, but only because the Maximizer turns the headroom the cut frees into level.", true));
@@ -1377,8 +1400,11 @@ function stemSuggestButton() {
   b.className = "pill pill-red stem-apply";
   b.textContent = "APPLY: " + (moves.length ? moves.map((k) => `${STEMS[k].toUpperCase()} ${fmtSigned(s[k])}`).join(", ") : "STEM EQ ON");
   b.addEventListener("click", () => {
-    P.stemOn.setValue(true);
-    s.forEach((v, k) => { const st = P.stemGain[k]; st.sliderDragStarted(); st.setNormalisedValue(scaledToNorm(st, v)); st.sliderDragEnded(); });
+    histGroup(true, "Apply Stem EQ suggestion");   // one undo step for all of it
+    try {
+      P.stemOn.setValue(true);
+      s.forEach((v, k) => { const st = P.stemGain[k]; st.sliderDragStarted(); st.setNormalisedValue(scaledToNorm(st, v)); st.sliderDragEnded(); });
+    } finally { histGroup(false); }
     stemCells.forEach((c) => c.refresh && c.refresh());
     onParamsChanged(); userEdited();
     toast("Stem EQ suggestion applied. Turn on MATCH and flip A/B to judge it.");
@@ -2021,7 +2047,7 @@ const chkChange = $("chk-resetchange");
 chkChange.addEventListener("change", () => P.resetOnChange.setValue(chkChange.checked));
 P.resetOnChange.valueChangedEvent.addListener(() => (chkChange.checked = !!P.resetOnChange.getValue()));
 
-function restartMeasurement() { resetMeter(); grWindow = []; clipWindow = []; tameWindow = []; punchWindow = []; }
+function restartMeasurement() { resetMeter(); grWindow = []; clipWindow = []; tameWindow = []; punchWindow = []; histReset(); }
 $("btn-reset").addEventListener("click", () => { restartMeasurement(); toast("Loudness measurement reset."); });
 // After a control change only the long-term readings start over; Short-term keeps running.
 function restartIntegrated() { resetMeter("stats"); }
@@ -2059,6 +2085,7 @@ function refreshAmChoices() {
       b.setAttribute("aria-pressed", String(on));
     });
   }
+  fetchGenreCurve();   // the dotted line follows the genre (no-op when it already shows this one)
 }
 function stepGenre(d) {
   const n = P.amGenre.properties.choices.length || GENRES.length;
@@ -2135,15 +2162,106 @@ function updateAmButton() {
     sub.textContent = amReport && amReport.ok ? "Done · click to run again" : "Click, then play your whole song";
   }
   if (tsTarget.refresh) tsTarget.refresh();
-  const undo = $("btn-undo");
-  undo.disabled = !M.amUndo;
-  undo.classList.toggle("is-disabled", !M.amUndo);
 }
-$("btn-undo").addEventListener("click", async () => {
-  if (!M.amUndo) return;
-  await amUndo();
-  toast("Undone: every setting is back to how it was before Auto-Master.");
+
+// ---------------------------------------------------------------------------------------------
+// Undo / redo: the plug-in records every change made here (one knob move = one step), each Auto-Master
+// run, Apply and snapshot recall. The arrows say what they will undo / redo.
+const IS_MAC = /Mac/.test(navigator.platform || "");
+const KEY = IS_MAC ? "⌘" : "Ctrl+";
+function refreshHistory() {
+  for (const [id, label, verb, keys] of [["btn-undo", M.undo, "Undo", `${KEY}Z`], ["btn-redo", M.redo, "Redo", IS_MAC ? "⇧⌘Z" : "Ctrl+Shift+Z or Ctrl+Y"]]) {
+    const b = $(id), on = !!label;
+    const title = on ? `${verb}: ${label} (${keys})` : `Nothing to ${verb.toLowerCase()}`;
+    if (b.title === title && b.disabled === !on) continue;
+    b.disabled = !on;
+    b.classList.toggle("is-disabled", !on);
+    b.title = title;
+    b.setAttribute("aria-label", title);
+  }
+}
+async function stepHistory(redo) {
+  if (!(redo ? M.redo : M.undo)) return;
+  let r = null;
+  try { r = await (redo ? histRedo() : histUndo()); } catch (e) { r = null; }
+  if (r && typeof r === "object") { M.undo = r.undo || ""; M.redo = r.redo || ""; }
+  refreshHistory();
+  if (r && r.done) toast(`${redo ? "Redone" : "Undone"}: ${r.done}`);
   refreshAllCells();
+}
+$("btn-undo").addEventListener("click", () => stepHistory(false));
+$("btn-redo").addEventListener("click", () => stepHistory(true));
+// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (Cmd on a Mac) while Polisher's window has the keyboard. A box you are
+// typing a value into keeps its own undo.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && storeArmed) { storeArmed = false; refreshSnapshots(); return; }
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  if (e.target && e.target.closest && e.target.closest("input, textarea, [contenteditable]")) return;
+  const k = (e.key || "").toLowerCase();
+  if (k === "z") { e.preventDefault(); stepHistory(e.shiftKey); }
+  else if (k === "y") { e.preventDefault(); stepHistory(true); }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Snapshots S1..S4 (not A/B: A/B is the original vs the master). An empty slot stores what you hear;
+// a stored one switches to it (one undo step); STORE then a slot (or Shift-click) replaces a slot.
+let storeArmed = false;
+let snapLearnShown = false;   // the snapshot Learn page opens by itself once, the first time a slot is stored
+const snapTime = (iso) => {
+  const d = iso ? new Date(iso) : null;
+  return d && !isNaN(d) ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+};
+let snapSig = "";
+function refreshSnapshots() {
+  const snaps = M.snaps || [];
+  const sig = JSON.stringify([snaps, M.snapActive, M.snapModified, storeArmed]);
+  if (sig === snapSig) return;
+  snapSig = sig;
+  document.querySelectorAll("#snaps .snap").forEach((b) => {
+    const k = Number(b.dataset.slot), s = snaps[k] || {}, filled = !!s.filled;
+    const active = filled && M.snapActive === k, changed = active && !!M.snapModified;
+    const text = `S${k + 1}${changed ? "•" : ""}`;
+    if (b.textContent !== text) b.textContent = text;
+    b.className = "pill snap " + (active ? "pill-red" : "pill-blue") + (filled ? "" : " empty") + (storeArmed ? " armed" : "");
+    b.setAttribute("aria-pressed", String(active));
+    const from = s.note ? ` after “${s.note}”` : "";
+    b.title = !filled ? `Snapshot ${k + 1} is empty: click to keep the settings you hear now`
+      : storeArmed ? `Replace Snapshot ${k + 1} with the settings you hear now`
+      : `Snapshot ${k + 1}${active ? (changed ? ", playing, changed since (•)" : ", playing") : ""}: stored ${snapTime(s.time)}${from}. `
+        + "Click to switch to it (undo goes back). Shift-click to replace it.";
+    b.setAttribute("aria-label", b.title);
+  });
+  const st = $("btn-store");
+  st.className = "pill snap-store " + (storeArmed ? "pill-red" : "pill-blue");
+  st.textContent = storeArmed ? "PICK SLOT" : "STORE";
+  st.setAttribute("aria-pressed", String(storeArmed));
+}
+function storeIn(k) {
+  const replaced = !!((M.snaps || [])[k] || {}).filled;
+  snapStore(k);
+  storeArmed = false;
+  M.snaps = (M.snaps || []).slice();
+  M.snaps[k] = { filled: true, time: new Date().toISOString(), note: M.undo };
+  M.snapActive = k; M.snapModified = false;
+  refreshSnapshots();
+  toast(replaced ? `Snapshot ${k + 1} replaced with the settings you hear now.`
+                 : `Kept in S${k + 1}. Click S${k + 1} any time to come back to these settings.`);
+  if (!snapLearnShown) { snapLearnShown = true; learnView = "snap"; renderLearn(); }
+}
+document.querySelectorAll("#snaps .snap").forEach((b) => b.addEventListener("click", async (e) => {
+  const k = Number(b.dataset.slot), filled = !!((M.snaps || [])[k] || {}).filled;
+  if (storeArmed || !filled || e.shiftKey) { storeIn(k); return; }
+  const ok = await snapRecall(k);
+  if (ok === false) return;
+  M.snapActive = k; M.snapModified = false;
+  refreshSnapshots();
+  refreshAllCells();
+  toast(`Snapshot ${k + 1}: its settings glide in. The undo arrow goes back.`);
+}));
+$("btn-store").addEventListener("click", () => {
+  storeArmed = !storeArmed;
+  refreshSnapshots();
+  if (storeArmed) { toast("Pick a slot, S1 to S4: it keeps the settings you hear now."); learnView = "snap"; renderLearn(); }
 });
 
 async function fetchReport(openIt) {
@@ -2228,6 +2346,237 @@ function drawRefCurve() {
   }
   const off = refOffset === null ? 0 : refOffset;
   path.setAttribute("d", spectrumPath(p.displayDb.map((v) => v + off)));
+}
+
+// ---------------------------------------------------------------------------------------------
+// The genre's typical tone on the spectrum (dotted): the balance Auto-Master's EQ aims for, computed by
+// the engine (getGenreCurve) for the chosen genre at the plug-in's sample rate, and moved to the
+// loudness of what's playing like the reference's curve. With a reference loaded Auto-Master aims for
+// the reference instead, so the genre line is hidden unless the user clicks its legend entry.
+let genreCurve = null;         // { genre, name, lufs, sr, displayDb } from the plug-in
+let genreOffset = null;        // dB the genre line is moved by: loudness playing now minus genreCurve.lufs
+let genreAsked = "";           // genre and sample rate of the last request (so a stale answer is dropped)
+const genreLinePref = { noRef: true, withRef: false };
+try { Object.assign(genreLinePref, JSON.parse(localStorage.getItem("polisher.genreLine") || "{}")); } catch (_) {}
+const genreShort = (name) => (name || "").split(" /")[0];   // "Trap / Hip-Hop" -> "Trap"
+async function fetchGenreCurve() {
+  const g = comboIndex(P.amGenre), sr = M.sr > 0 ? M.sr : 48000, key = `${g}@${sr}`;
+  if (key === genreAsked) return;
+  genreAsked = key;
+  let curve = null;
+  try { curve = JSON.parse(await genreGet(g)); } catch (e) { curve = null; }
+  if (genreAsked !== key) return;      // the genre changed again while this one was being computed
+  if (!curve || !curve.displayDb || !curve.displayDb.length) { genreAsked = ""; return; }
+  if (!genreCurve || genreCurve.lufs !== curve.lufs) genreOffset = null;
+  genreCurve = curve;
+  drawGenreCurve();
+  if (learnOn && learnView === "module" && selected === "eq") scheduleLearn();
+}
+function genreLineOn() { return refInfo.profile ? genreLinePref.withRef : genreLinePref.noRef; }
+let genreLegendKey = "";
+function drawGenreCurve() {
+  const path = $("sp-genre"), btn = $("legend-genre");
+  const full = genreCurve ? genreCurve.name : GENRES[comboIndex(P.amGenre)];
+  const on = genreLineOn(), key = `${full}|${on}|${!!refInfo.profile}`;
+  if (key !== genreLegendKey) {
+    genreLegendKey = key;
+    $("legend-genre-name").textContent = `${genreShort(full)} target`;
+    btn.setAttribute("aria-pressed", String(on));
+    btn.title = (refInfo.profile && !on ? "Hidden while a reference is loaded: Auto-Master aims for the reference's tone instead. " : "")
+      + `The tone typical ${full} masters have (what Auto-Master's EQ aims for), at the loudness of what's playing. Click to ${on ? "hide" : "show"} it.`;
+  }
+  if (!genreCurve || !on) { path.setAttribute("d", ""); return; }
+  if (M.shortTerm > -50) {
+    const want = M.shortTerm - genreCurve.lufs;
+    genreOffset = genreOffset === null ? want : genreOffset + 0.05 * (want - genreOffset);   // ~1 s glide
+  }
+  const off = genreOffset === null ? 0 : genreOffset;
+  path.setAttribute("d", spectrumPath(genreCurve.displayDb.map((v) => v + off)));
+}
+$("legend-genre").addEventListener("click", () => {
+  genreLinePref[refInfo.profile ? "withRef" : "noRef"] = !genreLineOn();
+  try { localStorage.setItem("polisher.genreLine", JSON.stringify(genreLinePref)); } catch (_) {}
+  drawGenreCurve();
+  if (learnOn && learnView === "module" && selected === "eq") scheduleLearn();
+});
+P.amGenre.valueChangedEvent.addListener(fetchGenreCurve);
+P.amGenre.propertiesChangedEvent.addListener(fetchGenreCurve);
+
+// ---------------------------------------------------------------------------------------------
+// Loudness history: the master's short-term loudness (red), the mix's (white) and the Maximizer's gain
+// reduction (blue, hanging from the top) over the last 2 minutes of playback, with the target line.
+// Built from the meter frames (30 a second), one point per half second. Time only runs while the song
+// plays: stopping leaves a gap and the graph waits; RESET clears it.
+const HIST_STEP_MS = 500, HIST_POINTS = 240;                 // 240 x 0.5 s = 2 minutes
+const HIST_TOP = -4, HIST_BOTTOM = -28;                      // LUFS at the top and bottom of the screen
+const HIST_GR_DEPTH = 12, HIST_GR_SPAN = 0.5;                // 12 dB of gain reduction fills the top half
+const HIST_SETTLE_MS = 3000;                                 // Short-term needs 3 s of the song after play starts
+const hist = { pts: [], acc: null, gapNext: true, playingSince: null, lastFrame: 0, dirty: true };
+let histView = false;
+try { histView = localStorage.getItem("polisher.view") === "history"; } catch (_) {}
+
+function histReset() { hist.pts = []; hist.acc = null; hist.gapNext = true; hist.dirty = true; drawHistory(); }
+function histFlush() {
+  const a = hist.acc;
+  hist.acc = null;
+  if (!a || !a.n) return;
+  hist.pts.push({ st: a.st / a.n, inSt: a.inN ? a.in / a.inN : null, gr: a.gr, gap: hist.gapNext });
+  hist.gapNext = false;
+  if (hist.pts.length > HIST_POINTS) hist.pts.splice(0, hist.pts.length - HIST_POINTS);
+  hist.dirty = true;
+}
+function histBreak() { histFlush(); if (hist.pts.length) hist.gapNext = true; hist.playingSince = null; }
+// One meter frame. `playing` comes from the plug-in (the host's transport); older builds don't send it.
+function histFrame(now) {
+  const stalled = hist.lastFrame && now - hist.lastFrame > 1000;   // the window was hidden, or the host stopped calling us
+  hist.lastFrame = now;
+  if (stalled || M.playing === false) { histBreak(); return; }
+  if (hist.playingSince === null) hist.playingSince = now;
+  if (now - hist.playingSince < HIST_SETTLE_MS) return;          // still filling with the time before play
+  if (M.shortTerm <= -70) { histBreak(); hist.playingSince = now - HIST_SETTLE_MS; return; }   // silence in the song
+  if (!hist.acc) hist.acc = { t0: now, n: 0, st: 0, in: 0, inN: 0, gr: 0 };
+  const a = hist.acc;
+  a.n++; a.st += M.shortTerm;
+  if (M.inShort > -70) { a.inN++; a.in += M.inShort; }
+  a.gr = Math.min(a.gr, M.gr || 0);                             // the deepest moment of the half second
+  if (now - a.t0 >= HIST_STEP_MS) histFlush();
+}
+const histX = (i, n) => W - (n - 1 - i) * (W / (HIST_POINTS - 1));
+const histY = (lufs) => clamp(((HIST_TOP - lufs) / (HIST_TOP - HIST_BOTTOM)) * H, 0, H);
+const histGrY = (gr) => clamp(-gr / HIST_GR_DEPTH, 0, 1) * H * HIST_GR_SPAN;
+// What Auto-Master aims for: the Target pill, or a loaded reference's loudness (kept within -16..-6 LUFS
+// by Auto-Master, see kRefMinLufs / kRefMaxLufs).
+function histTargetLufs() {
+  if (refInfo.profile && isFinite(refInfo.profile.lufs)) return { lufs: clamp(refInfo.profile.lufs, -16, -6), ref: true };
+  return { lufs: [-14, -9, -7][comboIndex(P.amTarget)], ref: false };
+}
+function buildHistoryGrid() {
+  let lines = "";
+  for (let i = 1; i < 4; i++) lines += `<line x1="0" y1="${(H * i) / 4}" x2="${W}" y2="${(H * i) / 4}"/>`;
+  const labels = [];
+  for (let s = 0; s <= 120; s += 30) {
+    const x = histX(HIST_POINTS - 1 - (s * 1000) / HIST_STEP_MS, HIST_POINTS);
+    if (s > 0 && s < 120) lines += `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${H}"/>`;
+    labels.push(`<span style="left:${((x / W) * 100).toFixed(2)}%">${s === 0 ? "now" : `${MINUS}${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`}</span>`);
+  }
+  $("hist-grid").innerHTML = lines;
+  $("time-labels").innerHTML = labels.reverse().join("");
+  $("hist-scale").innerHTML = [0, 1, 2, 3, 4].map((i) => `<span>${fmtNum(HIST_TOP + ((HIST_BOTTOM - HIST_TOP) * i) / 4, 0)}</span>`).join("");
+  const y6 = histGrY(-6);
+  $("hist-gr6").setAttribute("y1", y6); $("hist-gr6").setAttribute("y2", y6);
+  $("hist-gr6-label").style.top = ((y6 / H) * 100).toFixed(2) + "%";
+  $("hist-deep-rect").setAttribute("y", y6); $("hist-deep-rect").setAttribute("height", H - y6);   // past -6 dB: orange
+}
+// Loudest / quietest stretch and deepest limiting of what's on screen (Learn reads the same numbers).
+function histStats() {
+  const pts = hist.pts;
+  const st = pts.map((p) => p.st).filter((v) => v > -40).sort((a, b) => a - b);
+  const inSt = pts.map((p) => p.inSt).filter((v) => v !== null && v > -40).sort((a, b) => a - b);
+  const pct = (arr, q) => arr[clamp(Math.round(q * (arr.length - 1)), 0, arr.length - 1)];
+  const grs = pts.map((p) => p.gr);
+  return {
+    seconds: (pts.length * HIST_STEP_MS) / 1000,
+    loud: st.length ? pct(st, 0.95) : null, quiet: st.length ? pct(st, 0.1) : null,
+    mixLoud: inSt.length ? pct(inSt, 0.95) : null, mixQuiet: inSt.length ? pct(inSt, 0.1) : null,
+    grDeepest: grs.length ? Math.min(...grs) : 0,
+    grTypical: grs.length ? grs.reduce((a, b) => a + b, 0) / grs.length : 0,
+  };
+}
+function drawHistory() {
+  if (!histView) return;
+  const pts = hist.pts, n = pts.length;
+  const tgt = histTargetLufs();
+  const ty = histY(tgt.lufs);
+  $("hist-target").setAttribute("y1", ty); $("hist-target").setAttribute("y2", ty);
+  $("hist-target-label").style.top = ((ty / H) * 100).toFixed(2) + "%";
+  $("hist-target-label").textContent = `${tgt.ref ? "REF" : "TARGET"} ${fmtNum(tgt.lufs)}`;
+  $("legend-target").lastChild.textContent = `${tgt.ref ? "Reference" : "Target"} ${fmtNum(tgt.lufs)} LUFS`;
+  $("hist-empty").hidden = n > 0;
+  if (!hist.dirty) return;
+  hist.dirty = false;
+  let master = "", mix = "", gr = "", gaps = "";
+  let runStart = -1;
+  const closeRun = (end) => {
+    if (runStart < 0) return;
+    let d = `M${histX(runStart, n).toFixed(1)},0`;
+    for (let i = runStart; i <= end; i++) d += `L${histX(i, n).toFixed(1)},${histGrY(pts[i].gr).toFixed(1)}`;
+    gr += d + `L${histX(end, n).toFixed(1)},0Z`;
+    runStart = -1;
+  };
+  let mixOpen = false;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i], x = histX(i, n).toFixed(1);
+    if (p.gap && i > 0) {
+      closeRun(i - 1);
+      const gx = (histX(i, n) - W / (HIST_POINTS - 1) / 2).toFixed(1);
+      gaps += `<line x1="${gx}" y1="0" x2="${gx}" y2="${H}"/>`;
+    }
+    if (runStart < 0) runStart = i;
+    master += (p.gap || i === 0 ? "M" : "L") + x + "," + histY(p.st).toFixed(1);
+    if (p.inSt === null) mixOpen = false;
+    else { mix += (p.gap || !mixOpen ? "M" : "L") + x + "," + histY(p.inSt).toFixed(1); mixOpen = true; }
+  }
+  closeRun(n - 1);
+  $("hist-master").setAttribute("d", master);
+  $("hist-master-glow").setAttribute("d", master);
+  $("hist-in").setAttribute("d", mix);
+  $("hist-gr").setAttribute("d", gr);
+  $("hist-gr-deep").setAttribute("d", gr);
+  $("hist-gaps").innerHTML = gaps;
+  const s = histStats();
+  $("hist-stats").textContent = s.loud === null ? "" :
+    `LOUD ${fmtNum(s.loud)} · QUIET ${fmtNum(s.quiet)} LUFS · GR UP TO ${s.grDeepest > -0.05 ? "0.0" : fmtNum(s.grDeepest)} dB`;
+}
+function setHistView(on) {
+  const was = histView;
+  histView = on;
+  $("spectrum-screen").classList.toggle("view-history", on);
+  $("view-spectrum").setAttribute("aria-pressed", String(!on));
+  $("view-history").setAttribute("aria-pressed", String(on));
+  $("spectrum-svg").setAttribute("aria-label", on ? "Loudness history of the master and your mix, with the Maximizer's gain reduction"
+                                                  : "Live spectrum of your mix and the master");
+  try { localStorage.setItem("polisher.view", on ? "history" : "spectrum"); } catch (_) {}
+  hist.dirty = true;
+  drawHistory();
+  if (on !== was) {
+    if (on) learnView = "history";
+    else if (learnView === "history") learnView = "module";
+    renderLearn();
+  }
+}
+$("view-spectrum").addEventListener("click", () => setHistView(false));
+$("view-history").addEventListener("click", () => { if (histView) { learnView = "history"; renderLearn(); } else setHistView(true); });
+
+function renderHistoryLearn(body) {
+  const tgt = histTargetLufs(), s = histStats();
+  body.appendChild(head("LOUDNESS HISTORY"));
+  body.appendChild(para("l-p", `The red line is your master's loudness (Short-term: the last 3 seconds) over the last 2 minutes of playback; the white line is your mix as it comes in. The dashed line is ${tgt.ref ? "the reference's loudness" : "your target"}, ${fmtNum(tgt.lufs)} LUFS.`));
+  body.appendChild(item("Verse and chorus", null, "A chorus or drop usually sits 1–3 dB above the verse, so the red line steps up and down with your song. If the white line steps but the red one stays flat, the Maximizer is squashing the difference."));
+  body.appendChild(item("Blue shading (Maximizer GR)", null, "How much the Maximizer turns the loudest moments down: the deeper it hangs from the top, the harder it works. Short dips of 1–3 dB on the hits are normal. Past 6 dB it turns orange: if it stays orange, or dips past 9 dB, that is heavy limiting and the kick and snare lose punch."));
+  body.appendChild(item("Gaps", null, "Time only runs while your song plays: a gap is where you stopped. RESET (under the Output meter) clears the graph."));
+  body.appendChild(sep());
+  body.appendChild(head("WHAT IT SHOWS NOW"));
+  if (s.seconds < 20 || s.loud === null) {
+    body.appendChild(para("l-p", "Play at least 20 seconds of your song, ideally a verse going into the chorus. The numbers appear here."));
+    return;
+  }
+  const lift = s.loud - s.quiet, mixLift = s.mixLoud !== null ? s.mixLoud - s.mixQuiet : null;
+  body.appendChild(para("l-p", `Over ${Math.round(s.seconds)} s of playback the master runs from about ${fmtNum(s.quiet)} LUFS in its quieter parts to ${fmtNum(s.loud)} LUFS in its loudest (${lift.toFixed(1)} dB apart${mixLift !== null ? `; your mix ${mixLift.toFixed(1)} dB` : ""}). The Maximizer takes up to ${fmtNum(-Math.min(0, s.grDeepest))} dB off, about ${fmtNum(-Math.min(0, s.grTypical))} dB on average.`));
+  if (s.grTypical < -6 || s.grDeepest < -9) {
+    body.appendChild(tip("HEAVY LIMITING", `The shading goes down to ${fmtNum(-s.grDeepest)} dB${s.grTypical < -6 ? ` and stays around ${fmtNum(-s.grTypical)} dB` : ""}: the Maximizer is squashing the loud parts hard.`, false,
+      { need: "Only if the kick or snare sound weaker than in your mix.",
+        steps: ["Turn on MATCH and flip A/B, listening only to the kick and snare.",
+                "If they lost punch: turn Drive down 1–2 dB (Maximizer), or turn on the Soft Clipper (chain, left) so it takes some of the peaks.",
+                "Play the same part again and check that the shading stays blue (less than 6 dB) most of the time."] }));
+  } else if (mixLift !== null && mixLift >= 3 && lift < mixLift - 2) {
+    body.appendChild(tip("SECTIONS FLATTENED", `Your mix rises ${mixLift.toFixed(1)} dB from its quieter to its louder parts; the master only ${lift.toFixed(1)} dB. The loud parts are being held down more than the quiet ones.`, false,
+      { need: "Only if the chorus or drop no longer hits harder than the verse.",
+        steps: ["Turn on MATCH and play the change from verse into chorus on A, then on B.",
+                "If the chorus lifts less on B, lower Drive 1–2 dB and play it again.",
+                "Check here that the red line steps up at the chorus again."] }));
+  } else {
+    body.appendChild(tip("LOOKS HEALTHY", "Your song keeps its shape and the limiting is moderate. To check a different part, play it: the graph keeps the last 2 minutes.", true));
+  }
 }
 $("btn-ref").addEventListener("click", async () => {
   if (M.refState === 1) return;
@@ -2340,6 +2689,29 @@ function renderRefLearn(body) {
   body.appendChild(howToUseRef());
 }
 
+// Learn for snapshots and undo (opens once by itself, the first time a slot is stored, and with STORE).
+function renderSnapLearn(body) {
+  const link = document.createElement("button");
+  link.type = "button";
+  link.className = "l-link";
+  link.textContent = "← BACK";
+  link.addEventListener("click", () => { learnView = "module"; renderLearn(); });
+  body.appendChild(link);
+  body.appendChild(head("SNAPSHOTS S1–S4"));
+  body.appendChild(para("l-p", "Each slot keeps a whole sound: every knob and switch in every module, plus the Auto-Master report that explains it. They're saved with your Cubase project."));
+  body.appendChild(item("Empty slot", null, "Click it to keep the settings you hear now."));
+  body.appendChild(item("Stored slot", null, "Click it to switch to those settings. They glide in like a knob move, so there's no click, and the undo arrow takes you back."));
+  body.appendChild(item("Red slot", null, "The one playing. A dot (S1•) means you've changed something since. To keep the change, click STORE, then the slot (or Shift-click the slot)."));
+  body.appendChild(item("Not in a snapshot", null, "A / B, MATCH, MONO, PHONE and Listen, and Auto-Master's genre, intensity and target. Switching snapshots never changes how you listen. S1–S4 are not A / B: A is always your original mix, B the master."));
+  body.appendChild(sep());
+  body.appendChild(head("A FAIR COMPARE WITH MATCH"));
+  body.appendChild(para("l-p", "MATCH learns how loud each snapshot plays compared with your mix, over about 10 seconds of B. The first time you hear a snapshot, give it 10–15 seconds before you judge. After that MATCH remembers its level, so when you flip back it's matched at once. Right after a switch it holds the level for 3 seconds while the loudness reading catches up."));
+  body.appendChild(tip("TRY THIS", "Balanced vs Punchy: play your chorus, run Auto-Master on Balanced and click S1. Pick Punchy, run it again and click S2. Turn on MATCH and listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip S1 / S2 every few seconds: you hear punch and weight, not volume. Click the one you like and keep going.", true));
+  body.appendChild(sep());
+  body.appendChild(head("UNDO AND REDO"));
+  body.appendChild(para("l-p", `The arrows at the top step back and forward through your changes, one at a time: a knob move, a switch, a typed value, an Auto-Master run, Apply, a snapshot. Point at an arrow to see what it will undo. ${IS_MAC ? "⌘Z undoes, ⇧⌘Z redoes" : "Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes"} (click inside Polisher first, or Cubase takes the keys). The last 100 steps are kept while Polisher's window is closed, but not when you close the project. Automation from Cubase is never in the list.`));
+}
+
 const AM_MODULES = [["ul", "UNLIMITER"], ["eq", "TONAL EQ"], ["stem", "STEM EQ"], ["ts", "TONE STEADY"], ["rt", "RESONANCE TAMER"], ["bass", "BASS CONTROL"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
 function notesAsTips(body) {
   for (const raw of amReport.notes || []) {
@@ -2391,7 +2763,7 @@ function renderReport(body) {
     list.forEach((x) => body.appendChild(item(x.control, x.value, x.why)));
     if (id === "stem") { const b = stemSuggestButton(); if (b) body.appendChild(b); }
   }
-  body.appendChild(tip("COMPARE IT", "Turn on MATCH, then press A for your original mix and B for the master: both play at the same loudness, so you hear only what the master changed. The undo arrow at the top puts every setting back.", true));
+  body.appendChild(tip("COMPARE IT", "Turn on MATCH, then press A for your original mix and B for the master: both play at the same loudness, so you hear only what the master changed. The undo arrow at the top puts every setting back. To compare two Auto-Master runs, keep each in a snapshot (S1, S2 at the top).", true));
 }
 
 // Current value of a parameter by id, in the same units the report stores.
@@ -2443,7 +2815,7 @@ function prependAmSection(body, module) {
   if (moduleUnchanged(module)) {
     list.forEach((x) => frag.appendChild(item(x.control, x.value, x.why)));
   } else {
-    frag.appendChild(para("l-changed", "You've changed this module since Auto-Master set it, so its reasons no longer describe what you hear. Undo (top) puts Auto-Master's settings back."));
+    frag.appendChild(para("l-changed", "You've changed this module since Auto-Master set it, so its reasons no longer describe what you hear. The undo arrow (top) steps back through your changes to Auto-Master's settings."));
   }
   frag.appendChild(sep());
   body.prepend(frag);
@@ -2663,7 +3035,9 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   const wasAm = M.amState, wasTarget = M.tsTarget, wasFail = M.tsLearnFail;
   Object.assign(M, frame);
   watchListening(wasAm, wasTarget, wasFail);
-  if (srChanged) drawEq();
+  if (srChanged) { drawEq(); fetchGenreCurve(); }
+  refreshHistory();
+  refreshSnapshots();
   if (M.amReport !== amSeenVersion) {
     const first = amSeenVersion === -1;
     amSeenVersion = M.amReport;
@@ -2693,22 +3067,33 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   updateMeters();
   updateOutputMeter();
   updateLiveReadouts();
+  histFrame(performance.now());
+  if (histView) { drawHistory(); if (learnOn && learnView === "history") scheduleHistLearn(); }
   $("sp-mix").setAttribute("d", spectrumPath(M.mix));
   drawRefCurve();
+  drawGenreCurve();
   const master = spectrumPath(M.master);
   $("sp-master").setAttribute("d", master);
   $("sp-master-glow").setAttribute("d", master);
 });
 setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "dyn", "sat", "stem", "ts", "rt", "ul"].includes(selected)) renderLearn(); }, 1000);
+// The history's Learn page follows the graph, but only as often as a new point can change it.
+let histLearnAt = 0;
+function scheduleHistLearn() { const now = performance.now(); if (now - histLearnAt > 1000) { histLearnAt = now; renderLearn(); } }
 
 // ---------------------------------------------------------------------------------------------
 buildSpectrumGrid();
+buildHistoryGrid();
 buildMeters();
 renderChain();
 renderModule();
 setLearn(true);
 refreshAmChoices();
 updateAmButton();
+refreshHistory();
+refreshSnapshots();
 refreshMatch();
 refreshMonitor();
 onParamsChanged();
+setHistView(histView);
+fetchGenreCurve();

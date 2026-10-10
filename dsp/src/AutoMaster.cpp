@@ -616,6 +616,191 @@ std::vector<double> spectrumDisplayCurve (const AudioClip& clip, int fftSize, in
     return out;
 }
 
+// =================================================================================================
+// A genre's typical balance on the spectrum display
+// =================================================================================================
+
+BalanceCurve::BalanceCurve (const std::array<double, kEqBands>& bands) noexcept
+{
+    constexpr auto n = static_cast<size_t> (kEqBands);
+    for (size_t b = 0; b < n; ++b)
+        x[b] = std::log2 (std::sqrt (kEdges[b] * kEdges[b + 1]));
+    y = bands;
+    // A curve through the band values doesn't measure them exactly (a band's mean power per Hz leans
+    // toward its top end, and the curve bends inside it): move each node by its band's error.
+    for (int pass = 0; pass < 40; ++pass)
+    {
+        updateSlopes();
+        double worst = 0.0;
+        std::array<double, kEqBands> err {};
+        for (int b = 0; b < kEqBands; ++b)
+        {
+            const auto i = static_cast<size_t> (b);
+            err[i] = bands[i] - bandDb (b);
+            worst = std::max (worst, std::abs (err[i]));
+        }
+        if (worst < 1.0e-6)
+            break;
+        for (size_t b = 0; b < n; ++b)
+            y[b] += err[b];
+    }
+    updateSlopes();
+}
+
+void BalanceCurve::updateSlopes() noexcept
+{
+    // Monotone piecewise cubic (Fritsch-Carlson, with the shape-preserving end slopes of MATLAB's pchip).
+    constexpr auto n = static_cast<size_t> (kEqBands);
+    std::array<double, n - 1> h {}, d {};
+    for (size_t k = 0; k + 1 < n; ++k)
+    {
+        h[k] = x[k + 1] - x[k];
+        d[k] = (y[k + 1] - y[k]) / h[k];
+    }
+    for (size_t k = 1; k + 1 < n; ++k)
+    {
+        if (d[k - 1] * d[k] <= 0.0)
+            slope[k] = 0.0;
+        else
+        {
+            const double w1 = 2.0 * h[k] + h[k - 1], w2 = h[k] + 2.0 * h[k - 1];
+            slope[k] = (w1 + w2) / (w1 / d[k - 1] + w2 / d[k]);
+        }
+    }
+    auto endSlope = [] (double h0, double h1, double d0, double d1)
+    {
+        double s = ((2.0 * h0 + h1) * d0 - h0 * d1) / (h0 + h1);
+        if (s * d0 <= 0.0)
+            s = 0.0;
+        else if (d0 * d1 < 0.0 && std::abs (s) > std::abs (3.0 * d0))
+            s = 3.0 * d0;
+        return s;
+    };
+    slope[0] = endSlope (h[0], h[1], d[0], d[1]);
+    slope[n - 1] = endSlope (h[n - 2], h[n - 3], d[n - 2], d[n - 3]);
+}
+
+double BalanceCurve::db (double hz) const noexcept
+{
+    if (! (hz > 0.0))
+        return -300.0;
+    const double t = std::log2 (hz);
+    constexpr auto last = static_cast<size_t> (kEqBands - 1);
+    double v;
+    if (t <= x[0])
+        v = y[0] + slope[0] * (t - x[0]);
+    else if (t >= x[last])
+        v = y[last] + slope[last] * (t - x[last]);
+    else
+    {
+        size_t k = 0;
+        while (k + 1 < last && t > x[k + 1]) ++k;
+        const double h = x[k + 1] - x[k], s = (t - x[k]) / h;
+        const double s2 = s * s, s3 = s2 * s;
+        v = (2.0 * s3 - 3.0 * s2 + 1.0) * y[k] + (s3 - 2.0 * s2 + s) * h * slope[k]
+          + (-2.0 * s3 + 3.0 * s2) * y[k + 1] + (s3 - s2) * h * slope[k + 1];
+    }
+    if (hz < 20.0)
+        v -= 24.0 * std::log2 (20.0 / hz);   // a master's low cut
+    return v;
+}
+
+double BalanceCurve::bandDb (int band) const noexcept
+{
+    // Mean power per Hz over the band (power per Hz = the tilted value minus the tilt), integrated on
+    // a log grid, plus the tilt at the band's centre: what analyseMix() reads from a mix's bins.
+    const auto i = static_cast<size_t> (band);
+    const double lo = kEdges[i], hi = kEdges[i + 1];
+    constexpr int kSteps = 256;
+    double sum = 0.0;
+    for (int k = 0; k < kSteps; ++k)
+    {
+        const double f = lo * std::pow (hi / lo, (k + 0.5) / kSteps);
+        sum += std::pow (10.0, (db (f) - 4.5 * std::log2 (f / 1000.0)) / 10.0) * f;
+    }
+    const double mean = sum * std::log (hi / lo) / kSteps / (hi - lo);
+    return 10.0 * std::log10 (mean) + 4.5 * std::log2 (std::sqrt (lo * hi) / 1000.0);
+}
+
+std::vector<double> balanceDisplayCurve (const std::array<double, kEqBands>& bandDb, double sampleRate,
+                                         double lufs, int fftSize, int points)
+{
+    std::vector<double> out (static_cast<size_t> (std::max (0, points)), -120.0);
+    if (points < 2 || fftSize < 16 || ! (sampleRate >= 8000.0))
+        return out;
+    const BalanceCurve curve (bandDb);
+    const double nyquist = 0.5 * sampleRate, top = std::min (20000.0, nyquist);
+    // One channel's power per Hz (one-sided), before scaling to the loudness asked for.
+    auto power = [&] (double f) { return f > 0.0 && f < top ? std::pow (10.0, (curve.db (f) - 4.5 * std::log2 (f / 1000.0)) / 10.0) : 0.0; };
+
+    // Scale: two channels carrying this spectrum, K-weighted (BS.1770), measure `lufs`.
+    KWeighting k;
+    k.prepare (sampleRate);
+    double weighted = 0.0;
+    constexpr int kLoudSteps = 4000;
+    const double fLo = 2.0, span = std::log (top / fLo);
+    for (int i = 0; i < kLoudSteps; ++i)
+    {
+        const double f = fLo * std::exp (span * (i + 0.5) / kLoudSteps);
+        weighted += power (f) * k.powerGain (f) * f;
+    }
+    weighted *= span / kLoudSteps;
+    if (! (weighted > 0.0))
+        return out;
+    const double scale = lufsToEnergy (lufs) / (2.0 * weighted);
+
+    // Each bin's expected power: the spectrum seen through the Hann window's response, |W(d)| =
+    // (N/2) |sinc(d) / (1 - d^2)| at d bins away, summed out to +/- 8 bins (the rest is < -90 dB).
+    // The mono sum (L + R) / 2 of two equal channels is that channel; negative frequencies mirror.
+    constexpr int kSub = 16, kReach = 8 * kSub;
+    std::vector<double> kernel (2 * kReach + 1);
+    double kernelSum = 0.0;
+    for (int j = -kReach; j <= kReach; ++j)
+    {
+        const double d = static_cast<double> (j) / kSub;
+        double g;
+        if (j == 0)                     g = 1.0;
+        else if (std::abs (j) == kSub)  g = 0.5;
+        else                            g = std::sin (std::numbers::pi * d) / (std::numbers::pi * d * (1.0 - d * d));
+        kernel[static_cast<size_t> (j + kReach)] = g * g;
+        kernelSum += g * g / kSub;
+    }
+    const double N = fftSize, binHz = sampleRate / N;
+    // Normalised so that white noise reads exactly as the window's power sum predicts (3N/8 per bin).
+    const double toBin = scale * 0.5 * (N * N / 4.0) * binHz * (1.5 / kernelSum) / kSub;
+    const int lastBin = fftSize / 2 - 1;
+    std::vector<double> grid (static_cast<size_t> ((lastBin + 9) * kSub + 1));
+    for (size_t i = 0; i < grid.size(); ++i)
+        grid[i] = power (static_cast<double> (i) * binHz / kSub);
+    auto binPower = [&] (int bin)
+    {
+        double e = 0.0;
+        for (int j = -kReach; j <= kReach; ++j)
+            e += kernel[static_cast<size_t> (j + kReach)] * grid[static_cast<size_t> (std::abs (bin * kSub + j))];
+        return e * toBin;
+    };
+
+    // The display's points, exactly as spectrumDisplayCurve() and the plug-in's editor compute them.
+    const double fullScale = N * 0.25;
+    for (int i = 0; i < points; ++i)
+    {
+        const double f = 20.0 * std::pow (1000.0, static_cast<double> (i) / (points - 1));
+        const int lo = std::clamp (static_cast<int> (std::floor (f * std::pow (2.0, -1.0 / 12.0) / binHz)), 1, lastBin);
+        const int hi = std::clamp (static_cast<int> (std::ceil (f * std::pow (2.0, 1.0 / 12.0) / binHz)), lo, lastBin);
+        double e = 0.0;
+        for (int b = lo; b <= hi; ++b) e += binPower (b);
+        const double mag2 = e / (hi - lo + 1) / (fullScale * fullScale);
+        const double db = std::clamp (10.0 * std::log10 (mag2 + 1.0e-18) + 4.5 * std::log2 (f / 1000.0), -120.0, 12.0);
+        out[static_cast<size_t> (i)] = std::round (db * 10.0) / 10.0;
+    }
+    return out;
+}
+
+std::vector<double> genreDisplayCurve (Genre g, double sampleRate, double lufs, int fftSize, int points)
+{
+    return balanceDisplayCurve (genreTargetCurve (g), sampleRate, lufs, fftSize, points);
+}
+
 ReferenceProfile analyseReference (const AudioClip& part, double trackSeconds, double trackLufs, double startSeconds)
 {
     const ScopedFlushDenormals noDenormals;

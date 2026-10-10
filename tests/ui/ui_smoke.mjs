@@ -130,7 +130,7 @@ const ref = () => page.evaluate(() => ({
   red: document.getElementById('btn-ref').classList.contains('pill-red'),
   clearShown: !document.getElementById('btn-ref-clear').hidden,
   curve: (document.getElementById('sp-ref').getAttribute('d') || '').length,
-  legend: !document.getElementById('legend-ref').hidden,
+  legend: getComputedStyle(document.getElementById('legend-ref')).display !== 'none',   // what you see, not just the attribute
   litTargets: [...document.querySelectorAll('#row-target button[data-i]')].filter((b) => b.classList.contains('pill-red')).length,
   learn: document.getElementById('learn-body').textContent,
 }));
@@ -271,6 +271,258 @@ await page.waitForTimeout(300);
 m = await mon();
 check(!m.monoOn && !m.banner, 'the UI follows the plug-in when it switches a check off');
 
+// Genre target line (dotted): the plug-in computes it (mock: getGenreCurve) for the chosen genre. A
+// reference is loaded here, so it starts hidden (Auto-Master aims for the reference); its legend entry
+// shows it, it follows the genre selector, and without a reference it shows by default.
+const genre = () => page.evaluate(() => {
+  const d = document.getElementById('sp-genre').getAttribute('d') || '';
+  const ys = d.split(/[ML]/).filter(Boolean).map((p) => Number(p.split(',')[1]));
+  const btn = document.getElementById('legend-genre');
+  return { d, points: ys.length, inside: ys.filter((y) => y > 0.5 && y < 199.5).length, legend: btn.textContent.trim(),
+           shown: getComputedStyle(btn).display !== 'none', pressed: btn.getAttribute('aria-pressed'),
+           refLoaded: !document.getElementById('btn-ref-clear').hidden };
+});
+let gc = await genre();
+check(gc.refLoaded && gc.shown && gc.legend === 'Trap target', `genre line has a legend entry ("${gc.legend}")`);
+check(gc.pressed === 'false' && gc.d === '', 'with a reference loaded the genre line starts hidden (the reference is what Auto-Master aims for)');
+await page.click('#legend-genre');
+await page.waitForTimeout(200);
+gc = await genre();
+check(gc.pressed === 'true' && gc.points === 96 && gc.inside > 60, `clicking its legend entry draws the genre line (${gc.points} points, ${gc.inside} inside the plot)`);
+const trapD = gc.d;
+await page.click('#genre-next');
+await page.waitForTimeout(300);
+gc = await genre();
+check(gc.legend === 'R&B target' && gc.points === 96 && gc.d !== trapD, `the line and its legend follow the genre ("${gc.legend}")`);
+await page.click('#genre-prev');
+await page.waitForTimeout(300);
+check((await genre()).legend === 'Trap target', 'and back to Trap');
+await pick('Tonal EQ');
+await page.waitForTimeout(200);
+const eqLearn = await page.evaluate(() => document.getElementById('learn-body').textContent);
+check(/Dotted line · Trap target/.test(eqLearn) && /above the dotted line/.test(eqLearn), 'EQ Learn explains how to read the dotted line');
+// Everything under the spectrum fits on one line, even with the EQ curve's entry and the longest genre name.
+for (let i = 0; i < 5; i++) await page.click('#genre-next');   // -> Acoustic
+await page.waitForTimeout(300);
+const fit = await page.evaluate(() => {
+  const lg = document.querySelector('.legend'), t = document.querySelector('.view-toggle').getBoundingClientRect();
+  const screen = document.getElementById('spectrum-screen').getBoundingClientRect();
+  return { over: lg.scrollWidth - lg.clientWidth, inside: t.right <= screen.right, name: document.getElementById('legend-genre-name').textContent,
+           oneLine: lg.getBoundingClientRect().height < 26 };
+});
+check(fit.over <= 0 && fit.inside && fit.oneLine, `legend fits on one line with "${fit.name}" and the EQ entry (overflow ${fit.over} px)`);
+await page.click('#genre-next');   // -> Trap again
+await page.click('#btn-ref-clear');
+await page.waitForTimeout(400);
+gc = await genre();
+check(!gc.refLoaded && gc.pressed === 'true' && gc.points === 96, 'without a reference the genre line shows by default');
+
+// Loudness history: the same screen switches to the master's short-term loudness over time, with the
+// Maximizer's gain reduction and the target. The mock has been "playing" all along, so it has data.
+const hv = () => page.evaluate(() => {
+  const pts = (id) => (document.getElementById(id).getAttribute('d') || '').split(/[ML]/).filter(Boolean).length;
+  const vis = (id) => getComputedStyle(document.getElementById(id)).display !== 'none';
+  return { on: document.getElementById('spectrum-screen').classList.contains('view-history'),
+           master: pts('hist-master'), mix: pts('hist-in'), gr: (document.getElementById('hist-gr').getAttribute('d') || '').length,
+           gaps: document.querySelectorAll('#hist-gaps line').length, specVisible: vis('spec-layer'), histVisible: vis('hist-layer'),
+           empty: !document.getElementById('hist-empty').hidden, stats: document.getElementById('hist-stats').textContent,
+           times: document.querySelectorAll('#time-labels span').length, targetY: Number(document.getElementById('hist-target').getAttribute('y1')),
+           target: document.getElementById('hist-target-label').textContent, learn: document.getElementById('learn-body').textContent,
+           pressed: document.getElementById('view-history').getAttribute('aria-pressed') };
+});
+await page.click('#view-history');
+await page.waitForTimeout(700);
+let h = await hv();
+check(h.on && h.pressed === 'true' && !h.specVisible && h.histVisible, 'HISTORY switches the spectrum screen to the loudness history');
+check(h.master > 20 && h.mix > 20 && h.gr > 50 && !h.empty, `history draws the master, the mix and the Maximizer GR from the meter frames (${h.master} points)`);
+check(h.times === 5 && /^LOUD .* LUFS · GR UP TO/.test(h.stats), `history has its time axis and readout ("${h.stats}")`);
+check(h.target === 'TARGET −9.0' && Math.abs(h.targetY - ((-4 - -9) / 24) * 200) < 0.6, `target line at the Loud −9 target ("${h.target}", y ${h.targetY})`);
+check(/LOUDNESS HISTORY/.test(h.learn) && /Blue shading/.test(h.learn) && /turns orange/.test(h.learn), 'Learn explains how to read the history');
+// Stopping the transport pauses it (no new points); playing again continues after a gap.
+await page.evaluate(() => window.__polisherMock.setPlaying(false));
+await page.waitForTimeout(400);
+const paused = (await hv()).master;
+await page.waitForTimeout(1500);
+check((await hv()).master === paused, `stopping playback pauses the history (${paused} points)`);
+await page.evaluate(() => window.__polisherMock.setPlaying(true));
+await page.waitForTimeout(4600);
+h = await hv();
+check(h.master > paused && h.gaps === 1, `playing again adds points after a gap (${h.master} points, ${h.gaps} gap)`);
+await page.click('#btn-reset');
+await page.waitForTimeout(300);
+h = await hv();
+check(h.master === 0 && h.empty, 'RESET clears the history');
+await page.click('#view-spectrum');
+await page.waitForTimeout(300);
+h = await hv();
+check(!h.on && h.specVisible && !h.histVisible, 'SPECTRUM switches back');
+
+// ---------------------------------------------------------------------------------------------
+// Undo / redo and snapshots. mock.js keeps a history and snapshot bank like the plug-in's
+// (window.__mockHistory, window.__mockSnaps): one step per gesture, groups for Auto-Master and recall.
+const hist = () => page.evaluate(async () => {
+  const juce = await import('./juce/index.js');
+  const h = window.__mockHistory, u = document.getElementById('btn-undo'), r = document.getElementById('btn-redo');
+  return { steps: h.steps.length, pos: h.pos, undoTitle: u.title, redoTitle: r.title, undoOff: u.disabled, redoOff: r.disabled,
+           drive: juce.getSliderState('drive').getScaledValue(), release: juce.getSliderState('release').getScaledValue(),
+           satFocus: juce.getComboBoxState('satFocus').getChoiceIndex(), adaptive: !!juce.getToggleState('adaptive').getValue(),
+           bypass: !!juce.getToggleState('bypass').getValue(), match: !!juce.getToggleState('levelMatch').getValue(),
+           toast: document.getElementById('toast').textContent, learn: document.getElementById('learn-body').textContent };
+});
+const cellOf = (label) => page.locator('#knob-row .cell', { has: page.locator('.cell-label', { hasText: new RegExp(`^${label}$`) }) });
+const typeInto = async (label, text) => {
+  await cellOf(label).locator('.cell-value').dblclick();
+  await page.keyboard.press('Control+a');
+  await page.keyboard.type(text);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(200);
+};
+const fmt = (v) => `${v < 0 ? '−' : '+'}${Math.abs(v).toFixed(1)} dB`;
+
+await pick('Maximizer'); await page.waitForTimeout(150);
+h = await hist();
+const pos0 = h.pos, drive0 = h.drive;
+await typeInto('Drive', '8');
+h = await hist();
+check(h.pos === pos0 + 1 && h.steps === h.pos && h.drive === 8, `a typed value is one undo step (${h.pos - pos0} new, Drive ${h.drive})`);
+check(h.undoTitle === `Undo: Drive ${fmt(8 - drive0)} (Ctrl+Z)` && !h.undoOff, `the undo arrow says what it will undo ("${h.undoTitle}")`);
+check(h.redoOff && h.redoTitle === 'Nothing to redo', `redo is off until something is undone ("${h.redoTitle}")`);
+
+await page.keyboard.press('Control+z'); await page.waitForTimeout(200);
+h = await hist();
+check(h.drive === drive0 && !h.redoOff, `Ctrl+Z undoes it (Drive ${h.drive})`);
+check(h.redoTitle === `Redo: Drive ${fmt(8 - drive0)} (Ctrl+Shift+Z or Ctrl+Y)`, `the redo arrow says what it will redo ("${h.redoTitle}")`);
+check(/^Undone: Drive/.test(h.toast), `undo says what it undid ("${h.toast}")`);
+await page.keyboard.press('Control+Shift+Z'); await page.waitForTimeout(200);
+check((await hist()).drive === 8, 'Ctrl+Shift+Z redoes it');
+await page.keyboard.press('Control+z'); await page.waitForTimeout(150);
+await page.keyboard.press('Control+y'); await page.waitForTimeout(200);
+check((await hist()).drive === 8, 'Ctrl+Y redoes too');
+
+// A knob drag, press to release, is one step however far it moves.
+h = await hist();
+const box = await cellOf('Drive').locator('.knob').boundingBox();
+await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+await page.mouse.down();
+for (let i = 1; i <= 10; i++) await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 - 6 * i);
+await page.mouse.up();
+await page.waitForTimeout(200);
+let h2 = await hist();
+check(h2.pos === h.pos + 1 && h2.drive > h.drive, `a knob drag is one step (${h2.pos - h.pos} new, Drive ${h.drive} -> ${h2.drive})`);
+
+// Arrow keys on a knob: quick presses merge into one step.
+await page.waitForTimeout(1100);
+h = await hist();
+await cellOf('Release').locator('.knob').focus();
+for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowUp');
+await page.waitForTimeout(200);
+h2 = await hist();
+check(h2.pos === h.pos + 1 && h2.release > h.release && /^Undo: Release /.test(h2.undoTitle), `five arrow presses are one step ("${h2.undoTitle}")`);
+
+// A new change after an undo drops the redo (one line of history).
+await page.click('#btn-undo'); await page.waitForTimeout(200);
+check(!(await hist()).redoOff, 'the undo arrow undoes, and redo is offered');
+await cellOf('Release Mode').locator('button').click(); await page.waitForTimeout(200);
+h = await hist();
+check(h.redoOff && /^Undo: Adaptive Release (on|off)/.test(h.undoTitle), `a new change after undo clears redo ("${h.undoTitle}")`);
+await cellOf('Release Mode').locator('button').click(); await page.waitForTimeout(150);
+
+// Listening controls are not settings: A / B, MATCH and MONO add no step.
+h = await hist();
+for (const id of ['#btn-a', '#btn-b', '#btn-match', '#btn-match', '#btn-mono', '#btn-mono']) { await page.click(id); await page.waitForTimeout(80); }
+await page.waitForTimeout(150);
+h2 = await hist();
+check(h2.steps === h.steps && h2.pos === h.pos, 'A / B, MATCH and MONO are never undo steps');
+
+// While typing a value, Ctrl+Z belongs to the text box, not to Polisher's undo.
+h = await hist();
+await cellOf('Drive').locator('.cell-value').dblclick();
+await page.keyboard.press('Control+z');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(200);
+h2 = await hist();
+check(h2.pos === h.pos && h2.drive === h.drive, 'Ctrl+Z in a value box leaves the settings alone');
+
+// Auto-Master is one step that undoes everything it set; redo puts it back.
+const preAm = await hist();
+const amVersion = await page.evaluate(() => window.__mockAm.version);
+await page.click('#btn-automaster');
+// (mock.js listens to its whole 2:30 song, 30x faster than real time, then thinks for 0.9 s)
+await page.waitForFunction((v) => window.__mockAm.version > v && window.__mockAm.state === 0, amVersion, { timeout: 12000 });
+await page.waitForTimeout(300);
+h = await hist();
+check(h.undoTitle === 'Undo: Auto-Master (Trap / Hip-Hop, Balanced) (Ctrl+Z)' && h.pos === preAm.pos + 1, `Auto-Master is one undo step ("${h.undoTitle}")`);
+check(h.satFocus === 1 && h.drive === 9.4, 'Auto-Master set its values');
+await page.click('#btn-undo'); await page.waitForTimeout(250);
+h = await hist();
+check(h.satFocus === 0 && h.drive === preAm.drive && /^Undone: Auto-Master/.test(h.toast), `undo puts back everything Auto-Master set (Drive ${h.drive})`);
+await page.click('#btn-redo'); await page.waitForTimeout(250);
+h = await hist();
+check(h.satFocus === 1 && h.drive === 9.4, 'redo brings Auto-Master\'s settings back');
+
+// Apply of the Stem EQ suggestion (Vocals +2, and Stem EQ on) is one step.
+await pick('Stem EQ'); await page.waitForTimeout(200);
+const stemVoc = () => page.evaluate(async () => (await import('./juce/index.js')).getSliderState('stemVoc').getScaledValue());
+const preApply = await hist();
+const applyBtn = page.locator('#learn-body .stem-apply');
+check(await applyBtn.count() === 1, 'Learn offers the Stem EQ suggestion\'s APPLY');
+if (await applyBtn.count()) {
+  await applyBtn.click(); await page.waitForTimeout(250);
+  h = await hist();
+  check(h.pos === preApply.pos + 1 && h.undoTitle === 'Undo: Apply Stem EQ suggestion (Ctrl+Z)' && (await stemVoc()) === 2, `APPLY is one undo step ("${h.undoTitle}")`);
+  await page.click('#btn-undo'); await page.waitForTimeout(250);
+  check((await stemVoc()) === 0, 'undoing APPLY puts Vocals back');
+}
+await pick('Maximizer'); await page.waitForTimeout(150);
+
+// Snapshots S1..S4.
+const snapsUi = () => page.evaluate(() => [...document.querySelectorAll('#snaps .snap')].map((b) => ({
+  text: b.textContent, lit: b.classList.contains('pill-red'), empty: b.classList.contains('empty'), pressed: b.getAttribute('aria-pressed') === 'true', title: b.title })));
+let sn = await snapsUi();
+check(sn.length === 4 && sn.map((s) => s.text).join() === 'S1,S2,S3,S4', `four snapshot slots S1..S4 (${sn.map((s) => s.text).join(' ')})`);
+check(sn.every((s) => s.empty && !s.lit && /empty/.test(s.title)), 'all slots start empty and say so');
+await page.click('#snaps .snap[data-slot="0"]'); await page.waitForTimeout(250);
+sn = await snapsUi();
+h = await hist();
+check(!sn[0].empty && sn[0].lit && sn[0].pressed && /Snapshot 1, playing/.test(sn[0].title), `clicking an empty slot stores the settings in it ("${sn[0].title}")`);
+check(/SNAPSHOTS S1/.test(h.learn) && /TRY THIS/.test(h.learn) && /Balanced vs Punchy/.test(h.learn) && /MATCH/.test(h.learn), 'Learn explains snapshots, MATCH and the Balanced vs Punchy compare');
+const s1Drive = h.drive;
+await pick('Maximizer'); await page.waitForTimeout(150);
+await typeInto('Drive', '5');
+sn = await snapsUi();
+check(sn[0].text === 'S1•' && sn[0].lit, `a change after storing marks the slot as changed ("${sn[0].text}")`);
+await page.click('#snaps .snap[data-slot="1"]'); await page.waitForTimeout(250);
+sn = await snapsUi();
+check(sn[1].lit && !sn[0].lit && sn[0].text === 'S1', 'S2 stores the new settings and is the one lit');
+// Recall S1 while on A with MATCH on: settings come back, A and MATCH stay as they are, and it's one undo step.
+await page.click('#btn-a'); await page.click('#btn-match'); await page.waitForTimeout(150);
+const preRecall = await hist();
+await page.click('#snaps .snap[data-slot="0"]'); await page.waitForTimeout(250);
+h = await hist();
+sn = await snapsUi();
+check(h.drive === s1Drive && sn[0].lit && !sn[1].lit, `recalling S1 brings its settings back (Drive ${h.drive})`);
+check(h.bypass && h.match, 'recall leaves A / B and MATCH as they were');
+check(h.pos === preRecall.pos + 1 && h.undoTitle === 'Undo: Recall Snapshot 1 (Ctrl+Z)', `a recall is one undo step ("${h.undoTitle}")`);
+await page.keyboard.press('Control+z'); await page.waitForTimeout(250);
+h = await hist();
+sn = await snapsUi();
+check(h.drive === 5 && sn[1].lit && !sn[0].lit, 'undoing the recall goes back to S2 (and lights S2)');
+// STORE then a slot replaces it; Shift-click stores too.
+await page.click('#btn-store'); await page.waitForTimeout(100);
+check(await page.evaluate(() => document.getElementById('btn-store').textContent === 'PICK SLOT'), 'STORE asks for a slot');
+await page.click('#snaps .snap[data-slot="0"]'); await page.waitForTimeout(250);
+check(await page.evaluate(() => Math.abs(window.__mockSnaps.slots[0].values.drive - 5) < 1e-9), 'STORE then S1 replaces S1 with what plays now');
+await page.click('#snaps .snap[data-slot="2"]', { modifiers: ['Shift'] }); await page.waitForTimeout(250);
+sn = await snapsUi();
+check(!sn[2].empty && sn[2].lit, 'Shift-click stores in a slot');
+await page.click('#btn-b'); await page.click('#btn-match'); await page.waitForTimeout(150);
+
+// The header still fits on one row with the new controls (the page scales the 1600 x 900 design).
+const fits = await page.evaluate(() => {
+  const row = document.querySelector('.header-row'), r = row.getBoundingClientRect();
+  return row.scrollWidth <= row.clientWidth && [...row.children].every((c) => { const b = c.getBoundingClientRect(); return b.left >= r.left - 0.5 && b.right <= r.right + 0.5 && b.width > 0; });
+});
+check(fits, 'header controls fit on one row');
 // Whole-song listen: the button and Learn say what it has heard; FINISH NOW works from 12 s of music on.
 const amView = () => page.evaluate(() => ({
   title: document.getElementById('am-title').textContent,
@@ -329,6 +581,23 @@ tv = await tsView();
 check(tv.target >= 12 && /^your song · \d:\d\d$/.test(tv.val), `LEARN stores the song's tone ("${tv.val}")`);
 check(await page.evaluate(async () => (await import('./juce/index.js')).getSliderState('drive').getScaledValue()) === driveBefore, 'LEARN changes no other setting');
 check(/Tone Steady now holds your song to its own overall tone/.test(tv.learn), 'Learn is back on Tone Steady with the target');
+// LEARN is an undo step of its own: undo goes back to following the music, redo brings the tone back.
+const undoTitle = () => page.evaluate(() => document.getElementById('btn-undo').title);
+check(/Tone Steady: learn the song's tone/.test(await undoTitle()), `the undo arrow offers to undo LEARN ("${await undoTitle()}")`);
+const learnedTarget = tv.target;
+await page.click('#btn-undo'); await page.waitForTimeout(250);
+tv = await tsView();
+check(tv.target === 0 && tv.val === 'following the music', `undo of LEARN goes back to following the music ("${tv.val}")`);
+await page.click('#btn-redo'); await page.waitForTimeout(250);
+tv = await tsView();
+check(tv.target === learnedTarget, `redo brings the learned tone back ("${tv.val}")`);
+// A snapshot keeps the target: store S4 with it, CLEAR, recall S4.
+await page.locator('#snaps .snap').nth(3).click({ modifiers: ['Shift'] }); await page.waitForTimeout(200);   // store (replace)
+await page.click('#ts-clear'); await page.waitForTimeout(200);
+check((await tsView()).target === 0, 'CLEAR forgets the tone');
+await page.evaluate(() => document.querySelectorAll('#snaps .snap')[3].click()); await page.waitForTimeout(250);
+tv = await tsView();
+check(tv.target === learnedTarget, `recalling the snapshot brings Tone Steady's target back ("${tv.val}")`);
 
 check(errors.length === 0, `no script errors (${errors.join(' | ')})`);
 await browser.close();

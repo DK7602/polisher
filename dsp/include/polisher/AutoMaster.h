@@ -139,6 +139,48 @@ AudioClip loudestPart (const AudioClip& song, double& startSeconds);
     tilt, the display's fast-rise / slow-fall smoothing), averaged over the clip. */
 std::vector<double> spectrumDisplayCurve (const AudioClip& clip, int fftSize = kDisplayFftSize, int points = kDisplayPoints);
 
+// =================================================================================================
+// A genre's typical balance on the spectrum display (the dotted "Trap target" line)
+// =================================================================================================
+
+/** A tonal balance given as band levels (like MixAnalysis::bandDb or genreTargetCurve(): dB per EQ
+    band in the 4.5 dB/oct-tilted per-Hz view, any common offset) turned into one smooth curve, dB at
+    any frequency in that view. A monotone cubic through the band centres (so it has no bumps the
+    bands don't have), carried on past the outer centres with its end slopes, falling 24 dB/oct below
+    20 Hz like a master's low cut. Its node values are adjusted so that every band, measured the way
+    analyseMix() measures it (mean power per Hz over the band, tilt at the band's centre), reads
+    exactly the level it was given. */
+class BalanceCurve
+{
+public:
+    explicit BalanceCurve (const std::array<double, kEqBands>& bands) noexcept;
+
+    /** The curve at a frequency (dB, tilted view). */
+    double db (double hz) const noexcept;
+    /** One band of the curve, measured like analyseMix() measures a mix (dB, tilted view). */
+    double bandDb (int band) const noexcept;
+
+private:
+    std::array<double, kEqBands> x {}, y {}, slope {};   // band centres (log2 Hz), values (dB), slopes (dB/oct)
+    void updateSlopes() noexcept;
+};
+
+/** Loudness the genre curve is computed at when no other is asked for (the UI moves it anyway). */
+inline constexpr double kGenreCurveLufs = -9.0;
+
+/** A balance as the plug-in's spectrum display draws it (dB at kDisplayPoints log-spaced frequencies
+    from 20 Hz to 20 kHz, 4.5 dB/oct tilt, like spectrumDisplayCurve()) for a steady master that has
+    exactly this balance in both channels and measures `lufs` integrated: the display's expected
+    reading at each point, with its Hann window, bins and +/- 1/12 octave averaging. Nothing above
+    20 kHz. Shift it by (loudness now - lufs) to compare it with a live curve, like
+    ReferenceProfile::displayDb. */
+std::vector<double> balanceDisplayCurve (const std::array<double, kEqBands>& bandDb, double sampleRate,
+                                         double lufs = kGenreCurveLufs, int fftSize = kDisplayFftSize, int points = kDisplayPoints);
+
+/** The balance Auto-Master's EQ aims for in a genre (genreTargetCurve()) as the display draws it. */
+std::vector<double> genreDisplayCurve (Genre, double sampleRate, double lufs = kGenreCurveLufs,
+                                       int fftSize = kDisplayFftSize, int points = kDisplayPoints);
+
 /** Measures a reference song's loudest part. part = that part's audio; the rest describes the whole
     song it came from (for the report). */
 ReferenceProfile analyseReference (const AudioClip& part, double trackSeconds, double trackLufs, double startSeconds);

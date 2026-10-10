@@ -57,6 +57,7 @@ Leave headroom going in. A good input is about **−17 LUFS integrated with peak
 - **Double-click** a knob to reset it.
 - **Double-click the number** under a knob to type an exact value, then press **Enter** (**Esc** cancels). Units are optional: `-3`, `1.2k` for 1.2 kHz, `2.5` for a 2.5:1 ratio, `off` for a control's lowest setting. Values outside the range stop at its end. With a knob selected, **Enter** opens the box too.
 - The **mouse wheel** works too.
+- Changed your mind? The **undo arrow** at the top (or **Ctrl+Z**) takes back your last change; see [Undo, redo and snapshots](#undo-redo-and-snapshots).
 
 ### Exporting
 
@@ -101,7 +102,7 @@ Auto-Master sets the Tonal EQ bands together. Neighbouring bands overlap, so it 
 3. Play your **whole song**, ideally from the very start. The button shows how much it has heard and where the loudest part is so far; Learn shows the same, with **FINISH NOW** and **CANCEL**.
 4. It **finishes by itself** a few seconds after the song ends (after at least 30 seconds of music, when the music stops or you stop playback). In a hurry? From **12 seconds** of music on (the bar under the button turns green), click Auto-Master again or press **FINISH NOW**: it uses what it has heard. Before 12 seconds a click stops it without changing anything.
 5. Read the report in Learn (**WHY IT SOUNDS LIKE THIS**). It starts with what it heard, for example *Listened to 2:47 of your song; the loudest part (0:54–1:06, usually the hook or drop) set the levels*, and shows the **Whole song** loudness and loudness range as your mix arrives.
-6. Don't like it? Click the **undo arrow** to put every control back as it was (Tone Steady's target too).
+6. Don't like it? Click the **undo arrow** to put every control back as it was, Tone Steady's target too (the whole run is one undo step; the redo arrow brings it back). To compare two runs, keep each in a snapshot: see [Undo, redo and snapshots](#undo-redo-and-snapshots).
 
 Timeline positions come from Cubase's playhead. It listens for up to 15 minutes, and its memory stays the same however long the song is (it keeps only the loudest 12 seconds of audio and a few numbers per second).
 
@@ -124,7 +125,7 @@ Instead of a genre's typical sound, Auto-Master can aim for a **reference**: a r
 
 1. Pick a commercial song with the sound you want (for trap: a big trap single). Use a good file of the released version: WAV, AIFF, FLAC or MP3.
 2. Click **Match ref** (at the end of the TARGET row) and choose the file. Polisher reads the whole song (up to 15 minutes) and measures its **loudest 30 seconds**, usually the chorus or drop. That takes a few seconds; your music keeps playing.
-3. The pill now shows the song's name, and the spectrum shows its tone as a **dashed yellow line** (moved to the loudness of what's playing, so you compare tone, not volume).
+3. The pill now shows the song's name, and the spectrum shows its tone as a **dashed yellow line** (moved to the loudness of what's playing, so you compare tone, not volume). The dotted genre line steps aside while a reference is loaded; click its legend entry to show it too (see [The spectrum screen](#the-spectrum-screen)).
 4. Click **Auto-Master** and play **your own song**, as usual.
 
 What it takes from the reference:
@@ -182,7 +183,7 @@ Every band keeps its true shape right up to 20 kHz, at 44.1 and 48 kHz too, so t
 
 **Subsonic filter.** While Low End is boosted, a gentle high-pass at 15 Hz fades in by itself, so the boost doesn't also pump up rumble below 20 Hz that no speaker plays but the Maximizer still has to make room for. It costs less than 0.5 dB at 20 Hz and nothing you can measure from 30 Hz up. With Low End at 0 dB or cut, it's out of the path.
 
-On the spectrum, the white line is your mix, the blue curve is the EQ change and the red line is the master after the whole chain.
+On the spectrum, the white line is your mix, the blue curve is the EQ change and the red line is the master after the whole chain. The dotted line (for example **Trap target**) is the tone typical masters in your genre have, the balance Auto-Master's EQ aims for: where the red line sits above it, your master has more of that range than typical (see [The spectrum screen](#the-spectrum-screen)).
 
 ### 03 Stem EQ
 
@@ -345,6 +346,35 @@ MATCH takes care of loudness, but you still know which side is Polisher. To comp
 
 To compare just one part (say 30 seconds from the hook at 1:00), run it from a command prompt: `PolisherBlindTest.exe "my mix.wav" polisher.wav --start 60 --length 30` (quotes around names with spaces).
 
+## Undo, redo and snapshots
+
+### Undo and redo
+
+The two arrows at the top step **back and forward through your changes, one at a time**. Point at an arrow to see what it will do ("Undo: Drive +2.0 dB", "Undo: Auto-Master (Trap / Hip-Hop, Balanced)"); after a click, a note at the bottom says what was undone.
+
+- **One step per change**: a knob drag from press to release, a typed value, a switch, a choice, a dragged EQ point (its frequency and gain together). Quick mouse-wheel turns or arrow-key presses on one knob count as one step.
+- **Auto-Master** is one step that puts back everything it set (A / B included), Tone Steady's target and the report that was there before. **APPLY** of the Stem EQ suggestion, a **snapshot recall**, and Tone Steady's **LEARN** and **CLEAR** are one step each.
+- Undo something and then change something else, and the undone steps are gone (nothing to redo any more). Changes you made after an Auto-Master run are never thrown away by undoing it: they come off first, one by one.
+- **Keys**: Ctrl+Z undoes; Ctrl+Shift+Z or Ctrl+Y redoes (Cmd on a Mac). Click inside Polisher's window first, or Cubase gets the keys and uses its own undo. While you type a value into a box, Ctrl+Z works on the text.
+- Polisher keeps the **last 100 steps** while its window is closed and reopened. They are **not saved** with the project: opening the project, or loading a preset (anything that replaces all of Polisher's settings at once), starts a new list.
+- **Not in the list**: A / B, MATCH, MONO, PHONE, Listen and Solo (listening only), the Settings switches for the meters, and the genre / intensity / target choices. Automation and changes Cubase makes are never in it either, so playing back automation doesn't fill it up.
+
+### Snapshots S1–S4
+
+The four small slots next to the arrows each keep a **whole sound**: every knob and switch in every module, Tone Steady's target (your song's tone, or following the music), plus the Auto-Master report that explains it. They are **not A / B**: A is always your original mix and B the master; S1–S4 are four versions of the master.
+
+| You do | What happens |
+| --- | --- |
+| Click an **empty** slot (dim) | It keeps the settings you hear now. |
+| Click a **stored** slot | Those settings come back. Every control glides there like a knob move, so nothing clicks. One undo step. |
+| Click **STORE**, then a slot (or **Shift-click** a slot) | The slot is replaced with what you hear now. |
+
+The **red** slot is the one playing; a dot after it (**S1•**) means you've changed something since you stored or recalled it. Snapshots are saved with your Cubase project. They don't store A / B, MATCH, the listening aids or Auto-Master's genre / intensity / target, and recalling one never changes them.
+
+**A fair compare with MATCH.** MATCH learns how loud the master plays compared with your original over about 10 seconds of B. The first time you hear a snapshot, give it **10–15 seconds** before judging. After that, MATCH **remembers each snapshot's level**: flip back to it and it is matched at once. Right after a switch MATCH holds its level for 3 seconds while the loudness reading (which looks at the last 3 seconds) catches up. Storing new settings in a slot makes MATCH learn that slot again.
+
+**Try this: Balanced vs Punchy.** Run Auto-Master on **Balanced** (play your song) and click **S1**. Pick **Punchy**, run it again and click **S2**. Turn on **MATCH**, listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip **S1 / S2** every few seconds: you hear punch and weight, not volume. Keep the one you like by clicking it (the undo arrow can always take you back).
+
 ## Listening aids: Listen, Solo, MONO and PHONE
 
 These change only what you **hear**, never your master: they are not saved with the song, they switch off when you close Polisher, and a normal export never contains them. While any of them is on, a **red banner** across the top of the spectrum says what you are hearing ("LISTENING: what Saturation adds — not the master"); **BACK TO MASTER** on the banner turns everything off. The meters keep measuring the real master the whole time.
@@ -394,6 +424,40 @@ The **Learn** panel on the right explains, live, what the selected module is doi
 | Restart loudness after you change a control | on | Integrated restarts a moment after a change, so it measures what you hear now. |
 | Adaptive release (Maximizer) | on | Same as the Maximizer's Release Mode. |
 
+## The spectrum screen
+
+The big screen in the middle has two views. Switch with **SPECTRUM / HISTORY** at its bottom right; Polisher remembers your choice.
+
+### Spectrum
+
+- **White line**: your mix as it arrives. **Red line**: the master after the whole chain. Both are tilted 4.5 dB per octave, so a well-balanced mix reads roughly flat instead of falling to the right.
+- **Dotted line** (for example **Trap target**): the tone typical masters in the genre you picked at the top have, the same balance Auto-Master's EQ aims for. It follows the genre, and it is moved to the loudness of what's playing, so you compare tone, not volume.
+  - Where your red master line sits **above** the dotted line, your master has more of that range than typical masters in your genre; **below**, less. Differences of 1–2 dB are normal.
+  - Below about 60 Hz all the lines get rough: the screen can't draw the lowest notes finely.
+  - It shows a steady, average master. Busy drums and hats read up to about 1 dB above it, and wide stereo highs about 1 dB below it (the screen adds left and right together, so the purely stereo part of the sound doesn't count).
+- **Dashed yellow line**: a loaded reference's tone (Match ref). Auto-Master then aims for the reference, so the genre line is hidden. Click the genre line's legend entry to show or hide it, with or without a reference.
+- **Blue curve**: the Tonal EQ's change, when the EQ is shaping or its page is open.
+
+### Loudness history
+
+**HISTORY** draws the last 2 minutes of playback:
+
+| What you see | What it is |
+| --- | --- |
+| Red line | The master's Short-term loudness (the last 3 seconds) |
+| White line | Your mix as it comes in |
+| Dashed line | Your target (or the reference's loudness, when one is loaded) |
+| Blue shading from the top | How much the Maximizer turns the loud moments down: the deeper, the harder it works. Past 6 dB it turns orange |
+| Dotted vertical line | Where you stopped and started playback again |
+
+How to read it:
+
+- **Verse and chorus.** A chorus or drop usually sits 1–3 dB above the verse, so the red line steps up and down with your song. If the white line steps but the red one stays flat, the Maximizer is squashing the difference: lower Drive 1–2 dB and play the change again.
+- **Limiting.** Short dips of 1–3 dB on the hits are normal. Shading that stays orange (more than 6 dB) or dips past 9 dB is heavy limiting, and the kick and snare lose punch (the same advice as the Maximizer's **FIX IT IN THE MIX** in Learn).
+- The readout above the graph gives the loud and quiet parts' loudness and the deepest limiting on screen. Click **HISTORY** and Learn reads the graph for you.
+
+Time only runs while your song plays: stopping leaves a gap and the graph waits for you. **RESET** (under the Output meter) clears it; it is not cleared when Integrated restarts at play or after a control change.
+
 ## Meters
 
 The footer meters always measure the **master** (what leaves Polisher), using the streaming standard (ITU-R BS.1770 / EBU R128), also while MATCH, a Listen, Solo, MONO or PHONE is on.
@@ -422,6 +486,9 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Master isn't as loud as the reference | The reference had its drum peaks controlled in the mix; reaching it would crush yours | Fine as it is (streaming plays both at the same level). To get closer: a clipper on the drum bus, or Punchy |
 | Match ref says it can't read the file | Not WAV, AIFF, FLAC or MP3, or a damaged file | Export or convert the song to WAV and load that |
 | B sounds better but you're not sure why | B is louder | Turn on MATCH and play B for 10 s before comparing |
+| One snapshot sounds louder right after you switch, even with MATCH on | MATCH hasn't heard that snapshot for long yet | Play each snapshot for 10–15 s once; after that MATCH remembers its level and flips are matched at once |
+| Ctrl+Z undoes something in Cubase instead of in Polisher | Cubase had the keyboard | Click inside Polisher's window first, or use the undo arrow at the top |
+| The undo arrow is grey after opening the project | The undo list isn't saved with the project | Working as intended. Snapshots are saved: keep versions you may want back in S1–S4 |
 | Polisher sounds thin, mono, crackly or like a phone; a red banner is on the spectrum | A listening aid is on (Listen, Solo, MONO or PHONE) | Click BACK TO MASTER on the banner. They switch off by themselves when you close Polisher and are never in a normal export |
 | Listen plays silence | The module isn't changing anything right now (or you're on A) | Fine: nothing to hear. Play a louder part, switch to B, or set the module up first |
 | Kick or snare sounds weaker than the mix | Too much limiting | Lower Drive 1–2 dB, or turn on the Soft Clipper so it takes some peaks |
@@ -458,7 +525,9 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 
 **Does Polisher add delay?** A little (Stem EQ about 40 ms). Cubase compensates it automatically, and the export lines up.
 
-**Is my project saved with Polisher's settings?** Yes. All settings, including genre, intensity and target, are saved with the Cubase project.
+**Is my project saved with Polisher's settings?** Yes. All settings, including genre, intensity and target, and your snapshots S1–S4 are saved with the Cubase project. The undo list is not.
+
+**What's the difference between A / B and S1–S4?** A / B compares your original mix (A) with the master (B). S1–S4 are four versions of the master you can switch between, for example two Auto-Master runs.
 
 ## Glossary
 
@@ -474,3 +543,4 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Correlation | How mono-safe the stereo is: +1 mono, 0 wide, below 0 parts cancel. |
 | Harmonics | Extra overtones that make sound feel fuller and help bass on small speakers. |
 | Squash | How flattened audio is: peaks minus the average level, read as open when the peaks don't press against one ceiling. |
+| Snapshot | A stored copy of every setting (S1–S4), to switch between versions of your master. |

@@ -122,17 +122,43 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                                  audioProcessor.autoMaster.cancel();
                                  complete (true);
                              })
-        // Tone Steady goes back to following the music (forgets the song's stored tone).
+        // Tone Steady goes back to following the music (forgets the song's stored tone): its own undo step.
         .withNativeFunction ("clearToneTarget", [this] (const juce::Array<juce::var>&, auto complete)
                              {
-                                 audioProcessor.toneTarget.clear();
-                                 // Not a parameter: tell the host the song changed, so the project asks to be saved.
-                                 audioProcessor.updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+                                 audioProcessor.clearToneTarget();
                                  complete (true);
                              })
-        .withNativeFunction ("undoAutoMaster", [this] (const juce::Array<juce::var>&, auto complete)
+        // Undo / redo (the processor's history): each returns what it did and what is next, so the
+        // buttons update at once. historyGroup(true, label) ... historyGroup(false) makes the changes the
+        // page sends in between one step (Apply of the Stem EQ suggestion).
+        .withNativeFunction ("historyUndo", [this] (const juce::Array<juce::var>&, auto complete)
                              {
-                                 complete (audioProcessor.autoMaster.undo());
+                                 complete (historyResult (audioProcessor.history.undo()));
+                             })
+        .withNativeFunction ("historyRedo", [this] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 complete (historyResult (audioProcessor.history.redo()));
+                             })
+        .withNativeFunction ("historyGroup", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 // One group at a time from the page; one left open is closed with the window.
+                                 const bool begin = args.size() > 0 && static_cast<bool> (args[0]);
+                                 if (begin && ! pageGroupOpen)
+                                     audioProcessor.history.beginGroup (args.size() > 1 ? args[1].toString() : juce::String ("Changes"));
+                                 else if (! begin && pageGroupOpen)
+                                     audioProcessor.history.endGroup();
+                                 pageGroupOpen = begin;
+                                 complete (true);
+                             })
+        // Snapshots S1..S4: store the current settings in a slot, or recall one (an undo step).
+        .withNativeFunction ("snapshotStore", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 audioProcessor.snapshots.store (args.size() > 0 ? static_cast<int> (args[0]) : -1);
+                                 complete (true);
+                             })
+        .withNativeFunction ("snapshotRecall", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 complete (audioProcessor.snapshots.recall (args.size() > 0 ? static_cast<int> (args[0]) : -1));
                              })
         .withNativeFunction ("getAutoMasterReport", [this] (const juce::Array<juce::var>&, auto complete)
                              {
@@ -175,6 +201,25 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                                  audioProcessor.setMonoCheck (args.size() > 1 && static_cast<bool> (args[1]));
                                  audioProcessor.setPhoneCheck (args.size() > 2 && static_cast<bool> (args[2]));
                                  complete (true);
+                             })
+        // The spectrum's dotted line: a genre's typical balance (what Auto-Master's EQ aims for) as the
+        // display draws it at this sample rate, computed by the engine so the page holds no numbers of
+        // its own. getGenreCurve(genreIndex) -> JSON { genre, name, lufs, sr, displayDb }.
+        .withNativeFunction ("getGenreCurve", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 const int g = args.size() > 0 ? juce::jlimit (0, polisher::kNumGenres - 1, static_cast<int> (args[0])) : 0;
+                                 const auto genre = static_cast<polisher::Genre> (g);
+                                 const double sr = audioProcessor.getSampleRate() > 0.0 ? audioProcessor.getSampleRate() : 48000.0;
+                                 juce::Array<juce::var> points;
+                                 for (const double v : polisher::genreDisplayCurve (genre, sr))
+                                     points.add (v);
+                                 auto* o = new juce::DynamicObject();
+                                 o->setProperty ("genre", g);
+                                 o->setProperty ("name", juce::String::fromUTF8 (polisher::genreName (genre)));
+                                 o->setProperty ("lufs", polisher::kGenreCurveLufs);
+                                 o->setProperty ("sr", sr);
+                                 o->setProperty ("displayDb", points);
+                                 complete (juce::JSON::toString (juce::var (o), true));
                              })
         .withResourceProvider ([] (const auto& url) { return getResource (url); });
 }
@@ -253,6 +298,8 @@ PolisherWebEditor::~PolisherWebEditor()
             p->setValueNotifyingHost (0.0f);
     // So are Listen / Solo and the MONO / PHONE checks: back to the plain master.
     audioProcessor.resetMonitoring();
+    if (pageGroupOpen)
+        audioProcessor.history.endGroup();   // an undo group the page opened and never closed
 }
 
 void PolisherWebEditor::paint (juce::Graphics& g)
@@ -289,6 +336,36 @@ std::optional<juce::WebBrowserComponent::Resource> PolisherWebEditor::getResourc
         }
     }
     return std::nullopt;
+}
+
+juce::var PolisherWebEditor::historyResult (const juce::String& done)
+{
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("done", done);   // "" = there was nothing to undo / redo
+    o->setProperty ("undo", audioProcessor.history.undoLabel());
+    o->setProperty ("redo", audioProcessor.history.redoLabel());
+    return juce::var (o);
+}
+
+void PolisherWebEditor::addHistoryState (juce::DynamicObject& frame)
+{
+    // Undo / redo: what each would do ("" = nothing). Snapshots: which slots hold settings, which one is
+    // playing and whether it was changed since.
+    frame.setProperty ("undo", audioProcessor.history.undoLabel());
+    frame.setProperty ("redo", audioProcessor.history.redoLabel());
+    const auto st = audioProcessor.snapshots.getStatus();
+    juce::Array<juce::var> slots;
+    for (const auto& slot : st.slots)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("filled", slot.filled);
+        o->setProperty ("time", slot.time);
+        o->setProperty ("note", slot.note);
+        slots.add (juce::var (o));
+    }
+    frame.setProperty ("snaps", slots);
+    frame.setProperty ("snapActive", st.active);
+    frame.setProperty ("snapModified", st.modified);
 }
 
 juce::var PolisherWebEditor::makeSpectrum (const SpectrumTap& tap, Analyser& state)
@@ -347,8 +424,12 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("range",      roundTo (m.loudnessRange.load(), 0.1f));
     frame->setProperty ("truePeak",   roundTo (m.truePeakMax.load(), 0.1f));
     frame->setProperty ("peakRecent", roundTo (m.truePeakRecent.exchange (-100.0f), 0.1f));
-    frame->setProperty ("peakL",      roundTo (m.peakLeft.exchange (-100.0f), 0.1f));
-    frame->setProperty ("peakR",      roundTo (m.peakRight.exchange (-100.0f), 0.1f));
+    const float peakL = m.peakLeft.exchange (-100.0f), peakR = m.peakRight.exchange (-100.0f);
+    frame->setProperty ("peakL",      roundTo (peakL, 0.1f));
+    frame->setProperty ("peakR",      roundTo (peakR, 0.1f));
+    const auto nowMs = juce::Time::getMillisecondCounter();
+    if (peakL > -100.0f || peakR > -100.0f)
+        lastSoundMs = nowMs;   // the processor ran and something came out since the last frame
     frame->setProperty ("gr",         roundTo (grHold, 0.1f));
     frame->setProperty ("clip",       roundTo (clipHold, 0.1f));
     const float tame = m.bassTame.exchange (0.0f);
@@ -362,7 +443,7 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("amState",    static_cast<int> (am.getState()));
     frame->setProperty ("amProgress", roundTo (am.getProgress(), 0.01f));
     frame->setProperty ("amHearing",  am.isHearingAudio());
-    frame->setProperty ("amUndo",     am.canUndo());
+    addHistoryState (*frame);
     frame->setProperty ("amReport",   am.getReportVersion());
     // Whole-song listen: music heard, the loudest part so far (where, how loud), and whether Finish works.
     frame->setProperty ("amMode",     static_cast<int> (am.getMode()));
@@ -432,6 +513,12 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("sr",         audioProcessor.getSampleRate());
     frame->setProperty ("inShort",    roundTo (m.inputShortTerm.load(), 0.1f));
     frame->setProperty ("inIntegrated", roundTo (m.inputIntegrated.load(), 0.1f));
+    // The loudness history records only while the song plays: the host's transport (or, without one,
+    // e.g. the standalone app, while sound comes in), and only while the processor is still being called
+    // (a host that stops calling it would otherwise leave the meters frozen at their last reading).
+    const int transport = m.transport.load();
+    const bool running = nowMs - lastSoundMs < 1000;
+    frame->setProperty ("playing",    running && (transport == 1 || (transport < 0 && m.momentary.load() > -70.0f)));
     frame->setProperty ("mix",        makeSpectrum (audioProcessor.inputTap, mixAnalyser));
     frame->setProperty ("master",     makeSpectrum (audioProcessor.outputTap, masterAnalyser));
 

@@ -19,6 +19,7 @@
 #include "AutoMasterController.h"
 #include "ReferenceTrack.h"
 #include "ToneTargetStore.h"
+#include "SettingsHistory.h"
 
 #include <array>
 #include <atomic>
@@ -97,6 +98,7 @@ public:
         std::atomic<int> listenPlaying { 0 };              // listen mode being heard (polisher::listen::Mode; 0 while it prepares)
         std::atomic<float> listenGainDb { 0.0f };          // gain it is played with (dB, + = turned up to be heard)
         std::atomic<float> listenUnderDb { -100.0f };      // how far it sits under the master, as it is in the master (dB)
+        std::atomic<int> transport { -1 };                 // host transport: 1 playing, 0 stopped, -1 the host doesn't say (standalone)
     };
     Meters meters;
 
@@ -137,9 +139,19 @@ public:
 
     /** Tone Steady's stored target (the song's own tone, learned by Auto-Master), saved with the state. */
     ToneTargetStore toneTarget;
+    /** Tone Steady's CLEAR: back to following the music, as one undo step (message thread). */
+    void clearToneTarget();
 
     /** Listens to the mix, decides every module's settings and explains them. */
     AutoMasterController autoMaster { parameters, reference, toneTarget };
+
+    // --- Undo / redo and snapshots (message thread; see SettingsHistory.h) ----------------------------
+    /** Every change made in Polisher's window, Auto-Master run, Stem EQ Apply and snapshot recall, as
+        undo / redo steps. Kept while the window closes and opens; not saved (a project load clears it). */
+    SettingsHistory history { *this };
+    /** Snapshot slots S1..S4 (the whole sound), saved with the project. A recall is one undo step, and
+        MATCH remembers the level it learned for each slot (see processAnyPrecision). */
+    SettingsSnapshots snapshots { *this, history };
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -204,6 +216,20 @@ private:
     polisher::TonalEQParams stageToneEq;
     double stageToneRate = 0.0;
     double currentMatchGain = 1.0;
+
+    // MATCH per snapshot: the gap learned while a slot played unchanged, so flipping back to it is
+    // level-matched at once. The audio thread owns matchMemory; recall / store post requests.
+    void handleMatchRequests() noexcept;
+    // What undo steps and snapshots carry besides the controls: the Auto-Master report and Tone Steady's
+    // stored target, as one JSON string (an older snapshot's plain report still restores the report).
+    juce::String captureExtraState() const;
+    void restoreExtraState (const juce::String& extra);
+    struct MatchMemory { bool valid = false; double gapDb = 0.0; };
+    std::array<MatchMemory, SettingsSnapshots::kSlots> matchMemory {};
+    std::atomic<int> matchSwitchRequest { 0 };   // 0x100 | (leaving + 1) | (entering + 1) << 4
+    std::atomic<int> matchForgetRequest { 0 };   // one bit per slot
+    static constexpr double kMatchHoldSeconds = 3.0;    // after a switch: the short-term readings' window
+    static constexpr double kMatchLearnSeconds = 10.0;  // a slot's level is kept once learned this long
 
     // Monitoring (see setListenMode). The monitored signal is formed where its module sits, carried to
     // the output by monOut (so it lines up with the master to the sample) and given the Maximizer's gain

@@ -8,6 +8,7 @@
 #include "ToneTargetStore.h"
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -22,9 +23,9 @@
     3. A background thread runs polisher::autoMaster() on the loudest part (analysis, decisions,
        loudness search), with the whole song's tone for Tone Steady.
     4. Back on the message thread the chosen values are set as normal host parameter changes (so the
-       DAW sees them, and they can be automated or undone), a snapshot is kept for Undo, the song's
-       tone goes to Tone Steady (toneTarget), and the report is saved with the plug-in state so it's
-       still there when the project is reopened.
+       DAW sees them, and they can be automated), the song's tone goes to Tone Steady (toneTarget),
+       all of it as one step of the processor's undo history (see onApplyBegin / onApplyEnd), and the
+       report is saved with the plug-in state so it's still there when the project is reopened.
 
     start (toneOnly) listens the same way but only learns the song's tone for Tone Steady.
 
@@ -73,13 +74,24 @@ public:
     /** "Use what you've heard": stops listening and decides from it. False before kMinListenSeconds. */
     bool finish();
     void cancel();
-    bool undo();
 
     /** What the timer does 15 times a second while listening or analysing (tests call it directly). */
     void tick();
 
-    /** After the host loads a preset or project state: the old undo no longer applies. */
+    /** Around applying a result's settings, and around a tone-only listen storing the song's tone
+        (message thread): the processor makes each one undo step, labelled e.g. "Auto-Master (Trap /
+        Hip-Hop, Balanced)" or "Tone Steady: learn the song's tone". */
+    std::function<void (const juce::String& label)> onApplyBegin;
+    std::function<void()> onApplyEnd;
+
+    /** Sets every module from a finished analysis and stores its report (message thread). Called by the
+        timer when an analysis ends; public for the plug-in tests. */
+    void apply (const polisher::AutoMasterResult& result, const polisher::AutoMasterSettings& settings);
+
+    /** After the host loads a preset or project state. */
     void onStateRestored (const juce::String& savedReport);
+    /** Undo / redo / snapshot recall: the report that explains the settings now playing. */
+    void restoreReport (const juce::String& json) { setReport (json); }
     /** The report to save with the plug-in state (safe from any thread). */
     juce::String getReportForSaving() const;
 
@@ -97,7 +109,6 @@ public:
     int getToneLearnFailures() const noexcept  { return toneLearnFailures; }
     /** Memory the listen holds (fixed when it starts; it doesn't grow with the song). */
     std::size_t getListenMemoryBytes() const noexcept { return listener.isPrepared() ? listener.memoryBytes() : 0; }
-    bool canUndo() const noexcept              { return undoValid.load() && ! undoSnapshot.empty(); }
     int getReportVersion() const noexcept      { return reportVersion.load(); }
     juce::String getReportJson() const;        // "" when there's no report
 
@@ -106,7 +117,6 @@ private:
     /** Sets a new state and waits until the audio thread is out of capture(), so the listener is ours. */
     void takeListener (State newState);
     void launchAnalysis();
-    void apply (const polisher::AutoMasterResult& result, const polisher::AutoMasterSettings& settings);
     void setParam (const juce::String& id, float value);
     void setReport (const juce::String& json);
 
@@ -124,7 +134,6 @@ private:
     int session = 0;                              // message thread
     int toneLearnFailures = 0;                    // message thread
     polisher::SongStats pendingStats;             // the listen behind the analysis running now
-    juce::String undoToneTarget;                  // Tone Steady's target before the last Auto-Master (JSON)
 
     juce::CriticalSection resultLock;
     std::unique_ptr<polisher::AutoMasterResult> pendingResult;
@@ -132,8 +141,6 @@ private:
     polisher::AutoMasterSettings pendingSettings;
     std::atomic<bool> resultReady { false };
 
-    std::vector<std::pair<juce::RangedAudioParameter*, float>> undoSnapshot;   // message thread only
-    std::atomic<bool> undoValid { false };        // cleared from any thread when state is restored
     std::atomic<int> reportVersion { 0 };
     mutable juce::CriticalSection reportLock;
     juce::String report;
