@@ -82,6 +82,8 @@ const P = {
 const resetMeter = Juce.getNativeFunction("resetMeter");
 const amStart = Juce.getNativeFunction("startAutoMaster");
 const amCancel = Juce.getNativeFunction("cancelAutoMaster");
+const amFinish = Juce.getNativeFunction("finishAutoMaster");     // "use what you've heard" (12 s of music on)
+const tsClearTarget = Juce.getNativeFunction("clearToneTarget");  // Tone Steady follows the music again
 const amUndo = Juce.getNativeFunction("undoAutoMaster");
 const amGetReport = Juce.getNativeFunction("getAutoMasterReport");
 const refLoad = Juce.getNativeFunction("loadReference");
@@ -100,6 +102,8 @@ const M = {
   peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
   inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
   amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0, matchDb: 0, corr: 1,
+  // Whole-song listen (mode 0 Auto-Master, 1 learn Tone Steady's target only) and the stored target (s of song, 0 = none).
+  amMode: 0, amHeard: 0, amLoudAt: -1, amLoudLufs: -100, amCanFinish: false, amByItself: false, tsTarget: 0, tsLearnFail: 0,
   dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], stemKeep: 0, rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
   ulBoost: 0, ulSquash: 0, refVersion: 0, refState: 0,
   listen: 0, mono: false, phone: false, listenNow: 0, listenGain: 0, listenUnder: -100,
@@ -763,10 +767,53 @@ function segCell({ label, sub, state, labels, notes }) {
   refresh();
   return cell;
 }
+// Target: what Tone Steady holds the song to. The song's own tone (learned while it played: LEARN here,
+// or Auto-Master) or, without one, the last ~10 s of music. Not a parameter: saved with the song by the plug-in.
+const fmtTime = (sec) => `${Math.floor(Math.max(0, sec) / 60)}:${String(Math.floor(Math.max(0, sec) % 60)).padStart(2, "0")}`;
+function tsTargetCell() {
+  const cell = document.createElement("div");
+  cell.className = "cell";
+  cell.innerHTML = `<span class="cell-label">Target</span><span class="cell-sub mono">what it holds to</span>
+    <div class="seg seg-v"><button type="button" id="ts-learn" title="Play your whole song: Tone Steady learns its overall tone, so playback and export sound the same from any start point">LEARN</button><button type="button" id="ts-clear" title="Forget the song's tone: follow the last ~10 seconds of music instead">CLEAR</button></div>
+    <span class="cell-value mono os-note" id="ts-target-val"></span>`;
+  const learn = cell.querySelector("#ts-learn"), clear = cell.querySelector("#ts-clear"), val = cell.querySelector("#ts-target-val");
+  learn.addEventListener("click", async () => {
+    if (M.amState === 1 && M.amMode === 1) { learnView = "listen"; renderLearn(); return; }
+    if (M.amState !== 0) { toast("Auto-Master is busy. Let it finish (or cancel it), then press LEARN."); return; }
+    const started = await amStart("tone");
+    if (started === false) { toast("Polisher isn't ready yet: press play in your DAW once, then press LEARN again."); return; }
+    toneRequested = true;
+    Object.assign(M, { amState: 1, amMode: 1, amProgress: 0, amHearing: false, amHeard: 0, amLoudAt: -1, amCanFinish: false });
+    if (learnOn) learnView = "listen";
+    updateAmButton(); renderLearn(); refresh();
+    toast("Play your whole song from the start: Tone Steady learns its tone and finishes by itself at the end.");
+  });
+  clear.addEventListener("click", async () => {
+    if (!M.tsTarget) return;
+    try { await tsClearTarget(); } catch (e) { /* the next frame shows the state either way */ }
+    M.tsTarget = 0;
+    refresh(); renderLearn();
+    toast("Tone Steady follows the music again (the last ~10 seconds).");
+  });
+  function refresh() {
+    const learning = M.amState === 1 && M.amMode === 1;
+    learn.textContent = learning ? "LEARNING" : "LEARN";
+    learn.className = "pill " + (learning ? "pill-red" : "pill-blue");
+    learn.setAttribute("aria-pressed", String(learning));
+    clear.className = "pill pill-blue" + (M.tsTarget ? "" : " is-disabled");
+    clear.disabled = !M.tsTarget;
+    val.textContent = M.tsTarget ? `your song \u00b7 ${fmtTime(M.tsTarget)}` : "following the music";
+  }
+  cell.refresh = refresh;
+  refresh();
+  return cell;
+}
+const tsTarget = tsTargetCell();
 const tsCells = [
   liveKnobCell({ label: "Amount", sub: "how much drift", state: P.tsAmount, def: 0, minText: "off", maxText: "100", fmt: (v) => `${Math.round(v)} %` }),
   liveKnobCell({ label: "Range", sub: "largest cut", state: P.tsRange, def: 3, minText: "1", maxText: "6 dB", fmt: (v) => `${MINUS}${v.toFixed(1)} / +${(v / 2).toFixed(1)}` }),
   segCell({ label: "Speed", sub: "reaction", state: P.tsSpeed, labels: TS_SPEEDS, notes: ["1 s \u00b7 sections", "0.4 s \u00b7 phrases", "0.15 s \u00b7 notes"] }),
+  tsTarget,
   barCell({ label: "Steadying", sub: "biggest move now", minText: "0", maxText: "6 dB", id: "tsmeter" }),
 ];
 const rtCells = [
@@ -964,6 +1011,15 @@ function avgGrRecent() { return grWindow.length ? grWindow.reduce((a, b) => a + 
 function renderLearn() {
   renderLearnBody();
   if (learnOn && learnView === "module") addMonitorLearn($("learn-body"));
+  if (learnOn && learnView === "module" && M.amState === 1) {
+    // Still listening while you look at a module: a way back to the listening view.
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "l-link";
+    link.textContent = `← ${M.amMode === 1 ? "LEARNING TONE" : "LISTENING"} · ${fmtTime(M.amHeard || 0)} HEARD`;
+    link.addEventListener("click", () => { learnView = "listen"; renderLearn(); });
+    $("learn-body").prepend(link);
+  }
 }
 
 function renderLearnBody() {
@@ -977,6 +1033,8 @@ function renderLearnBody() {
     return;
   }
 
+  if (learnView === "listen" && M.amState !== 0) { renderListenLearn(body); return; }
+  if (learnView === "listen") learnView = "module";
   if (learnView === "report" && amReport) { renderReport(body); return; }
   if (learnView === "ref") { renderRefLearn(body); return; }
 
@@ -1018,9 +1076,9 @@ function renderLearnBody() {
 
   if (louderPartDb > 0)
     body.appendChild(tip("LOUDER THAN WHAT AUTO-MASTER HEARD",
-      `This part of your mix is about ${fmtNum(louderPartDb, 1)} dB louder than the 12 seconds Auto-Master listened to, so here the master is louder and more limited than it planned.`, false,
+      `This part of your mix is about ${fmtNum(louderPartDb, 1)} dB louder than the loudest part Auto-Master heard, so here the master is louder and more limited than it planned. It probably didn't hear this part.`, false,
       { need: "Yes, if this is the chorus or drop: Auto-Master should hear the loudest part.",
-        steps: ["Start playback a few seconds before this part.", "Click Auto-Master again while it plays."] }));
+        steps: ["Click Auto-Master and play the whole song from the start.", "Let it play to the end: it finds the loudest part by itself and finishes when the song ends."] }));
   body.appendChild(head("WHAT'S HAPPENING"));
   if (bypassed) {
     body.appendChild(para("l-p", "You're on A: the original mix, untouched. Switch to B to hear the Maximizer."));
@@ -1426,7 +1484,8 @@ function renderTsLearn(body) {
   body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
     : !on ? "Tone Steady is off, so the tone is left exactly as it comes in."
     : amount < 0.5 ? "Amount is at 0, so nothing is changed. Turn Amount up to keep the tone steady through the song."
-    : !playing ? "Press play: Tone Steady learns your song's own balance over the first seconds, then keeps each section close to it."
+    : !playing ? (M.tsTarget ? "Press play: Tone Steady keeps each part close to your song's own overall tone."
+                             : "Press play: Tone Steady learns your song's own balance over the first seconds, then keeps each section close to it.")
     : Math.abs(move) < 0.3 ? "This part of the song matches its own overall balance, so Tone Steady is resting."
     : `Right now it's ${move < 0 ? "pulling down" : "lifting"} the area around ${where} by ${fmtNum(Math.abs(move))} dB: this part drifted ${move < 0 ? "fuller" : "thinner"} there than the rest of the song.`));
   body.appendChild(sep());
@@ -1435,10 +1494,18 @@ function renderTsLearn(body) {
   body.appendChild(item("Range", `${MINUS}${range.toFixed(1)} / +${(range / 2).toFixed(1)} dB`, `Cuts go at most ${range.toFixed(1)} dB, boosts at most ${(range / 2).toFixed(1)} dB: the most it can move any part of the spectrum. A section meant to sound different (a drop with more bass) can be pulled by up to this much, so lower Range if a big moment sounds smaller.`));
   body.appendChild(item("Speed", speed, speed === "Slow" ? "Reacts over about a second: the gentlest, best for most masters."
     : speed === "Medium" ? "Reacts within about half a second: catches a phrase that gets muddier or a hook that gets harsher." : "Reacts within a few notes (0.15 s): strongest, can make the mix feel controlled."));
-  body.appendChild(item("Reference", "", "Your song's own balance over the last ~10 seconds, so the Tonal EQ sets the tone and Tone Steady only keeps it. Quiet breakdowns are left alone. When a bass or 808 comes in (the low end jumps more than 4 dB against the rest), it re-learns the balance within about a second instead of cutting the new low end."));
-  if (on && !bypassed && amount > 70 && speed === "Fast")
+  if (M.tsTarget)
+    body.appendChild(item("Target", `your song · ${fmtTime(M.tsTarget)}`, `Tone Steady now holds your song to its own overall tone, learned when it listened to ${fmtTime(M.tsTarget)} of your song. So what you hear is what you export, from any start point. Parts that come and go are left alone: an 808 that enters after the intro isn't cut, and a part that isn't playing isn't faked back. It follows your Tonal EQ moves, and it's saved with your project. CLEAR goes back to following the music.`));
+  else
+    body.appendChild(item("Target", "following the music", "Your song's own balance over the last ~10 seconds, so the Tonal EQ sets the tone and Tone Steady only keeps it. Quiet breakdowns are left alone. When a bass or 808 comes in (the low end jumps more than 4 dB against the rest), it re-learns the balance within about a second instead of cutting the new low end. Because it follows the music, what you hear can depend a little on where playback starts. LEARN holds it to your whole song's tone instead."));
+  if (on && !bypassed && amount >= 0.5 && M.tsTarget && M.tsTarget < 30)
+    body.appendChild(tip("HEADS UP", `Tone Steady learned your song's tone from only ${fmtTime(M.tsTarget)} of music, so it may not describe the whole song.`, false,
+      { need: "Only if your song's sections sound quite different from each other.", steps: ["Press LEARN in this panel.", "Play the whole song from the start. It finishes by itself when the song ends."] }));
+  else if (on && !bypassed && amount > 70 && speed === "Fast")
     body.appendChild(tip("HEADS UP", "High Amount at Fast speed follows single notes. That can flatten moves you made on purpose, like a drop that's meant to hit with more bass.", false,
       { need: "Only if the big moments sound smaller with it on.", steps: ["Turn on MATCH and flip A/B through the drop or chorus.", "If the impact shrinks: lower Range to about 1.5 dB.", "Or lower Amount to about 40 %, or Speed to Slow."] }));
+  else if (!M.tsTarget)
+    body.appendChild(tip("TRY THIS", "Press LEARN and play your whole song from the start: Tone Steady learns its overall tone, so what you hear from any start point is what you export. Then Amount 40 %, Range 3 dB, Speed Slow, and compare with MATCH on.", true));
   else
     body.appendChild(tip("TRY THIS", "Amount 40 %, Range 3 dB, Speed Slow: sections stay consistent without losing their character. Compare with MATCH on.", true));
 }
@@ -1468,8 +1535,62 @@ function renderRtLearn(body) {
     body.appendChild(tip("TRY THIS", "Amount 50 %, Sensitivity 50 %, Focus Full. Then try Focus Harshness on a bright mix: hats and vocals get smoother without losing air.", true));
 }
 
+// While Auto-Master listens (or Tone Steady learns): what it has heard, the loudest part so far, FINISH NOW.
+function renderListenLearn(body) {
+  const tone = M.amMode === 1, heard = M.amHeard || 0;
+  body.appendChild(head(tone ? "LEARNING YOUR SONG'S TONE" : "LISTENING TO YOUR SONG"));
+  if (M.amState === 2) {
+    body.appendChild(para("l-p", `Heard ${fmtTime(heard)} of your song. Now choosing every setting for its loudest part (a few seconds)…`));
+    return;
+  }
+  body.appendChild(para("l-p", !heard && !M.amHearing ? "Press play in your DAW, ideally from the very start of the song."
+    : M.amHearing ? "Keep the song playing." : "Paused. Press play to go on, or finish with what it has heard."));
+  body.appendChild(para("l-p", (tone ? "Polisher listens to the whole song and learns its overall tone for Tone Steady. Nothing else changes."
+                                     : "Auto-Master listens to the whole song, finds its loudest part by itself and sets every module for it. It also learns your song's tone for Tone Steady.")
+    + " It finishes by itself a few seconds after the song ends. Or press FINISH NOW any time after 12 seconds."));
+  body.appendChild(sep());
+  body.appendChild(item("Heard", fmtTime(heard), "of music so far. Silence and stops are skipped."));
+  if (!tone)
+    body.appendChild(item("Loudest part so far", M.amLoudAt >= 0 ? `${fmtTime(M.amLoudAt)}–${fmtTime(M.amLoudAt + 12)}` : "–",
+      M.amLoudAt >= 0 ? `${fmtNum(M.amLoudLufs)} LUFS. Auto-Master sets the levels from this part (usually the hook or drop).` : "Found once 12 seconds of music are in."));
+  const row = document.createElement("div");
+  row.className = "l-actions";
+  const finish = document.createElement("button");
+  finish.type = "button";
+  finish.id = "am-finish";
+  finish.className = "pill pill-red stem-apply" + (M.amCanFinish ? "" : " is-disabled");
+  finish.disabled = !M.amCanFinish;
+  finish.textContent = M.amCanFinish ? "FINISH NOW" : `FINISH NOW (in ${fmtTime(Math.max(0, 12 - heard) + 0.999)})`;
+  finish.title = tone ? "Learn the tone from what it has heard" : "Use what it has heard: set every module from the loudest part so far";
+  finish.addEventListener("click", finishListening);
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.id = "am-cancel";
+  cancel.className = "pill pill-blue stem-apply";
+  cancel.textContent = "CANCEL";
+  cancel.addEventListener("click", () => {
+    amCancel(); amRequested = false; toneRequested = false;
+    M.amState = 0; learnView = "module";
+    updateAmButton(); renderLearn();
+    toast(tone ? "Stopped learning. Tone Steady keeps what it had." : "Auto-Master stopped listening. Nothing was changed.");
+  });
+  row.append(finish, cancel);
+  body.appendChild(row);
+  body.appendChild(tip("TRY THIS", tone ? "Play the whole song in one go, from the start to the end. The tone is learned from every part, so preview and export sound the same from any start point."
+                                        : "Play the whole song in one go, from the start to the end. Auto-Master picks the loudest part itself, and the report tells you where it was.", true));
+}
+let lastListenDraw = "";
+async function finishListening() {
+  if (!M.amCanFinish) { toast("Let it hear at least 12 seconds of music first."); return; }
+  amFinishClicked = true;
+  let ok = true;
+  try { ok = await amFinish(); } catch (e) { ok = false; }
+  if (ok === false) { amFinishClicked = false; toast("It needs at least 12 seconds of music first."); return; }
+  toast(M.amMode === 1 ? "Learning the tone from what it heard." : `Using what it heard (${fmtTime(M.amHeard)}). Choosing every setting…`);
+}
+
 // Warnings go right under "What's happening" so they're seen without scrolling; friendly tips stay at the end.
-// Auto-Master plans from the 12 s it heard. When the incoming mix stays clearly louder than that for a few
+// Auto-Master plans from the loudest part it heard. When the incoming mix stays clearly louder than that for a few
 // seconds (playback started in the verse, the chorus came later), the Maximizer Learn says so.
 let louderPartDb = 0, louderSince = 0, louderReport = null;
 function watchLouderPart() {
@@ -1483,6 +1604,31 @@ function watchLouderPart() {
   if (now - louderSince > 3000 && over > louderPartDb + 0.5) {
     if (louderPartDb === 0) toast("This part is louder than what Auto-Master heard. See Learn (Maximizer).");
     louderPartDb = over;
+  }
+}
+
+// The whole-song listen as the plug-in reports it: says when the song's end finished it, announces a learned
+// tone, keeps the LISTENING view in Learn current.
+function watchListening(wasAm, wasTarget, wasFail) {
+  if (wasAm === 1 && M.amState === 2 && !amFinishClicked && M.amByItself)
+    toast(`The song ended: Auto-Master heard ${fmtTime(M.amHeard)} and is choosing every setting…`);
+  if (wasAm !== 0 && M.amState === 0) amFinishClicked = false;
+  if (M.tsTarget !== wasTarget || M.tsLearnFail !== wasFail) {
+    if (toneRequested && M.amState === 0) {
+      toneRequested = false;
+      if (M.tsLearnFail !== wasFail)
+        toast("Tone Steady heard too little music at your song's level to learn its tone. Play more of the song, then press LEARN again.");
+      else if (M.tsTarget) {
+        toast(`Tone Steady learned your song's tone from ${fmtTime(M.tsTarget)} of music.`);
+        if (learnView === "listen") learnView = "module";
+      }
+    }
+    tsTarget.refresh();
+    if (learnOn && learnView === "module" && selected === "ts") renderLearn();
+  }
+  if (learnOn && learnView === "listen") {
+    const key = [M.amState, Math.floor(M.amHeard || 0), M.amCanFinish, M.amHearing, M.amLoudAt].join("|");
+    if (key !== lastListenDraw) { lastListenDraw = key; renderLearn(); }
   }
 }
 
@@ -1936,10 +2082,18 @@ for (const st of [P.amGenre, P.amIntensity, P.amTarget]) {
 }
 
 let amRequested = false;       // this session pressed Auto-Master (so a new report opens in Learn)
+let toneRequested = false;     // this session pressed Tone Steady's LEARN (so its result is announced)
+let amFinishClicked = false;   // the listen was finished by hand (not by the song ending)
 let amSeenVersion = -1;
 let amOpenedTime = null;       // the report already opened for the user (by its timestamp)
 $("btn-automaster").addEventListener("click", async () => {
-  if (M.amState === 1) { amCancel(); amRequested = false; toast("Auto-Master stopped listening."); return; }
+  if (M.amState === 1) {
+    // Listening: from 12 s of music on, a click uses what it heard; before that it stops.
+    if (M.amCanFinish) { finishListening(); return; }
+    amCancel(); amRequested = false; toneRequested = false; M.amState = 0; updateAmButton(); renderLearn();
+    toast(M.amMode === 1 ? "Stopped learning. Tone Steady keeps what it had." : "Auto-Master stopped listening. Nothing was changed.");
+    return;
+  }
   if (M.amState === 2) return;
   const started = await amStart();
   if (started === false) {
@@ -1947,25 +2101,40 @@ $("btn-automaster").addEventListener("click", async () => {
     return;
   }
   amRequested = true;
-  M.amState = 1; M.amProgress = 0; M.amHearing = false;
+  amFinishClicked = false;
+  Object.assign(M, { amState: 1, amMode: 0, amProgress: 0, amHearing: false, amHeard: 0, amLoudAt: -1, amCanFinish: false });
+  if (learnOn) learnView = "listen";
   updateAmButton();
+  renderLearn();
+  toast("Play your whole song from the start. Auto-Master finishes by itself when it ends (or click again after 12 seconds).");
 });
+// What the Auto-Master button says while it listens.
+function amListenText() {
+  const heard = M.amHeard || 0;
+  if (!heard) return M.amHearing ? "Listening…" : "Press play · from the start of your song";
+  if (!M.amCanFinish) return `${fmtTime(heard)} heard · keep playing · click to stop`;
+  if (!M.amHearing) return `Paused at ${fmtTime(heard)} · play on, or click to finish`;
+  const loud = M.amMode !== 1 && M.amLoudAt >= 0 ? ` · loudest at ${fmtTime(M.amLoudAt)}` : "";
+  return `${fmtTime(heard)} heard${loud} · click to finish`;
+}
 function updateAmButton() {
   const btn = $("btn-automaster"), title = $("am-title"), sub = $("am-sub");
   const busy = M.amState === 1 || M.amState === 2;
   btn.classList.toggle("busy", busy);
   $("am-progress").hidden = M.amState !== 1;
+  $("am-progress").classList.toggle("ready", !!M.amCanFinish);
   $("am-progress-fill").style.width = (clamp(M.amProgress, 0, 1) * 100).toFixed(0) + "%";
   if (M.amState === 1) {
-    title.textContent = "LISTENING";
-    sub.textContent = M.amHearing ? `${Math.round(M.amProgress * 12)} / 12 s · click to stop` : "Press play: the loudest part of your song";
+    title.textContent = M.amMode === 1 ? "LEARNING TONE" : "LISTENING";
+    sub.textContent = amListenText();
   } else if (M.amState === 2) {
     title.textContent = "THINKING";
     sub.textContent = "Choosing every setting (a few seconds)…";
   } else {
     title.textContent = "AUTO-MASTER";
-    sub.textContent = amReport && amReport.ok ? "Done · click to run again" : "Listens to your mix and sets every module";
+    sub.textContent = amReport && amReport.ok ? "Done · click to run again" : "Click, then play your whole song";
   }
+  if (tsTarget.refresh) tsTarget.refresh();
   const undo = $("btn-undo");
   undo.disabled = !M.amUndo;
   undo.classList.toggle("is-disabled", !M.amUndo);
@@ -2027,7 +2196,7 @@ async function fetchReference() {
     if (refInfo.message) toast(refInfo.message);
     else if (refInfo.profile) {
       learnView = "ref";
-      toast(`Reference loaded: “${refInfo.profile.name}”. Play the loudest part of your song and press Auto-Master.`);
+      toast(`Reference loaded: “${refInfo.profile.name}”. Press Auto-Master and play your song from the start.`);
     }
   }
   refreshRefPill();
@@ -2129,7 +2298,7 @@ function howToUseRef() {
   ol.className = "l-steps";
   for (const st of ["Pick a commercial trap song with the sound you want: the released WAV, FLAC or MP3 (a good-quality file, not a phone recording).",
                     "Click Match ref (next to the targets) and choose the file. Polisher measures its loudest part in a few seconds.",
-                    "Play the loudest part of YOUR song (the chorus or the drop) and press Auto-Master.",
+                    "Press Auto-Master and play YOUR song from the start: it finds the loudest part by itself.",
                     "Turn on MATCH and A/B. The dashed line on the spectrum is the reference's tone; the × on the pill goes back to the genre targets."]) {
     const li = document.createElement("li"); li.textContent = st; ol.appendChild(li);
   }
@@ -2166,7 +2335,7 @@ function renderRefLearn(body) {
     body.appendChild(head("REFERENCE vs YOUR MIX vs MASTER"));
     body.appendChild(refCompare(r));
   } else {
-    body.appendChild(tip("COMPARE IT", "Play the loudest part of your song and press Auto-Master. It aims for this reference, and this panel then compares the reference, your mix and the master side by side.", true));
+    body.appendChild(tip("COMPARE IT", "Press Auto-Master and play your song from the start. It aims for this reference, and this panel then compares the reference, your mix and the master side by side.", true));
   }
   body.appendChild(howToUseRef());
 }
@@ -2191,13 +2360,24 @@ function renderReport(body) {
   if (!r.ok) {
     body.appendChild(head("AUTO-MASTER"));
     body.appendChild(para("l-p", r.summary));
-    body.appendChild(tip(r.tipTitle || "TRY AGAIN", r.tip || "Start playback on your chorus or drop, then press Auto-Master. The counter only runs while it hears music.", true));
+    body.appendChild(tip(r.tipTitle || "TRY AGAIN", r.tip || "Press Auto-Master, then play your song from the start. It counts only music, and needs at least 12 seconds of it.", true));
     return;
   }
   body.appendChild(head("AUTO-MASTER REPORT"));
   const meta = para("l-meta", `${r.genre} · ${r.intensity} · ${r.target}`);
   body.appendChild(meta);
+  if (r.listened) body.appendChild(para("l-p l-listened", r.listened));
   body.appendChild(para("l-p", r.summary));
+  const L = r.listen;
+  if (L && L.heard > 0 && L.songLufs > -70)
+    body.appendChild(item("Whole song", `${fmtNum(L.songLufs)} LUFS`,
+      `Your whole song as it arrives (loudness range ${fmtNum(L.songLra)} LU). Its loudest part measures ${fmtNum(L.loudLufs)} LUFS: the master is set for that part, so the rest of the song sits under it as you mixed it.`
+      + (!r.toneTarget ? "" : Math.abs(r.toneTarget - L.heard) < 1 ? ` Tone Steady learned your song's overall tone from these ${fmtTime(r.toneTarget)}.`
+                                                                   : ` Tone Steady keeps the overall tone it learned from ${fmtTime(r.toneTarget)} of your song.`)));
+  if (L && L.heard > 0 && L.heard < 30)
+    body.appendChild(tip("PLAY THE WHOLE SONG NEXT TIME", `Auto-Master heard ${fmtTime(L.heard)} of your song, so it set the levels from that part.`, true,
+      { need: "No, if that was the loudest part (the hook or drop). Otherwise the louder part will be limited harder than planned.",
+        steps: ["Click Auto-Master and play the song from the start.", "Let it play to the end: it finds the loudest part by itself."] }));
   if (r.reference && r.mixStats && r.masterStats) {
     body.appendChild(head(`REFERENCE vs YOUR MIX vs MASTER`));
     body.appendChild(refCompare(r));
@@ -2425,7 +2605,7 @@ function updateLiveReadouts() {
   }
   const rts = $("read-ts");
   if (rts) rts.textContent = P.bypass.getValue() ? "Bypassed" : !P.tsOn.getValue() ? "Off" : tsIsNeutral() ? neutralText("ts")
-    : `${Math.round(tsAmountAt())} % \u00b7 ${MINUS}${P.tsRange.getScaledValue().toFixed(1)} dB`;
+    : `${Math.round(tsAmountAt())} % \u00b7 ${MINUS}${P.tsRange.getScaledValue().toFixed(1)} dB${M.tsTarget ? " \u00b7 song" : ""}`;
   const rrt = $("read-rt");
   if (rrt) rrt.textContent = P.bypass.getValue() ? "Bypassed" : !P.rtOn.getValue() ? "Off" : rtIsNeutral() ? neutralText("rt")
     : `${Math.round(rtAmountAt())} % \u00b7 ${RT_FOCUS[comboIndex(P.rtFocus)]}`;
@@ -2480,8 +2660,9 @@ function updateLiveReadouts() {
 // Meter events from the plug-in (30 per second).
 window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   const srChanged = frame.sr && frame.sr !== M.sr;
-  const wasAm = M.amState;
+  const wasAm = M.amState, wasTarget = M.tsTarget, wasFail = M.tsLearnFail;
   Object.assign(M, frame);
+  watchListening(wasAm, wasTarget, wasFail);
   if (srChanged) drawEq();
   if (M.amReport !== amSeenVersion) {
     const first = amSeenVersion === -1;

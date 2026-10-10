@@ -31,19 +31,46 @@ struct StemEQParams
     bool keepLoudness = false;
 };
 
+/** Tone Steady's bands: the model's 64 ERB bands (StemNet::kBands). */
+inline constexpr int kToneBands = 64;
+
+/** A song's own tone as Tone Steady measures it: per band, its level relative to the whole frame
+    (dB), typical for the song. Only the shape matters (adding the same dB to every band changes
+    nothing). Learned by Auto-Master while the song plays (SongListener::toneTarget), saved with the
+    project. As learned it describes the mix arriving at the plug-in; toneTargetAtStage() turns it
+    into what the spectral stage hears after the Tonal EQ. */
+struct ToneTarget
+{
+    bool valid = false;
+    std::array<float, kToneBands> bandDb {};
+    double seconds = 0.0;     // how much music it was learned from
+};
+
 /** Tone Steady: keeps the tonal balance steady as the song plays. Each band's short-term level is
     compared with the song's own long-term balance; where a passage drifts (muddier, harsher,
     thinner) the band is nudged back, cuts up to Range, boosts up to half of it. Above ~2.5 kHz it
     reacts only to a top end that stays brighter for seconds, never to hats coming and going.
-    In 30-160 Hz a jump of more than 4 dB beyond the rest of the spectrum that lasts about a second
-    (an 808 or bass coming in for the chorus) is taken as the arrangement, not a drift: the
-    reference re-learns within about a second instead of cutting the new low end for the next ten. */
+
+    Two references:
+    - Following the music (no target): the song's balance over the last ~10 s. In 30-160 Hz a jump
+      of more than 4 dB beyond the rest of the spectrum that lasts about a second (an 808 or bass
+      coming in for the chorus) is taken as the arrangement, not a drift: the reference re-learns
+      within about a second instead of cutting the new low end for the next ten.
+    - A stored target (target.valid): the whole song's own tone, learned by Auto-Master. Nothing is
+      learned while playing, so the result no longer depends on where playback or an export starts.
+      It compares the music as it enters the stage (before the Stem EQ move and the tamer's cuts,
+      which are yours, not a drift) with the target. A band far from the song's tone is a part
+      coming or going, not a drift, and is left alone: below 160 Hz both ways beyond 4 dB (fully at
+      6 dB: an 808 entering after an intro is not cut, the intro without it not lifted); elsewhere
+      only lifts, beyond 6 dB (fully at 9 dB: a part that isn't playing is not faked back), while a
+      passage that drifts muddier or harsher is pulled down however far it drifts. */
 struct ToneSteadyParams
 {
     bool enabled = true;
     double amount = 0.0;      // % of the drift corrected, 0 = off
     double rangeDb = 3.0;     // largest cut (boosts: half), 1 ... 6 dB
     int speed = 1;            // 0 slow (1 s), 1 medium (0.4 s), 2 fast (0.15 s)
+    ToneTarget target;        // as the stage hears it (toneTargetAtStage); invalid = follow the music
 };
 
 enum class ResonanceFocus { full = 0, boxiness = 1, harshness = 2 };
@@ -83,6 +110,7 @@ private:
     std::vector<float> h, x, gi, gh, logits;
     int head = 0, filled = 0;
 };
+static_assert (StemNet::kBands == kToneBands, "Tone Steady measures in the model's bands");
 
 /** The spectral stage: Stem EQ, Tone Steady and Resonance Tamer share one STFT (so the two later
     modules add no latency). Their gains multiply per bin and frame; Tone Steady and Resonance Tamer
@@ -120,6 +148,9 @@ public:
     static constexpr double kMaxGainDb = 12.0;
     static constexpr double kMaxKeepDb = 12.0;            // Keep loudness never moves the level more than this
     static constexpr double kKeepAverageSeconds = 2.0;    // how long Keep loudness listens to the music
+    // Tone Steady with a target: how far (dB) a band may sit from the song's tone before it counts as
+    // the arrangement (a part coming or going) and is left alone; below 160 Hz, and the rest.
+    static constexpr double kTargetLowPartDb = 4.0, kTargetPartDb = 6.0;
 
     void prepare (double sampleRate, int numChannels);
     void reset() noexcept;
@@ -139,6 +170,15 @@ public:
     static int fftSizeFor (double sampleRate) noexcept { return sampleRate < 80000.0 ? 1024 : sampleRate < 160000.0 ? 2048 : 4096; }
     static int latencyFor (double sampleRate) noexcept { return fftSizeFor (sampleRate) * 7 / 4; }
     int latencySamples() const noexcept { return latencyFor (sampleRate); }
+
+    /** Centre (Hz) of band b of the model's 64 ERB bands at this sample rate (20 Hz ... 20 kHz, or
+        up to half the rate). No allocation. */
+    static double bandCentreHz (int band, double sampleRate) noexcept;
+    /** The bands as the stage measures them with an FFT of fftSize: each band's centre (Hz), its
+        triangular weights over the bins 0 ... fftSize / 2 ([band][bin], every bin's weights sum to
+        1), and the first / one-past-last bin it touches. Allocates. */
+    static void makeBands (double sampleRate, int fftSize, std::vector<double>& centreHz, std::vector<double>& weights,
+                           std::vector<int>& firstBin, std::vector<int>& endBin);
 
     void processFrame (double* frame, int numChannels) noexcept;
 

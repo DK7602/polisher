@@ -18,6 +18,7 @@
 #include "SpectrumTap.h"
 #include "AutoMasterController.h"
 #include "ReferenceTrack.h"
+#include "ToneTargetStore.h"
 
 #include <array>
 #include <atomic>
@@ -134,8 +135,11 @@ public:
     /** The reference song for Match ref (its measurements only), saved with the state. */
     ReferenceTrack reference;
 
+    /** Tone Steady's stored target (the song's own tone, learned by Auto-Master), saved with the state. */
+    ToneTargetStore toneTarget;
+
     /** Listens to the mix, decides every module's settings and explains them. */
-    AutoMasterController autoMaster { parameters, reference };
+    AutoMasterController autoMaster { parameters, reference, toneTarget };
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -193,6 +197,12 @@ private:
     std::atomic<float>* imgMidParam = nullptr;
     std::atomic<float>* imgHighParam = nullptr;
     polisher::LevelMatch levelMatch;
+    // Tone Steady's target on the audio thread: as stored (the mix arriving), and moved by the Tonal EQ
+    // in front of the stage (recomputed when either changes).
+    polisher::ToneTarget songTone, stageTone;
+    int songToneVersion = -1;
+    polisher::TonalEQParams stageToneEq;
+    double stageToneRate = 0.0;
     double currentMatchGain = 1.0;
 
     // Monitoring (see setListenMode). The monitored signal is formed where its module sits, carried to

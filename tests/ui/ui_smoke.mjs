@@ -143,11 +143,20 @@ check(r.litTargets === 0, 'no target pill is lit while a reference sets the loud
 const ys = await page.evaluate(() => (document.getElementById('sp-ref').getAttribute('d') || '').split(/[ML]/).filter(Boolean).map((p) => Number(p.split(',')[1])));
 check(ys.length === 96 && ys.filter((y) => y > 0.5 && y < 199.5).length > 60, `reference curve lies inside the plot (${ys.filter((y) => y > 0.5 && y < 199.5).length}/96 points)`);
 
-// Auto-Master with the reference: the report says so and shows the comparison table.
+// Auto-Master with the reference: the report says so and shows the comparison table. (mock.js listens to
+// its 2:30 song 30x faster than real time and finishes by itself when the song ends.)
+const learnText = () => page.evaluate(() => document.getElementById('learn-body').textContent);
+const waitForLearn = async (re, ms = 10000) => {
+  for (let t = 0; t < ms; t += 100) { if (re.test(await learnText())) return true; await page.waitForTimeout(100); }
+  return false;
+};
 await page.click('#btn-automaster');
-await page.waitForTimeout(6500);
+check(await waitForLearn(/Listened to \d:\d\d of your song/), 'Auto-Master finishes by itself when the song ends and opens its report');
 r = await ref();
 check(/Matched to your reference/.test(r.learn) && /REFERENCE vs YOUR MIX vs MASTER/.test(r.learn), 'report names the reference and compares it');
+check(/Listened to 2:30 of your song; the loudest part \(0:54–1:06, usually the hook or drop\) set the levels\./.test(r.learn),
+      'report says how much of the song it heard and where the loudest part was');
+check(/Whole song/.test(r.learn) && /Tone Steady learned your song's overall tone from these 2:30/.test(r.learn), 'report shows the whole song and the learned tone');
 check(await page.evaluate(() => document.querySelectorAll('#learn-body table.l-cmp').length === 2), 'comparison tables (levels and tone) are shown');
 
 await page.click('#btn-ref-clear');
@@ -261,6 +270,65 @@ await page.evaluate(() => { window.__mockMonitor.mono = false; });
 await page.waitForTimeout(300);
 m = await mon();
 check(!m.monoOn && !m.banner, 'the UI follows the plug-in when it switches a check off');
+
+// Whole-song listen: the button and Learn say what it has heard; FINISH NOW works from 12 s of music on.
+const amView = () => page.evaluate(() => ({
+  title: document.getElementById('am-title').textContent,
+  sub: document.getElementById('am-sub').textContent,
+  learn: document.getElementById('learn-body').textContent,
+  finish: document.getElementById('am-finish') ? { disabled: document.getElementById('am-finish').disabled, text: document.getElementById('am-finish').textContent } : null,
+  state: window.__mockAm.state, mode: window.__mockAm.mode, heard: window.__mockAm.heard,
+}));
+await pick('Maximizer'); await page.waitForTimeout(120);
+await page.click('#btn-automaster');
+await page.waitForTimeout(150);
+let a = await amView();
+check(a.state === 1 && a.mode === 0 && a.title === 'LISTENING', `Auto-Master starts listening ("${a.title}")`);
+check(/LISTENING TO YOUR SONG/.test(a.learn) && /finishes by itself/.test(a.learn) && /FINISH NOW/.test(a.learn), 'Learn shows the listening view with FINISH NOW');
+check(a.finish && a.finish.disabled && a.heard < 12, `FINISH NOW waits for 12 s of music ("${a.finish && a.finish.text}" at ${a.heard} s)`);
+await page.waitForFunction(() => window.__mockAm.heard >= 24, null, { timeout: 5000 });
+await page.waitForTimeout(120);
+a = await amView();
+check(a.finish && !a.finish.disabled, 'FINISH NOW is ready after 12 s of music');
+check(/heard/.test(a.sub) && /click to finish/.test(a.sub), `the button says what it heard ("${a.sub}")`);
+check(/Loudest part so far/.test(a.learn), 'Learn shows the loudest part so far');
+await page.click('#am-finish');
+check(await waitForLearn(/Listened to \d:\d\d of your song/, 5000), 'FINISH NOW uses what it heard and opens the report');
+a = await amView();
+check(/Listened to 0:\d\d of your song; the loudest part \(0:\d\d–0:\d\d/.test(a.learn), 'the report quotes the part it heard');
+
+// Tone Steady's target: LEARN (a tone-only listen), CLEAR, and Learn says which reference it uses.
+await pick('Tone Steady'); await page.waitForTimeout(150);
+const tsView = () => page.evaluate(() => ({
+  val: document.getElementById('ts-target-val')?.textContent || '',
+  learnBtn: document.getElementById('ts-learn')?.textContent || '',
+  clearDisabled: !!document.getElementById('ts-clear')?.disabled,
+  learn: document.getElementById('learn-body').textContent,
+  read: document.getElementById('read-ts')?.textContent || '',
+  target: window.__mockAm.toneTarget,
+}));
+let tv = await tsView();
+check(/^your song · \d:\d\d$/.test(tv.val) && !tv.clearDisabled, `Tone Steady shows the target learned by Auto-Master ("${tv.val}")`);
+check(/Tone Steady now holds your song to its own overall tone/.test(tv.learn) && /what you hear is what you export/.test(tv.learn), 'Learn explains the stored target');
+check(/song$/.test(tv.read), `the chain row says it holds to the song ("${tv.read}")`);
+await page.click('#ts-clear'); await page.waitForTimeout(200);
+tv = await tsView();
+check(tv.target === 0 && tv.val === 'following the music' && tv.clearDisabled, `CLEAR goes back to following the music ("${tv.val}")`);
+check(/following the music/.test(tv.learn) && /LEARN holds it to your whole song's tone/.test(tv.learn), 'Learn explains following the music and LEARN');
+await page.click('#ts-learn'); await page.waitForTimeout(150);
+a = await amView();
+check(a.state === 1 && a.mode === 1 && a.title === 'LEARNING TONE', `LEARN starts a tone-only listen ("${a.title}")`);
+check(/LEARNING YOUR SONG'S TONE/.test(a.learn) && /Nothing else changes/.test(a.learn), 'Learn shows the tone-learning view');
+check((await tsView()).learnBtn === 'LEARNING', 'the LEARN button shows it is learning');
+const driveBefore = await page.evaluate(async () => (await import('./juce/index.js')).getSliderState('drive').getScaledValue());
+await page.waitForFunction(() => window.__mockAm.heard >= 12, null, { timeout: 5000 });
+await page.waitForTimeout(150);
+await page.click('#am-finish');
+await page.waitForTimeout(400);
+tv = await tsView();
+check(tv.target >= 12 && /^your song · \d:\d\d$/.test(tv.val), `LEARN stores the song's tone ("${tv.val}")`);
+check(await page.evaluate(async () => (await import('./juce/index.js')).getSliderState('drive').getScaledValue()) === driveBefore, 'LEARN changes no other setting');
+check(/Tone Steady now holds your song to its own overall tone/.test(tv.learn), 'Learn is back on Tone Steady with the target');
 
 check(errors.length === 0, `no script errors (${errors.join(' | ')})`);
 await browser.close();

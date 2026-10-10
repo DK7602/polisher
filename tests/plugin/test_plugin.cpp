@@ -1007,6 +1007,263 @@ TEST_CASE ("Listening never allocates on the audio thread", "[plugin][monitoring
     CHECK (worst == 0);
 }
 
+// --- Auto-Master's whole-song listen and Tone Steady's stored target ---------------------------------
+
+namespace {
+
+/** The DAW's playhead: playing, at `seconds` on the timeline (moved along by play()). */
+struct FakePlayHead final : juce::AudioPlayHead
+{
+    double seconds = 0.0;
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo info;
+        info.setIsPlaying (true);
+        info.setTimeInSeconds (seconds);
+        return info;
+    }
+};
+
+/** Plays a clip through the processor with the playhead moving along, ticking Auto-Master after every
+    block as its timer would. Returns the most operator-new calls any one block made. */
+int play (PolisherAudioProcessor& p, FakePlayHead& head, const AudioClip& clip, int block = 512)
+{
+    juce::AudioBuffer<float> buf (2, block);
+    juce::MidiBuffer midi;
+    int worst = 0;
+    for (int pos = 0; pos < clip.numSamples(); pos += block)
+    {
+        const int n = std::min (block, clip.numSamples() - pos);
+        buf.setSize (2, n, false, false, true);
+        for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, clip.channels[(size_t) c].data() + pos, n);
+        allocations = 0;
+        countAllocations = true;
+        p.processBlock (buf, midi);
+        countAllocations = false;
+        worst = std::max (worst, allocations.load());
+        head.seconds += n / clip.sampleRate;
+        p.autoMaster.tick();
+    }
+    return worst;
+}
+
+/** Waits (ticking, like the timer) until Auto-Master's analysis is applied. */
+bool waitForAutoMaster (PolisherAudioProcessor& p)
+{
+    for (int i = 0; i < 15000; ++i)   // up to 5 minutes
+    {
+        p.autoMaster.tick();
+        if (p.autoMaster.getState() == AutoMasterController::idle)
+            return true;
+        juce::Thread::sleep (20);
+    }
+    return false;
+}
+
+AudioClip songOf (std::initializer_list<AudioClip> parts)
+{
+    AudioClip song;
+    for (const auto& part : parts)
+    {
+        if (song.channels.empty()) { song = part; continue; }
+        for (size_t c = 0; c < 2; ++c)
+            song.channels[c].insert (song.channels[c].end(), part.channels[c].begin(), part.channels[c].end());
+    }
+    return song;
+}
+
+juce::var reportOf (PolisherAudioProcessor& p) { return juce::JSON::parse (p.autoMaster.getReportJson()); }
+
+} // namespace
+
+TEST_CASE ("Auto-Master listens to the whole song, finishes by itself when it ends, and decides from the loudest part", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, false);
+    FakePlayHead head;
+    head.seconds = 5.0;                       // playback started at 0:05
+    p->setPlayHead (&head);
+    REQUIRE (p->autoMaster.start());
+    const auto chorus = testsig::musicLike (sr, 14.0, -12.0, 3);
+
+    play (*p, head, testsig::musicLike (sr, 10.0, -30.0, 1));   // intro
+    play (*p, head, testsig::musicLike (sr, 20.0, -20.0, 2));   // verse
+    CHECK (p->autoMaster.getState() == AutoMasterController::listening);   // past 12 s: still listening
+    CHECK (p->autoMaster.canFinish());
+    const auto memory = p->autoMaster.getListenMemoryBytes();
+    CHECK (memory > 0);
+    CHECK (memory < 16u * 1024u * 1024u);
+    play (*p, head, chorus);
+    play (*p, head, testsig::musicLike (sr, 10.0, -20.0, 4));   // verse
+    CHECK (p->autoMaster.getState() == AutoMasterController::listening);
+    CHECK (p->autoMaster.getListenMemoryBytes() == memory);    // fixed, however long the song
+    CHECK (std::abs (p->autoMaster.getHeardSeconds() - 54.0) < 0.05);
+    const double loudAt = p->autoMaster.getLoudestStartSeconds();
+    INFO ("loudest part found at " << loudAt << " s on the timeline");
+    CHECK (loudAt >= 5.0 + 30.0 - 0.05);                        // the chorus: 0:35 - 0:49
+    CHECK (loudAt <= 5.0 + 32.0 + 0.05);
+
+    // The song ends: a few seconds of silence while the transport keeps running.
+    play (*p, head, testsig::silence (sr, 2, 4.5));
+    CHECK (p->autoMaster.getState() == AutoMasterController::analysing);
+    REQUIRE (waitForAutoMaster (*p));
+    CHECK (p->autoMaster.finishedByItself());
+
+    const auto r = reportOf (*p);
+    REQUIRE (static_cast<bool> (r["ok"]));
+    const auto listen = r["listen"];
+    CHECK (std::abs ((double) listen["heard"] - 54.0) < 0.05);
+    CHECK (static_cast<bool> (listen["fromHost"]));
+    CHECK (static_cast<bool> (listen["byItself"]));
+    CHECK (std::abs ((double) listen["loudStart"] - loudAt) < 1.0e-6);
+    CHECK (std::abs ((double) listen["loudEnd"] - loudAt - 12.0) < 1.0e-6);
+    CHECK ((double) listen["songLufs"] < (double) listen["loudLufs"] - 2.0);   // the whole song is quieter than its chorus
+    const auto text = r["listened"].toString();
+    INFO (text);
+    const auto start = (int) std::lround (loudAt);
+    CHECK (text == "Listened to 0:54 of your song; the loudest part (0:" + juce::String (start) + juce::String::fromUTF8 ("\xE2\x80\x93") + "0:"
+                   + juce::String (start + 12) + ", usually the hook or drop) set the levels.");
+    // It decided from the chorus: what it heard measures like the chorus.
+    CHECK (std::abs ((double) r["capturedLufs"] - polisher::measure (chorus).integratedLufs) < 0.5);
+
+    // Tone Steady got the song's own tone (learned from all 54 s), and Undo puts the old reference back.
+    REQUIRE (p->toneTarget.isSet());
+    CHECK (std::abs (p->toneTarget.get().seconds - 54.0) < 0.05);
+    CHECK (std::abs ((double) r["toneTarget"] - 54.0) < 0.05);
+    REQUIRE (p->autoMaster.undo());
+    CHECK_FALSE (p->toneTarget.isSet());
+}
+
+TEST_CASE ("Auto-Master: Finish uses what it heard from 12 s of music on, not before; a pause doesn't end it", "[plugin][automaster]")
+{
+    const double sr = 44100.0;
+    auto p = makeProcessor (sr, 512, false);
+    FakePlayHead head;
+    p->setPlayHead (&head);
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, testsig::musicLike (sr, 8.0, -14.0, 5));
+    CHECK_FALSE (p->autoMaster.canFinish());
+    CHECK_FALSE (p->autoMaster.finish());
+    CHECK (p->autoMaster.getState() == AutoMasterController::listening);
+    CHECK (std::abs (p->autoMaster.getProgress() - 8.0f / 12.0f) < 0.01f);
+
+    // Playback stopped for a while (no audio at all): under 30 s of music, it keeps waiting.
+    juce::Thread::sleep (4200);
+    p->autoMaster.tick();
+    CHECK (p->autoMaster.getState() == AutoMasterController::listening);
+    CHECK_FALSE (p->autoMaster.isHearingAudio());
+
+    play (*p, head, testsig::musicLike (sr, 5.0, -14.0, 6));
+    REQUIRE (p->autoMaster.canFinish());
+    REQUIRE (p->autoMaster.finish());
+    CHECK (p->autoMaster.getState() == AutoMasterController::analysing);
+    REQUIRE (waitForAutoMaster (*p));
+    CHECK_FALSE (p->autoMaster.finishedByItself());
+    const auto r = reportOf (*p);
+    REQUIRE (static_cast<bool> (r["ok"]));
+    CHECK (std::abs ((double) r["listen"]["heard"] - 13.0) < 0.05);
+    CHECK_FALSE (static_cast<bool> (r["listen"]["byItself"]));
+    CHECK (r["listened"].toString() == "Listened to 0:13 of your song and set the levels from it.");
+}
+
+TEST_CASE ("Auto-Master's listening never allocates on the audio thread", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 1024, true);
+    renderFixed (*p, testsig::musicLike (sr, 1.0, -6.0), 1024);   // warm up
+    FakePlayHead head;
+    p->setPlayHead (&head);
+    REQUIRE (p->autoMaster.start());
+    // Getting louder all the time, so the loudest part moves on with every 100 ms once 12 s are in.
+    auto mix = testsig::musicLike (sr, 16.0, -8.0, 7);
+    for (auto& ch : mix.channels)
+        for (size_t i = 0; i < ch.size(); ++i) ch[i] *= (float) (0.3 + 0.7 * (double) i / (double) ch.size());
+    const int worst = play (*p, head, mix, 1024);
+    CHECK (worst == 0);
+    CHECK (p->autoMaster.getState() == AutoMasterController::listening);
+    CHECK (p->autoMaster.getLoudestStartSeconds() > 3.5);           // the newest (loudest) 12 s
+    p->autoMaster.cancel();
+}
+
+TEST_CASE ("Tone Steady: Learn listens to the song for its tone only; the target is saved with the song", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    auto setUp = [] (PolisherAudioProcessor& p) { set (p, "tsAmount", 60.0f); set (p, "tsRange", 4.0f); };
+    auto song = testsig::trapLike (sr, 34.0);
+
+    // Learn: a tone-only listen. The song ends (no audio arrives for a few seconds) and it's done,
+    // with nothing else changed.
+    auto a = makeProcessor (sr, 512, false);
+    setUp (*a);
+    FakePlayHead head;
+    a->setPlayHead (&head);
+    const int reportBefore = a->autoMaster.getReportVersion();
+    REQUIRE (a->autoMaster.start (AutoMasterController::toneOnly));
+    play (*a, head, song);
+    CHECK (a->autoMaster.getState() == AutoMasterController::listening);
+    juce::Thread::sleep (4200);
+    a->autoMaster.tick();
+    CHECK (a->autoMaster.getState() == AutoMasterController::idle);
+    REQUIRE (a->toneTarget.isSet());
+    const auto learned = a->toneTarget.get();
+    CHECK (std::abs (learned.seconds - 34.0) < 0.05);
+    CHECK (a->autoMaster.getReportVersion() == reportBefore);
+    CHECK (a->parameters.getRawParameterValue ("tsAmount")->load() == 60.0f);
+    CHECK (a->parameters.getRawParameterValue ("drive")->load() == 0.0f);
+
+    // Saved with the song, back exactly as it was.
+    juce::MemoryBlock state;
+    a->getStateInformation (state);
+    auto b = makeProcessor (sr, 512, false);
+    b->setStateInformation (state.getData(), (int) state.getSize());
+    REQUIRE (b->toneTarget.isSet());
+    CHECK (b->toneTarget.get().bandDb == learned.bandDb);
+    CHECK (std::abs (b->toneTarget.get().seconds - learned.seconds) < 1.0e-9);
+
+    // The restored song plays exactly like one given the same target, and not like following the music.
+    auto direct = makeProcessor (sr, 512, false);
+    setUp (*direct);
+    direct->toneTarget.set (learned);
+    auto follow = makeProcessor (sr, 512, false);
+    setUp (*follow);
+    const auto clip = testsig::trapLike (sr, 8.0, 3);
+    const auto restoredOut = renderFixed (*b, clip, 512);
+    CHECK (maxAbsDiff (restoredOut, renderFixed (*direct, clip, 512)) == 0.0);
+    CHECK (maxAbsDiff (restoredOut, renderFixed (*follow, clip, 512)) > 1.0e-4);
+
+    // A song saved before stored targets existed follows the music, exactly as it did.
+    auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+    REQUIRE (xml != nullptr);
+    CHECK (xml->hasAttribute ("toneTarget"));
+    xml->removeAttribute ("toneTarget");
+    juce::MemoryBlock older;
+    juce::AudioProcessor::copyXmlToBinary (*xml, older);
+    auto old = makeProcessor (sr, 512, false);
+    old->toneTarget.set (learned);                        // whatever it had is replaced by the song's state
+    old->setStateInformation (older.getData(), (int) older.getSize());
+    CHECK_FALSE (old->toneTarget.isSet());
+    auto fresh = makeProcessor (sr, 512, false);
+    setUp (*fresh);
+    CHECK (maxAbsDiff (renderFixed (*old, clip, 512), renderFixed (*fresh, clip, 512)) == 0.0);
+
+    // A damaged or future-format target is ignored rather than half-read.
+    xml->setAttribute ("toneTarget", "{\"format\": 9, \"bands\": [1, 2]}");
+    juce::MemoryBlock odd;
+    juce::AudioProcessor::copyXmlToBinary (*xml, odd);
+    b->setStateInformation (odd.getData(), (int) odd.getSize());
+    CHECK_FALSE (b->toneTarget.isSet());
+
+    // Learn on too little music at the song's level says so and keeps what it had.
+    b->toneTarget.set (learned);
+    REQUIRE (b->autoMaster.start (AutoMasterController::toneOnly));
+    FakePlayHead head2;
+    b->setPlayHead (&head2);
+    play (*b, head2, testsig::musicLike (sr, 6.0, -14.0, 2));
+    CHECK_FALSE (b->autoMaster.finish());                  // under 12 s: keeps listening
+    b->autoMaster.cancel();
+    CHECK (b->toneTarget.get().bandDb == learned.bandDb);
+}
+
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:
 // a function-local static would be torn down after JUCE's own shutdown objects and crash on exit.
 int main (int argc, char* argv[])

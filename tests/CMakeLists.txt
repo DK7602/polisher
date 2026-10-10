@@ -23,7 +23,8 @@ add_executable(polisher_tests
     test_unlimiter.cpp
     test_validation.cpp
     test_reference.cpp
-    test_monitoring.cpp)
+    test_monitoring.cpp
+    test_songlistener.cpp)
 
 target_link_libraries(polisher_tests PRIVATE polisher_dsp Catch2::Catch2WithMain)
 set_target_properties(polisher_tests PROPERTIES FOLDER "Polisher")
@@ -39,7 +40,8 @@ if(POLISHER_BUILD_PLUGIN)
         plugin/test_plugin.cpp
         ${CMAKE_SOURCE_DIR}/plugin/PluginProcessor.cpp
         ${CMAKE_SOURCE_DIR}/plugin/AutoMasterController.cpp
-        ${CMAKE_SOURCE_DIR}/plugin/ReferenceTrack.cpp)
+        ${CMAKE_SOURCE_DIR}/plugin/ReferenceTrack.cpp
+        ${CMAKE_SOURCE_DIR}/plugin/ToneTargetStore.cpp)
     target_include_directories(polisher_plugin_tests PRIVATE ${CMAKE_SOURCE_DIR}/plugin)
     target_compile_definitions(polisher_plugin_tests PRIVATE
         POLISHER_HEADLESS=1

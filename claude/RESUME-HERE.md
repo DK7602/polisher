@@ -69,6 +69,38 @@ Auto-Master: Trap and R&B -> Bass only (falls back to Full when the part heard h
 harmonics targets, lands them within 0.2 dB (test +-2). UI: Focus seg cell, Learn + TRY THIS, chain readout
 "· bass". NOT YET HEARD by the user: ask for a phone-speaker A/B (Bass only, Tube, Drive +9, MATCH).
 
+## Whole-song Auto-Master + Tone Steady stored target (after v0.15.0, worktree agent)
+Flow: press Auto-Master, play the song; it keeps listening (no stop at 12 s) and finishes by itself when the song
+ends (4 s without music, silent blocks OR no blocks wall-clock, after >= 30 s of music), on FINISH / a click from
+12 s of music on (before: a click cancels), or at 15 min. dsp polisher::SongListener (new): audio thread, fixed
+memory from prepare (~10 MB at 48k): K-weighted 100 ms hop energies (+ DAW timeline time per hop from the playhead,
+only while playing), the loudest 12 s window kept as 100 ms pieces from a pool of 2W+2 (recent / best index
+lists change hands, no copy; exact re-sum per hop; earliest of equals like LoudestPartFinder), and Tone Steady's
+own frame measure (stage FFT size, Hann, ERB bands via new StemEQ::makeBands / bandCentreHz) -> 1 s block
+log-means of band-dB-relative-to-frame. toneTarget() = per-band MEDIAN over blocks within 15 dB of the song's
+power-mean level (>= 8 blocks). stats(): BS.1770 integrated + EBU 3342 LRA from the hops (match LoudnessMeter
+within 0.01 LU on a 2:30 song), loudest part position. AutoMasterController: capture(buffer, hostSeconds)
+with a seq_cst busy-flag handshake (takeListener) so the message thread owns the listener after a state change;
+listener allocated in start() (message thread); tick() = timer body (tests call it); report gets "listened"
+text + "listen" {heard, songLufs, songLra, loudStart/End, loudLufs, fromHost, byItself} + "toneTarget";
+dsp summary drops its "Listened to 12 s" head when settings.songSeconds > 0. Mode toneOnly = Tone Steady LEARN
+(only stores the tone). A short Auto-Master run (< 30 s) keeps a longer-learned tone; LEARN always replaces.
+Tone Steady target: ToneSteadyParams::target (ToneTarget, 64 floats) = stored tone (input-referenced) moved by
+the Tonal EQ in front (toneTargetAtStage: EQ response at band centres, recomputed on EQ / target / rate change in
+updateLimiterParams, allocation-free). In target mode the stage measures the frame BEFORE the Stem EQ move and
+tamer cuts, tsLong = target (no learning, no re-learn), arrangement guard: below 160 Hz |drift| 4->6 dB fades
+the correction (808 in/out), elsewhere only lifts fade 6->9 dB (missing parts not faked back; harsh/muddy drifts
+still cut). Running mode untouched (no target). Stored as XML attribute "toneTarget" (JSON, format 1) by
+plugin/ToneTargetStore (SpinLock; audio thread try-locks in fetch); no attribute = follows the music (old songs);
+Auto-Master undo restores the previous target (one level; the snapshots/undo agent should fold it into
+multi-step undo). Measured: chorus rendered from bar 1 vs from the chorus (on the STFT grid) 9e-7 with a target
+vs 2e-3 following the music after 20 s; 808 after a 16 s intro: low end -0.0..+0.4 dB; 808 only 15 s of 75:
+>= -0.26 dB; a muddy passage still cut -2.2 dB. Off-grid start points still differ slightly (any STFT stage).
+UI: listening view in Learn (heard, loudest part so far, FINISH NOW / CANCEL), button text, green bar from 12 s,
+Tone Steady Target cell (LEARN / CLEAR, "your song · 2:47" / "following the music") + Learn texts, report lines.
+Frame props amMode/amHeard/amLoudAt/amLoudLufs/amCanFinish/amByItself/tsTarget/tsLearnFail; native functions
+finishAutoMaster, clearToneTarget, startAutoMaster("tone"). NOT YET HEARD by the user.
+
 ## 2026-10-10 session (user asked: do all five of the audit follow-ups, one after the other, overnight)
 1. Unlimiter header button fixed: it toggled the GLOBAL bypass (A) instead of ulOn. app.js now has one table
    HEAD_POWER of every module's own switch (the Maximizer's button stays the global bypass); ulOn host changes

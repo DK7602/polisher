@@ -332,7 +332,17 @@ void PolisherAudioProcessor::updateLimiterParams()
 
     unlimiter.setParams (moduleParams.unlimiter (p.bypassed));
     stemEq.setParams (moduleParams.stem (p.bypassed));
-    stemEq.setToneSteady (moduleParams.steady (p.bypassed));
+    // Tone Steady holds the song to its stored tone when there is one, moved by the Tonal EQ in front.
+    auto steady = moduleParams.steady (p.bypassed);
+    const bool newTone = toneTarget.fetch (songTone, songToneVersion);
+    if (newTone || getSampleRate() != stageToneRate || e.enabled != stageToneEq.enabled || e.gainDb != stageToneEq.gainDb || e.freqHz != stageToneEq.freqHz)
+    {
+        stageToneEq = e;
+        stageToneRate = getSampleRate();
+        stageTone = polisher::toneTargetAtStage (songTone, e, stageToneRate);
+    }
+    steady.target = stageTone;
+    stemEq.setToneSteady (steady);
     stemEq.setResonance (moduleParams.resonance (p.bypassed));
     dynamics.setParams (moduleParams.dynamics (p.bypassed));
     saturation.setParams (moduleParams.saturation (p.bypassed));
@@ -365,9 +375,14 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
 
     // Fresh loudness measurement each time the host transport starts (optional).
     bool isPlaying = wasPlaying;
+    double hostSeconds = -1.0;   // where this block sits on the DAW's timeline (Auto-Master's report), if known
     if (auto* hostPlayHead = getPlayHead())
         if (auto position = hostPlayHead->getPosition())
+        {
             isPlaying = position->getIsPlaying();
+            if (const auto t = position->getTimeInSeconds(); t.hasValue() && isPlaying)
+                hostSeconds = *t;
+        }
     const bool justStarted = isPlaying && ! wasPlaying;
     wasPlaying = isPlaying;
 
@@ -434,7 +449,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
 
     inputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     inputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
-    autoMaster.capture (buffer);   // the untouched mix, while Auto-Master is listening
+    autoMaster.capture (buffer, hostSeconds);   // the untouched mix, while Auto-Master is listening
 
     // Input Trim (ramped per block): turns a too-hot mix down before the whole chain. The input meter,
     // the spectrum's "your mix" line, MATCH and Auto-Master all take the mix as it arrives, above.
@@ -672,6 +687,9 @@ void PolisherAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
         // Match ref: the reference song's measurements and name (no audio). Absent when none is loaded.
         if (const auto ref = reference.getJsonForSaving(); ref.isNotEmpty())
             xml->setAttribute ("amReference", ref);
+        // Tone Steady's stored target (the song's own tone). Absent when it follows the music.
+        if (const auto tone = toneTarget.toJson(); tone.isNotEmpty())
+            xml->setAttribute ("toneTarget", tone);
         copyXmlToBinary (*xml, destData);
     }
 }
@@ -683,8 +701,10 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
         {
             const auto savedReport = xml->getStringAttribute ("amReport");
             const auto savedReference = xml->getStringAttribute ("amReference");   // "" in states from before Match ref
+            const auto savedTone = xml->getStringAttribute ("toneTarget");         // "": Tone Steady follows the music (as before)
             xml->removeAttribute ("amReport");
             xml->removeAttribute ("amReference");
+            xml->removeAttribute ("toneTarget");
             // Stem EQ Keep loudness (added after v0.15.0) is on for new instances, but a song saved before it
             // existed was mixed without it: load that state with it off, so it sounds as it did.
             // (JUCE would give a control missing from the state its default, which is on.)
@@ -700,6 +720,7 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
             parameters.replaceState (juce::ValueTree::fromXml (*xml));
             autoMaster.onStateRestored (savedReport);
             reference.restoreFromJson (savedReference);
+            toneTarget.restoreFromJson (savedTone);
         }
 }
 

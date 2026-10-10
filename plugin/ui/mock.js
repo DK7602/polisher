@@ -78,8 +78,20 @@
   window.__mockMonitor = mon;
   const monGain = [0, 18, 12, 20, 9, 0, 0, 0, 0, 15, 15, 15, 15];
   const monUnder = [-100, -33, -27, -35, -24, -6, -9, -14, -20, -30, -30, -30, -30];
-  // Simulated Auto-Master (listening runs 3x faster than the real 12 s).
-  const am = { state: 0, progress: 0, undo: false, version: 0, report: "", snapshot: null };
+  // Simulated Auto-Master: it "listens" to a 2:30 song 30x faster than real time (its loudest part at
+  // 0:54), finishes by itself at the song's end (or on FINISH from 12 s of music on), then thinks for
+  // 0.9 s. Mode 1 is Tone Steady's LEARN: it only stores the song's tone (toneTarget: seconds heard).
+  const SONG = 150, LOUD_AT = 54;
+  const am = { state: 0, mode: 0, heard: 0, byItself: false, undo: false, version: 0, report: "", snapshot: null,
+               toneTarget: 0, toneBefore: 0, toneFail: 0 };
+  window.__mockAm = am;
+  const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+  function amDecide(byItself) {
+    am.byItself = byItself;
+    if (am.mode === 1) { am.toneTarget = am.heard; am.state = 0; return; }
+    am.state = 2;
+    setTimeout(amFinish, 900);
+  }
   const setSlider = (name, v) => { sliders[name].value = v; send("__juce__slider" + name, { eventType: "valueChanged", value: v }); };
   const setToggle = (name, v) => { toggles[name] = v; send("__juce__toggle" + name, { eventType: "valueChanged", value: v }); };
   const setCombo = (name, index) => {   // by choice index, like the plug-in's Auto-Master
@@ -100,10 +112,17 @@
       mixStats: { bandDb: [-6.1, 4.4, 2.9, 0.3, -1.4, -4.6, -11.5], bassWidth: 42, midSide: -15.2, highSide: -11.0, subVsBass: -0.8 },
       masterStats: { bandDb: [-4.7, 3.6, 1.5, 0.1, -1.0, -3.1, -8.2], bassWidth: 3, midSide: -13.9, highSide: -8.3, subVsBass: 0.1 },
     } : {};
+    am.toneBefore = am.toneTarget;
+    if (!(am.heard < 30 && am.heard < am.toneTarget)) am.toneTarget = am.heard;   // a short listen keeps a longer-learned tone
+    const whole = am.heard >= 14, loudAt = whole ? Math.min(LOUD_AT, am.heard - 12) : 0;
     am.report = JSON.stringify({
-      ok: true, stemSuggest: [2, 0, 0, 0], genre: "Trap / Hip-Hop", intensity: "Balanced", target: "Loud \u22129", values,
-      inputLufs: -17.8, outputLufs: -9.0, targetLufs: -9.0, ...refPart,
-      summary: "Listened to 12 s of the loudest part. " + (rp ? `Matched to your reference \u201c${rp.name}\u201d instead of typical Trap / Hip-Hop masters: tone, loudness, stereo width and low end aim for it, part of the way. ` : "") + "Your mix measured \u221217.8 LUFS with peaks at \u22120.4 dBTP. The master now measures \u22129.0 LUFS with true peak \u22121.0 dBTP. The full song will read about 1 LU lower than this loud section, which is normal.",
+      ok: true, time: new Date().toISOString() + "#" + am.version, stemSuggest: [2, 0, 0, 0], genre: "Trap / Hip-Hop", intensity: "Balanced", target: "Loud \u22129", values,
+      inputLufs: -17.8, outputLufs: -9.0, targetLufs: -9.0, capturedLufs: -17.8, ...refPart,
+      listened: whole ? `Listened to ${mmss(am.heard)} of your song; the loudest part (${mmss(loudAt)}\u2013${mmss(loudAt + 12)}, usually the hook or drop) set the levels.`
+                      : `Listened to ${mmss(am.heard)} of your song and set the levels from it.`,
+      listen: { heard: am.heard, songLufs: -19.9, songLra: 6.1, loudStart: loudAt, loudEnd: loudAt + 12, loudLufs: -17.6, fromHost: true, byItself: am.byItself },
+      toneTarget: am.toneTarget,
+      summary: (rp ? `Matched to your reference \u201c${rp.name}\u201d instead of typical Trap / Hip-Hop masters: tone, loudness, stereo width and low end aim for it, part of the way. ` : "") + "Your mix measured \u221217.8 LUFS with peaks at \u22120.4 dBTP. The master now measures \u22129.0 LUFS with true peak \u22121.0 dBTP in this loudest part. The whole song reads lower than its loudest part, which is normal.",
       notes: ["FIX IT IN THE MIX: your mix is 7.4 dB higher in the low mids (180\u2013600 Hz) than typical Trap / Hip-Hop masters. The master EQ only fixes part of that; adjusting the main source in the mix (often guitars, pads or a boomy vocal) will sound better."],
       reasons: [
         R("eq", "Low Mid", "\u22121.4 dB", "Your mix has about 7.4 dB more low mids (180\u2013600 Hz) than typical Trap / Hip-Hop masters, so a 1.4 dB cut closes part of the gap. Less mud and boxiness, so the mix reads clearer."),
@@ -127,7 +146,9 @@
     am.undo = true; am.version++; am.state = 0;
   }
   setInterval(() => {
-    if (am.state === 1) { am.progress = Math.min(1, am.progress + 0.1 / 4); if (am.progress >= 1) { am.state = 2; setTimeout(amFinish, 900); } }
+    if (am.state !== 1) return;
+    am.heard = Math.min(SONG, am.heard + 3);         // 0.1 s here = 3 s of the song
+    if (am.heard >= SONG) amDecide(true);            // the song ended: it finishes by itself
   }, 100);
 
   const send = (id, obj) => setTimeout(() => window.__JUCE__.backend.emitByBackend(id, JSON.stringify(obj)), 0);
@@ -135,7 +156,7 @@
   window.__JUCE__ = {
     initialisationData: {
       __juce__platform: [],
-      __juce__functions: ["resetMeter", "startAutoMaster", "cancelAutoMaster", "undoAutoMaster", "getAutoMasterReport",
+      __juce__functions: ["resetMeter", "startAutoMaster", "finishAutoMaster", "cancelAutoMaster", "undoAutoMaster", "getAutoMasterReport", "clearToneTarget",
                           "loadReference", "clearReference", "getReference", "setMonitor"],
       __juce__registeredGlobalEventIds: [],
       __juce__sliders: Object.keys(sliders),
@@ -164,8 +185,13 @@
       } else if (eventId === "__juce__invoke") {
         let result = true;
         if (payload.name === "resetMeter") integratedAcc = [];   // (the mock has no separate short-term history)
-        if (payload.name === "startAutoMaster") { am.state = 1; am.progress = 0; }
+        if (payload.name === "startAutoMaster") {
+          if (am.state === 2) result = false;
+          else Object.assign(am, { state: 1, heard: 0, byItself: false, mode: (payload.params || [])[0] === "tone" ? 1 : 0 });
+        }
+        if (payload.name === "finishAutoMaster") { result = am.state === 1 && am.heard >= 12; if (result) amDecide(false); }
         if (payload.name === "cancelAutoMaster" && am.state === 1) am.state = 0;
+        if (payload.name === "clearToneTarget") am.toneTarget = 0;
         if (payload.name === "getAutoMasterReport") result = am.report;
         if (payload.name === "setMonitor") {
           const [listen, mono, phone] = payload.params || [];
@@ -187,6 +213,7 @@
               if (combos[k].value !== v) { combos[k].value = v; send("__juce__comboBox" + k, { eventType: "valueChanged", value: v }); }
           }
           am.undo = false; am.report = ""; am.version++;
+          am.toneTarget = am.toneBefore;   // Tone Steady's reference as it was, too
         }
         send("__juce__complete", { promiseId: payload.resultId, result });
       }
@@ -230,7 +257,10 @@
       tame: toggles.bassOn && sliders.bassTame.value > 0 ? +(-sliders.bassTame.value / 100 * 5 * beat).toFixed(1) : 0,
       punch: toggles.bassOn && sliders.bassPunch.value > 0 ? +(sliders.bassPunch.value / 100 * 4 * beat).toFixed(1) : 0,
       bassWidth: 42, corr: +(0.55 - (sliders.imgMid.value + sliders.imgHigh.value - 200) / 400).toFixed(2), matchDb: +(-(11 * (1 - Math.exp(-drive / 11)))).toFixed(1),
-      amState: am.state, amProgress: +am.progress.toFixed(2), amHearing: true, amUndo: am.undo, amReport: am.version,
+      amState: am.state, amProgress: am.state === 1 ? +Math.min(1, am.heard / 12).toFixed(2) : 0, amHearing: true, amUndo: am.undo, amReport: am.version,
+      amMode: am.mode, amHeard: am.heard, amCanFinish: am.state === 1 && am.heard >= 12, amByItself: am.byItself,
+      amLoudAt: am.heard < 12 ? -1 : Math.min(LOUD_AT, am.heard - 12), amLoudLufs: am.heard >= LOUD_AT + 12 ? -17.6 : -21.2,
+      tsTarget: am.toneTarget, tsLearnFail: am.toneFail,
       refVersion: ref.version, refState: ref.state,
       clip: toggles.clipOn && !bypass ? +(-Math.max(0, drive - 1.5 + sliders.clipLevel.value * -0.5) * 0.5 * (0.3 + 0.7 * beat)).toFixed(1) : 0,
       dynGr: [1, 2, 3, 4].map((b) => {

@@ -162,6 +162,12 @@ struct AutoMasterSettings
         (clamped to kRefMinLufs .. kRefMaxLufs), stereo width and low end. The genre still decides
         what a reference can't show (how much clipping, compression and saturation suit the style). */
     ReferenceProfile reference;
+    /** The song's own tone (SongListener::toneTarget, as the mix arrives), when it listened to the song:
+        Tone Steady holds the song to it (moved by the chosen Tonal EQ), and every render hears it so. */
+    ToneTarget songTone;
+    /** How much of the song the plug-in listened to before handing over its loudest part (0: only this
+        clip). The plug-in's report says that itself, so the summary doesn't repeat it. */
+    double songSeconds = 0.0;
 };
 
 struct AutoMasterResult

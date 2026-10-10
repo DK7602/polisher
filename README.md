@@ -46,6 +46,8 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | Match ref: load a released song (WAV / AIFF / FLAC / MP3); its loudest 30 s is measured (tone, loudness, width, low end) and saved with the project (no audio); Auto-Master aims for it instead of the genre (part of the way, same limits), says honestly when it can't get as loud, and Learn compares reference / mix / master; dashed reference curve on the spectrum | Done (v0.15) |
 | Saturation Focus "Bass only" (808 to phone): only the low end (LR4 below 150 Hz) feeds the curve, its added harmonics are high-passed at 70 Hz and mixed onto the untouched dry signal, so the 808 gets harmonics phone speakers can play while vocals and hats stay clean (a 2 kHz tone at full Drive: THD -156 dB vs -13 dB in Full); Full is bit-for-bit the old sound; click-free switching; Auto-Master picks it for Trap and R&B | Done (after v0.15.0) |
 | Listening aids (monitoring only, never saved, never in an offline export, off when the window closes, red banner while on): Listen buttons that play only what Saturation adds / the Soft Clipper, Resonance Tamer, Maximizer and a Dynamics band take off (sample-aligned, at their level in the master, quiet ones turned up with the amount shown), Dynamics band solos, MONO and PHONE (mono, ~300 Hz–8 kHz) checks next to MATCH; click-free switching | Done (after v0.15.0) |
+| Whole-song Auto-Master: press it and play the song; it keeps listening (up to 15 min, fixed memory: the loudest 12 s of audio in 100 ms pieces that change hands without copying, plus 100 ms loudness and 1 s tone readings; allocation-free on the audio thread) and finishes by itself when the song ends (4 s without music after 30 s of it), or on FINISH from 12 s on; decides from the loudest 12 s; report: "Listened to 2:47 of your song; the loudest part (0:54–1:06) set the levels", whole-song LUFS / LRA | Done (after v0.15.0) |
+| Tone Steady stored target: the song's own tone (median of 1 s readings per band, learned by Auto-Master or Tone Steady's LEARN, saved with the project, follows the Tonal EQ); held to it, preview and export match from any start point (measured: 9e-7 vs 2e-3 following the music); an 808 entering after an intro isn't cut; CLEAR / old songs: follows the music as before | Done (after v0.15.0) |
 
 ## Validation
 
@@ -92,6 +94,7 @@ dsp/        Framework-free C++20 engine (no JUCE): unit-testable, reusable offli
     LoudnessTargeting.h  Offline render + drive search used by Auto-Master
     LevelMatch.h         MATCH: loudness-matched, clip-free A/B gains
     StemEQ.h             Stem EQ + Tone Steady + Resonance Tamer (one STFT stage, model in StemNetWeights.h)
+    SongListener.h       Auto-Master's whole-song listen: loudest part, song loudness, the song's tone
     Unlimiter.h          Restores hit contrast on squashed audio
     Monitoring.h         Listening aids: Listen / Solo switch (ListenMix), MONO / PHONE checks (MonitorOutput)
 plugin/     JUCE AudioProcessor, web-view editor (+ basic native fallback editor when no web view exists)

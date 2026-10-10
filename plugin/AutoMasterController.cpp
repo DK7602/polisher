@@ -1,6 +1,8 @@
 #include "AutoMasterController.h"
 #include "ModuleParams.h"
 
+#include <thread>
+
 namespace
 {
     juce::var reasonsToVar (const std::vector<polisher::AutoMasterReason>& reasons)
@@ -32,45 +34,79 @@ namespace
         return juce::var (o);
     }
 
+    juce::String mmss (double seconds)
+    {
+        const int t = static_cast<int> (std::lround (std::max (0.0, seconds)));
+        return juce::String (t / 60) + ":" + juce::String (t % 60).paddedLeft ('0', 2);
+    }
+
+    /** One line for the top of the report: how much of the song it heard and which part set the levels. */
+    juce::String listenedText (const polisher::SongStats& st, double windowSeconds)
+    {
+        juce::String text = "Listened to " + mmss (st.heardSeconds) + " of your song";
+        if (st.heardSeconds < windowSeconds + 2.0)
+            return text + " and set the levels from it.";
+        return text + "; the loudest part (" + mmss (st.loudestStartSeconds) + juce::String::fromUTF8 ("\xE2\x80\x93")
+             + mmss (st.loudestStartSeconds + st.loudestSeconds) + (st.positionFromHost ? "" : " into what I heard")
+             + ", usually the hook or drop) set the levels.";
+    }
+
     const char* const kIntensityNames[] = { "Gentle", "Balanced", "Punchy" };
     const char* const kTargetNames[] = { "Stream \xE2\x88\x92" "14", "Loud \xE2\x88\x92" "9", "Club \xE2\x88\x92" "7" };
 }
 
-AutoMasterController::AutoMasterController (juce::AudioProcessorValueTreeState& s, const ReferenceTrack& ref)
-    : state (s), reference (ref)
+AutoMasterController::AutoMasterController (juce::AudioProcessorValueTreeState& s, const ReferenceTrack& ref, ToneTargetStore& tone)
+    : state (s), reference (ref), toneTarget (tone)
 {
-    const auto maxSamples = static_cast<size_t> (kMaxSampleRate * kListenSeconds);
-    captureL.assign (maxSamples, 0.0f);
-    captureR.assign (maxSamples, 0.0f);
 }
 
 AutoMasterController::~AutoMasterController()
 {
     stopTimer();
+    stateFlag.store (idle);
     pool.removeAllJobs (true, 60000);
 }
 
 void AutoMasterController::prepare (double newSampleRate)
 {
-    if (newSampleRate <= 0.0)
-        return;
-    const double old = sampleRate.exchange (newSampleRate);
-    capacity.store (static_cast<int> (std::min (newSampleRate * kListenSeconds, static_cast<double> (captureL.size()))));
-    if (old != newSampleRate && stateFlag.load() == listening)
-        written.store (0);   // different sample rate: start the listening over
+    if (newSampleRate > 0.0)
+        sampleRate.store (newSampleRate);   // a listen at another rate starts over (tick)
 }
 
-bool AutoMasterController::start()
+void AutoMasterController::takeListener (State newState)
 {
-    if (getState() == analysing || capacity.load() == 0)
+    stateFlag.store (newState);
+    while (captureBusy.load())
+        std::this_thread::yield();
+}
+
+bool AutoMasterController::start (Mode m)
+{
+    const double rate = sampleRate.load();
+    if (getState() == analysing || rate <= 0.0)
         return false;
+    takeListener (idle);
+    if (! listener.isPrepared() || listener.getSampleRate() != rate)
+        listener.prepare (rate, kWindowSeconds, kMaxListenSeconds);   // allocates: the audio thread is out of it
+    else
+        listener.reset();
     ++session;
-    written.store (0);
-    heardAudio.store (false);
+    mode.store (m);
     hearingAudio = false;
-    quietTicks = 0;
-    stateFlag.store (listening, std::memory_order_release);
+    autoFinished = false;
+    lastHeard = 0;
+    lastMusicMs = juce::Time::getMillisecondCounterHiRes();
+    stateFlag.store (listening);
     startTimerHz (15);
+    return true;
+}
+
+bool AutoMasterController::finish()
+{
+    if (! canFinish())
+        return false;
+    autoFinished = false;
+    launchAnalysis();
     return true;
 }
 
@@ -84,19 +120,56 @@ void AutoMasterController::cancel()
     }
 }
 
-float AutoMasterController::getProgress() const noexcept
+double AutoMasterController::getHeardSeconds() const noexcept
 {
-    const int cap = capacity.load();
-    return cap > 0 ? juce::jmin (1.0f, static_cast<float> (written.load()) / static_cast<float> (cap)) : 0.0f;
+    return listener.isPrepared() ? listener.heardSeconds() : 0.0;
 }
 
-void AutoMasterController::timerCallback()
+double AutoMasterController::getLoudestStartSeconds() const noexcept
 {
-    if (heardAudio.exchange (false)) { hearingAudio = true; quietTicks = 0; }
-    else if (++quietTicks > 20)       hearingAudio = false;   // ~1.3 s without music
+    return listener.isPrepared() ? listener.loudestStartSeconds() : -1.0;
+}
 
-    if (getState() == listening && written.load (std::memory_order_acquire) >= capacity.load())
-        launchAnalysis();
+double AutoMasterController::getLoudestLufs() const noexcept
+{
+    return listener.isPrepared() ? listener.loudestLufs() : -100.0;
+}
+
+float AutoMasterController::getProgress() const noexcept
+{
+    return getState() == listening ? static_cast<float> (juce::jmin (1.0, getHeardSeconds() / kMinListenSeconds)) : 0.0f;
+}
+
+void AutoMasterController::tick()
+{
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    if (getState() == listening)
+    {
+        // The host changed the sample rate: start the listening over at the new rate.
+        const double rate = sampleRate.load();
+        if (rate > 0.0 && listener.getSampleRate() != rate)
+        {
+            takeListener (idle);
+            listener.prepare (rate, kWindowSeconds, kMaxListenSeconds);
+            lastHeard = 0;
+            lastMusicMs = now;
+            stateFlag.store (listening);
+        }
+        const auto heard = listener.heardSamples();
+        if (heard != lastHeard) { lastHeard = heard; lastMusicMs = now; hearingAudio = true; }
+        else if (now - lastMusicMs > 1300.0) hearingAudio = false;   // ~1.3 s without music
+
+        // The song ended: enough music, then a few seconds without it (silent blocks, or no blocks at all
+        // when the host stops processing with the transport). Or it heard as much as it may.
+        const bool songEnded = listener.heardSeconds() >= kAutoFinishSeconds
+                            && (static_cast<double> (listener.silentSamples()) >= kSongEndSilenceSeconds * listener.getSampleRate()
+                                || now - lastMusicMs >= kSongEndSilenceSeconds * 1000.0);
+        if (songEnded || listener.isFull())
+        {
+            autoFinished = true;
+            launchAnalysis();
+        }
+    }
 
     if (resultReady.exchange (false))
     {
@@ -120,13 +193,33 @@ void AutoMasterController::timerCallback()
 
 void AutoMasterController::launchAnalysis()
 {
-    stateFlag.store (analysing);
+    takeListener (analysing);   // the audio thread is out of the listener from here on
 
-    const int cap = capacity.load();
-    polisher::AudioClip clip;
-    clip.sampleRate = sampleRate.load();
-    clip.channels = { std::vector<float> (captureL.begin(), captureL.begin() + cap),
-                      std::vector<float> (captureR.begin(), captureR.begin() + cap) };
+    auto tone = listener.toneTarget();   // the song's tone for Tone Steady
+    pendingStats = listener.stats();
+
+    if (getMode() == toneOnly)
+    {
+        // Learn only: Tone Steady gets the song's tone; nothing else changes. The host is told the
+        // song changed (it's not a parameter), so the project asks to be saved.
+        if (tone.valid)
+        {
+            toneTarget.set (tone);
+            state.processor.updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+        }
+        else
+            ++toneLearnFailures;
+        stateFlag.store (idle);
+        stopTimer();
+        return;
+    }
+
+    // A short Auto-Master listen (finished early) doesn't replace a tone learned from more of the song.
+    const auto stored = toneTarget.get();
+    if (stored.valid && (! tone.valid || (tone.seconds < kAutoFinishSeconds && tone.seconds < stored.seconds)))
+        tone = stored;
+
+    polisher::AudioClip clip = listener.loudestWindow();
 
     auto choice = [this] (const char* id) { return juce::roundToInt (state.getRawParameterValue (id)->load()); };
     polisher::AutoMasterSettings settings;
@@ -139,6 +232,8 @@ void AutoMasterController::launchAnalysis()
     for (int k = 0; k < polisher::kStems; ++k)
         settings.stem.gainDb[static_cast<size_t> (k)] = state.getRawParameterValue (ModuleParams::stemIds[k])->load();
     settings.reference = reference.getProfile();   // Match ref (invalid = none: genre targets)
+    settings.songTone = tone;                       // Tone Steady holds the song to its own tone
+    settings.songSeconds = pendingStats.heardSeconds;   // the report says itself how much it heard
     pendingSettings = settings;
 
     const int thisSession = session;
@@ -186,6 +281,22 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
     doc->setProperty ("target", juce::String::fromUTF8 (kTargetNames[static_cast<int> (s.target)]));
     doc->setProperty ("time", juce::Time::getCurrentTime().toISO8601 (true));
 
+    // What it listened to: how much of the song, the whole song's loudness, where the loudest part is.
+    {
+        const auto& st = pendingStats;
+        auto* listen = new juce::DynamicObject();
+        listen->setProperty ("heard", st.heardSeconds);
+        listen->setProperty ("songLufs", st.integratedLufs);
+        listen->setProperty ("songLra", st.loudnessRangeLu);
+        listen->setProperty ("loudStart", st.loudestStartSeconds);
+        listen->setProperty ("loudEnd", st.loudestStartSeconds + st.loudestSeconds);
+        listen->setProperty ("loudLufs", st.loudestLufs);
+        listen->setProperty ("fromHost", st.positionFromHost);
+        listen->setProperty ("byItself", autoFinished);   // the song ended (not the Finish button)
+        doc->setProperty ("listen", juce::var (listen));
+        doc->setProperty ("listened", listenedText (st, kWindowSeconds));
+    }
+
     if (r.ok)
     {
         // Undo snapshot of everything Auto-Master may change.
@@ -196,6 +307,12 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
                 if (! rp->getParameterID().startsWith ("am") && rp->getParameterID() != "autoreset"
                     && rp->getParameterID() != "resetOnChange")
                     undoSnapshot.emplace_back (rp, rp->getValue());
+
+        // Tone Steady's target: the song's own tone, as the analysis heard it (undo puts the old one back).
+        undoToneTarget = toneTarget.toJson();
+        toneTarget.set (s.songTone);
+        if (s.songTone.valid)
+            doc->setProperty ("toneTarget", s.songTone.seconds);
 
         const auto& c = r.chain;
         auto* values = new juce::DynamicObject();
@@ -331,6 +448,7 @@ bool AutoMasterController::undo()
     }
     undoSnapshot.clear();
     undoValid.store (false);
+    toneTarget.restoreFromJson (undoToneTarget);   // Tone Steady's reference as it was, too
     setReport ({});
     return true;
 }

@@ -105,13 +105,29 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                                      audioProcessor.requestMeterReset();
                                  complete (true);
                              })
-        .withNativeFunction ("startAutoMaster", [this] (const juce::Array<juce::var>&, auto complete)
+        // startAutoMaster() listens to the song and masters it; startAutoMaster("tone") only learns the
+        // song's tone for Tone Steady. finishAutoMaster() = "use what you've heard" (12 s of music on).
+        .withNativeFunction ("startAutoMaster", [this] (const juce::Array<juce::var>& args, auto complete)
                              {
-                                 complete (audioProcessor.autoMaster.start());
+                                 const bool toneOnly = args.size() > 0 && args[0].toString() == "tone";
+                                 complete (audioProcessor.autoMaster.start (toneOnly ? AutoMasterController::toneOnly
+                                                                                     : AutoMasterController::fullMaster));
+                             })
+        .withNativeFunction ("finishAutoMaster", [this] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 complete (audioProcessor.autoMaster.finish());
                              })
         .withNativeFunction ("cancelAutoMaster", [this] (const juce::Array<juce::var>&, auto complete)
                              {
                                  audioProcessor.autoMaster.cancel();
+                                 complete (true);
+                             })
+        // Tone Steady goes back to following the music (forgets the song's stored tone).
+        .withNativeFunction ("clearToneTarget", [this] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 audioProcessor.toneTarget.clear();
+                                 // Not a parameter: tell the host the song changed, so the project asks to be saved.
+                                 audioProcessor.updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
                                  complete (true);
                              })
         .withNativeFunction ("undoAutoMaster", [this] (const juce::Array<juce::var>&, auto complete)
@@ -348,6 +364,19 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("amHearing",  am.isHearingAudio());
     frame->setProperty ("amUndo",     am.canUndo());
     frame->setProperty ("amReport",   am.getReportVersion());
+    // Whole-song listen: music heard, the loudest part so far (where, how loud), and whether Finish works.
+    frame->setProperty ("amMode",     static_cast<int> (am.getMode()));
+    frame->setProperty ("amHeard",    roundTo (static_cast<float> (am.getHeardSeconds()), 0.1f));
+    frame->setProperty ("amLoudAt",   roundTo (static_cast<float> (am.getLoudestStartSeconds()), 0.1f));
+    frame->setProperty ("amLoudLufs", roundTo (static_cast<float> (am.getLoudestLufs()), 0.1f));
+    frame->setProperty ("amCanFinish", am.canFinish());
+    frame->setProperty ("amByItself", am.finishedByItself());
+    // Tone Steady's stored target: how much of the song it was learned from (0 = following the music).
+    {
+        const auto tone = audioProcessor.toneTarget.get();
+        frame->setProperty ("tsTarget", tone.valid ? roundTo (static_cast<float> (juce::jmax (1.0, tone.seconds)), 0.1f) : 0.0f);
+        frame->setProperty ("tsLearnFail", am.getToneLearnFailures());
+    }
     frame->setProperty ("refVersion", audioProcessor.reference.getVersion());
     frame->setProperty ("refState",   static_cast<int> (audioProcessor.reference.getState()));
     frame->setProperty ("corr",       roundTo (m.correlation.load(), 0.01f));

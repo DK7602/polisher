@@ -1,6 +1,7 @@
 #include "polisher/AutoMaster.h"
 #include "polisher/Denormals.h"
 #include "polisher/FilterDesign.h"
+#include "polisher/SongListener.h"
 
 #include <algorithm>
 #include <cmath>
@@ -883,10 +884,10 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
 
     if (! a.usable)
     {
-        r.summary = "I couldn't hear enough music to master. Press play on the loudest part of your song "
-                    "(the chorus or the drop), then press Auto-Master and let it listen for the whole count.";
+        r.summary = "I couldn't hear enough music to master. Press Auto-Master, then play your song from the start "
+                    "and let it listen until the song ends.";
         r.tipTitle = "TRY AGAIN";
-        r.tip = "Start playback on your chorus or drop, then press Auto-Master. The counter only runs while it hears music.";
+        r.tip = "Press Auto-Master, then play your song from the start. It counts only music, and needs at least 12 seconds of it.";
         return r;
     }
 
@@ -1191,6 +1192,19 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                     " dB on average. " + pct (ts.amount) + " keeps the parts consistent while they keep their own character. Range stays at 3 dB (boosts at most 1.5 dB).");
             reason ("ts", "Speed", ts.speed == 1 ? "Medium" : "Slow", ts.speed == 1 ? "The shifts are large (over 1.2 dB on average at full strength), so Medium, which reacts within about half a second, catches them before they're heard."
                                                                                     : "The shifts are small, so Slow, which reacts over about a second, is enough and is the gentlest setting.");
+        }
+        // The song's own tone, learned while it played: Tone Steady holds every part to it (as the stage
+        // hears it, after this EQ), so playback from any point and the export sound the same.
+        if (s.songTone.valid)
+        {
+            ts.target = toneTargetAtStage (s.songTone, chain.eq, clip.sampleRate);
+            const int secs = static_cast<int> (std::lround (s.songTone.seconds));
+            char heardText[16];
+            std::snprintf (heardText, sizeof heardText, "%d:%02d", secs / 60, secs % 60);
+            reason ("ts", "Target", "Your song",
+                    std::string ("I learned your song's overall tone from the ") + heardText + " I heard. Tone Steady holds every part to it instead of the last few seconds, "
+                    "so what you hear from any start point is what you export. A part that comes or goes (an 808 entering after the intro) is the arrangement, "
+                    "not a drift, and is left alone." + (ts.amount < 0.5 ? " It's ready for when you turn Amount up." : ""));
         }
     }
 
@@ -1742,6 +1756,9 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     // --- Summary -------------------------------------------------------------------------------------
     char head[512];
     std::snprintf (head, sizeof head, "Listened to %.0f s of your mix. ", a.seconds);
+    if (s.songSeconds > 0.0)
+        head[0] = '\0';   // the plug-in's report already says how much of the song it heard and which part this is
+    const bool wholeSong = s.songSeconds >= a.seconds + 2.0;
     if (useRef)
         r.summary = std::string (head) + "Matched to your reference " + refName + " (its loudest part measures " + num (ref.lufs) +
                     " LUFS) instead of typical " + genre + " masters: tone, loudness, stereo width and low end aim for it, part of the way. "
@@ -1752,7 +1769,8 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                 num (arrivesPeak) + " dBTP. Settings: " + genre + ", " + rules.name + ", " + tname +
                 (trimDb < 0.0 ? ". To land on the target, Input Trim turns it down " + num (-trimDb) + " dB first" : std::string()) +
                 ". The master now measures " + num (out.integratedLufs) + " LUFS with true peak " + num (out.truePeakDbtp) +
-                " dBTP. The full song will read about 1 LU lower than this loud section, which is normal.";
+                (wholeSong ? " dBTP in this loudest part. The whole song reads lower than its loudest part, which is normal."
+                           : " dBTP. The full song will read about 1 LU lower than this loud section, which is normal.");
     // --- Stem EQ: suggest a vocal move, never apply it -------------------------------------------------
     // Only the vocal: drums, bass and "other" swing too much with the arrangement (no drums in a ballad,
     // a kick but no 808...) for a usual level to mean anything.

@@ -3,7 +3,9 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "polisher/AutoMaster.h"
+#include "polisher/SongListener.h"
 #include "ReferenceTrack.h"
+#include "ToneTargetStore.h"
 
 #include <atomic>
 #include <memory>
@@ -11,67 +13,70 @@
 
 /** Runs Auto-Master inside the plug-in.
 
-    1. start(): the audio thread copies the incoming mix (before any processing) into a buffer,
-       skipping silence, until it has kListenSeconds of music.
-    2. A background thread runs polisher::autoMaster() on it (analysis, decisions, loudness search).
-    3. Back on the message thread the chosen values are set as normal host parameter changes (so the
-       DAW sees them, and they can be automated or undone), a snapshot is kept for Undo, and the
-       report is saved with the plug-in state so it's still there when the project is reopened.
+    1. start(): the audio thread feeds the incoming mix (before any processing) to a
+       polisher::SongListener while you play the song. It skips silence and keeps, in fixed memory,
+       the loudest kWindowSeconds it has heard, the loudness of every 100 ms and the song's tone.
+    2. It keeps listening until the song ends (kSongEndSilenceSeconds without music after at least
+       kAutoFinishSeconds of it), or finish() ("use what you've heard", from kMinListenSeconds on),
+       or kMaxListenSeconds.
+    3. A background thread runs polisher::autoMaster() on the loudest part (analysis, decisions,
+       loudness search), with the whole song's tone for Tone Steady.
+    4. Back on the message thread the chosen values are set as normal host parameter changes (so the
+       DAW sees them, and they can be automated or undone), a snapshot is kept for Undo, the song's
+       tone goes to Tone Steady (toneTarget), and the report is saved with the plug-in state so it's
+       still there when the project is reopened.
 
-    The capture buffer is allocated once, for the highest supported sample rate, so nothing ever
-    reallocates while the audio thread may be writing. Each run has a session number; a result from
-    an older session is thrown away. Everything except capture() runs on the message thread
-    (prepare() may run on any thread and only touches atomics). */
+    start (toneOnly) listens the same way but only learns the song's tone for Tone Steady.
+
+    The listener's memory is allocated by start() for the current sample rate (on the message thread,
+    never while the audio thread may be using it), so nothing reallocates while the audio thread
+    writes. Each run has a session number; a result from an older session is thrown away. Everything
+    except capture() runs on the message thread (prepare() may run on any thread and only touches
+    atomics). */
 class AutoMasterController final : private juce::Timer
 {
 public:
-    static constexpr double kListenSeconds = 12.0;
-    static constexpr double kMaxSampleRate = 192000.0;
+    static constexpr double kWindowSeconds = 12.0;          // the part it decides from: the loudest it heard
+    static constexpr double kMinListenSeconds = 12.0;       // finish() works from here on
+    static constexpr double kAutoFinishSeconds = 30.0;      // music heard before the song's end finishes it by itself
+    static constexpr double kSongEndSilenceSeconds = 4.0;   // ...this long without music (or without audio at all; 2 bars at 120 BPM)
+    static constexpr double kMaxListenSeconds = 15.0 * 60.0;
     enum State { idle = 0, listening = 1, analysing = 2 };
+    enum Mode { fullMaster = 0, toneOnly = 1 };
 
-    AutoMasterController (juce::AudioProcessorValueTreeState& state, const ReferenceTrack& reference);
+    AutoMasterController (juce::AudioProcessorValueTreeState& state, const ReferenceTrack& reference, ToneTargetStore& toneTarget);
     ~AutoMasterController() override;
 
-    /** Sets the capture length for the sample rate. A capture in progress starts over if the rate
-        changed; otherwise it carries on (hosts often re-prepare on transport start). */
+    /** Remembers the sample rate. A listen in progress starts over if it changed; otherwise it carries
+        on (hosts often re-prepare on transport start). */
     void prepare (double sampleRate);
 
-    /** Audio thread: records the mix while listening. Never allocates or locks. */
+    /** Audio thread: hands the mix to the listener while listening. hostSeconds: the DAW's timeline
+        position of the block (negative: unknown). Never allocates or locks. */
     template <typename Sample>
-    void capture (const juce::AudioBuffer<Sample>& buffer) noexcept
+    void capture (const juce::AudioBuffer<Sample>& buffer, double hostSeconds) noexcept
     {
-        if (stateFlag.load (std::memory_order_acquire) != listening)
-            return;
-        const int nch = buffer.getNumChannels(), n = buffer.getNumSamples();
-        if (nch == 0 || n == 0)
-            return;
-        Sample peak = 0;
-        for (int c = 0; c < nch; ++c)
-            peak = std::max (peak, buffer.getMagnitude (c, 0, n));
-        if (peak < static_cast<Sample> (0.003))   // about -50 dBFS: not playing
-            return;
-        heardAudio.store (true, std::memory_order_relaxed);
-
-        int w = written.load (std::memory_order_acquire);
-        const int cap = capacity.load (std::memory_order_acquire);
-        const int todo = std::min (n, cap - w);
-        if (todo <= 0)
-            return;
-        const Sample* l = buffer.getReadPointer (0);
-        const Sample* r = buffer.getReadPointer (std::min (1, nch - 1));
-        for (int i = 0; i < todo; ++i)
+        // Busy flag first, then the state (both sequentially consistent): whoever stops the listening
+        // either sees this block in progress and waits for it, or this block sees the new state.
+        captureBusy.store (true);
+        if (stateFlag.load() == listening && listener.getSampleRate() == sampleRate.load (std::memory_order_relaxed))
         {
-            captureL[static_cast<size_t> (w + i)] = static_cast<float> (l[i]);
-            captureR[static_cast<size_t> (w + i)] = static_cast<float> (r[i]);
+            const int nch = buffer.getNumChannels(), n = buffer.getNumSamples();
+            if (nch > 0 && n > 0)
+                listener.process (buffer.getReadPointer (0), buffer.getReadPointer (std::min (1, nch - 1)), n, hostSeconds);
         }
-        // If start() reset the count meanwhile, drop this block rather than restore stale progress.
-        written.compare_exchange_strong (w, w + todo, std::memory_order_acq_rel);
+        captureBusy.store (false, std::memory_order_release);
     }
 
     /** False if the plug-in isn't ready yet (no sample rate) or an analysis is still running. */
-    bool start();
+    bool start (Mode mode = fullMaster);
+    /** "Use what you've heard": stops listening and decides from it. False before kMinListenSeconds. */
+    bool finish();
     void cancel();
     bool undo();
+
+    /** What the timer does 15 times a second while listening or analysing (tests call it directly). */
+    void tick();
 
     /** After the host loads a preset or project state: the old undo no longer applies. */
     void onStateRestored (const juce::String& savedReport);
@@ -79,14 +84,27 @@ public:
     juce::String getReportForSaving() const;
 
     State getState() const noexcept           { return static_cast<State> (stateFlag.load()); }
-    float getProgress() const noexcept;        // 0..1 while listening
+    Mode getMode() const noexcept             { return static_cast<Mode> (mode.load()); }
+    float getProgress() const noexcept;        // 0..1: music heard of kMinListenSeconds, while listening
     bool isHearingAudio() const noexcept       { return hearingAudio; }
+    double getHeardSeconds() const noexcept;   // music heard so far (this or the last listen)
+    bool canFinish() const noexcept            { return getState() == listening && getHeardSeconds() >= kMinListenSeconds; }
+    double getLoudestStartSeconds() const noexcept;   // where the loudest part so far starts (-1: none yet)
+    double getLoudestLufs() const noexcept;           // its loudness (-100: none yet)
+    /** Whether the last listen ended by itself because the song ended (or the listen limit). */
+    bool finishedByItself() const noexcept     { return autoFinished; }
+    /** How many tone-only listens heard too little music at the song's level to learn its tone. */
+    int getToneLearnFailures() const noexcept  { return toneLearnFailures; }
+    /** Memory the listen holds (fixed when it starts; it doesn't grow with the song). */
+    std::size_t getListenMemoryBytes() const noexcept { return listener.isPrepared() ? listener.memoryBytes() : 0; }
     bool canUndo() const noexcept              { return undoValid.load() && ! undoSnapshot.empty(); }
     int getReportVersion() const noexcept      { return reportVersion.load(); }
     juce::String getReportJson() const;        // "" when there's no report
 
 private:
-    void timerCallback() override;
+    void timerCallback() override { tick(); }
+    /** Sets a new state and waits until the audio thread is out of capture(), so the listener is ours. */
+    void takeListener (State newState);
     void launchAnalysis();
     void apply (const polisher::AutoMasterResult& result, const polisher::AutoMasterSettings& settings);
     void setParam (const juce::String& id, float value);
@@ -94,16 +112,19 @@ private:
 
     juce::AudioProcessorValueTreeState& state;
     const ReferenceTrack& reference;              // Match ref: when loaded, Auto-Master aims for it
+    ToneTargetStore& toneTarget;                  // Tone Steady's stored target (the song's tone)
 
-    std::vector<float> captureL, captureR;       // sized once, for kMaxSampleRate
-    std::atomic<int> capacity { 0 };
+    polisher::SongListener listener;              // prepared by start() for the current sample rate
     std::atomic<double> sampleRate { 0.0 };
-    std::atomic<int> written { 0 };
-    std::atomic<int> stateFlag { idle };
-    std::atomic<bool> heardAudio { false };
-    bool hearingAudio = false;
-    int quietTicks = 0;
+    std::atomic<int> stateFlag { idle }, mode { fullMaster };
+    std::atomic<bool> captureBusy { false };
+    bool hearingAudio = false, autoFinished = false;
+    std::int64_t lastHeard = 0;                   // message thread: music heard at the last tick
+    double lastMusicMs = 0.0;                     // when it last grew
     int session = 0;                              // message thread
+    int toneLearnFailures = 0;                    // message thread
+    polisher::SongStats pendingStats;             // the listen behind the analysis running now
+    juce::String undoToneTarget;                  // Tone Steady's target before the last Auto-Master (JSON)
 
     juce::CriticalSection resultLock;
     std::unique_ptr<polisher::AutoMasterResult> pendingResult;

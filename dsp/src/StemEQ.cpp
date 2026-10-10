@@ -126,6 +126,52 @@ bool StemNet::push (const float* features, float* out) noexcept
 // ---------------------------------------------------------------------------------------------
 // StemEQ
 
+double StemEQ::bandCentreHz (int band, double sampleRate) noexcept
+{
+    constexpr int B = StemNet::kBands;
+    const auto erb = [] (double f) { return 21.4 * std::log10 (1.0 + 0.00437 * f); };
+    const double e0 = erb (20.0), e1 = erb (std::min (sampleRate / 2.0, 20000.0));
+    return (std::pow (10.0, (e0 + (e1 - e0) * band / (B - 1)) / 21.4) - 1.0) / 0.00437;
+}
+
+void StemEQ::makeBands (double sampleRate, int fftSize, std::vector<double>& bandCf, std::vector<double>& bandW,
+                        std::vector<int>& bandLo, std::vector<int>& bandHi)
+{
+    // Triangular ERB bands, columns normalised to 1 (tools/stem/common.py: band_centres, tri_weights).
+    constexpr int B = StemNet::kBands;
+    const int N = fftSize, bins = N / 2 + 1;
+    std::array<double, B> cf {};
+    for (int b = 0; b < B; ++b)
+        cf[static_cast<size_t> (b)] = bandCentreHz (b, sampleRate);
+    bandCf.assign (cf.begin(), cf.end());
+    bandW.assign (static_cast<size_t> (B * bins), 0.0);
+    for (int k = 0; k < bins; ++k)
+    {
+        const double f = k * sampleRate / N;
+        double col = 0.0;
+        for (int b = 0; b < B; ++b)
+        {
+            const auto i = static_cast<size_t> (b);
+            double w = b == 0 ? (f <= cf[0] ? 1.0 : 0.0)
+                              : std::clamp ((f - cf[i - 1]) / (cf[i] - cf[i - 1]), 0.0, 1.0) * (f <= cf[i] ? 1.0 : 0.0);
+            w += b == B - 1 ? (f > cf[i] ? 1.0 : 0.0)
+                            : std::clamp ((cf[i + 1] - f) / (cf[i + 1] - cf[i]), 0.0, 1.0) * (f > cf[i] ? 1.0 : 0.0);
+            bandW[i * bins + static_cast<size_t> (k)] = w;
+            col += w;
+        }
+        for (int b = 0; b < B; ++b) bandW[static_cast<size_t> (b * bins + k)] /= col;
+    }
+    bandLo.assign (B, bins);
+    bandHi.assign (B, 0);
+    for (int b = 0; b < B; ++b)
+        for (int k = 0; k < bins; ++k)
+            if (bandW[static_cast<size_t> (b * bins + k)] > 0.0)
+            {
+                bandLo[static_cast<size_t> (b)] = std::min (bandLo[static_cast<size_t> (b)], k);
+                bandHi[static_cast<size_t> (b)] = k + 1;
+            }
+}
+
 bool StemEQ::isNeutral (const StemEQParams& p) noexcept
 {
     if (! p.enabled) return true;
@@ -160,39 +206,8 @@ void StemEQ::prepare (double newSampleRate, int numChannels)
 
     // Triangular ERB bands, columns normalised to 1 (tools/stem/common.py: band_centres, tri_weights).
     constexpr int B = StemNet::kBands;
-    const auto erb = [] (double f) { return 21.4 * std::log10 (1.0 + 0.00437 * f); };
-    const double e0 = erb (20.0), e1 = erb (std::min (sampleRate / 2.0, 20000.0));
-    std::array<double, B> cf {};
-    for (int b = 0; b < B; ++b)
-        cf[static_cast<size_t> (b)] = (std::pow (10.0, (e0 + (e1 - e0) * b / (B - 1)) / 21.4) - 1.0) / 0.00437;
-    bandCf.assign (cf.begin(), cf.end());
-    for (int b = 0; b < B; ++b) bandLoud[static_cast<size_t> (b)] = aWeightPower (cf[static_cast<size_t> (b)]);
-    bandW.assign (static_cast<size_t> (B * bins), 0.0);
-    for (int k = 0; k < bins; ++k)
-    {
-        const double f = k * sampleRate / N;
-        double col = 0.0;
-        for (int b = 0; b < B; ++b)
-        {
-            const auto i = static_cast<size_t> (b);
-            double w = b == 0 ? (f <= cf[0] ? 1.0 : 0.0)
-                              : std::clamp ((f - cf[i - 1]) / (cf[i] - cf[i - 1]), 0.0, 1.0) * (f <= cf[i] ? 1.0 : 0.0);
-            w += b == B - 1 ? (f > cf[i] ? 1.0 : 0.0)
-                            : std::clamp ((cf[i + 1] - f) / (cf[i + 1] - cf[i]), 0.0, 1.0) * (f > cf[i] ? 1.0 : 0.0);
-            bandW[i * bins + static_cast<size_t> (k)] = w;
-            col += w;
-        }
-        for (int b = 0; b < B; ++b) bandW[static_cast<size_t> (b * bins + k)] /= col;
-    }
-    bandLo.assign (B, bins);
-    bandHi.assign (B, 0);
-    for (int b = 0; b < B; ++b)
-        for (int k = 0; k < bins; ++k)
-            if (bandW[static_cast<size_t> (b * bins + k)] > 0.0)
-            {
-                bandLo[static_cast<size_t> (b)] = std::min (bandLo[static_cast<size_t> (b)], k);
-                bandHi[static_cast<size_t> (b)] = k + 1;
-            }
+    makeBands (sampleRate, N, bandCf, bandW, bandLo, bandHi);
+    for (int b = 0; b < B; ++b) bandLoud[static_cast<size_t> (b)] = aWeightPower (bandCf[static_cast<size_t> (b)]);
 
     for (int c = 0; c < 2; ++c)
     {
@@ -408,19 +423,26 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
     constexpr int B = StemNet::kBands;
     const int bins = fftSize / 2 + 1;
     tsAmount += ((isNeutral (tsParams) ? 0.0 : std::clamp (tsParams.amount, 0.0, 100.0) / 100.0) - tsAmount) * gainCoeff;
+    // A stored target (the whole song's tone): the reference is fixed, nothing is learned while playing.
+    const bool useTarget = tsParams.target.valid;
 
-    // Band energies after the Stem EQ move and the resonance cuts.
+    // Band energies after the Stem EQ move and the resonance cuts (with a target: as the music enters
+    // the stage, like the target was measured; the Stem EQ move and the tamer's cuts are yours).
     std::array<double, B> e {};
     for (int band = 0; band < B; ++band)
     {
         const double* w = bandW.data() + band * bins;
         double sum = 0.0;
-        for (int k = bandLo[static_cast<size_t> (band)]; k < bandHi[static_cast<size_t> (band)]; ++k)
-        {
-            const auto K = static_cast<size_t> (k);
-            const double g = binGain[K] * rtLin[K];
-            sum += w[k] * (std::norm (L[k]) + std::norm (R[k])) * g * g;
-        }
+        if (useTarget)
+            for (int k = bandLo[static_cast<size_t> (band)]; k < bandHi[static_cast<size_t> (band)]; ++k)
+                sum += w[k] * (std::norm (L[k]) + std::norm (R[k]));
+        else
+            for (int k = bandLo[static_cast<size_t> (band)]; k < bandHi[static_cast<size_t> (band)]; ++k)
+            {
+                const auto K = static_cast<size_t> (k);
+                const double g = binGain[K] * rtLin[K];
+                sum += w[k] * (std::norm (L[k]) + std::norm (R[k])) * g * g;
+            }
         e[static_cast<size_t> (band)] = sum;
     }
     static constexpr double kShortS[3] = { 1.0, 0.4, 0.15 };
@@ -466,7 +488,7 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
         // chorus), not a drift: the reference re-learns instead of cutting it for the next ~10 s.
         constexpr double kNewPartDb = 4.0;
         bool jump = false;
-        if (signal && ! warming && ! relearn)
+        if (signal && ! warming && ! relearn && ! useTarget)
         {
             double top = -400.0;
             for (double v : tsLong) top = std::max (top, v);
@@ -504,6 +526,11 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
             if (jump) { tsRelearn = static_cast<long> (1.5 * framesPerSecond); tsJump.fill (0.0); }
         }
     }
+    // With a target the reference is the song's own tone (only the shape counts: the corrections
+    // below take the overall offset out). Following the music again later starts from it.
+    if (useTarget)
+        for (size_t b = 0; b < static_cast<size_t> (B); ++b)
+            tsLong[b] = std::max (static_cast<double> (tsParams.target.bandDb[b]), -90.0);
     double maxLong = -400.0;
     for (double v : tsLong) maxLong = std::max (maxLong, v);
 
@@ -532,6 +559,20 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
             const double db = 1.0 + 2.0 * topW (b);                                                // 1 dB dead band (3 dB up top)
             const double dead = x > 0.0 ? std::max (0.0, x - db) : std::min (0.0, x + db);
             t[b] = std::clamp (tsAmount * dead, -range * (1.0 - 0.5 * topW (b)), range * 0.5);
+            if (useTarget)
+            {
+                // Far from the song's tone is the arrangement, not a drift, and is left alone: in the
+                // low end (below 160 Hz), where 808s and basses come and go, both ways from 4 dB (gone at 6): an 808
+                // entering after an intro isn't cut, an intro without it isn't lifted. Elsewhere only
+                // lifts, from 6 dB (gone at 9): a part that isn't playing isn't faked back, while a
+                // muddier or harsher passage is still pulled down however far it drifts.
+                const bool low = bandCf[b] <= 160.0;
+                if (low || x > 0.0)
+                {
+                    const double from = low ? kTargetLowPartDb : kTargetPartDb, width = low ? 2.0 : 3.0;
+                    t[b] *= std::clamp ((from + width - std::abs (x)) / width, 0.0, 1.0);
+                }
+            }
         }
     }
     const double aG = 1.0 - std::exp (-1.0 / (0.08 * framesPerSecond));

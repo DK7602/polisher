@@ -6,7 +6,7 @@ Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d7
 
 ## What Polisher is
 
-Polisher is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds eleven modules in one window, and **Auto-Master** can set all of them for you in about 12 seconds.
+Polisher is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds eleven modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
 This manual covers version 0.15.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
@@ -15,7 +15,7 @@ This manual covers version 0.15.0. Every control is explained in plain words, wi
 1. Put Polisher in the **last insert slot of Stereo Out**.
 2. Turn off any other limiter, clipper or mastering chain on Stereo Out.
 3. Pick your genre, an intensity and a target at the top.
-4. Play the loudest part of the song (the hook or the drop) and press **Auto-Master**.
+4. Press **Auto-Master** and play your whole song from the start. It finds the loudest part by itself and finishes when the song ends.
 5. Turn on **MATCH** and flip **A / B** to check the result at equal loudness.
 6. Read the **Learn** panel on the right: it explains every choice and tells you if anything needs fixing.
 
@@ -47,7 +47,7 @@ Leave headroom going in. A good input is about **−17 LUFS integrated with peak
 1. Click the genre name at the top and choose yours (Trap / Hip-Hop, R&B, Pop, EDM, Rock, Acoustic).
 2. Choose **Intensity**: Gentle, Balanced or Punchy. Balanced is the default.
 3. Choose **Target**: Stream −14, Loud −9 or Club −7. Loud −9 is the default.
-4. Play the loudest part of your song and click **Auto-Master**. Keep it playing until it finishes.
+4. Click **Auto-Master**, then play your song from the start. It finishes by itself a few seconds after the song ends (or click it again any time after 12 seconds to use what it heard).
 5. Turn on **MATCH**, flip **A / B** and listen.
 6. Read Learn. Red boxes need a decision; blue boxes are tips.
 
@@ -76,7 +76,7 @@ The Maximizer's **Drive** sits just before the Soft Clipper, so the clipper and 
 
 ## Auto-Master
 
-Auto-Master listens to 12 seconds of your song, then sets every module except Stem EQ and explains each choice. It skips silence while it listens, and needs at least 3 seconds of music.
+Auto-Master listens to your whole song as it plays, finds its **loudest part** by itself (the 12 seconds that measure loudest, usually the hook or drop), then sets every module except Stem EQ for that part and explains each choice. It skips silence and stops while it listens. While it listens it also learns your song's overall tone for **Tone Steady**, and measures the whole song's loudness for the report.
 
 ### The three choices
 
@@ -97,10 +97,13 @@ Auto-Master sets the Tonal EQ bands together. Neighbouring bands overlap, so it 
 ### How to run it
 
 1. Set Genre, Intensity and Target.
-2. Play the **loudest part** of the song (hook, chorus or drop).
-3. Click **Auto-Master** and let it play until it finishes.
-4. Read the report in Learn (**WHY IT SOUNDS LIKE THIS**).
-5. Don't like it? Click the **undo arrow** to put every control back as it was.
+2. Click **Auto-Master**. It says **LISTENING**.
+3. Play your **whole song**, ideally from the very start. The button shows how much it has heard and where the loudest part is so far; Learn shows the same, with **FINISH NOW** and **CANCEL**.
+4. It **finishes by itself** a few seconds after the song ends (after at least 30 seconds of music, when the music stops or you stop playback). In a hurry? From **12 seconds** of music on (the bar under the button turns green), click Auto-Master again or press **FINISH NOW**: it uses what it has heard. Before 12 seconds a click stops it without changing anything.
+5. Read the report in Learn (**WHY IT SOUNDS LIKE THIS**). It starts with what it heard, for example *Listened to 2:47 of your song; the loudest part (0:54–1:06, usually the hook or drop) set the levels*, and shows the **Whole song** loudness and loudness range as your mix arrives.
+6. Don't like it? Click the **undo arrow** to put every control back as it was (Tone Steady's target too).
+
+Timeline positions come from Cubase's playhead. It listens for up to 15 minutes, and its memory stays the same however long the song is (it keeps only the loudest 12 seconds of audio and a few numbers per second).
 
 ### What to expect
 
@@ -109,6 +112,8 @@ Auto-Master sets the Tonal EQ bands together. Neighbouring bands overlap, so it 
 - A module marked **Checked · kept** was measured and needed no change.
 - **Stem EQ** is never changed. If your vocal sits unusually low or loud for the genre, it suggests a Vocals move (up to ±3 dB) with an **APPLY** button. The Tonal EQ comes before Stem EQ, so Auto-Master sets it for your mix without your Stem moves and never EQs them back out; everything after Stem EQ is set for the mix with them.
 - If you change a module after Auto-Master, Learn notes that its reasons no longer describe what you hear.
+- If you finished early and a later part of the song plays more than 2 LU louder than the part it heard, the Maximizer's Learn says **LOUDER THAN WHAT AUTO-MASTER HEARD**: that part is limited harder than planned. Run Auto-Master again and play the whole song.
+- A quick run (finished before 30 seconds) doesn't replace a Tone Steady target learned from more of the song.
 - If the audio doesn't sound like a full mix (for example, Polisher is on one track), Auto-Master changes nothing and tells you to move it to Stereo Out.
 
 Every warning in the report says **Do I need to fix it?** and gives numbered steps. Auto-Master is a starting point: your ears and MATCH make the final call.
@@ -120,7 +125,7 @@ Instead of a genre's typical sound, Auto-Master can aim for a **reference**: a r
 1. Pick a commercial song with the sound you want (for trap: a big trap single). Use a good file of the released version: WAV, AIFF, FLAC or MP3.
 2. Click **Match ref** (at the end of the TARGET row) and choose the file. Polisher reads the whole song (up to 15 minutes) and measures its **loudest 30 seconds**, usually the chorus or drop. That takes a few seconds; your music keeps playing.
 3. The pill now shows the song's name, and the spectrum shows its tone as a **dashed yellow line** (moved to the loudness of what's playing, so you compare tone, not volume).
-4. Play the **loudest part of your own song** and click **Auto-Master**, as usual.
+4. Click **Auto-Master** and play **your own song**, as usual.
 
 What it takes from the reference:
 
@@ -206,9 +211,14 @@ Keeps the tone consistent through the song. When a section drifts muddier, harsh
 | Amount | 0–100 % (0) | How much drift is corrected. 40 % is a good start. |
 | Range | 1–6 dB (3) | Largest cut; boosts go up to half of it. |
 | Speed | Slow, Medium, Fast (Medium) | How fast it reacts: about 1 s, 0.4 s or 0.15 s. |
+| Target | LEARN / CLEAR | What it holds the song to: **your song** (its own overall tone, learned while it played) or **following the music** (the last ~10 seconds). |
 | Steadying meter | 0–6 dB | The biggest move right now. |
 
-It learns your song's balance over about 10 seconds, leaves quiet breakdowns alone, and is gentle on the top end so busy hi-hats keep their sparkle. When a bass or 808 comes in (the low end jumps more than 4 dB against the rest, say from the intro into the chorus), it re-learns the balance within about a second instead of cutting the new low end. Range is the most it can move any part of the spectrum, so a section meant to sound different can be pulled by up to that much: if the drop feels smaller, lower Range (to about 1.5 dB) or Amount.
+It leaves quiet breakdowns alone and is gentle on the top end, so busy hi-hats keep their sparkle. Range is the most it can move any part of the spectrum, so a section meant to sound different can be pulled by up to that much: if the drop feels smaller, lower Range (to about 1.5 dB) or Amount.
+
+**Target: your song.** When Auto-Master listens to your whole song, it also learns the song's own overall tone and gives it to Tone Steady (you can also press **LEARN** in this panel and play the song: that only learns the tone and changes nothing else). Tone Steady then holds every part to your song's own tone, so **what you hear is what you export**, from any start point. Parts that come and go are left alone: an 808 that enters after the intro is not cut, and a part that isn't playing is not faked back (a low end more than 4 dB away from the song's tone, or anything else more than 6 dB under it, is the arrangement, not a drift). A passage that drifts muddier or harsher is still pulled back. The target follows your Tonal EQ moves, so a tone change you make there isn't undone. It is saved with your project; **CLEAR** goes back to following the music. If it learned from under 30 seconds of music, Learn suggests learning again from the whole song.
+
+**Following the music** (no target, and every song saved before targets existed): it learns your song's balance over about 10 seconds. When a bass or 808 comes in (the low end jumps more than 4 dB against the rest, say from the intro into the chorus), it re-learns the balance within about a second instead of cutting the new low end. Because it follows the music, what you hear can depend a little on where playback or an export starts.
 
 ### 05 Resonance Tamer
 
@@ -405,7 +415,9 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Master is too loud or squashed even at Drive 0; input reads far above 0 dBTP | Your old chain (EQ, saturator, compressor, limiter) is still on Stereo Out before Polisher, so the mix arrives already limited and hot | Bypass every other insert on Stereo Out, keep Polisher in the last slot, and run Auto-Master again |
 | Input is hot even with nothing else on Stereo Out | The mix itself is too loud | Run Auto-Master: it turns the mix down with Input Trim when it's louder than your target. Or lower Input Trim yourself (Maximizer screen) by about as many dB as the master's Integrated reads above your target |
 | Auto-Master says "This doesn't sound like a full mix" | Polisher is on one track, not Stereo Out | Remove it from the track, load it in Stereo Out's last insert slot (F3 > Stereo Out), play the chorus and run Auto-Master again |
-| Auto-Master doesn't finish or says it heard too little | The song stopped or was mostly silence | Keep the loudest part playing until it's done (it needs 12 s of music, at least 3 s) |
+| Auto-Master keeps listening | It waits for the song to end (a few seconds without music after at least 30 s of it), or plays a loop | Let the song play to its end, or click Auto-Master again (or FINISH NOW in Learn) any time after 12 s of music |
+| Auto-Master says it heard too little | Playback stopped or was mostly silence | Click Auto-Master, play the song from the start and let it play (it needs at least 12 s of music) |
+| Tone Steady's Target says "following the music" | No song tone learned yet (or CLEAR was pressed, or the song was saved before targets existed) | Press LEARN in Tone Steady (or run Auto-Master) and play the whole song |
 | Master lands quieter than the target | Auto-Master protected the drums within the intensity's limit | Fine as it is. To go louder, choose Punchy, or tame the drum peaks in the mix |
 | Master isn't as loud as the reference | The reference had its drum peaks controlled in the mix; reaching it would crush yours | Fine as it is (streaming plays both at the same level). To get closer: a clipper on the drum bus, or Punchy |
 | Match ref says it can't read the file | Not WAV, AIFF, FLAC or MP3, or a damaged file | Export or convert the song to WAV and load that |
@@ -433,6 +445,10 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 **Can a Listen, Solo, MONO or PHONE end up in my export?** Not in a normal (offline) export: Polisher switches them off. They are not saved with the song and switch off when you close Polisher. Only a Realtime Export plays what you hear, so check that the red banner is gone first.
 
 **Will Auto-Master change my Stem EQ?** Never. It may suggest a Vocals move with an APPLY button; you decide.
+
+**Do I have to play the whole song for Auto-Master?** It's best: it then finds the loudest part by itself and Tone Steady learns your whole song's tone. If you're in a hurry, play the hook or drop and click Auto-Master again after 12 seconds.
+
+**Will my export sound like what I heard?** Yes. With Tone Steady holding your song to its learned tone (Target: your song), Tone Steady does the same to each part wherever playback or the export starts; the other modules settle within the first second or two.
 
 **Why −1 dBTP for the ceiling?** Streaming services convert to MP3/AAC, which pushes peaks up, and the louder the master the more. −1 dBTP leaves enough room for most masters; Auto-Master uses −1.5 for Loud −9 (Spotify asks for −2 dBTP on masters louder than −14 LUFS). No ceiling makes clipping after conversion impossible, only unlikely.
 

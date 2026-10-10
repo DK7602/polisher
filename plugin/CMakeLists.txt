@@ -51,7 +51,8 @@ target_sources(Polisher PRIVATE
     PluginEditor.cpp
     PolisherWebEditor.cpp
     AutoMasterController.cpp
-    ReferenceTrack.cpp)
+    ReferenceTrack.cpp
+    ToneTargetStore.cpp)
 
 target_compile_definitions(Polisher PUBLIC
     JUCE_WEB_BROWSER=1
