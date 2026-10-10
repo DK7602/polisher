@@ -57,6 +57,7 @@ Leave headroom going in. A good input is about **−17 LUFS integrated with peak
 - **Double-click** a knob to reset it.
 - **Double-click the number** under a knob to type an exact value, then press **Enter** (**Esc** cancels). Units are optional: `-3`, `1.2k` for 1.2 kHz, `2.5` for a 2.5:1 ratio, `off` for a control's lowest setting. Values outside the range stop at its end. With a knob selected, **Enter** opens the box too.
 - The **mouse wheel** works too.
+- Changed your mind? The **undo arrow** at the top (or **Ctrl+Z**) takes back your last change; see [Undo, redo and snapshots](#undo-redo-and-snapshots).
 
 ### Exporting
 
@@ -100,7 +101,7 @@ Auto-Master sets the Tonal EQ bands together. Neighbouring bands overlap, so it 
 2. Play the **loudest part** of the song (hook, chorus or drop).
 3. Click **Auto-Master** and let it play until it finishes.
 4. Read the report in Learn (**WHY IT SOUNDS LIKE THIS**).
-5. Don't like it? Click the **undo arrow** to put every control back as it was.
+5. Don't like it? Click the **undo arrow** to put every control back as it was (the whole run is one undo step; the redo arrow brings it back). To compare two runs, keep each in a snapshot: see [Undo, redo and snapshots](#undo-redo-and-snapshots).
 
 ### What to expect
 
@@ -335,6 +336,35 @@ MATCH takes care of loudness, but you still know which side is Polisher. To comp
 
 To compare just one part (say 30 seconds from the hook at 1:00), run it from a command prompt: `PolisherBlindTest.exe "my mix.wav" polisher.wav --start 60 --length 30` (quotes around names with spaces).
 
+## Undo, redo and snapshots
+
+### Undo and redo
+
+The two arrows at the top step **back and forward through your changes, one at a time**. Point at an arrow to see what it will do ("Undo: Drive +2.0 dB", "Undo: Auto-Master (Trap / Hip-Hop, Balanced)"); after a click, a note at the bottom says what was undone.
+
+- **One step per change**: a knob drag from press to release, a typed value, a switch, a choice, a dragged EQ point (its frequency and gain together). Quick mouse-wheel turns or arrow-key presses on one knob count as one step.
+- **Auto-Master** is one step that puts back everything it set (A / B included) and the report that was there before. **APPLY** of the Stem EQ suggestion and a **snapshot recall** are one step each.
+- Undo something and then change something else, and the undone steps are gone (nothing to redo any more). Changes you made after an Auto-Master run are never thrown away by undoing it: they come off first, one by one.
+- **Keys**: Ctrl+Z undoes; Ctrl+Shift+Z or Ctrl+Y redoes (Cmd on a Mac). Click inside Polisher's window first, or Cubase gets the keys and uses its own undo. While you type a value into a box, Ctrl+Z works on the text.
+- Polisher keeps the **last 100 steps** while its window is closed and reopened. They are **not saved** with the project: opening the project, or loading a preset (anything that replaces all of Polisher's settings at once), starts a new list.
+- **Not in the list**: A / B, MATCH, MONO, PHONE, Listen and Solo (listening only), the Settings switches for the meters, and the genre / intensity / target choices. Automation and changes Cubase makes are never in it either, so playing back automation doesn't fill it up.
+
+### Snapshots S1–S4
+
+The four small slots next to the arrows each keep a **whole sound**: every knob and switch in every module, plus the Auto-Master report that explains it. They are **not A / B**: A is always your original mix and B the master; S1–S4 are four versions of the master.
+
+| You do | What happens |
+| --- | --- |
+| Click an **empty** slot (dim) | It keeps the settings you hear now. |
+| Click a **stored** slot | Those settings come back. Every control glides there like a knob move, so nothing clicks. One undo step. |
+| Click **STORE**, then a slot (or **Shift-click** a slot) | The slot is replaced with what you hear now. |
+
+The **red** slot is the one playing; a dot after it (**S1•**) means you've changed something since you stored or recalled it. Snapshots are saved with your Cubase project. They don't store A / B, MATCH, the listening aids or Auto-Master's genre / intensity / target, and recalling one never changes them.
+
+**A fair compare with MATCH.** MATCH learns how loud the master plays compared with your original over about 10 seconds of B. The first time you hear a snapshot, give it **10–15 seconds** before judging. After that, MATCH **remembers each snapshot's level**: flip back to it and it is matched at once. Right after a switch MATCH holds its level for 3 seconds while the loudness reading (which looks at the last 3 seconds) catches up. Storing new settings in a slot makes MATCH learn that slot again.
+
+**Try this: Balanced vs Punchy.** Play your chorus. Run Auto-Master on **Balanced** and click **S1**. Pick **Punchy**, run it again and click **S2**. Turn on **MATCH**, listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip **S1 / S2** every few seconds: you hear punch and weight, not volume. Keep the one you like by clicking it (the undo arrow can always take you back).
+
 ## Listening aids: Listen, Solo, MONO and PHONE
 
 These change only what you **hear**, never your master: they are not saved with the song, they switch off when you close Polisher, and a normal export never contains them. While any of them is on, a **red banner** across the top of the spectrum says what you are hearing ("LISTENING: what Saturation adds — not the master"); **BACK TO MASTER** on the banner turns everything off. The meters keep measuring the real master the whole time.
@@ -410,6 +440,9 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Master isn't as loud as the reference | The reference had its drum peaks controlled in the mix; reaching it would crush yours | Fine as it is (streaming plays both at the same level). To get closer: a clipper on the drum bus, or Punchy |
 | Match ref says it can't read the file | Not WAV, AIFF, FLAC or MP3, or a damaged file | Export or convert the song to WAV and load that |
 | B sounds better but you're not sure why | B is louder | Turn on MATCH and play B for 10 s before comparing |
+| One snapshot sounds louder right after you switch, even with MATCH on | MATCH hasn't heard that snapshot for long yet | Play each snapshot for 10–15 s once; after that MATCH remembers its level and flips are matched at once |
+| Ctrl+Z undoes something in Cubase instead of in Polisher | Cubase had the keyboard | Click inside Polisher's window first, or use the undo arrow at the top |
+| The undo arrow is grey after opening the project | The undo list isn't saved with the project | Working as intended. Snapshots are saved: keep versions you may want back in S1–S4 |
 | Polisher sounds thin, mono, crackly or like a phone; a red banner is on the spectrum | A listening aid is on (Listen, Solo, MONO or PHONE) | Click BACK TO MASTER on the banner. They switch off by themselves when you close Polisher and are never in a normal export |
 | Listen plays silence | The module isn't changing anything right now (or you're on A) | Fine: nothing to hear. Play a louder part, switch to B, or set the module up first |
 | Kick or snare sounds weaker than the mix | Too much limiting | Lower Drive 1–2 dB, or turn on the Soft Clipper so it takes some peaks |
@@ -442,7 +475,9 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 
 **Does Polisher add delay?** A little (Stem EQ about 40 ms). Cubase compensates it automatically, and the export lines up.
 
-**Is my project saved with Polisher's settings?** Yes. All settings, including genre, intensity and target, are saved with the Cubase project.
+**Is my project saved with Polisher's settings?** Yes. All settings, including genre, intensity and target, and your snapshots S1–S4 are saved with the Cubase project. The undo list is not.
+
+**What's the difference between A / B and S1–S4?** A / B compares your original mix (A) with the master (B). S1–S4 are four versions of the master you can switch between, for example two Auto-Master runs.
 
 ## Glossary
 
@@ -458,3 +493,4 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Correlation | How mono-safe the stereo is: +1 mono, 0 wide, below 0 parts cancel. |
 | Harmonics | Extra overtones that make sound feel fuller and help bass on small speakers. |
 | Squash | How flattened audio is: peaks minus the average level, read as open when the peaks don't press against one ceiling. |
+| Snapshot | A stored copy of every setting (S1–S4), to switch between versions of your master. |

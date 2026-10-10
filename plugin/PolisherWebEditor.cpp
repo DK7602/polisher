@@ -114,9 +114,37 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                                  audioProcessor.autoMaster.cancel();
                                  complete (true);
                              })
-        .withNativeFunction ("undoAutoMaster", [this] (const juce::Array<juce::var>&, auto complete)
+        // Undo / redo (the processor's history): each returns what it did and what is next, so the
+        // buttons update at once. historyGroup(true, label) ... historyGroup(false) makes the changes the
+        // page sends in between one step (Apply of the Stem EQ suggestion).
+        .withNativeFunction ("historyUndo", [this] (const juce::Array<juce::var>&, auto complete)
                              {
-                                 complete (audioProcessor.autoMaster.undo());
+                                 complete (historyResult (audioProcessor.history.undo()));
+                             })
+        .withNativeFunction ("historyRedo", [this] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 complete (historyResult (audioProcessor.history.redo()));
+                             })
+        .withNativeFunction ("historyGroup", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 // One group at a time from the page; one left open is closed with the window.
+                                 const bool begin = args.size() > 0 && static_cast<bool> (args[0]);
+                                 if (begin && ! pageGroupOpen)
+                                     audioProcessor.history.beginGroup (args.size() > 1 ? args[1].toString() : juce::String ("Changes"));
+                                 else if (! begin && pageGroupOpen)
+                                     audioProcessor.history.endGroup();
+                                 pageGroupOpen = begin;
+                                 complete (true);
+                             })
+        // Snapshots S1..S4: store the current settings in a slot, or recall one (an undo step).
+        .withNativeFunction ("snapshotStore", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 audioProcessor.snapshots.store (args.size() > 0 ? static_cast<int> (args[0]) : -1);
+                                 complete (true);
+                             })
+        .withNativeFunction ("snapshotRecall", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 complete (audioProcessor.snapshots.recall (args.size() > 0 ? static_cast<int> (args[0]) : -1));
                              })
         .withNativeFunction ("getAutoMasterReport", [this] (const juce::Array<juce::var>&, auto complete)
                              {
@@ -237,6 +265,8 @@ PolisherWebEditor::~PolisherWebEditor()
             p->setValueNotifyingHost (0.0f);
     // So are Listen / Solo and the MONO / PHONE checks: back to the plain master.
     audioProcessor.resetMonitoring();
+    if (pageGroupOpen)
+        audioProcessor.history.endGroup();   // an undo group the page opened and never closed
 }
 
 void PolisherWebEditor::paint (juce::Graphics& g)
@@ -273,6 +303,36 @@ std::optional<juce::WebBrowserComponent::Resource> PolisherWebEditor::getResourc
         }
     }
     return std::nullopt;
+}
+
+juce::var PolisherWebEditor::historyResult (const juce::String& done)
+{
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("done", done);   // "" = there was nothing to undo / redo
+    o->setProperty ("undo", audioProcessor.history.undoLabel());
+    o->setProperty ("redo", audioProcessor.history.redoLabel());
+    return juce::var (o);
+}
+
+void PolisherWebEditor::addHistoryState (juce::DynamicObject& frame)
+{
+    // Undo / redo: what each would do ("" = nothing). Snapshots: which slots hold settings, which one is
+    // playing and whether it was changed since.
+    frame.setProperty ("undo", audioProcessor.history.undoLabel());
+    frame.setProperty ("redo", audioProcessor.history.redoLabel());
+    const auto st = audioProcessor.snapshots.getStatus();
+    juce::Array<juce::var> slots;
+    for (const auto& slot : st.slots)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("filled", slot.filled);
+        o->setProperty ("time", slot.time);
+        o->setProperty ("note", slot.note);
+        slots.add (juce::var (o));
+    }
+    frame.setProperty ("snaps", slots);
+    frame.setProperty ("snapActive", st.active);
+    frame.setProperty ("snapModified", st.modified);
 }
 
 juce::var PolisherWebEditor::makeSpectrum (const SpectrumTap& tap, Analyser& state)
@@ -346,7 +406,7 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("amState",    static_cast<int> (am.getState()));
     frame->setProperty ("amProgress", roundTo (am.getProgress(), 0.01f));
     frame->setProperty ("amHearing",  am.isHearingAudio());
-    frame->setProperty ("amUndo",     am.canUndo());
+    addHistoryState (*frame);
     frame->setProperty ("amReport",   am.getReportVersion());
     frame->setProperty ("refVersion", audioProcessor.reference.getVersion());
     frame->setProperty ("refState",   static_cast<int> (audioProcessor.reference.getState()));

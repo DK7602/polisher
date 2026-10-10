@@ -42,7 +42,15 @@
       </div>
       <button type="button" id="btn-a" class="imgbtn" aria-label="A: original mix (bypass)" title="A: hear your original mix"><img src="assets/btn_a.png" alt=""></button>
       <button type="button" id="btn-b" class="imgbtn" aria-label="B: master" title="B: hear the master"><img src="assets/btn_b.png" alt=""></button>
-      <button type="button" id="btn-undo" class="imgbtn is-disabled" aria-label="Undo Auto-Master" title="Undo Auto-Master" disabled><img src="assets/btn_undo.png" alt=""></button>
+      <button type="button" id="btn-undo" class="imgbtn is-disabled" aria-label="Nothing to undo" title="Nothing to undo" disabled><img src="assets/btn_undo.png" alt=""></button>
+      <button type="button" id="btn-redo" class="imgbtn redo is-disabled" aria-label="Nothing to redo" title="Nothing to redo" disabled><img src="assets/btn_undo.png" alt=""></button>
+      <!-- Snapshots S1..S4: whole settings, saved with the project (not A/B, which is original vs master). -->
+      <div class="snaps" id="snaps" role="group" aria-label="Snapshots S1 to S4: keep and switch between whole settings">
+        <div class="snap-row">
+          <button type="button" class="pill pill-blue snap empty" data-slot="0" aria-pressed="false">S1</button><button type="button" class="pill pill-blue snap empty" data-slot="1" aria-pressed="false">S2</button><button type="button" class="pill pill-blue snap empty" data-slot="2" aria-pressed="false">S3</button><button type="button" class="pill pill-blue snap empty" data-slot="3" aria-pressed="false">S4</button>
+        </div>
+        <button type="button" id="btn-store" class="pill pill-blue snap-store" aria-pressed="false" title="Store: click, then pick a slot (S1 to S4) to keep the settings you hear now in it">STORE</button>
+      </div>
       <button type="button" id="btn-settings" class="imgbtn" aria-label="Settings" title="Settings"><img src="assets/btn_gear.png" alt=""></button>
       <button type="button" id="btn-help" class="imgbtn" aria-label="Help" title="Help"><img src="assets/btn_help.png" alt=""></button>
     </div>
@@ -174,6 +182,8 @@
     </div>
     <ul>
       <li><b>Auto-Master:</b> pick your genre (top), an intensity and a target, then play the loudest part of your song and press Auto-Master. It listens for 12 seconds, sets every module and explains why in Learn. The undo arrow puts everything back.</li>
+      <li><b>Undo / redo:</b> the arrows at the top step back and forward through your changes one at a time (a knob move, a switch, an Auto-Master run, a snapshot). Point at an arrow to see what it will undo. Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes (click inside Polisher first). Kept while the window is closed; not saved with the project.</li>
+      <li><b>Snapshots S1–S4:</b> each keeps a whole sound (every setting, plus its Auto-Master report). Click an empty slot to keep what you hear; click a stored one to switch to it (it glides, and undo goes back); STORE then a slot (or Shift-click) replaces it. Red = playing, S1• = changed since. They're not A/B and never change A/B, MATCH or the listening aids. Try Balanced in S1 vs Punchy in S2 with MATCH on: play each for 15 s once, then flip; MATCH remembers each one's level.</li>
       <li><b>Match ref:</b> click <b>Match ref</b> (next to the targets) and load a released song you want to sound like (WAV, AIFF, FLAC or MP3). Polisher measures its loudest part; then play the loudest part of <i>your</i> song and press Auto-Master: it aims for the reference's tone, loudness, width and low end instead of the genre's. The dashed line on the spectrum is the reference's tone. The &times; on the pill clears it.</li>
       <li><b>Knobs:</b> drag up/down. Hold Shift for fine control. Double-click to reset. Mouse wheel works too.</li>
       <li><b>A / B:</b> A plays your original mix (bypassed), B plays the master. Turn on <b>MATCH</b> first and play B for about 10 seconds: the louder side is turned down so both play at the same loudness, and your original is kept from clipping. Then you compare tone and punch, not volume. On B the meters show the real master (on A, your original mix), never the matched level. MATCH switches itself off when you close Polisher and during a normal export; for a Realtime Export, switch MATCH off and make sure B is on first.</li>

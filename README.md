@@ -45,6 +45,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | Stem EQ Keep Loudness: moves change the balance, not the loudness (K-weighted, ~2 s, ±12 dB, inside the same STFT: no extra latency); on for new instances, off for songs saved before it; live "Keeping level" readout | Done (after v0.15.0) |
 | Match ref: load a released song (WAV / AIFF / FLAC / MP3); its loudest 30 s is measured (tone, loudness, width, low end) and saved with the project (no audio); Auto-Master aims for it instead of the genre (part of the way, same limits), says honestly when it can't get as loud, and Learn compares reference / mix / master; dashed reference curve on the spectrum | Done (v0.15) |
 | Saturation Focus "Bass only" (808 to phone): only the low end (LR4 below 150 Hz) feeds the curve, its added harmonics are high-passed at 70 Hz and mixed onto the untouched dry signal, so the 808 gets harmonics phone speakers can play while vocals and hats stay clean (a 2 kHz tone at full Drive: THD -156 dB vs -13 dB in Full); Full is bit-for-bit the old sound; click-free switching; Auto-Master picks it for Trap and R&B | Done (after v0.15.0) |
+| Undo / redo and snapshots: a linear history of the last 100 changes kept in the plug-in (one knob gesture = one step, quick repeats merged; Auto-Master, Stem EQ Apply and a recall are one step each and carry the report; host automation and A/B, MATCH, listening aids never recorded; not saved), arrows with "Undo: Drive +2.0 dB" labels and Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y; snapshots S1–S4 of every setting plus its report, saved with the project, click-free recall, "changed since" mark, MATCH remembers each snapshot's level for fair flips | Done (after v0.15.0) |
 | Listening aids (monitoring only, never saved, never in an offline export, off when the window closes, red banner while on): Listen buttons that play only what Saturation adds / the Soft Clipper, Resonance Tamer, Maximizer and a Dynamics band take off (sample-aligned, at their level in the master, quiet ones turned up with the amount shown), Dynamics band solos, MONO and PHONE (mono, ~300 Hz–8 kHz) checks next to MATCH; click-free switching | Done (after v0.15.0) |
 
 ## Validation
@@ -59,10 +60,12 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
   block size (1 to 4096, and random sizes), offline export = real time (MATCH never reaches an export),
   reported latency = real delay at 44.1-192 kHz and the same in bypass, a sample-rate change starts like a
   fresh plug-in, no memory allocation on the audio thread, saved state restores every control, every control
-  jumping at random never gives NaN or passes the ceiling, double precision = single precision.
+  jumping at random never gives NaN or passes the ceiling, double precision = single precision; undo / redo
+  (one step per gesture, host automation never recorded, the 100-step cap, Auto-Master undone exactly) and
+  snapshots (exact recall, saved with the project, A/B and MATCH untouched, click-free, MATCH's per-snapshot level).
 - **Sanitizers** (CI, Linux; pull requests and manual runs): the engine tests under AddressSanitizer + UndefinedBehaviorSanitizer.
 - **UI smoke test** (CI, `tests/ui/`): the web UI in headless Chromium: every module's on/off switch, A / B,
-  host changes, no script errors.
+  host changes, undo / redo (buttons, labels, Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y), snapshots, no script errors.
 - **pluginval** at strictness 10 + Steinberg's VST3 validator (CI, Windows).
 - **Listening**: `PolisherBlindTest` (built with the plug-in) turns exported masters into a loudness-matched,
   shuffled blind test with a score sheet and a separate answer key (see the manual).
@@ -94,7 +97,8 @@ dsp/        Framework-free C++20 engine (no JUCE): unit-testable, reusable offli
     StemEQ.h             Stem EQ + Tone Steady + Resonance Tamer (one STFT stage, model in StemNetWeights.h)
     Unlimiter.h          Restores hit contrast on squashed audio
     Monitoring.h         Listening aids: Listen / Solo switch (ListenMix), MONO / PHONE checks (MonitorOutput)
-plugin/     JUCE AudioProcessor, web-view editor (+ basic native fallback editor when no web view exists)
+plugin/     JUCE AudioProcessor, web-view editor (+ basic native fallback editor when no web view exists);
+            SettingsHistory.h: undo / redo history and snapshots S1-S4 (kept in the processor)
   ui/       The liquid-glass interface: index.html, styles.css, app.js, images, fonts (OFL).
             Browser preview: copy JUCE's modules/juce_gui_extra/native/javascript/*.js into
             plugin/ui/juce/, run `python3 -m http.server` in plugin/ui and open

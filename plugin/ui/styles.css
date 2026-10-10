@@ -397,3 +397,23 @@ body.theme-mono .sw-ref { border-top-color: #E6E6E6; }
 .band-pick .band-row .solo { width: 30px; padding: 0; font-size: 11px; }
 .band-pick .band-row .solo.on { box-shadow: 0 0 0 1.5px #FFB3B7, 0 0 10px rgba(255,40,50,.8); }
 body.theme-mono .monitor-banner { background: linear-gradient(180deg, rgba(225,25,35,.96), rgba(150,8,16,.96)); }
+
+/* ---------- header: snapshots S1..S4, undo / redo (tightened so the row still fits 1189 px) ---------- */
+.header-row { gap: 7px; }
+.logo { width: 84px; height: 46px; object-fit: contain; flex-shrink: 0; }
+.title { width: 168px; min-width: 120px; flex-shrink: 1; }   /* gives way if MATCH's reading needs room */
+.genre { width: 186px; margin-left: 2px; flex-shrink: 0; }
+.genre button { width: 28px; }
+.learn-toggle { width: 96px; font-size: 14px; flex-shrink: 0; }
+.match { min-width: 80px; padding: 0 10px; flex-shrink: 0; }
+.header-row .imgbtn { width: 44px; height: 44px; flex-shrink: 0; }
+.redo img { transform: scaleX(-1); }
+#btn-redo:not(.is-disabled) { cursor: pointer; filter: drop-shadow(0 0 8px rgba(120,190,255,.6)); }
+body.theme-mono #btn-redo:not(.is-disabled) { filter: drop-shadow(0 0 8px rgba(255,255,255,.45)); }
+.snaps { display: flex; flex-direction: column; gap: 3px; flex-shrink: 0; }
+.snap-row { display: flex; gap: 3px; }
+.snap { height: 21px; width: 33px; padding: 0; line-height: 21px; font-size: 11px; font-weight: 700; letter-spacing: .04em; cursor: pointer; white-space: nowrap; }
+.snap.empty { opacity: .6; }
+.snap.empty:hover { opacity: .9; }
+.snap.armed { box-shadow: 0 0 0 1.5px #FFB3B7, 0 0 8px rgba(255,40,50,.7); }
+.snap-store { height: 21px; width: 141px; padding: 0; line-height: 21px; font-size: 11px; font-weight: 700; letter-spacing: .08em; cursor: pointer; }
