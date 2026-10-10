@@ -1,11 +1,35 @@
 # Polisher — resume here (updated 2026-10-10)
 
 Read this first in a new chat. Code: github.com/DK7602/polisher. Newest work: branch
-`claude/eloquent-einstein-sscadx` (v0.14.0, 2026-10-10 session below; it fast-forwarded from
+`claude/eloquent-einstein-sscadx` (v0.15.0, 2026-10-10 sessions below; it fast-forwarded from
 `claude/gracious-wright-tgs0no`, which is older). Merge to `main` when ready. Every push builds Mac + Windows; download Polisher-Windows from the
 latest green Actions run.
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
+
+## 2026-10-10 module-by-module audit (v0.15.0)
+User asked for a module-by-module audit + "next level" suggestions (+ type-in values: done, d054c5c).
+Five read-only audit agents measured every module (scratch programs under /tmp/claude-0/audit-*, gone with the
+container); then fixes (Imager/Clipper/Tube/host bypass/ceiling texts by me; Bass+Dynamics, Unlimiter, Tonal EQ,
+spectral stage by worktree agents, merged). Key behaviour changes to remember:
+- Imager and Mono Below: the mid goes through the same all-passes as the split side (no longer bit-exact mid
+  while running; mid LEVEL is). Clipper: always-on oversampled path, cross-fades; prepare(nch, sampleRate).
+- Punch boosts only low-end jumps that come with a 1-5 kHz click (808 note-ons: 0 dB; a pure sine kick: none).
+- Sub Tame waits 0.75 s of low end before cutting; Tone Steady re-learns when 30-160 Hz rises >4 dB for ~1 s.
+- Unlimiter: 4 dB/dB lift law with soft knee, max 10 dB x Amount x strength; Kick/Snap lift only their band;
+  Squash = true peak + limiter-signature check; hidden param ulSquashSet (hint 5) latches strength from
+  Auto-Master; 5 ms look-ahead (latency 240 @48k); Auto-Master keeps it only if >= 1 dB punch survives the target.
+- Tonal EQ: matched-magnitude biquads (JS curve same math); 15 Hz 4th-order HP fades in only while Low End boosts;
+  Auto-Master solves band gains by least squares over the band-overlap matrix; tone analysed BEFORE Stem EQ.
+- Stem EQ FFT 4096 at >=160 kHz (latency ~40 ms at every rate); Model Hears is A-weighted ("what you hear");
+  tamer statistics A-weighted (threshold 0.3). Auto-Master vocal level still RAW energy: re-derive the genre
+  vocal norms on the user's songs before switching it (note in AutoMaster.h / LoudnessTargeting.h).
+- Auto-Master: Loud ceiling -1.5 dBTP (Club/Stream -1.0); clipper dropped when it would clip < 0.3 dB;
+  quiet-mix NEED/STEP note; report carries capturedLufs and Learn warns when the playing part is >2 LU louder.
+- Host bypass = the "bypass" param (A); tail = latency + 0.2 s.
+Open suggestions (not built): reference matching, delta/listen modes, snapshots + undo, mono/phone checks,
+genre target curve on the spectrum, Stem EQ keep-loudness, stored Tone Steady target, low-band-only harmonics,
+imager meters at the output, whole-song Auto-Master listen.
 
 ## 2026-10-10 session (user asked: do all five of the audit follow-ups, one after the other, overnight)
 1. Unlimiter header button fixed: it toggled the GLOBAL bypass (A) instead of ulOn. app.js now has one table
