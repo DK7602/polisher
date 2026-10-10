@@ -18,6 +18,7 @@
 #include "SpectrumTap.h"
 #include "AutoMasterController.h"
 #include "ReferenceTrack.h"
+#include "SettingsHistory.h"
 
 #include <array>
 #include <atomic>
@@ -138,6 +139,14 @@ public:
     /** Listens to the mix, decides every module's settings and explains them. */
     AutoMasterController autoMaster { parameters, reference };
 
+    // --- Undo / redo and snapshots (message thread; see SettingsHistory.h) ----------------------------
+    /** Every change made in Polisher's window, Auto-Master run, Stem EQ Apply and snapshot recall, as
+        undo / redo steps. Kept while the window closes and opens; not saved (a project load clears it). */
+    SettingsHistory history { *this };
+    /** Snapshot slots S1..S4 (the whole sound), saved with the project. A recall is one undo step, and
+        MATCH remembers the level it learned for each slot (see processAnyPrecision). */
+    SettingsSnapshots snapshots { *this, history };
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
 private:
@@ -195,6 +204,16 @@ private:
     std::atomic<float>* imgHighParam = nullptr;
     polisher::LevelMatch levelMatch;
     double currentMatchGain = 1.0;
+
+    // MATCH per snapshot: the gap learned while a slot played unchanged, so flipping back to it is
+    // level-matched at once. The audio thread owns matchMemory; recall / store post requests.
+    void handleMatchRequests() noexcept;
+    struct MatchMemory { bool valid = false; double gapDb = 0.0; };
+    std::array<MatchMemory, SettingsSnapshots::kSlots> matchMemory {};
+    std::atomic<int> matchSwitchRequest { 0 };   // 0x100 | (leaving + 1) | (entering + 1) << 4
+    std::atomic<int> matchForgetRequest { 0 };   // one bit per slot
+    static constexpr double kMatchHoldSeconds = 3.0;    // after a switch: the short-term readings' window
+    static constexpr double kMatchLearnSeconds = 10.0;  // a slot's level is kept once learned this long
 
     // Monitoring (see setListenMode). The monitored signal is formed where its module sits, carried to
     // the output by monOut (so it lines up with the master to the sample) and given the Maximizer's gain

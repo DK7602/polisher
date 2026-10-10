@@ -12,6 +12,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <functional>
+#include <map>
 #include <numbers>
 #include <new>
 #include <random>
@@ -1038,6 +1039,444 @@ TEST_CASE ("Plug-in: the meters say whether the host is playing, so the loudness
     renderFixed (*p, block, 512);
     CHECK (p->meters.transport.load() == -1);                  // a host that gives no position this block
     p->setPlayHead (nullptr);
+}
+
+// --- Undo / redo and snapshots ----------------------------------------------------------------------
+
+namespace {
+
+/** A user change the way Polisher's window makes it: one gesture (press, values, release). */
+void gesture (PolisherAudioProcessor& p, const juce::String& id, std::initializer_list<float> plainValues)
+{
+    auto* param = p.parameters.getParameter (id);
+    REQUIRE (param != nullptr);
+    param->beginChangeGesture();
+    for (float v : plainValues)
+        param->setValueNotifyingHost (param->convertTo0to1 (v));
+    param->endChangeGesture();
+}
+void gesture (PolisherAudioProcessor& p, const juce::String& id, float plain) { gesture (p, id, { plain }); }
+
+float plainOf (PolisherAudioProcessor& p, const juce::String& id) { return p.parameters.getRawParameterValue (id)->load(); }
+
+/** Every control's 0..1 value, in parameter order. */
+std::vector<float> allValues (PolisherAudioProcessor& p)
+{
+    std::vector<float> v;
+    for (auto* param : p.getParameters()) v.push_back (param->getValue());
+    return v;
+}
+
+/** The settings a snapshot holds: plain value by ID. */
+std::map<juce::String, float> settingsOf (PolisherAudioProcessor& p)
+{
+    std::map<juce::String, float> m;
+    for (auto* param : p.getParameters())
+        if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (param); rp != nullptr && SettingsScope::isSetting (rp->getParameterID()))
+            m[rp->getParameterID()] = rp->convertFrom0to1 (rp->getValue());
+    return m;
+}
+
+/** The first control whose value differs ("" = all the same). */
+juce::String firstDifference (const std::map<juce::String, float>& a, const std::map<juce::String, float>& b)
+{
+    for (const auto& [id, v] : a)
+        if (! b.contains (id) || std::abs (b.at (id) - v) > 1.0e-4f * std::max (1.0f, std::abs (v)))
+            return id + ": " + juce::String (v) + " vs " + (b.contains (id) ? juce::String (b.at (id)) : juce::String ("missing"));
+    return {};
+}
+
+void randomSettings (PolisherAudioProcessor& p, unsigned seed)
+{
+    std::mt19937 rng (seed);
+    std::uniform_real_distribution<float> u (0.0f, 1.0f);
+    for (auto* param : p.getParameters())
+        if (SettingsScope::isSetting (dynamic_cast<juce::RangedAudioParameter*> (param)->getParameterID()))
+            param->setValueNotifyingHost (u (rng));
+}
+
+juce::String utf8 (const char* s) { return juce::String::fromUTF8 (s); }
+
+} // namespace
+
+TEST_CASE ("Undo: one gesture is one step; host automation and listening controls are never recorded", "[plugin][history]")
+{
+    auto p = makeProcessor (48000.0, 512, false);
+    auto& h = p->history;
+    h.setMergeWindowMs (0.0);
+    CHECK_FALSE (h.canUndo());
+    CHECK (h.undo().isEmpty());
+
+    // A knob drag from press to release, through many values: one step, named by what it did.
+    gesture (*p, "drive", { 0.5f, 1.0f, 2.0f, 3.0f });
+    CHECK (h.size() == 1);
+    CHECK (h.undoLabel() == "Drive +3.0 dB");
+
+    // The DAW's automation (no gesture) and A/B, MATCH, Auto-Master's choices add nothing.
+    set (*p, "ceiling", -2.0f);
+    set (*p, "eqGain3", 4.0f);
+    gesture (*p, "bypass", 1.0f);
+    gesture (*p, "levelMatch", 1.0f);
+    gesture (*p, "amIntensity", 2.0f);
+    gesture (*p, "amGenre", 3.0f);
+    CHECK (h.size() == 1);
+
+    // Undo puts back the exact value; what the host changed stays as it is.
+    const float driveBefore = p->parameters.getParameter ("drive")->convertTo0to1 (0.0f);
+    CHECK (h.undo() == "Drive +3.0 dB");
+    CHECK (p->parameters.getParameter ("drive")->getValue() == driveBefore);
+    CHECK (plainOf (*p, "ceiling") == -2.0f);
+    CHECK (plainOf (*p, "eqGain3") == 4.0f);
+    CHECK (plainOf (*p, "bypass") == 1.0f);
+    CHECK_FALSE (h.canUndo());
+    CHECK (h.redoLabel() == "Drive +3.0 dB");
+    CHECK (h.redo() == "Drive +3.0 dB");
+    CHECK (plainOf (*p, "drive") == 3.0f);
+    CHECK_FALSE (h.canRedo());
+
+    // Switches, choices and other units read in plain words.
+    gesture (*p, "clipOn", 1.0f);
+    CHECK (h.undoLabel() == "Clipper on");
+    gesture (*p, "satMode", 1.0f);
+    CHECK (h.undoLabel() == "Saturation Mode: Tube");
+    gesture (*p, "bassPunch", 25.0f);
+    CHECK (h.undoLabel() == "Bass Punch 0 %" + utf8 (" \xE2\x86\x92 ") + "25 %");
+    gesture (*p, "ceiling", -2.5f);
+    CHECK (h.undoLabel() == "Ceiling " + utf8 ("\xE2\x88\x92") + "0.5 dB");
+
+    // Overlapping gestures (dragging an EQ point moves its gain and frequency) are one step.
+    auto* g = p->parameters.getParameter ("eqGain2");
+    auto* f = p->parameters.getParameter ("eqFreq2");
+    const int n = h.size();
+    g->beginChangeGesture();
+    f->beginChangeGesture();
+    g->setValueNotifyingHost (g->convertTo0to1 (3.0f));
+    f->setValueNotifyingHost (f->convertTo0to1 (140.0f));
+    g->endChangeGesture();
+    f->endChangeGesture();
+    CHECK (h.size() == n + 1);
+    CHECK (h.undoLabel() == "EQ Bass (2 controls)");
+    h.undo();
+    CHECK (plainOf (*p, "eqGain2") == 0.0f);
+    CHECK (plainOf (*p, "eqFreq2") == 100.0f);
+
+    // A new change after an undo drops what could have been redone (the history is one line).
+    CHECK (h.canRedo());
+    gesture (*p, "imgHigh", 120.0f);
+    CHECK_FALSE (h.canRedo());
+    CHECK (h.undoLabel() == "Imager High Width 100 %" + utf8 (" \xE2\x86\x92 ") + "120 %");
+
+    // A gesture that ends where it started is not a step.
+    const int m = h.size();
+    gesture (*p, "satDrive", { 3.0f, 0.0f });
+    CHECK (h.size() == m);
+}
+
+TEST_CASE ("Undo: quick repeats on one control merge; the history keeps the last 100 steps", "[plugin][history]")
+{
+    auto p = makeProcessor (48000.0, 512, false);
+    auto& h = p->history;
+
+    // Mouse wheel / arrow keys: each tick is its own gesture; within the merge window they are one step.
+    h.setMergeWindowMs (60000.0);
+    gesture (*p, "drive", 1.0f);
+    gesture (*p, "drive", 2.0f);
+    gesture (*p, "drive", 2.5f);
+    CHECK (h.size() == 1);
+    CHECK (h.undoLabel() == "Drive +2.5 dB");
+    gesture (*p, "drive", 0.0f);              // wheeled back to where it was: no step left
+    CHECK (h.size() == 0);
+    gesture (*p, "drive", 1.0f);
+    gesture (*p, "satDrive", 2.0f);           // another control: its own step
+    gesture (*p, "drive", 4.0f);              // back to Drive after it: a new step, not merged
+    CHECK (h.size() == 3);
+    h.undo();
+    CHECK (plainOf (*p, "drive") == 1.0f);
+    gesture (*p, "drive", 3.0f);              // after an undo: never merged into an older step
+    CHECK (h.size() == 3);
+    CHECK (h.undoLabel() == "Drive +2.0 dB");
+
+    // The cap: 130 more steps keep only the last 100; undoing all of them stops at step 30.
+    h.setMergeWindowMs (0.0);
+    std::vector<float> after;
+    for (int i = 0; i < 130; ++i)
+    {
+        gesture (*p, i % 2 ? "drive" : "satDrive", 0.1f * static_cast<float> (i % 50) + 0.5f);
+        after.push_back (plainOf (*p, i % 2 ? "drive" : "satDrive"));
+    }
+    CHECK (h.size() == SettingsHistory::kMaxSteps);
+    int undone = 0;
+    while (h.undo().isNotEmpty()) ++undone;
+    CHECK (undone == SettingsHistory::kMaxSteps);
+    // Back to the settings after step 30 (index 29, a satDrive move; Drive as step 29 left it).
+    CHECK (plainOf (*p, "satDrive") == after[28]);
+    CHECK (plainOf (*p, "drive") == after[29]);
+}
+
+TEST_CASE ("Undo: an Auto-Master run is one step that undoes everything it set; later edits are never lost", "[plugin][history]")
+{
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, false);
+    auto& h = p->history;
+    h.setMergeWindowMs (0.0);
+    gesture (*p, "drive", 2.0f);                 // a manual step before Auto-Master
+    set (*p, "bypass", 1.0f);                    // listening to A when it runs
+    const auto before = allValues (*p);
+    const auto reportBefore = p->autoMaster.getReportJson();
+
+    polisher::AutoMasterSettings s;              // Trap / Hip-Hop, Balanced, Loud -9; Stem EQ as the plug-in has it
+    s.stem.enabled = true;
+    s.stem.keepLoudness = true;
+    const auto result = polisher::autoMaster (testsig::trapLike (sr, AutoMasterController::kListenSeconds), s);
+    REQUIRE (result.ok);
+    p->autoMaster.apply (result, s);
+    const auto after = allValues (*p);
+    const auto reportAfter = p->autoMaster.getReportJson();
+    int changed = 0;
+    for (size_t i = 0; i < before.size(); ++i) changed += before[i] != after[i] ? 1 : 0;
+    INFO (changed << " controls changed");
+    CHECK (changed >= 15);
+    CHECK (plainOf (*p, "bypass") == 0.0f);      // Auto-Master switched to B
+    CHECK (reportAfter.isNotEmpty());
+    CHECK (h.size() == 2);
+    CHECK (h.undoLabel() == "Auto-Master (Trap / Hip-Hop, Balanced)");
+
+    // Undo: every control exactly as before (A included) and the report that was there before.
+    CHECK (h.undo() == "Auto-Master (Trap / Hip-Hop, Balanced)");
+    CHECK (allValues (*p) == before);
+    CHECK (p->autoMaster.getReportJson() == reportBefore);
+    CHECK (h.undoLabel() == "Drive +2.0 dB");    // the manual step is still there
+    // Redo: Auto-Master's settings and report again.
+    CHECK (h.redo() == "Auto-Master (Trap / Hip-Hop, Balanced)");
+    CHECK (allValues (*p) == after);
+    CHECK (p->autoMaster.getReportJson() == reportAfter);
+
+    // A manual edit after Auto-Master: undo takes back only that edit, redo brings it back.
+    const float sat = plainOf (*p, "satDrive");
+    gesture (*p, "satDrive", sat + 2.0f);
+    gesture (*p, "imgHigh", 90.0f);
+    CHECK (h.undo().startsWith ("Imager High Width"));
+    CHECK (h.undo() == "Saturation Drive +2.0 dB");
+    CHECK (allValues (*p) == after);              // exactly Auto-Master's settings
+    CHECK (h.undoLabel() == "Auto-Master (Trap / Hip-Hop, Balanced)");
+    h.redo();
+    h.redo();
+    CHECK (plainOf (*p, "satDrive") == sat + 2.0f);
+    CHECK (plainOf (*p, "imgHigh") == 90.0f);
+
+    // A failed run (silence) changes no setting and adds no step.
+    const int n = h.size();
+    const auto silent = polisher::autoMaster (testsig::silence (sr, 2, AutoMasterController::kListenSeconds), s);
+    REQUIRE_FALSE (silent.ok);
+    p->autoMaster.apply (silent, s);
+    CHECK (h.size() == n);
+}
+
+TEST_CASE ("Snapshots: recall brings back the exact settings as one undo step, and leaves A/B, MATCH and Auto-Master's choices alone", "[plugin][snapshots]")
+{
+    auto p = makeProcessor (48000.0, 512, true);
+    auto& h = p->history;
+    auto& snaps = p->snapshots;
+    h.setMergeWindowMs (0.0);
+    CHECK (snaps.getStatus().active == -1);
+    CHECK_FALSE (snaps.recall (0));               // empty: nothing happens
+    CHECK (h.size() == 0);
+
+    p->autoMaster.restoreReport ("{\"ok\": true, \"intensity\": \"Balanced\"}");
+    snaps.store (0);
+    const auto s1 = settingsOf (*p);
+    randomSettings (*p, 3);
+    p->autoMaster.restoreReport ("{\"ok\": true, \"intensity\": \"Punchy\"}");
+    snaps.store (1);
+    const auto s2 = settingsOf (*p);
+    REQUIRE (firstDifference (s1, s2).isNotEmpty());
+    auto st = snaps.getStatus();
+    CHECK ((st.slots[0].filled && st.slots[1].filled && ! st.slots[2].filled && ! st.slots[3].filled));
+    CHECK ((st.active == 1 && ! st.modified));
+    CHECK (h.size() == 0);                        // storing changes no setting
+
+    // A/B on A, MATCH on, other Auto-Master choices: a recall must not touch them.
+    set (*p, "bypass", 1.0f);
+    set (*p, "levelMatch", 1.0f);
+    set (*p, "amIntensity", 2.0f);
+    set (*p, "amTarget", 0.0f);
+
+    CHECK (snaps.recall (0));
+    INFO (firstDifference (s1, settingsOf (*p)));
+    CHECK (firstDifference (s1, settingsOf (*p)).isEmpty());
+    CHECK (plainOf (*p, "bypass") == 1.0f);
+    CHECK (plainOf (*p, "levelMatch") == 1.0f);
+    CHECK (plainOf (*p, "amIntensity") == 2.0f);
+    CHECK (plainOf (*p, "amTarget") == 0.0f);
+    CHECK (p->autoMaster.getReportJson().contains ("Balanced"));   // the report that explains S1
+    CHECK (h.size() == 1);
+    CHECK (h.undoLabel() == "Recall Snapshot 1");
+    st = snaps.getStatus();
+    CHECK ((st.active == 0 && ! st.modified));
+
+    // A change shows as "modified"; undoing it is S1 again.
+    gesture (*p, "drive", plainOf (*p, "drive") + 1.0f);
+    st = snaps.getStatus();
+    CHECK ((st.active == 0 && st.modified));
+    h.undo();
+    st = snaps.getStatus();
+    CHECK ((st.active == 0 && ! st.modified));
+
+    // Undoing the recall is S2 again (settings and report), and S2 shows as the one playing.
+    CHECK (h.undo() == "Recall Snapshot 1");
+    CHECK (firstDifference (s2, settingsOf (*p)).isEmpty());
+    CHECK (p->autoMaster.getReportJson().contains ("Punchy"));
+    st = snaps.getStatus();
+    CHECK ((st.active == 1 && ! st.modified));
+    CHECK (h.redo() == "Recall Snapshot 1");
+    CHECK (firstDifference (s1, settingsOf (*p)).isEmpty());
+
+    // Storing again replaces a slot.
+    gesture (*p, "drive", 7.0f);
+    snaps.store (0);
+    CHECK (snaps.recall (1));
+    CHECK (snaps.recall (0));
+    CHECK (plainOf (*p, "drive") == 7.0f);
+}
+
+TEST_CASE ("Snapshots are saved with the project; a project from before snapshots loads with every slot empty", "[plugin][snapshots]")
+{
+    auto a = makeProcessor (48000.0, 512, true);
+    a->snapshots.store (0);
+    const auto s1 = settingsOf (*a);
+    randomSettings (*a, 8);
+    a->snapshots.store (2);
+    juce::MemoryBlock state;
+    a->getStateInformation (state);
+    auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+    REQUIRE (xml != nullptr);
+    auto* saved = xml->getChildByName (SettingsSnapshots::kTag);
+    REQUIRE (saved != nullptr);
+    CHECK (saved->getIntAttribute ("version") == SettingsSnapshots::kFormat);
+
+    auto b = makeProcessor (48000.0, 512, false);
+    gesture (*b, "drive", 5.0f);
+    REQUIRE (b->history.canUndo());
+    b->setStateInformation (state.getData(), (int) state.getSize());
+    CHECK_FALSE (b->history.canUndo());           // another project: the old steps no longer apply
+    auto st = b->snapshots.getStatus();
+    CHECK ((st.slots[0].filled && ! st.slots[1].filled && st.slots[2].filled && ! st.slots[3].filled));
+    CHECK ((st.active == 2 && ! st.modified));
+    CHECK (firstDifference (settingsOf (*a), settingsOf (*b)).isEmpty());
+    CHECK (b->snapshots.recall (0));
+    CHECK (firstDifference (s1, settingsOf (*b)).isEmpty());
+
+    // An empty bank adds nothing to the state (it stays exactly as before snapshots existed).
+    auto fresh = makeProcessor (48000.0, 512, false);
+    juce::MemoryBlock plain;
+    fresh->getStateInformation (plain);
+    auto plainXml = juce::AudioProcessor::getXmlFromBinary (plain.getData(), (int) plain.getSize());
+    REQUIRE (plainXml != nullptr);
+    CHECK (plainXml->getChildByName (SettingsSnapshots::kTag) == nullptr);
+
+    // A project saved before snapshots: every control loads, every slot is empty.
+    xml->removeChildElement (saved, true);
+    set (*a, "drive", 4.25f);
+    for (auto* child : xml->getChildIterator())
+        if (child->getStringAttribute ("id") == "drive") child->setAttribute ("value", 4.25);
+    juce::MemoryBlock old;
+    juce::AudioProcessor::copyXmlToBinary (*xml, old);
+    b->setStateInformation (old.getData(), (int) old.getSize());
+    st = b->snapshots.getStatus();
+    CHECK (std::none_of (st.slots.begin(), st.slots.end(), [] (const auto& s) { return s.filled; }));
+    CHECK (st.active == -1);
+    CHECK (plainOf (*b, "drive") == 4.25f);
+    CHECK_FALSE (b->snapshots.recall (0));
+}
+
+TEST_CASE ("Snapshots: a recall glides like a knob move (no click)", "[plugin][snapshots]")
+{
+    const double sr = 48000.0;
+    // A low tone: any jump in the output would stand far above its own sample-to-sample steps.
+    const auto tone = testsig::sine (sr, 2, 110.0, -12.0, 9.0);
+    auto steady = [&] (bool busy)
+    {
+        auto p = makeProcessor (sr, 512, busy);
+        return maxStepOf (renderFixed (*p, tone, 512), (int) (0.5 * sr));
+    };
+    const double calm = std::max (steady (false), steady (true));
+
+    auto p = makeProcessor (sr, 512, false);
+    p->snapshots.store (0);                       // S1: every module neutral
+    busySettings (*p);
+    p->snapshots.store (1);                       // S2: every module working
+    p->prepareToPlay (sr, 512);
+    AudioClip out = tone;
+    for (auto& ch : out.channels) ch.resize ((size_t) (tone.numSamples() / 512 * 512));   // whole blocks only
+    juce::AudioBuffer<float> buf (2, 512);
+    juce::MidiBuffer midi;
+    for (int pos = 0, k = 0; pos + 512 <= tone.numSamples(); pos += 512, ++k)
+    {
+        if (k > 0 && k % 120 == 0) p->snapshots.recall ((k / 120) % 2 == 1 ? 0 : 1);   // flip every 1.3 s
+        for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, tone.channels[(size_t) c].data() + pos, 512);
+        p->processBlock (buf, midi);
+        for (int c = 0; c < 2; ++c)
+            std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + 512, out.channels[(size_t) c].begin() + pos);
+    }
+    const double flipping = maxStepOf (out, (int) (0.5 * sr));
+    INFO ("largest sample step: flipping S1/S2 " << flipping << ", steady " << calm);
+    CHECK (flipping < 1.5 * calm);
+}
+
+TEST_CASE ("Snapshots: MATCH remembers the level of each snapshot it heard, so flipping back is matched at once", "[plugin][snapshots]")
+{
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, false);
+    set (*p, "ceiling", 0.0f);
+    p->snapshots.store (0);                       // S1: Drive 0
+    set (*p, "drive", 6.0f);
+    p->snapshots.store (1);                       // S2: Drive +6, about 6 LU louder
+    set (*p, "levelMatch", 1.0f);
+    p->prepareToPlay (sr, 512);
+    const auto mix = testsig::musicLike (sr, 12.0, -20.0, 3);
+    juce::AudioBuffer<float> buf (2, 512);
+    juce::MidiBuffer midi;
+    int at = 0;
+    auto play = [&] (double seconds)
+    {
+        for (int i = 0; i < (int) (seconds * sr / 512); ++i)
+        {
+            for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, mix.channels[(size_t) c].data() + at, 512);
+            at = (at + 1024 < mix.numSamples()) ? at + 512 : 0;
+            p->processBlock (buf, midi);
+        }
+        return (double) p->meters.matchDb.load();
+    };
+
+    REQUIRE (p->snapshots.recall (0));
+    const double s1 = play (25.0);                // MATCH learns S1 (about 0 dB)
+    REQUIRE (p->snapshots.recall (1));
+    const double held = play (0.05);
+    const double heldLater = play (2.8);          // first visit: the old level is held while the readings catch up
+    const double s2 = play (30.0);                // ...then MATCH learns S2 (about -6 dB)
+    INFO ("S1 " << s1 << " dB, S2 " << s2 << " dB, held " << held << " / " << heldLater);
+    CHECK (std::abs (s1) < 0.5);
+    CHECK (s2 < -5.0);
+    CHECK (std::abs (held - s1) < 0.05);
+    CHECK (std::abs (heldLater - s1) < 0.05);
+
+    // Flipping back: each snapshot's own level at once (without the memory, S1 would play ~6 dB down
+    // and take ~20 s to come back).
+    REQUIRE (p->snapshots.recall (0));
+    const double backToS1 = play (0.05);
+    REQUIRE (p->snapshots.recall (1));
+    const double backToS2 = play (0.05);
+    INFO ("back to S1 " << backToS1 << " dB, back to S2 " << backToS2 << " dB");
+    CHECK (std::abs (backToS1 - s1) < 0.3);
+    CHECK (std::abs (backToS2 - s2) < 0.3);
+
+    // Storing new settings in a slot forgets its level (it has to be learned again).
+    set (*p, "drive", 3.0f);
+    p->snapshots.store (0);
+    REQUIRE (p->snapshots.recall (1));
+    play (0.05);
+    REQUIRE (p->snapshots.recall (0));
+    CHECK (std::abs (play (0.05) - s2) < 0.3);   // no memory for the new S1: S2's level is held
 }
 
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:

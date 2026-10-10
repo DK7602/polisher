@@ -186,17 +186,14 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
     doc->setProperty ("target", juce::String::fromUTF8 (kTargetNames[static_cast<int> (s.target)]));
     doc->setProperty ("time", juce::Time::getCurrentTime().toISO8601 (true));
 
+    // Everything below (the settings and the new report) is one undo step.
+    const bool grouped = r.ok && onApplyBegin && onApplyEnd;
+    if (grouped)
+        onApplyBegin ("Auto-Master (" + (s.reference.valid ? juce::String ("Match ref") : juce::String (polisher::genreName (s.genre)))
+                      + ", " + kIntensityNames[static_cast<int> (s.intensity)] + ")");
+
     if (r.ok)
     {
-        // Undo snapshot of everything Auto-Master may change.
-        undoSnapshot.clear();
-        undoValid.store (true);
-        for (auto* p : state.processor.getParameters())
-            if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
-                if (! rp->getParameterID().startsWith ("am") && rp->getParameterID() != "autoreset"
-                    && rp->getParameterID() != "resetOnChange")
-                    undoSnapshot.emplace_back (rp, rp->getValue());
-
         const auto& c = r.chain;
         auto* values = new juce::DynamicObject();
         auto set = [&] (const juce::String& id, float v) { setParam (id, v); values->setProperty (id, v); };
@@ -296,6 +293,8 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
 
     // Saved with the plug-in state (see getReportForSaving), so it survives reopening the project.
     setReport (juce::JSON::toString (juce::var (doc), true));
+    if (grouped)
+        onApplyEnd();
 }
 
 void AutoMasterController::setReport (const juce::String& json)
@@ -309,7 +308,6 @@ void AutoMasterController::setReport (const juce::String& json)
 
 void AutoMasterController::onStateRestored (const juce::String& savedReport)
 {
-    undoValid.store (false);
     setReport (savedReport);
 }
 
@@ -317,22 +315,6 @@ juce::String AutoMasterController::getReportForSaving() const
 {
     const juce::ScopedLock sl (reportLock);
     return report;
-}
-
-bool AutoMasterController::undo()
-{
-    if (! canUndo())
-        return false;
-    for (auto& [p, v] : undoSnapshot)
-    {
-        p->beginChangeGesture();
-        p->setValueNotifyingHost (v);
-        p->endChangeGesture();
-    }
-    undoSnapshot.clear();
-    undoValid.store (false);
-    setReport ({});
-    return true;
 }
 
 juce::String AutoMasterController::getReportJson() const

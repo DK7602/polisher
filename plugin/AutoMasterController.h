@@ -6,6 +6,7 @@
 #include "ReferenceTrack.h"
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -15,8 +16,9 @@
        skipping silence, until it has kListenSeconds of music.
     2. A background thread runs polisher::autoMaster() on it (analysis, decisions, loudness search).
     3. Back on the message thread the chosen values are set as normal host parameter changes (so the
-       DAW sees them, and they can be automated or undone), a snapshot is kept for Undo, and the
-       report is saved with the plug-in state so it's still there when the project is reopened.
+       DAW sees them, and they can be automated), as one step of the processor's undo history (see
+       onApplyBegin / onApplyEnd), and the report is saved with the plug-in state so it's still there
+       when the project is reopened.
 
     The capture buffer is allocated once, for the highest supported sample rate, so nothing ever
     reallocates while the audio thread may be writing. Each run has a session number; a result from
@@ -71,24 +73,32 @@ public:
     /** False if the plug-in isn't ready yet (no sample rate) or an analysis is still running. */
     bool start();
     void cancel();
-    bool undo();
 
-    /** After the host loads a preset or project state: the old undo no longer applies. */
+    /** Around applying a result's settings (message thread): the processor makes them one undo step,
+        labelled e.g. "Auto-Master (Trap / Hip-Hop, Balanced)". */
+    std::function<void (const juce::String& label)> onApplyBegin;
+    std::function<void()> onApplyEnd;
+
+    /** Sets every module from a finished analysis and stores its report (message thread). Called by the
+        timer when an analysis ends; public for the plug-in tests. */
+    void apply (const polisher::AutoMasterResult& result, const polisher::AutoMasterSettings& settings);
+
+    /** After the host loads a preset or project state. */
     void onStateRestored (const juce::String& savedReport);
+    /** Undo / redo / snapshot recall: the report that explains the settings now playing. */
+    void restoreReport (const juce::String& json) { setReport (json); }
     /** The report to save with the plug-in state (safe from any thread). */
     juce::String getReportForSaving() const;
 
     State getState() const noexcept           { return static_cast<State> (stateFlag.load()); }
     float getProgress() const noexcept;        // 0..1 while listening
     bool isHearingAudio() const noexcept       { return hearingAudio; }
-    bool canUndo() const noexcept              { return undoValid.load() && ! undoSnapshot.empty(); }
     int getReportVersion() const noexcept      { return reportVersion.load(); }
     juce::String getReportJson() const;        // "" when there's no report
 
 private:
     void timerCallback() override;
     void launchAnalysis();
-    void apply (const polisher::AutoMasterResult& result, const polisher::AutoMasterSettings& settings);
     void setParam (const juce::String& id, float value);
     void setReport (const juce::String& json);
 
@@ -111,8 +121,6 @@ private:
     polisher::AutoMasterSettings pendingSettings;
     std::atomic<bool> resultReady { false };
 
-    std::vector<std::pair<juce::RangedAudioParameter*, float>> undoSnapshot;   // message thread only
-    std::atomic<bool> undoValid { false };        // cleared from any thread when state is restored
     std::atomic<int> reportVersion { 0 };
     mutable juce::CriticalSection reportLock;
     juce::String report;

@@ -97,3 +97,30 @@ TEST_CASE ("MATCH learns only while B plays, and holds one steady level", "[leve
     INFO ("B gain range " << lo << " .. " << hi);
     CHECK (hi - lo < 1.5);
 }
+
+TEST_CASE ("MATCH can start from a level learned before, and holds it while the readings catch up", "[levelmatch]")
+{
+    // Snapshots: the gap MATCH learned for a snapshot comes back when you flip to it again.
+    LevelMatch m;
+    m.prepare (kSr);
+    run (m, -14.0, -9.0, -3.0, true, 20.0);
+    CHECK (m.hasLearned());
+    CHECK (m.learnedSeconds() > 19.0);
+    m.setGapDb (1.5);                                   // another snapshot, learned earlier
+    CHECK_THAT (m.gapDb(), WithinAbs (1.5, 1e-9));
+    m.holdLearning (static_cast<int> (3.0 * kSr));
+    CHECK (m.learnedSeconds() == 0.0);
+    run (m, -14.0, -9.0, -3.0, true, 2.9);              // still the old readings: held
+    CHECK_THAT (m.gapDb(), WithinAbs (1.5, 1e-9));
+    run (m, -14.0, -12.5, -3.0, true, 0.2);             // then it learns on from where it was set
+    CHECK_THAT (m.gapDb(), WithinAbs (1.5, 0.05));
+    run (m, -14.0, -11.0, -3.0, true, 40.0);
+    CHECK_THAT (m.gapDb(), WithinAbs (3.0, 0.05));
+
+    // Before anything was learned, the level is kept and the first reading sets the original's loudness.
+    LevelMatch fresh;
+    fresh.prepare (kSr);
+    fresh.setGapDb (4.0);
+    run (fresh, -14.0, -14.0, -3.0, true, 0.1);
+    CHECK_THAT (fresh.gapDb(), WithinAbs (4.0, 0.05));
+}

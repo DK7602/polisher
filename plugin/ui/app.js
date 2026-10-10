@@ -82,7 +82,12 @@ const P = {
 const resetMeter = Juce.getNativeFunction("resetMeter");
 const amStart = Juce.getNativeFunction("startAutoMaster");
 const amCancel = Juce.getNativeFunction("cancelAutoMaster");
-const amUndo = Juce.getNativeFunction("undoAutoMaster");
+// Undo / redo (the plug-in keeps the history, so it survives closing this window) and snapshots S1..S4.
+const histUndo = Juce.getNativeFunction("historyUndo");
+const histRedo = Juce.getNativeFunction("historyRedo");
+const histGroup = Juce.getNativeFunction("historyGroup");
+const snapStore = Juce.getNativeFunction("snapshotStore");
+const snapRecall = Juce.getNativeFunction("snapshotRecall");
 const amGetReport = Juce.getNativeFunction("getAutoMasterReport");
 const refLoad = Juce.getNativeFunction("loadReference");
 const refClear = Juce.getNativeFunction("clearReference");
@@ -100,7 +105,8 @@ const M = {
   momentary: -100, shortTerm: -100, integrated: -100, range: 0, truePeak: -100,
   peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
   inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
-  amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0, matchDb: 0, corr: 1,
+  amState: 0, amProgress: 0, amHearing: false, amReport: 0, matchDb: 0, corr: 1,
+  undo: "", redo: "", snaps: [{}, {}, {}, {}], snapActive: -1, snapModified: false,
   dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], stemKeep: 0, rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
   ulBoost: 0, ulSquash: 0, refVersion: 0, refState: 0,
   listen: 0, mono: false, phone: false, listenNow: 0, listenGain: 0, listenUnder: -100,
@@ -415,10 +421,12 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   };
   value.title = "Double-click to type a value";
   value.addEventListener("dblclick", typeIn);
+  // Each key press is one gesture (the plug-in's undo merges quick repeats into one step).
+  const nudge = (d) => { state.sliderDragStarted(); setNorm(state.getNormalisedValue() + d); state.sliderDragEnded(); };
   knob.addEventListener("keydown", (e) => {
     const step = e.shiftKey ? 0.002 : 0.01;
-    if (e.key === "ArrowUp" || e.key === "ArrowRight") setNorm(state.getNormalisedValue() + step);
-    else if (e.key === "ArrowDown" || e.key === "ArrowLeft") setNorm(state.getNormalisedValue() - step);
+    if (e.key === "ArrowUp" || e.key === "ArrowRight") nudge(step);
+    else if (e.key === "ArrowDown" || e.key === "ArrowLeft") nudge(-step);
     else if (e.key === "Enter") typeIn();
     else return;
     e.preventDefault();
@@ -981,6 +989,7 @@ function renderLearnBody() {
   if (learnView === "report" && amReport) { renderReport(body); return; }
   if (learnView === "ref") { renderRefLearn(body); return; }
   if (learnView === "history") { renderHistoryLearn(body); return; }
+  if (learnView === "snap") { renderSnapLearn(body); return; }
 
   const m = modules.find((x) => x.id === selected);
   if (!m.live) {
@@ -1333,8 +1342,11 @@ function stemSuggestButton() {
   b.className = "pill pill-red stem-apply";
   b.textContent = "APPLY: " + (moves.length ? moves.map((k) => `${STEMS[k].toUpperCase()} ${fmtSigned(s[k])}`).join(", ") : "STEM EQ ON");
   b.addEventListener("click", () => {
-    P.stemOn.setValue(true);
-    s.forEach((v, k) => { const st = P.stemGain[k]; st.sliderDragStarted(); st.setNormalisedValue(scaledToNorm(st, v)); st.sliderDragEnded(); });
+    histGroup(true, "Apply Stem EQ suggestion");   // one undo step for all of it
+    try {
+      P.stemOn.setValue(true);
+      s.forEach((v, k) => { const st = P.stemGain[k]; st.sliderDragStarted(); st.setNormalisedValue(scaledToNorm(st, v)); st.sliderDragEnded(); });
+    } finally { histGroup(false); }
     stemCells.forEach((c) => c.refresh && c.refresh());
     onParamsChanged(); userEdited();
     toast("Stem EQ suggestion applied. Turn on MATCH and flip A/B to judge it.");
@@ -1981,15 +1993,106 @@ function updateAmButton() {
     title.textContent = "AUTO-MASTER";
     sub.textContent = amReport && amReport.ok ? "Done · click to run again" : "Listens to your mix and sets every module";
   }
-  const undo = $("btn-undo");
-  undo.disabled = !M.amUndo;
-  undo.classList.toggle("is-disabled", !M.amUndo);
 }
-$("btn-undo").addEventListener("click", async () => {
-  if (!M.amUndo) return;
-  await amUndo();
-  toast("Undone: every setting is back to how it was before Auto-Master.");
+
+// ---------------------------------------------------------------------------------------------
+// Undo / redo: the plug-in records every change made here (one knob move = one step), each Auto-Master
+// run, Apply and snapshot recall. The arrows say what they will undo / redo.
+const IS_MAC = /Mac/.test(navigator.platform || "");
+const KEY = IS_MAC ? "⌘" : "Ctrl+";
+function refreshHistory() {
+  for (const [id, label, verb, keys] of [["btn-undo", M.undo, "Undo", `${KEY}Z`], ["btn-redo", M.redo, "Redo", IS_MAC ? "⇧⌘Z" : "Ctrl+Shift+Z or Ctrl+Y"]]) {
+    const b = $(id), on = !!label;
+    const title = on ? `${verb}: ${label} (${keys})` : `Nothing to ${verb.toLowerCase()}`;
+    if (b.title === title && b.disabled === !on) continue;
+    b.disabled = !on;
+    b.classList.toggle("is-disabled", !on);
+    b.title = title;
+    b.setAttribute("aria-label", title);
+  }
+}
+async function stepHistory(redo) {
+  if (!(redo ? M.redo : M.undo)) return;
+  let r = null;
+  try { r = await (redo ? histRedo() : histUndo()); } catch (e) { r = null; }
+  if (r && typeof r === "object") { M.undo = r.undo || ""; M.redo = r.redo || ""; }
+  refreshHistory();
+  if (r && r.done) toast(`${redo ? "Redone" : "Undone"}: ${r.done}`);
   refreshAllCells();
+}
+$("btn-undo").addEventListener("click", () => stepHistory(false));
+$("btn-redo").addEventListener("click", () => stepHistory(true));
+// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (Cmd on a Mac) while Polisher's window has the keyboard. A box you are
+// typing a value into keeps its own undo.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && storeArmed) { storeArmed = false; refreshSnapshots(); return; }
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  if (e.target && e.target.closest && e.target.closest("input, textarea, [contenteditable]")) return;
+  const k = (e.key || "").toLowerCase();
+  if (k === "z") { e.preventDefault(); stepHistory(e.shiftKey); }
+  else if (k === "y") { e.preventDefault(); stepHistory(true); }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Snapshots S1..S4 (not A/B: A/B is the original vs the master). An empty slot stores what you hear;
+// a stored one switches to it (one undo step); STORE then a slot (or Shift-click) replaces a slot.
+let storeArmed = false;
+let snapLearnShown = false;   // the snapshot Learn page opens by itself once, the first time a slot is stored
+const snapTime = (iso) => {
+  const d = iso ? new Date(iso) : null;
+  return d && !isNaN(d) ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+};
+let snapSig = "";
+function refreshSnapshots() {
+  const snaps = M.snaps || [];
+  const sig = JSON.stringify([snaps, M.snapActive, M.snapModified, storeArmed]);
+  if (sig === snapSig) return;
+  snapSig = sig;
+  document.querySelectorAll("#snaps .snap").forEach((b) => {
+    const k = Number(b.dataset.slot), s = snaps[k] || {}, filled = !!s.filled;
+    const active = filled && M.snapActive === k, changed = active && !!M.snapModified;
+    const text = `S${k + 1}${changed ? "•" : ""}`;
+    if (b.textContent !== text) b.textContent = text;
+    b.className = "pill snap " + (active ? "pill-red" : "pill-blue") + (filled ? "" : " empty") + (storeArmed ? " armed" : "");
+    b.setAttribute("aria-pressed", String(active));
+    const from = s.note ? ` after “${s.note}”` : "";
+    b.title = !filled ? `Snapshot ${k + 1} is empty: click to keep the settings you hear now`
+      : storeArmed ? `Replace Snapshot ${k + 1} with the settings you hear now`
+      : `Snapshot ${k + 1}${active ? (changed ? ", playing, changed since (•)" : ", playing") : ""}: stored ${snapTime(s.time)}${from}. `
+        + "Click to switch to it (undo goes back). Shift-click to replace it.";
+    b.setAttribute("aria-label", b.title);
+  });
+  const st = $("btn-store");
+  st.className = "pill snap-store " + (storeArmed ? "pill-red" : "pill-blue");
+  st.textContent = storeArmed ? "PICK SLOT" : "STORE";
+  st.setAttribute("aria-pressed", String(storeArmed));
+}
+function storeIn(k) {
+  const replaced = !!((M.snaps || [])[k] || {}).filled;
+  snapStore(k);
+  storeArmed = false;
+  M.snaps = (M.snaps || []).slice();
+  M.snaps[k] = { filled: true, time: new Date().toISOString(), note: M.undo };
+  M.snapActive = k; M.snapModified = false;
+  refreshSnapshots();
+  toast(replaced ? `Snapshot ${k + 1} replaced with the settings you hear now.`
+                 : `Kept in S${k + 1}. Click S${k + 1} any time to come back to these settings.`);
+  if (!snapLearnShown) { snapLearnShown = true; learnView = "snap"; renderLearn(); }
+}
+document.querySelectorAll("#snaps .snap").forEach((b) => b.addEventListener("click", async (e) => {
+  const k = Number(b.dataset.slot), filled = !!((M.snaps || [])[k] || {}).filled;
+  if (storeArmed || !filled || e.shiftKey) { storeIn(k); return; }
+  const ok = await snapRecall(k);
+  if (ok === false) return;
+  M.snapActive = k; M.snapModified = false;
+  refreshSnapshots();
+  refreshAllCells();
+  toast(`Snapshot ${k + 1}: its settings glide in. The undo arrow goes back.`);
+}));
+$("btn-store").addEventListener("click", () => {
+  storeArmed = !storeArmed;
+  refreshSnapshots();
+  if (storeArmed) { toast("Pick a slot, S1 to S4: it keeps the settings you hear now."); learnView = "snap"; renderLearn(); }
 });
 
 async function fetchReport(openIt) {
@@ -2417,6 +2520,29 @@ function renderRefLearn(body) {
   body.appendChild(howToUseRef());
 }
 
+// Learn for snapshots and undo (opens once by itself, the first time a slot is stored, and with STORE).
+function renderSnapLearn(body) {
+  const link = document.createElement("button");
+  link.type = "button";
+  link.className = "l-link";
+  link.textContent = "← BACK";
+  link.addEventListener("click", () => { learnView = "module"; renderLearn(); });
+  body.appendChild(link);
+  body.appendChild(head("SNAPSHOTS S1–S4"));
+  body.appendChild(para("l-p", "Each slot keeps a whole sound: every knob and switch in every module, plus the Auto-Master report that explains it. They're saved with your Cubase project."));
+  body.appendChild(item("Empty slot", null, "Click it to keep the settings you hear now."));
+  body.appendChild(item("Stored slot", null, "Click it to switch to those settings. They glide in like a knob move, so there's no click, and the undo arrow takes you back."));
+  body.appendChild(item("Red slot", null, "The one playing. A dot (S1•) means you've changed something since. To keep the change, click STORE, then the slot (or Shift-click the slot)."));
+  body.appendChild(item("Not in a snapshot", null, "A / B, MATCH, MONO, PHONE and Listen, and Auto-Master's genre, intensity and target. Switching snapshots never changes how you listen. S1–S4 are not A / B: A is always your original mix, B the master."));
+  body.appendChild(sep());
+  body.appendChild(head("A FAIR COMPARE WITH MATCH"));
+  body.appendChild(para("l-p", "MATCH learns how loud each snapshot plays compared with your mix, over about 10 seconds of B. The first time you hear a snapshot, give it 10–15 seconds before you judge. After that MATCH remembers its level, so when you flip back it's matched at once. Right after a switch it holds the level for 3 seconds while the loudness reading catches up."));
+  body.appendChild(tip("TRY THIS", "Balanced vs Punchy: play your chorus, run Auto-Master on Balanced and click S1. Pick Punchy, run it again and click S2. Turn on MATCH and listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip S1 / S2 every few seconds: you hear punch and weight, not volume. Click the one you like and keep going.", true));
+  body.appendChild(sep());
+  body.appendChild(head("UNDO AND REDO"));
+  body.appendChild(para("l-p", `The arrows at the top step back and forward through your changes, one at a time: a knob move, a switch, a typed value, an Auto-Master run, Apply, a snapshot. Point at an arrow to see what it will undo. ${IS_MAC ? "⌘Z undoes, ⇧⌘Z redoes" : "Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes"} (click inside Polisher first, or Cubase takes the keys). The last 100 steps are kept while Polisher's window is closed, but not when you close the project. Automation from Cubase is never in the list.`));
+}
+
 const AM_MODULES = [["ul", "UNLIMITER"], ["eq", "TONAL EQ"], ["stem", "STEM EQ"], ["ts", "TONE STEADY"], ["rt", "RESONANCE TAMER"], ["bass", "BASS CONTROL"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
 function notesAsTips(body) {
   for (const raw of amReport.notes || []) {
@@ -2457,7 +2583,7 @@ function renderReport(body) {
     list.forEach((x) => body.appendChild(item(x.control, x.value, x.why)));
     if (id === "stem") { const b = stemSuggestButton(); if (b) body.appendChild(b); }
   }
-  body.appendChild(tip("COMPARE IT", "Turn on MATCH, then press A for your original mix and B for the master: both play at the same loudness, so you hear only what the master changed. The undo arrow at the top puts every setting back.", true));
+  body.appendChild(tip("COMPARE IT", "Turn on MATCH, then press A for your original mix and B for the master: both play at the same loudness, so you hear only what the master changed. The undo arrow at the top puts every setting back. To compare two Auto-Master runs, keep each in a snapshot (S1, S2 at the top).", true));
 }
 
 // Current value of a parameter by id, in the same units the report stores.
@@ -2509,7 +2635,7 @@ function prependAmSection(body, module) {
   if (moduleUnchanged(module)) {
     list.forEach((x) => frag.appendChild(item(x.control, x.value, x.why)));
   } else {
-    frag.appendChild(para("l-changed", "You've changed this module since Auto-Master set it, so its reasons no longer describe what you hear. Undo (top) puts Auto-Master's settings back."));
+    frag.appendChild(para("l-changed", "You've changed this module since Auto-Master set it, so its reasons no longer describe what you hear. The undo arrow (top) steps back through your changes to Auto-Master's settings."));
   }
   frag.appendChild(sep());
   body.prepend(frag);
@@ -2729,6 +2855,8 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   const wasAm = M.amState;
   Object.assign(M, frame);
   if (srChanged) { drawEq(); fetchGenreCurve(); }
+  refreshHistory();
+  refreshSnapshots();
   if (M.amReport !== amSeenVersion) {
     const first = amSeenVersion === -1;
     amSeenVersion = M.amReport;
@@ -2781,6 +2909,8 @@ renderModule();
 setLearn(true);
 refreshAmChoices();
 updateAmButton();
+refreshHistory();
+refreshSnapshots();
 refreshMatch();
 refreshMonitor();
 onParamsChanged();
