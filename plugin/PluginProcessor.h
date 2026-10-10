@@ -13,6 +13,7 @@
 #include "polisher/Saturation.h"
 #include "polisher/StemEQ.h"
 #include "polisher/Unlimiter.h"
+#include "polisher/Monitoring.h"
 #include "ModuleParams.h"
 #include "SpectrumTap.h"
 #include "AutoMasterController.h"
@@ -23,7 +24,8 @@
 
 /** Polisher: Input Trim -> Unlimiter -> Tonal EQ -> Stem EQ -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
     -> Maximizer (true-peak limiter), plus EBU R128
-    meters, spectrum taps and Auto-Master (which listens to the incoming mix and sets the chain). */
+    meters, spectrum taps and Auto-Master (which listens to the incoming mix and sets the chain). After the
+    meters, for listening only: Listen / Solo (setListenMode), MATCH, then the MONO / PHONE checks. */
 class PolisherAudioProcessor final : public juce::AudioProcessor
 {
 public:
@@ -91,8 +93,26 @@ public:
         std::atomic<float> ulBoost { 0.0f };               // largest Unlimiter lift since read (dB, >= 0)
         std::atomic<float> ulSquash { 0.0f };              // how squashed the incoming audio is (dB, 0 = not measured yet)
         std::atomic<float> tsDb { 0.0f }, tsHz { 0.0f };    // largest Tone Steady correction since read (dB, signed) and where
+        std::atomic<int> listenPlaying { 0 };              // listen mode being heard (polisher::listen::Mode; 0 while it prepares)
+        std::atomic<float> listenGainDb { 0.0f };          // gain it is played with (dB, + = turned up to be heard)
+        std::atomic<float> listenUnderDb { -100.0f };      // how far it sits under the master, as it is in the master (dB)
     };
     Meters meters;
+
+    // --- Monitoring: Listen / Solo and the MONO / PHONE checks ---------------------------------------
+    // Not parameters, so a host never saves or automates them: the editor sets them, they go back to
+    // off when it closes (resetMonitoring), and an offline export (isNonRealtime) never contains them.
+    /** What plays instead of the master (polisher::listen::Mode; 0 = the master). */
+    void setListenMode (int mode) noexcept { listenRequest.store (polisher::listen::isValid (mode) ? mode : 0); }
+    void setMonoCheck (bool on) noexcept { monoRequest.store (on); }
+    void setPhoneCheck (bool on) noexcept { phoneRequest.store (on); }
+    int getListenMode() const noexcept { return listenRequest.load(); }
+    bool getMonoCheck() const noexcept { return monoRequest.load(); }
+    bool getPhoneCheck() const noexcept { return phoneRequest.load(); }
+    /** Everything back to the plain master (the editor closing). */
+    void resetMonitoring() noexcept { setListenMode (0); setMonoCheck (false); setPhoneCheck (false); }
+    /** Tests: play a listen signal exactly at its level in the master (no "hear it" gain or peak turn-down). */
+    void setListenAutoLevel (bool on) noexcept { listenAutoLevel.store (on); }
 
     /** Adds to a meter accumulator the editor drains with exchange(0); a CAS loop, so neither
         side's update is lost (atomic<float>::fetch_add is not available everywhere yet). */
@@ -121,7 +141,12 @@ public:
 
 private:
     template <typename Sample>
+    void processInChunks (juce::AudioBuffer<Sample>& buffer);
+    template <typename Sample>
     void processAnyPrecision (juce::AudioBuffer<Sample>& buffer);
+
+    int listenArmSamples (int mode) const noexcept;
+    void startListenMode (int mode) noexcept;
 
     void updateLimiterParams();
     double targetDriveGain() const;
@@ -169,6 +194,19 @@ private:
     std::atomic<float>* imgHighParam = nullptr;
     polisher::LevelMatch levelMatch;
     double currentMatchGain = 1.0;
+
+    // Monitoring (see setListenMode). The monitored signal is formed where its module sits, carried to
+    // the output by monOut (so it lines up with the master to the sample) and given the Maximizer's gain
+    // there; monForm lines a module's input up with its output. Buffers hold monCapacity samples (larger
+    // host blocks are processed in parts).
+    std::atomic<int> listenRequest { 0 };
+    std::atomic<bool> monoRequest { false }, phoneRequest { false }, listenAutoLevel { true };
+    polisher::ListenMix listenMix;
+    polisher::MonitorOutput monitorOut;
+    polisher::MonitorDelay monForm, monOut;
+    std::array<std::vector<double>, 2> monPre, monSig, monAux;
+    std::vector<double> monLimGain, monClipGain;
+    int monCapacity = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherAudioProcessor)
 };

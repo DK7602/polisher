@@ -60,7 +60,7 @@ Leave headroom going in. A good input is about **−17 LUFS integrated with peak
 
 ### Exporting
 
-Export as usual with **File > Export > Audio Mixdown**. MATCH switches itself off during a normal (offline) export, so your file is the real master. For a Realtime Export, switch MATCH off and make sure B is on before you start: in real time Polisher can't tell an export from playback. Polisher reports its delay to Cubase, which lines everything up for you.
+Export as usual with **File > Export > Audio Mixdown**. MATCH and the listening aids (Listen, Solo, MONO, PHONE) switch themselves off during a normal (offline) export, so your file is the real master. For a Realtime Export, switch MATCH and every listening aid off (no red banner on the spectrum) and make sure B is on before you start: in real time Polisher can't tell an export from playback. Polisher reports its delay to Cubase, which lines everything up for you.
 
 ## The signal chain
 
@@ -69,7 +69,7 @@ The order is fixed, from repair to loudness: fix the mix's dynamics first, then 
 ```
 Input Trim -> 01 Unlimiter -> 02 Tonal EQ -> [03 Stem EQ / 04 Tone Steady / 05 Resonance Tamer] -> 06 Bass Control
 -> 07 Dynamics -> 08 Stereo Imager -> 09 Saturation -> Drive -> 10 Soft Clipper -> 11 Maximizer -> your master
-(03-05 share one stage, ~40 ms; MATCH gain sits at the very end, for listening only)
+(03-05 share one stage, ~40 ms; MATCH, Listen / Solo and the MONO / PHONE checks sit at the very end, for listening only)
 ```
 
 The Maximizer's **Drive** sits just before the Soft Clipper, so the clipper and limiter share the peak work. Its **Input Trim** (on the Maximizer screen) sits before everything: it turns a mix that is already too loud down before the first module. MATCH only changes what you hear while comparing; it is off during export.
@@ -330,6 +330,35 @@ MATCH takes care of loudness, but you still know which side is Polisher. To comp
 
 To compare just one part (say 30 seconds from the hook at 1:00), run it from a command prompt: `PolisherBlindTest.exe "my mix.wav" polisher.wav --start 60 --length 30` (quotes around names with spaces).
 
+## Listening aids: Listen, Solo, MONO and PHONE
+
+These change only what you **hear**, never your master: they are not saved with the song, they switch off when you close Polisher, and a normal export never contains them. While any of them is on, a **red banner** across the top of the spectrum says what you are hearing ("LISTENING: what Saturation adds — not the master"); **BACK TO MASTER** on the banner turns everything off. The meters keep measuring the real master the whole time.
+
+### Listen: hear only what a module changes
+
+Five modules have a headphones button, **LISTEN**, at the top right of their panel. It plays only what that module adds or takes away, so you learn what it really does to your song. One at a time: pressing another one switches over (with a short gap); pressing it again goes back to the master. Every switch fades over about 15 ms, so nothing clicks.
+
+| Module | LISTEN plays | What to listen for |
+| --- | --- | --- |
+| Saturation | Only the harmonics it adds (output minus input, lined up to the sample) | A soft, buzzy shadow of the 808 and vocal is normal: that's the warmth and the harmonics that carry the 808 on phones. Clear crackle or fizz on the hits: lower Drive or Mix. |
+| Soft Clipper | What the clipping shaves off the peaks (the input at the clipper's level, minus its output) | Short ticks on the kick and snare are normal. A buzz on the 808, the snare's body or anything like a note: raise Clip Level or Softness. |
+| Resonance Tamer | The ringing tones it cuts | Thin whistles, rings or a boxy honk are what it should catch. Whole vocal or melody notes: lower Amount or Sensitivity. |
+| Maximizer | What the limiter takes off the peaks | Faint ticks are normal. Clear kicks and snares, or a pumping 808: lower Drive 1–2 dB or turn on the Soft Clipper. |
+| Dynamics | What the picked band's compression takes off (before its Gain) | Short bumps on the loudest hits are normal. The band most of the time, or a pumping 808: raise Threshold or lower Ratio. |
+
+**Dynamics also has S (solo) buttons**, one per band: S plays only that band (after its compression, at its real level in the master), so you hear what lives in it. Move a band's Split until the kick and 808 sit in LOW and the vocal's body in LO-MID. The four solos add up to exactly what Dynamics puts out.
+
+What a module adds or removes is often 20–40 dB quieter than the music, too quiet to hear at your normal volume. So Polisher **turns quiet changes up** (toward 15 dB under the master, at most +24 dB) and says so on the banner ("+18 dB so you can hear it"); Learn tells you how far under the music it really sits ("In your master it sits about 33 dB under the music"). Judge the **character** (ticks or crackle, a ring or a note), and remember the real level. A change that would peak over the ceiling is turned down instead ("kept under the ceiling"); a solo plays at its real level. Each change is lined up with the master to the sample and given the same Drive and limiting it gets in the master. On **A** nothing is processed, so a Listen is silent there.
+
+### MONO and PHONE: check how your master translates
+
+Next to MATCH, two small buttons check your master on other speakers. They work with A / B and MATCH (MATCH still compares fairly: both sides get the same check).
+
+- **MONO** plays left and right mixed together on both speakers, like a club PA or a phone. If a part gets much quieter or disappears (often wide synths, reverbs or doubled vocals), it is out of phase and will vanish on mono speakers: bring the Stereo Imager's Mids and Highs toward 100 %, or narrow that part in the mix.
+- **PHONE** plays your master like a phone speaker: mono, almost nothing below about 300 Hz or above 8 kHz (gentle slopes), with a small bump around 2 kHz, at about the same loudness on a balanced mix (a mix whose weight is all sub gets quieter, as on a real phone). **Does the 808 still come through?** You hear its upper harmonics, not its sub; that's normal, and it's what Saturation (Tube is the fullest) and an 808's own distortion are for. If the 808 disappears, add a little Saturation Drive or 1–2 dB of Bass on the Tonal EQ, or saturate the 808 track in the mix.
+
+While any check or Listen is on, nothing leaves Polisher above 0 dBFS.
+
 ## Learn and Quick Help
 
 The **Learn** panel on the right explains, live, what the selected module is doing to your track. Click **LEARN ON** at the top to show or hide it.
@@ -352,7 +381,7 @@ The **Learn** panel on the right explains, live, what the selected module is doi
 
 ## Meters
 
-The footer meters always measure the **master** (what leaves Polisher), using the streaming standard (ITU-R BS.1770 / EBU R128).
+The footer meters always measure the **master** (what leaves Polisher), using the streaming standard (ITU-R BS.1770 / EBU R128), also while MATCH, a Listen, Solo, MONO or PHONE is on.
 
 | Meter | Unit | What it tells you | Good range (trap / hip-hop) |
 | --- | --- | --- | --- |
@@ -376,6 +405,8 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Master isn't as loud as the reference | The reference had its drum peaks controlled in the mix; reaching it would crush yours | Fine as it is (streaming plays both at the same level). To get closer: a clipper on the drum bus, or Punchy |
 | Match ref says it can't read the file | Not WAV, AIFF, FLAC or MP3, or a damaged file | Export or convert the song to WAV and load that |
 | B sounds better but you're not sure why | B is louder | Turn on MATCH and play B for 10 s before comparing |
+| Polisher sounds thin, mono, crackly or like a phone; a red banner is on the spectrum | A listening aid is on (Listen, Solo, MONO or PHONE) | Click BACK TO MASTER on the banner. They switch off by themselves when you close Polisher and are never in a normal export |
+| Listen plays silence | The module isn't changing anything right now (or you're on A) | Fine: nothing to hear. Play a louder part, switch to B, or set the module up first |
 | Kick or snare sounds weaker than the mix | Too much limiting | Lower Drive 1–2 dB, or turn on the Soft Clipper so it takes some peaks |
 | Learn says Diminishing returns | Drive past the point where it adds loudness | Lower Drive until Short-term starts to drop, then back up 0.5 dB |
 | Harsh or crunchy top | Saturation, clipping or a big EQ boost | Lower Saturation Drive 3 dB or Mix to 30 %; raise Clip Level or Softness; keep EQ moves to 1–3 dB |
@@ -393,6 +424,8 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 **Do I have to use Auto-Master?** No. Every module works by hand. Auto-Master is a fast, explained starting point.
 
 **Should I use Match ref or a genre?** A genre is a safe average. A reference is better when you know exactly whose sound you want. Pick a reference in the same style as your song: a trap reference for a trap song.
+
+**Can a Listen, Solo, MONO or PHONE end up in my export?** Not in a normal (offline) export: Polisher switches them off. They are not saved with the song and switch off when you close Polisher. Only a Realtime Export plays what you hear, so check that the red banner is gone first.
 
 **Will Auto-Master change my Stem EQ?** Never. It may suggest a Vocals move with an APPLY button; you decide.
 

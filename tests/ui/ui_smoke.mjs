@@ -1,7 +1,8 @@
 // UI smoke test: opens the plug-in's web UI in headless Chromium with mock.js standing in for the
 // plug-in, visits every module, and checks that each module-header switch controls that module only
-// (the Maximizer's is the global bypass, A), that host changes show on the button, and that nothing
-// throws.
+// (the Maximizer's is the global bypass, A), that host changes show on the button, the Match ref pill,
+// the listening aids (MONO / PHONE, each module's Listen button, the Dynamics S buttons, the banner), and
+// that nothing throws.
 //   Needs plugin/ui/juce/*.js (JUCE's web-view bridge) and the UI served at UI_URL.
 //   node tests/ui/ui_smoke.mjs        (default UI_URL http://127.0.0.1:8765/index.html)
 import { chromium } from 'playwright';
@@ -136,6 +137,89 @@ await page.waitForTimeout(1000);
 r = await ref();
 check(r.pill === 'Second Reference' && r.curve > 100, `loading a reference shows the new song ("${r.pill}")`);
 check(/MATCH A REFERENCE/.test(r.learn) && /HOW TO USE IT/.test(r.learn), 'Learn explains the reference and how to use it');
+
+// Listening aids (monitoring only). mock.js records what the UI asked the "plug-in" for in __mockMonitor.
+const mon = () => page.evaluate(() => ({
+  ...window.__mockMonitor,
+  banner: !document.getElementById('monitor-banner').hidden,
+  text: document.getElementById('monitor-text').textContent,
+  level: document.getElementById('monitor-level').textContent,
+  listenShown: !document.getElementById('btn-listen').hidden,
+  listenLabel: document.getElementById('btn-listen-text').textContent,
+  listenOn: document.getElementById('btn-listen').getAttribute('aria-pressed') === 'true',
+  monoOn: document.getElementById('btn-mono').getAttribute('aria-pressed') === 'true',
+  phoneOn: document.getElementById('btn-phone').getAttribute('aria-pressed') === 'true',
+  learn: document.getElementById('learn-body').textContent,
+}));
+let m = await mon();
+check(!m.banner && m.listen === 0 && !m.mono && !m.phone, 'no listening aid is on at start, and no banner');
+
+// MONO and PHONE next to MATCH: each flips only its own check, and the banner says it isn't the master.
+await pick('Maximizer'); await page.waitForTimeout(120);
+await page.click('#btn-mono'); await page.waitForTimeout(150);
+m = await mon();
+check(m.mono && !m.phone && m.listen === 0 && m.monoOn, 'MONO turns the mono check on (and nothing else)');
+check(m.banner && /MONO CHECK/.test(m.text) && /not the master/.test(m.text), `banner shows the mono check ("${m.text}")`);
+await page.click('#btn-phone'); await page.waitForTimeout(150);
+m = await mon();
+check(m.mono && m.phone && m.phoneOn && /PHONE/.test(m.text), `PHONE turns the phone check on ("${m.text}")`);
+check(/PHONE CHECK/.test(m.learn) && /808/.test(m.learn), 'Learn explains what to listen for on PHONE');
+await page.click('#monitor-stop'); await page.waitForTimeout(150);
+m = await mon();
+check(!m.mono && !m.phone && m.listen === 0 && !m.banner, 'BACK TO MASTER turns every check off and hides the banner');
+
+// Listen buttons in the module headers: Saturation (added), Soft Clipper, Resonance Tamer, Maximizer (removed).
+const LISTEN = { 'Saturation': [1, 'LISTEN', /what Saturation adds/], 'Soft Clipper': [2, 'LISTEN', /Soft Clipper shaves off/],
+                 'Resonance Tamer': [3, 'LISTEN', /Resonance Tamer cuts/], 'Maximizer': [4, 'LISTEN', /Maximizer takes off/] };
+for (const [name, [mode, label, what]] of Object.entries(LISTEN)) {
+  await pick(name); await page.waitForTimeout(120);
+  m = await mon();
+  check(m.listenShown && m.listenLabel === label && !m.listenOn, `${name}: shows its ${label} button`);
+  check(/HEAR WHAT IT DOES/.test(m.learn), `${name}: Learn points to the Listen button`);
+  await page.click('#btn-listen'); await page.waitForTimeout(200);
+  m = await mon();
+  check(m.listen === mode && m.listenOn, `${name}: Listen asks for mode ${mode} (${m.listen})`);
+  check(m.banner && what.test(m.text) && /not the master/.test(m.text), `${name}: banner says what you hear ("${m.text}")`);
+  check(/so you can hear it/.test(m.level), `${name}: banner says how much it is turned up ("${m.level}")`);
+  check(/WHAT YOU'RE HEARING/.test(m.learn) && /Do I need to fix it\?/.test(m.learn), `${name}: Learn says what to listen for, with a plan`);
+}
+// One at a time: the Maximizer's Listen replaced the Tamer's; moving to another module keeps the banner.
+await pick('Tonal EQ'); await page.waitForTimeout(150);
+m = await mon();
+check(!m.listenShown, 'a module without a listen mode has no Listen button');
+check(m.banner && m.listen === 4, 'the banner stays while listening, whatever module is open');
+await pick('Maximizer'); await page.waitForTimeout(120);
+await page.click('#btn-listen'); await page.waitForTimeout(150);
+m = await mon();
+check(m.listen === 0 && !m.banner, 'pressing Listen again goes back to the master');
+
+// Dynamics: an S (solo) button per band, one at a time; LISTEN plays what the picked band's compression removes.
+await pick('Dynamics'); await page.waitForTimeout(150);
+const solos = () => page.evaluate(() => [...document.querySelectorAll('.band-pick .solo')].map((b) => b.getAttribute('aria-pressed') === 'true'));
+check((await solos()).length === 4, 'Dynamics shows an S button for each of its four bands');
+await page.evaluate(() => document.querySelectorAll('.band-pick .solo')[0].click()); await page.waitForTimeout(150);
+m = await mon();
+check(m.listen === 5 && (await solos()).join() === 'true,false,false,false' && /SOLO: only the LOW band/.test(m.text), `S on LOW solos it ("${m.text}")`);
+await page.evaluate(() => document.querySelectorAll('.band-pick .solo')[2].click()); await page.waitForTimeout(150);
+m = await mon();
+check(m.listen === 7 && (await solos()).join() === 'false,false,true,false', 'S on HI-MID replaces the LOW solo (one at a time)');
+await page.evaluate(() => document.querySelectorAll('.band-pick .solo')[2].click()); await page.waitForTimeout(150);
+m = await mon();
+check(m.listen === 0 && !m.banner, 'S again un-solos');
+await page.click('#btn-listen'); await page.waitForTimeout(150);
+m = await mon();
+check(m.listen === 9 + 2 && /HIGH MID band/.test(m.text), `Dynamics LISTEN plays what the picked band loses (mode ${m.listen}, "${m.text}")`);
+await page.evaluate(() => document.querySelectorAll('.band-pick .band-btn')[0].click()); await page.waitForTimeout(150);
+m = await mon();
+check(m.listen === 9, 'picking another band moves the removed-listen to it');
+await page.click('#monitor-stop'); await page.waitForTimeout(150);
+
+// The plug-in switching them off itself (a new window) shows: the frame's state wins.
+await page.click('#btn-mono'); await page.waitForTimeout(700);
+await page.evaluate(() => { window.__mockMonitor.mono = false; });
+await page.waitForTimeout(300);
+m = await mon();
+check(!m.monoOn && !m.banner, 'the UI follows the plug-in when it switches a check off');
 
 check(errors.length === 0, `no script errors (${errors.join(' | ')})`);
 await browser.close();

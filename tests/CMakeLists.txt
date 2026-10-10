@@ -22,7 +22,8 @@ add_executable(polisher_tests
     test_spectral.cpp
     test_unlimiter.cpp
     test_validation.cpp
-    test_reference.cpp)
+    test_reference.cpp
+    test_monitoring.cpp)
 
 target_link_libraries(polisher_tests PRIVATE polisher_dsp Catch2::Catch2WithMain)
 set_target_properties(polisher_tests PROPERTIES FOLDER "Polisher")

@@ -44,6 +44,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | Module-by-module audit fixes: Imager and Mono Below keep panned sounds in place; click-free Clipper; no Tube thump; Punch ignores 808 notes; Sub Tame and Tone Steady leave the first notes and a drop alone; consistent, band-only Unlimiter that Auto-Master only keeps when the punch survives the Maximizer; matched-magnitude EQ with a subsonic filter and band-overlap-aware Auto-Master gains; Stem EQ at 176.4/192 kHz; host bypass = latency-matched A | Done (v0.15) |
 | Stem EQ Keep Loudness: moves change the balance, not the loudness (K-weighted, ~2 s, ±12 dB, inside the same STFT: no extra latency); on for new instances, off for songs saved before it; live "Keeping level" readout | Done (after v0.15.0) |
 | Match ref: load a released song (WAV / AIFF / FLAC / MP3); its loudest 30 s is measured (tone, loudness, width, low end) and saved with the project (no audio); Auto-Master aims for it instead of the genre (part of the way, same limits), says honestly when it can't get as loud, and Learn compares reference / mix / master; dashed reference curve on the spectrum | Done (v0.15) |
+| Listening aids (monitoring only, never saved, never in an offline export, off when the window closes, red banner while on): Listen buttons that play only what Saturation adds / the Soft Clipper, Resonance Tamer, Maximizer and a Dynamics band take off (sample-aligned, at their level in the master, quiet ones turned up with the amount shown), Dynamics band solos, MONO and PHONE (mono, ~300 Hz–8 kHz) checks next to MATCH; click-free switching | Done (after v0.15.0) |
 
 ## Validation
 
@@ -91,6 +92,7 @@ dsp/        Framework-free C++20 engine (no JUCE): unit-testable, reusable offli
     LevelMatch.h         MATCH: loudness-matched, clip-free A/B gains
     StemEQ.h             Stem EQ + Tone Steady + Resonance Tamer (one STFT stage, model in StemNetWeights.h)
     Unlimiter.h          Restores hit contrast on squashed audio
+    Monitoring.h         Listening aids: Listen / Solo switch (ListenMix), MONO / PHONE checks (MonitorOutput)
 plugin/     JUCE AudioProcessor, web-view editor (+ basic native fallback editor when no web view exists)
   ui/       The liquid-glass interface: index.html, styles.css, app.js, images, fonts (OFL).
             Browser preview: copy JUCE's modules/juce_gui_extra/native/javascript/*.js into
@@ -140,6 +142,14 @@ on a manual run: Actions > Build & Test > Run workflow, "Also build macOS".
   3 ms + 12 samples and is reported to the host.
 - **Adaptive release.** Dips below the ~400 ms average gain (transients) recover fast; the program-level
   gain moves slowly, so bass-heavy material doesn't pump.
+- **Listening aids.** Monitoring only, outside the parameter tree (the editor sets them; they reset when it
+  closes; `isNonRealtime()` bypasses them, so an offline export is the master bit for bit). A Listen signal is
+  formed where its module sits (Saturation: output minus input delayed by its latency; Clipper: input x the
+  clipper's clean gain minus output; Maximizer: aligned input minus output; Resonance Tamer: a second
+  overlap-add inside the STFT with X x (1 - tamer gain); Dynamics: one band, or b x (1 - reduction)), given
+  Drive and the limiter's per-sample gain and delayed to the output, so it is sample-aligned with the master
+  (tests: delta + master = the right reference to float precision). Only one is computed at a time; 15 ms
+  S-curve fades, the next one arms (fills its delay lines, measures its level for 0.1 s) before it fades in.
 - **Loudness targeting.** A secant search on the real limiter output converges in a few passes. When a target
   can't be reached with limiting alone, it says so (Auto-Master will then add the clipper and saturation
   stages, and Learn will explain why).

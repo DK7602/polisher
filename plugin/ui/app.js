@@ -101,7 +101,16 @@ const M = {
   amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0, matchDb: 0, corr: 1,
   dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], stemKeep: 0, rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
   ulBoost: 0, ulSquash: 0, refVersion: 0, refState: 0,
+  listen: 0, mono: false, phone: false, listenNow: 0, listenGain: 0, listenUnder: -100,
 };
+// Listening aids (Listen / Solo, MONO, PHONE): monitoring only. The plug-in keeps them out of the saved
+// parameters, switches them off when this window closes and never puts them in an offline export.
+// Listen modes (numbers shared with dsp/include/polisher/Monitoring.h): 1 Saturation added, 2 Clipper
+// removed, 3 Resonance Tamer removed, 4 Maximizer removed, 5-8 Dynamics band solo, 9-12 Dynamics removed.
+const MON = { listen: 0, mono: false, phone: false, sentAt: 0 };
+const setMonitorFn = Juce.getNativeFunction("setMonitor");
+const LISTEN_OF_MODULE = { sat: 1, clip: 2, rt: 3, max: 4 };
+const isSoloMode = (m) => m >= 5 && m <= 8;
 // Match ref: the loaded reference song (its measurements; the plug-in keeps no audio).
 let refInfo = { state: 0, message: "", profile: null };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
@@ -590,21 +599,42 @@ function dynRangeText(b) {
 }
 function dynBandCell() {
   const cell = document.createElement("div");
-  cell.className = "cell";
-  cell.innerHTML = `<span class="cell-label">Band</span><span class="cell-sub mono">pick · reduction</span><div class="band-pick"></div>`;
+  cell.className = "cell dyn-pick";
+  cell.innerHTML = `<span class="cell-label">Band</span><span class="cell-sub mono">pick · S = solo</span><div class="band-pick"></div>`;
   const wrap = cell.querySelector(".band-pick");
-  const buttons = DYN_BANDS.map((band, b) => {
+  const rows = DYN_BANDS.map((band, b) => {
+    const row = document.createElement("div");
+    row.className = "band-row";
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.addEventListener("click", () => { dynBand = b; renderModule(); renderLearn(); });
-    wrap.appendChild(btn);
-    return btn;
+    btn.className = "band-btn";
+    // Picking another band while listening to what a band's compression removes follows the pick.
+    btn.addEventListener("click", () => { dynBand = b; if (MON.listen >= 9) setMonitor(9 + b); renderModule(); renderLearn(); });
+    // S: hear only this band (one solo at a time; again = back to the master).
+    const solo = document.createElement("button");
+    solo.type = "button";
+    solo.textContent = "S";
+    solo.title = `Solo: hear only the ${band.name} band (${band.holds}), not the master`;
+    solo.setAttribute("aria-label", `Solo the ${band.name} band`);
+    solo.addEventListener("click", () => {
+      const on = MON.listen !== 5 + b;
+      dynBand = b;
+      setMonitor(on ? 5 + b : 0);
+      renderModule();
+      toast(on ? `SOLO: only the ${band.name} band of Dynamics, not the master. S again (or BACK TO MASTER) returns.` : "Back to the master.");
+    });
+    row.append(btn, solo);
+    wrap.appendChild(row);
+    return { btn, solo };
   });
-  cell.refresh = () => buttons.forEach((btn, b) => {
-    btn.className = "pill mono " + (b === dynBand ? "pill-red" : "pill-blue");
+  cell.refresh = () => rows.forEach(({ btn, solo }, b) => {
+    btn.className = "pill mono band-btn " + (b === dynBand ? "pill-red" : "pill-blue");
     btn.setAttribute("aria-pressed", String(b === dynBand));
     const gr = M.dynGr[b] || 0;
     btn.textContent = `${DYN_BANDS[b].short} ${dynBandActive(b) && gr < -0.05 ? fmtNum(gr) : ""}`.trim();
+    const soloed = MON.listen === 5 + b;
+    solo.className = "pill mono solo " + (soloed ? "pill-red on" : "pill-blue");
+    solo.setAttribute("aria-pressed", String(soloed));
   });
   cell.refresh();
   return cell;
@@ -776,6 +806,7 @@ function renderModule() {
     $("module-note").textContent = "Designed · not active in this build";
     $("soon-text").textContent = m.soon;
   }
+  refreshListenButton();
   updateLiveReadouts();
   drawEq();
 }
@@ -926,6 +957,11 @@ function louderBy() {
 function avgGrRecent() { return grWindow.length ? grWindow.reduce((a, b) => a + b, 0) / grWindow.length : 0; }
 
 function renderLearn() {
+  renderLearnBody();
+  if (learnOn && learnView === "module") addMonitorLearn($("learn-body"));
+}
+
+function renderLearnBody() {
   const body = $("learn-body");
   body.innerHTML = "";
   if (!learnOn) {
@@ -1532,6 +1568,143 @@ $("btn-match").addEventListener("click", () => {
            : "MATCH off: B plays the master at its real loudness.");
 });
 P.levelMatch.valueChangedEvent.addListener(refreshMatch);
+
+// ---------------------------------------------------------------------------------------------
+// Listening aids: Listen / Solo (hear only what a module changes), MONO and PHONE checks. Monitoring only:
+// a red banner shows while any is on, so it is never forgotten.
+const listenModeFor = (id) => (id === "dyn" ? 9 + dynBand : LISTEN_OF_MODULE[id] || 0);
+function listenWhat(m) {
+  if (m === 1) return "what Saturation adds";
+  if (m === 2) return "what the Soft Clipper shaves off";
+  if (m === 3) return "what Resonance Tamer cuts";
+  if (m === 4) return "what the Maximizer takes off";
+  if (isSoloMode(m)) return `only the ${DYN_BANDS[m - 5].name.toUpperCase()} band of Dynamics`;
+  if (m >= 9 && m <= 12) return `what Dynamics takes off the ${DYN_BANDS[m - 9].name.toUpperCase()} band`;
+  return "";
+}
+function setMonitor(listen, mono = MON.mono, phone = MON.phone) {
+  MON.listen = listen; MON.mono = mono; MON.phone = phone; MON.sentAt = performance.now();
+  setMonitorFn(listen, mono, phone);
+  refreshMonitor();
+}
+function refreshListenButton() {
+  const b = $("btn-listen"), mode = listenModeFor(selected);
+  b.hidden = !mode;
+  if (!mode) return;
+  const on = MON.listen === mode;
+  b.className = "pill listen " + (on ? "pill-red on" : "pill-blue");
+  b.setAttribute("aria-pressed", String(on));
+  $("btn-listen-text").textContent = "LISTEN";
+  b.title = `Listen: hear only ${listenWhat(mode)} (a listening aid: never in your export)`;
+}
+$("btn-listen").addEventListener("click", () => {
+  const mode = listenModeFor(selected), on = MON.listen !== mode;
+  setMonitor(on ? mode : 0);
+  toast(on ? `LISTENING: ${listenWhat(mode)}, not the master. Press LISTEN again (or BACK TO MASTER) to return.` : "Back to the master.");
+});
+// The banner's second part: how loud what you hear is, compared with how it sits in the master.
+function monitorLevelText() {
+  const m = MON.listen;
+  if (!m || M.listenNow !== m) return m ? "starting…" : "";
+  if (P.bypass.getValue() && !isSoloMode(m)) return "on A: nothing is processed";
+  const g = M.listenGain || 0;
+  if (!isSoloMode(m) && (M.listenUnder ?? -100) <= -99) return "silent: nothing changed";
+  if (g > 0.4) return `+${g.toFixed(0)} dB so you can hear it`;
+  if (g < -0.4) return `${fmtNum(g, 0)} dB, kept under the ceiling`;
+  return "at its real level";
+}
+function refreshBanner() {
+  const check = MON.phone ? "PHONE" : MON.mono ? "MONO" : "";
+  const on = !!(MON.listen || check);
+  $("monitor-banner").hidden = !on;
+  if (!on) return;
+  $("monitor-text").textContent = MON.listen
+    ? `${isSoloMode(MON.listen) ? "SOLO" : "LISTENING"}: ${listenWhat(MON.listen)}${check ? `, on ${check}` : ""} — not the master`
+    : MON.phone ? "PHONE CHECK: your master on a phone speaker — not the master's real sound"
+    : "MONO CHECK: left + right together — not the master's real sound";
+  $("monitor-level").textContent = monitorLevelText();
+}
+function refreshMonitor() {
+  for (const [id, on] of [["btn-mono", MON.mono], ["btn-phone", MON.phone]]) {
+    const b = $(id);
+    b.className = "pill check-pill " + (on ? "pill-red" : "pill-blue");
+    b.setAttribute("aria-pressed", String(on));
+  }
+  refreshListenButton();
+  dynPicker.refresh();
+  refreshBanner();
+  scheduleLearn();
+}
+$("btn-mono").addEventListener("click", () => {
+  setMonitor(MON.listen, !MON.mono, MON.phone);
+  toast(MON.mono ? "MONO check on: both speakers play left and right mixed together. Listen for parts that disappear." : "MONO check off.");
+});
+$("btn-phone").addEventListener("click", () => {
+  setMonitor(MON.listen, MON.mono, !MON.phone);
+  toast(MON.phone ? "PHONE check on: your master on a phone speaker. Does the 808 still come through?" : "PHONE check off.");
+});
+$("monitor-stop").addEventListener("click", () => { setMonitor(0, false, false); toast("Back to the master."); });
+
+// Learn: what you're hearing and what to listen for (at the top while a listening aid is on), or a pointer
+// to the Listen button on the modules that have one.
+function listenLevelSentence(m) {
+  if (M.listenNow !== m || (M.listenUnder ?? -100) <= -99) return "";
+  const under = -(M.listenUnder || 0), g = M.listenGain || 0;
+  if (isSoloMode(m)) return g < -0.4 ? ` It's turned down ${fmtNum(-g, 0)} dB here so it can't clip.` : "";
+  return ` In your master it sits about ${under.toFixed(0)} dB under the music` +
+    (g > 0.4 ? `; it plays ${g.toFixed(0)} dB louder here so you can hear it.` : g < -0.4 ? `; it's turned down ${fmtNum(-g, 0)} dB here so it can't clip.` : ", and plays at that level here.");
+}
+function listenTip(m) {
+  const lvl = listenLevelSentence(m);
+  if (m === 1)
+    return tip("LISTEN: WHAT SATURATION ADDS", "Only the harmonics Saturation adds (its output minus what went in, lined up to the sample), not the master." + lvl, true,
+      { need: "Only if you hear clear crackle or fizz on the loud hits. A soft, buzzy shadow of the 808 and the vocal is normal: that's the warmth, and the harmonics that let the 808 come through on phones.",
+        steps: ["Lower Drive by 3 dB (or Mix to about 30 %) until the crackle goes.", "Press LISTEN again (or BACK TO MASTER) and compare with MATCH on."] });
+  if (m === 2)
+    return tip("LISTEN: WHAT THE CLIPPER SHAVES OFF", "Only what the Soft Clipper takes off the peaks (its input at the clipper's level, minus its output), not the master." + lvl, true,
+      { need: "Only if you hear more than short ticks on the kick and snare. Ticks are the clipping doing its job; a buzz on the 808, the snare's body or anything like a note means it clips too hard.",
+        steps: ["Raise Clip Level by 1 dB, or raise Softness.", "Listen again: you want only short ticks on the hits."] });
+  if (m === 3)
+    return tip("LISTEN: WHAT THE TAMER CUTS", "Only what Resonance Tamer cuts: the ringing tones it pulls down, not the master." + lvl, true,
+      { need: "Only if you hear whole notes of the vocal, the snare or the melody. Thin whistles, rings or a boxy honk coming and going are what it should catch.",
+        steps: ["Lower Amount by 20 %, or Sensitivity to about 40 %.", "Or set Focus to Harshness or Boxiness so it only looks where the rings are."] });
+  if (m === 4)
+    return tip("LISTEN: WHAT THE MAXIMIZER TAKES OFF", "Only what the limiter takes off the peaks, not the master." + lvl, true,
+      { need: "Only if you hear the kick and snare clearly, or the 808 pumping. Faint ticks on the hits are normal.",
+        steps: ["Lower Drive by 1–2 dB.", "Or turn on the Soft Clipper (chain, left): it takes the sharpest peaks so the limiter does less."] });
+  if (isSoloMode(m)) {
+    const b = m - 5;
+    return tip(`SOLO: THE ${DYN_BANDS[b].name.toUpperCase()} BAND`, `Only the ${DYN_BANDS[b].name} band (${dynRangeText(b)}: ${DYN_BANDS[b].holds}) after its compression, at its real level in the master.` + lvl, true,
+      { need: "No. It's a listening tool: hear what lives in each band.",
+        steps: ["Move this band's Split until the kick and 808 sit in LOW and the vocal's body in LO-MID.", "Press S again (or BACK TO MASTER) to hear the master."] });
+  }
+  const b = m - 9;
+  return tip(`LISTEN: WHAT DYNAMICS TAKES OFF ${DYN_BANDS[b].short}`, `Only what Dynamics takes off the ${DYN_BANDS[b].name} band (${DYN_BANDS[b].holds}), not the master.` + lvl, true,
+    { need: "Only if you hear the band most of the time, or the 808 pumping. Short bumps on the loudest hits are normal.",
+      steps: ["Raise this band's Threshold, or lower its Ratio to 2:1.", "Aim for 1–3 dB on the band's button."] });
+}
+function addMonitorLearn(body) {
+  if (MON.listen || MON.mono || MON.phone) {
+    const frag = document.createDocumentFragment();
+    frag.appendChild(head("WHAT YOU'RE HEARING"));
+    if (MON.listen) frag.appendChild(listenTip(MON.listen));
+    if (MON.phone)
+      frag.appendChild(tip("PHONE CHECK", "A phone speaker, roughly: mono, almost nothing below 300 Hz or above 8 kHz, at about your master's loudness.", true,
+        { need: "Only if the 808 disappears. You'll hear its upper harmonics, not its sub; that's normal, and it's what Saturation (Tube is the fullest) and an 808's own distortion are for.",
+          steps: ["Turn Saturation's Drive up a little, or add 1–2 dB of Bass on the Tonal EQ.", "Best fix, in the mix: a little distortion or saturation on the 808 track itself.", "Press PHONE again to go back."] }));
+    else if (MON.mono)
+      frag.appendChild(tip("MONO CHECK", "Both speakers play left and right mixed together, like a club PA or a phone speaker.", true,
+        { need: "Only if a part gets much quieter or disappears: it's out of phase, and it will vanish on mono speakers.",
+          steps: ["Find which part (often wide synths, reverbs or doubled vocals).", "Bring the Stereo Imager's Mids and Highs back toward 100 %, or narrow that part in the mix.", "Press MONO again to go back to stereo."] }));
+    frag.appendChild(sep());
+    body.prepend(frag);
+  }
+  const mode = listenModeFor(selected);
+  if (mode && MON.listen !== mode && !(selected === "dyn" && isSoloMode(MON.listen)))
+    body.appendChild(tip("HEAR WHAT IT DOES", selected === "dyn"
+      ? "S next to a band plays only that band. LISTEN (headphones, top right of this panel) plays only what the picked band's compression takes off. Listening aids only: never in your export."
+      : `LISTEN (headphones, top right of this panel) plays only ${listenWhat(mode)}, so you can learn its sound. Quiet changes are turned up so you can hear them. A listening aid: never in your export.`, true));
+}
 
 function refreshAB() {
   const bypassed = !!P.bypass.getValue();
@@ -2307,6 +2480,13 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   if (M.refVersion !== refSeenVersion) { refSeenVersion = M.refVersion; fetchReference(); }
   else if (M.refState === 1) refreshRefPill();
   if (P.levelMatch.getValue()) refreshMatch();
+  // Listening aids: the plug-in's state wins (it switches them off itself, e.g. for a new window), except
+  // for a moment after a click here, while the click is on its way.
+  if (frame.listen !== undefined && performance.now() - MON.sentAt > 500
+      && (frame.listen !== MON.listen || !!frame.mono !== MON.mono || !!frame.phone !== MON.phone)) {
+    MON.listen = frame.listen; MON.mono = !!frame.mono; MON.phone = !!frame.phone;
+    refreshMonitor();
+  } else if (MON.listen) $("monitor-level").textContent = monitorLevelText();
   watchLouderPart();
   if (M.momentary > -70 || M.peakL > -80) lastAudioTime = performance.now();
   grWindow.push(M.gr);
@@ -2337,4 +2517,5 @@ setLearn(true);
 refreshAmChoices();
 updateAmButton();
 refreshMatch();
+refreshMonitor();
 onParamsChanged();

@@ -200,7 +200,10 @@ void StemEQ::prepare (double newSampleRate, int numChannels)
         acc[static_cast<size_t> (c)].assign (n, 0.0);
         outQueue[static_cast<size_t> (c)].assign (static_cast<size_t> (hopSize), 0.0);
         spectra[static_cast<size_t> (c)].assign (4 * n, {});
+        tdAcc[static_cast<size_t> (c)].assign (n, 0.0);
+        tdQueue[static_cast<size_t> (c)].assign (static_cast<size_t> (hopSize), 0.0);
     }
+    tdGain.assign (static_cast<size_t> (bins), 0.0);
     work.assign (n, {});
     binGain.assign (static_cast<size_t> (bins), 1.0);
     for (auto* v : { &power, &levelDb, &rtCut, &rtTarget, &rtSmooth, &tsBin }) v->assign (static_cast<size_t> (bins), 0.0);
@@ -224,8 +227,9 @@ void StemEQ::prepare (double newSampleRate, int numChannels)
 
 void StemEQ::reset() noexcept
 {
-    for (auto* v : { &inRing[0], &inRing[1], &acc[0], &acc[1], &outQueue[0], &outQueue[1] })
+    for (auto* v : { &inRing[0], &inRing[1], &acc[0], &acc[1], &outQueue[0], &outQueue[1], &tdAcc[0], &tdAcc[1], &tdQueue[0], &tdQueue[1] })
         std::fill (v->begin(), v->end(), 0.0);
+    tdFrame = { 0.0, 0.0 };
     for (auto& s : spectra) std::fill (s.begin(), s.end(), std::complex<double> {});
     for (auto& d : dry) std::fill (d.begin(), d.end(), 0.0);
     net.reset();
@@ -698,8 +702,10 @@ void StemEQ::hop() noexcept
         for (int k = 0; k < bins; ++k)
         {
             const auto K = static_cast<size_t> (k);
+            const double ts = tsBin[K] != 0.0 ? std::exp (tsBin[K] * (std::numbers::ln10 / 20.0)) : 1.0;
+            if (tamerDeltaOn) tdGain[K] = binGain[K] * ts * (1.0 - rtLin[K]);   // what the tamer takes off
             binGain[K] *= rtLin[K];
-            if (tsBin[K] != 0.0) binGain[K] *= std::exp (tsBin[K] * (std::numbers::ln10 / 20.0));
+            if (tsBin[K] != 0.0) binGain[K] *= ts;
         }
         for (int k = 0; k < N; ++k)
         {
@@ -714,6 +720,22 @@ void StemEQ::hop() noexcept
             acc[0][static_cast<size_t> (i)] += work[static_cast<size_t> (i)].real() * w;
             acc[1][static_cast<size_t> (i)] += work[static_cast<size_t> (i)].imag() * w;
         }
+        if (tamerDeltaOn)
+        {
+            // The same frame through what the tamer took off, overlap-added beside the main output.
+            for (int k = 0; k < N; ++k)
+            {
+                const double g = tdGain[static_cast<size_t> (k <= half ? k : N - k)];
+                work[static_cast<size_t> (k)] = (Lo[k] + std::complex<double> (0.0, 1.0) * Ro[k]) * g;
+            }
+            fft (work.data(), true);
+            for (int i = 0; i < N; ++i)
+            {
+                const double w = window[static_cast<size_t> (i)] * norm;
+                tdAcc[0][static_cast<size_t> (i)] += work[static_cast<size_t> (i)].real() * w;
+                tdAcc[1][static_cast<size_t> (i)] += work[static_cast<size_t> (i)].imag() * w;
+            }
+        }
     }
 
     // The first hop of the accumulator is complete: it becomes the next hop of output.
@@ -723,6 +745,13 @@ void StemEQ::hop() noexcept
         std::copy (a.begin(), a.begin() + hopSize, outQueue[static_cast<size_t> (c)].begin());
         std::copy (a.begin() + hopSize, a.end(), a.begin());
         std::fill (a.end() - hopSize, a.end(), 0.0);
+        if (tamerDeltaOn)
+        {
+            auto& t = tdAcc[static_cast<size_t> (c)];
+            std::copy (t.begin(), t.begin() + hopSize, tdQueue[static_cast<size_t> (c)].begin());
+            std::copy (t.begin() + hopSize, t.end(), t.begin());
+            std::fill (t.end() - hopSize, t.end(), 0.0);
+        }
     }
     ++frameCount;
 }
@@ -747,6 +776,9 @@ void StemEQ::processFrame (double* frame, int numChannels) noexcept
         d[dp] = frame[c];
         frame[c] = (c < 2 && mix > 0.0) ? delayed + (outQueue[static_cast<size_t> (c)][qp] - delayed) * mix : delayed;
     }
+    if (tamerDeltaOn)
+        for (size_t c = 0; c < 2; ++c)
+            tdFrame[c] = mix > 0.0 ? tdQueue[c][qp] * mix : 0.0;
     dryPos = dryPos + 1 == latency ? 0 : dryPos + 1;
     inPos = inPos + 1 == fftSize ? 0 : inPos + 1;
     if (++queuePos == hopSize)

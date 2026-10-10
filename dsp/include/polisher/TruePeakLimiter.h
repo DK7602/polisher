@@ -59,6 +59,15 @@ public:
     template <typename Sample>
     void process (Sample* const* channels, int numChannels, int numSamples) noexcept
     {
+        process (channels, numChannels, numSamples, nullptr);
+    }
+
+    /** The same, also writing the gain applied to each output sample (1 = untouched, before the final
+        clamp at the ceiling) to gainOut[0 .. numSamples): the plug-in's listen modes give a monitored
+        signal the level it has in the master. */
+    template <typename Sample>
+    void process (Sample* const* channels, int numChannels, int numSamples, double* gainOut) noexcept
+    {
         const int nch = std::min (numChannels, channelCount);
         for (int i = 0; i < numSamples; ++i)
         {
@@ -71,6 +80,8 @@ public:
 
             for (int c = 0; c < nch; ++c)
                 channels[c][i] = static_cast<Sample> (out[static_cast<size_t> (c)]);
+            if (gainOut != nullptr)
+                gainOut[i] = lastGain;
         }
     }
 
@@ -121,6 +132,7 @@ private:
     double gain = 1.0;
     double sustain = 0.0;
     double minGainSinceRead = 1.0;
+    double lastGain = 1.0;   // gain applied to the latest output sample
 };
 
 } // namespace polisher

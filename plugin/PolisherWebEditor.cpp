@@ -151,6 +151,15 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                              {
                                  complete (audioProcessor.reference.getInfoJson());
                              })
+        // Monitoring: setMonitor(listenMode, mono, phone). Listening aids only: not parameters, back to
+        // off when this window closes, never in an offline export.
+        .withNativeFunction ("setMonitor", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 audioProcessor.setListenMode (args.size() > 0 ? static_cast<int> (args[0]) : 0);
+                                 audioProcessor.setMonoCheck (args.size() > 1 && static_cast<bool> (args[1]));
+                                 audioProcessor.setPhoneCheck (args.size() > 2 && static_cast<bool> (args[2]));
+                                 complete (true);
+                             })
         .withResourceProvider ([] (const auto& url) { return getResource (url); });
 }
 
@@ -226,6 +235,8 @@ PolisherWebEditor::~PolisherWebEditor()
     if (auto* p = audioProcessor.parameters.getParameter ("levelMatch"))
         if (p->getValue() > 0.5f)
             p->setValueNotifyingHost (0.0f);
+    // So are Listen / Solo and the MONO / PHONE checks: back to the plain master.
+    audioProcessor.resetMonitoring();
 }
 
 void PolisherWebEditor::paint (juce::Graphics& g)
@@ -382,6 +393,13 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("stemShare",  stemShare);
     frame->setProperty ("stemKeep",   roundTo (m.stemKeep.load(), 0.1f));
     frame->setProperty ("matchDb",    roundTo (m.matchDb.load(), 0.1f));
+    // Monitoring: what was asked for (the banner shows while anything is on) and what is heard now.
+    frame->setProperty ("listen",     audioProcessor.getListenMode());
+    frame->setProperty ("mono",       audioProcessor.getMonoCheck());
+    frame->setProperty ("phone",      audioProcessor.getPhoneCheck());
+    frame->setProperty ("listenNow",  m.listenPlaying.load());
+    frame->setProperty ("listenGain", roundTo (m.listenGainDb.load(), 0.5f));
+    frame->setProperty ("listenUnder", roundTo (m.listenUnderDb.load(), 1.0f));
     frame->setProperty ("sr",         audioProcessor.getSampleRate());
     frame->setProperty ("inShort",    roundTo (m.inputShortTerm.load(), 0.1f));
     frame->setProperty ("inIntegrated", roundTo (m.inputIntegrated.load(), 0.1f));

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <complex>
 #include <vector>
@@ -144,6 +145,31 @@ public:
     template <typename Sample>
     void process (Sample* const* channels, int numChannels, int numSamples) noexcept
     {
+        process (channels, numChannels, numSamples, nullptr);
+    }
+
+    /** Listen hook (the plug-in's "Listen: removed" on Resonance Tamer). While on, every frame is also
+        re-synthesised with X x (Stem EQ, Keep loudness and Tone Steady gains) x (1 - tamer gain): what
+        the tamer cut. It is overlap-added like the main output (so it lines up with it exactly, and the
+        output plus it is the stage's output without the tamer's cuts) and written by the process()
+        overload below. Costs one more inverse FFT per hop while on. Switching it on starts from
+        silence; it is complete after about 1.25 frames (fftSize). */
+    void setTamerDelta (bool on) noexcept
+    {
+        if (on && ! tamerDeltaOn)
+        {
+            for (auto* v : { &tdAcc[0], &tdAcc[1], &tdQueue[0], &tdQueue[1] }) std::fill (v->begin(), v->end(), 0.0);
+            tdFrame = { 0.0, 0.0 };
+        }
+        tamerDeltaOn = on;
+    }
+    bool isTamerDeltaOn() const noexcept { return tamerDeltaOn; }
+
+    /** The same, also writing what Resonance Tamer cut (setTamerDelta) to tamerDelta[c][0 .. numSamples)
+        for channels 0 and 1 (zeros while the hook is off). */
+    template <typename Sample>
+    void process (Sample* const* channels, int numChannels, int numSamples, double* const* tamerDelta) noexcept
+    {
         std::array<double, kMaxChannels> frame {};
         const int nch = numChannels < channelCount ? numChannels : channelCount;
         for (int i = 0; i < numSamples; ++i)
@@ -151,6 +177,8 @@ public:
             for (int c = 0; c < nch; ++c) frame[static_cast<size_t> (c)] = static_cast<double> (channels[c][i]);
             processFrame (frame.data(), nch);
             for (int c = 0; c < nch; ++c) channels[c][i] = static_cast<Sample> (frame[static_cast<size_t> (c)]);
+            if (tamerDelta != nullptr)
+                for (int c = 0; c < std::min (nch, 2); ++c) tamerDelta[c][i] = tamerDeltaOn ? tdFrame[static_cast<size_t> (c)] : 0.0;
         }
     }
 
@@ -251,6 +279,12 @@ private:
     std::array<double, kStems * kStems> keepM {};        // ~2 s average of sum_b E_b share_s share_t
     double keepMix = 0.0, keepCoeff = 0.0, keepAvg = 0.0, keepDb = 0.0;
     void updateKeepLoudness (const std::complex<double>* L, const std::complex<double>* R) noexcept;
+
+    // Listen hook: what Resonance Tamer cut, overlap-added beside the main output
+    bool tamerDeltaOn = false;
+    std::array<std::vector<double>, 2> tdAcc, tdQueue;
+    std::vector<double> tdGain;                          // per bin: the frame's gain without the tamer x (1 - tamer gain)
+    std::array<double, 2> tdFrame {};                    // the latest output sample of it
 
     // dry path and cross-fade
     std::array<std::vector<double>, kMaxChannels> dry;

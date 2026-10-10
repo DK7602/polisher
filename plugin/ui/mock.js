@@ -71,6 +71,12 @@
       bandDb: [-5.5, 2.0, 0.8, 0.1, -0.9, -2.9, -7.4], bassWidth: 2, midSide: -13.0, highSide: -8.0, correlation: 0.7, subVsBass: -1.2, displayDb: refCurve(-0.6) },
   ];
   const ref = { state: 2, message: "", profile: refSongs[0], version: 1, next: 1 };
+  // Simulated listening aids (Listen / Solo, MONO, PHONE). Exposed so the UI smoke test can check what the
+  // UI asked the "plug-in" for. Quiet deltas are "turned up" by a plausible amount.
+  const mon = { listen: 0, mono: false, phone: false };
+  window.__mockMonitor = mon;
+  const monGain = [0, 18, 12, 20, 9, 0, 0, 0, 0, 15, 15, 15, 15];
+  const monUnder = [-100, -33, -27, -35, -24, -6, -9, -14, -20, -30, -30, -30, -30];
   // Simulated Auto-Master (listening runs 3x faster than the real 12 s).
   const am = { state: 0, progress: 0, undo: false, version: 0, report: "", snapshot: null };
   const setSlider = (name, v) => { sliders[name].value = v; send("__juce__slider" + name, { eventType: "valueChanged", value: v }); };
@@ -119,7 +125,7 @@
     initialisationData: {
       __juce__platform: [],
       __juce__functions: ["resetMeter", "startAutoMaster", "cancelAutoMaster", "undoAutoMaster", "getAutoMasterReport",
-                          "loadReference", "clearReference", "getReference"],
+                          "loadReference", "clearReference", "getReference", "setMonitor"],
       __juce__registeredGlobalEventIds: [],
       __juce__sliders: Object.keys(sliders),
       __juce__toggles: Object.keys(toggles),
@@ -150,6 +156,11 @@
         if (payload.name === "startAutoMaster") { am.state = 1; am.progress = 0; }
         if (payload.name === "cancelAutoMaster" && am.state === 1) am.state = 0;
         if (payload.name === "getAutoMasterReport") result = am.report;
+        if (payload.name === "setMonitor") {
+          const [listen, mono, phone] = payload.params || [];
+          mon.listen = Number.isInteger(listen) && listen >= 0 && listen < 13 ? listen : 0;
+          mon.mono = !!mono; mon.phone = !!phone;
+        }
         if (payload.name === "getReference") result = JSON.stringify({ state: ref.state, message: ref.message, profile: ref.profile || undefined });
         if (payload.name === "clearReference") { ref.profile = null; ref.state = 0; ref.message = ""; ref.version++; }
         if (payload.name === "loadReference") {   // no file dialog in a browser: "pick" the next mock song
@@ -223,6 +234,8 @@
         ? +(-10 * Math.log10([0.15, 0.2, 0.5, 0.15].reduce((a, s, k) => a + s * Math.pow(10, sliders[["stemVoc", "stemDrums", "stemBass", "stemOther"][k]].value / 10), 0))).toFixed(1) : 0,
       satHarm: toggles.satOn && !bypass && sliders.satDrive.value > 0.05 && sliders.satMix.value > 0.05
         ? +(-62 + sliders.satDrive.value * 2.4 + 20 * Math.log10(sliders.satMix.value / 100 + 1e-3) + 3 * beat).toFixed(1) : -100,
+      listen: mon.listen, mono: mon.mono, phone: mon.phone, listenNow: mon.listen,
+      listenGain: mon.listen && !bypass ? monGain[mon.listen] : 0, listenUnder: mon.listen && !bypass ? monUnder[mon.listen] : -100,
       mix, master,
     };
     window.__JUCE__.backend && window.__JUCE__.backend.emitByBackend("polisherMeters", JSON.stringify(frame));

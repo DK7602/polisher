@@ -11,6 +11,8 @@
 
 #include <atomic>
 #include <cstdlib>
+#include <functional>
+#include <numbers>
 #include <new>
 #include <random>
 
@@ -618,6 +620,331 @@ TEST_CASE ("Plug-in: a reference file is read in the background and its loudest 
     CHECK (ref.getState() == ReferenceTrack::empty);
     CHECK_FALSE (ref.getProfile().valid);
     dir.deleteRecursively();
+}
+
+// --- Monitoring: Listen / Solo, MONO and PHONE ------------------------------------------------------
+
+namespace {
+
+using Setup = std::function<void (PolisherAudioProcessor&)>;
+
+/** Every module at its neutral default except what `setup` sets; Drive 0, ceiling 0 dBTP. */
+std::unique_ptr<PolisherAudioProcessor> plainProcessor (double sr, const Setup& setup)
+{
+    auto p = std::make_unique<PolisherAudioProcessor>();
+    set (*p, "autoreset", 0.0f);
+    set (*p, "ceiling", 0.0f);
+    if (setup) setup (*p);
+    p->setRateAndBufferSizeDetails (sr, 512);
+    p->prepareToPlay (sr, 512);
+    return p;
+}
+
+/** What comes out with a listen mode on, at its level in the master (no "hear it" gain). */
+AudioClip heard (const AudioClip& mix, int mode, const Setup& setup)
+{
+    auto p = plainProcessor (mix.sampleRate, setup);
+    p->setListenAutoLevel (false);
+    p->setListenMode (mode);
+    return renderFixed (*p, mix, 512);
+}
+
+AudioClip masterOf (const AudioClip& mix, const Setup& setup)
+{
+    auto p = plainProcessor (mix.sampleRate, setup);
+    return renderFixed (*p, mix, 512);
+}
+
+/** Largest |a + sa * b - expected| from `from` on, with expected(c, i). */
+template <typename Expected>
+double worstError (const AudioClip& a, double sa, const AudioClip& b, int from, Expected expected)
+{
+    double e = 0.0;
+    for (int c = 0; c < 2; ++c)
+        for (int i = from; i < a.numSamples(); ++i)
+            e = std::max (e, std::abs ((double) a.channels[(size_t) c][(size_t) i] + sa * b.channels[(size_t) c][(size_t) i] - expected (c, i)));
+    return e;
+}
+
+double peakFrom (const AudioClip& a, int from)
+{
+    double p = 0.0;
+    for (const auto& ch : a.channels)
+        for (size_t i = (size_t) from; i < ch.size(); ++i) p = std::max (p, (double) std::abs (ch[i]));
+    return p;
+}
+
+double maxStepOf (const AudioClip& a, int from)
+{
+    double s = 0.0;
+    for (const auto& ch : a.channels)
+        for (size_t i = (size_t) std::max (from, 1); i < ch.size(); ++i) s = std::max (s, std::abs ((double) ch[i] - ch[i - 1]));
+    return s;
+}
+
+AudioClip ringing (double sr, double seconds)
+{
+    auto in = testsig::musicLike (sr, seconds, -18.0, 5);
+    for (auto& ch : in.channels)
+        for (size_t i = 0; i < ch.size(); ++i)
+            ch[i] += static_cast<float> (0.05 * std::sin (2.0 * std::numbers::pi * 2400.0 * static_cast<double> (i) / sr));
+    return in;
+}
+
+} // namespace
+
+TEST_CASE ("Listen: each delta lines up with the master to the sample, and is silent when its module rests", "[plugin][monitoring]")
+{
+    namespace L = polisher::listen;
+    const double sr = 48000.0;
+    const int settle = (int) (0.4 * sr);   // armed, measured and faded in by then
+
+    SECTION ("Saturation: added = output minus aligned input")
+    {
+        const auto mix = testsig::musicLike (sr, 2.0, -6.0);
+        const Setup on = [] (auto& p) { set (p, "satDrive", 12.0f); };
+        const auto m1 = masterOf (mix, on), m0 = masterOf (mix, nullptr), l1 = heard (mix, L::satAdded, on);
+        CHECK (peakFrom (m1, 0) < 0.95);   // the Maximizer doesn't touch it, so the master is sat output, delayed
+        const double err = worstError (l1, -1.0, m1, settle, [&] (int c, int i) { return -(double) m0.channels[(size_t) c][(size_t) i]; });
+        INFO ("listen - (master - dry master): " << err << ", delta peak " << peakFrom (l1, settle));
+        CHECK (err < 1.0e-5);
+        CHECK (peakFrom (l1, settle) > 0.01);
+        CHECK (peakFrom (heard (mix, L::satAdded, nullptr), settle) == 0.0);   // Drive 0: nothing added, exactly
+    }
+    SECTION ("Soft Clipper: removed = aligned input x makeup minus output")
+    {
+        const auto tone = testsig::sine (sr, 2, 1000.0, -11.0, 1.5);
+        const Setup off = [] (auto& p) { set (p, "clipLevel", -9.0f); set (p, "clipSoftness", 100.0f); };
+        const Setup on = [] (auto& p) { set (p, "clipLevel", -9.0f); set (p, "clipSoftness", 100.0f); set (p, "clipOn", 1.0f); };
+        const auto m1 = masterOf (tone, on), m0 = masterOf (tone, off), l1 = heard (tone, L::clipRemoved, on);
+        const double makeup = std::pow (10.0, 9.0 / 20.0);
+        CHECK (peakFrom (m1, 0) < 0.95);
+        const double err = worstError (l1, 1.0, m1, settle, [&] (int c, int i) { return makeup * m0.channels[(size_t) c][(size_t) i]; });
+        INFO ("listen + master - makeup x dry master: " << err << ", shaved peak " << peakFrom (l1, settle));
+        CHECK (err < 1.0e-5);
+        CHECK (peakFrom (l1, settle) > 0.01);
+        CHECK (peakFrom (heard (tone, L::clipRemoved, off), settle) == 0.0);   // clipper off: nothing shaved
+    }
+    SECTION ("Resonance Tamer: removed = what its cuts took out of the spectral stage")
+    {
+        const auto mix = ringing (sr, 2.5);
+        const Setup on = [] (auto& p) { set (p, "rtAmount", 100.0f); };
+        auto probe = plainProcessor (sr, on);
+        const int latency = probe->getLatencySamples();
+        const auto m1 = masterOf (mix, on), l1 = heard (mix, L::tamerRemoved, on);
+        // Only the tamer works: master + what it cut = the mix, delayed.
+        const double err = worstError (l1, 1.0, m1, settle, [&] (int c, int i) { return i >= latency ? (double) mix.channels[(size_t) c][(size_t) (i - latency)] : 0.0; });
+        INFO ("listen + master - delayed mix: " << err << ", cut peak " << peakFrom (l1, settle));
+        CHECK (err < 1.0e-5);
+        CHECK (peakFrom (l1, settle) > 0.01);
+        CHECK (peakFrom (heard (mix, L::tamerRemoved, nullptr), settle) == 0.0);   // Amount 0: nothing cut
+    }
+    SECTION ("Maximizer: removed = aligned limiter input minus output")
+    {
+        const auto mix = testsig::musicLike (sr, 2.0, -6.0);
+        // (Drive 6 keeps what is removed under 0 dBFS, where the monitoring's safety stage never acts.)
+        const Setup on = [] (auto& p) { set (p, "drive", 6.0f); };
+        auto probe = plainProcessor (sr, on);
+        const int latency = probe->getLatencySamples();
+        const double g = std::pow (10.0, 6.0 / 20.0);
+        const auto m1 = masterOf (mix, on), l1 = heard (mix, L::maxRemoved, on);
+        const double err = worstError (l1, 1.0, m1, settle, [&] (int c, int i) { return i >= latency ? g * mix.channels[(size_t) c][(size_t) (i - latency)] : 0.0; });
+        INFO ("listen + master - driven mix: " << err << ", removed peak " << peakFrom (l1, settle));
+        CHECK (err < 2.0e-5);
+        CHECK (peakFrom (l1, settle) > 0.05);
+        CHECK (peakFrom (l1, settle) < 0.99);
+        CHECK (peakFrom (heard (mix, L::maxRemoved, nullptr), settle) == 0.0);   // not limiting: nothing removed
+    }
+    SECTION ("Dynamics: the four band solos add up to the master; removed + master = the uncompressed split")
+    {
+        const auto mix = testsig::musicLike (sr, 2.0, -6.0);
+        const Setup on = [] (auto& p) { set (p, "dynRatio1", 4.0f); set (p, "dynThr1", -30.0f); set (p, "dynRatio3", 2.0f); set (p, "dynThr3", -40.0f); set (p, "dynGain3", 2.0f); };
+        const Setup idle = [] (auto& p) { set (p, "dynRatio1", 1.01f); set (p, "dynThr1", 0.0f); };   // running, not compressing
+        const auto m1 = masterOf (mix, on), split = masterOf (mix, idle);
+        AudioClip sum = testsig::silence (sr, 2, 2.0);
+        for (int k = 0; k < 4; ++k)
+        {
+            const auto s = heard (mix, L::dynSolo + k, on);
+            CHECK (peakFrom (s, settle) > 0.001);
+            for (size_t c = 0; c < 2; ++c)
+                for (size_t i = 0; i < s.channels[c].size(); ++i) sum.channels[c][i] += s.channels[c][i];
+        }
+        const double solos = worstError (sum, -1.0, m1, settle, [] (int, int) { return 0.0; });
+        INFO ("sum of the four solos - master: " << solos);
+        CHECK (solos < 1.0e-5);
+        // Removed is what each band's compression took off, before the band's gain: the master plus the
+        // low band's removed part plus the high-mid's (at its +2 dB) is the same split uncompressed.
+        const auto removed = heard (mix, L::dynRemoved + 0, on), removed3 = heard (mix, L::dynRemoved + 2, on);
+        const Setup gainOnly = [] (auto& p) { set (p, "dynRatio1", 1.01f); set (p, "dynThr1", 0.0f); set (p, "dynGain3", 2.0f); };
+        const auto uncompressed = masterOf (mix, gainOnly);
+        const double g3 = std::pow (10.0, 2.0 / 20.0);
+        AudioClip restored = m1;
+        for (size_t c = 0; c < 2; ++c)
+            for (size_t i = 0; i < restored.channels[c].size(); ++i)
+                restored.channels[c][i] += removed.channels[c][i] + (float) (g3 * removed3.channels[c][i]);
+        const double err = worstError (restored, -1.0, uncompressed, settle, [] (int, int) { return 0.0; });
+        INFO ("master + both removed parts - uncompressed split: " << err);
+        CHECK (err < 1.0e-5);
+        CHECK (peakFrom (removed, settle) > 0.01);
+        CHECK (peakFrom (heard (mix, L::dynRemoved + 0, idle), settle) == 0.0);   // not compressing: nothing removed
+        CHECK (peakFrom (split, settle) > 0.1);
+    }
+}
+
+TEST_CASE ("Listen, MONO and PHONE switch without clicks", "[plugin][monitoring]")
+{
+    namespace L = polisher::listen;
+    const double sr = 48000.0;
+    const auto tone = testsig::sine (sr, 2, 200.0, -6.0, 3.6);
+    const Setup busy = [] (auto& p) { set (p, "satDrive", 12.0f); set (p, "drive", 6.0f); set (p, "dynRatio1", 3.0f); set (p, "dynThr1", -30.0f); set (p, "rtAmount", 60.0f); };
+    auto master = masterOf (tone, busy);
+    auto p = plainProcessor (sr, busy);
+    AudioClip out = tone;
+    juce::AudioBuffer<float> buf (2, 512);
+    juce::MidiBuffer midi;
+    static constexpr int modes[] = { L::satAdded, L::off, L::maxRemoved, L::dynSolo, L::dynRemoved, L::tamerRemoved, L::clipRemoved, L::satAdded, L::off };
+    for (int pos = 0, k = 0; pos + 512 <= tone.numSamples(); pos += 512, ++k)
+    {
+        const int step = k / 37;   // ~0.4 s each
+        p->setListenMode (modes[std::min (step, 8)]);
+        p->setMonoCheck (step % 3 == 1);
+        p->setPhoneCheck (step % 4 == 2);
+        for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, tone.channels[(size_t) c].data() + pos, 512);
+        p->processBlock (buf, midi);
+        for (int c = 0; c < 2; ++c) std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + 512, out.channels[(size_t) c].begin() + pos);
+    }
+    const int from = p->getLatencySamples() + 512;
+    for (auto* clip : { &out, &master })
+        for (auto& ch : clip->channels) ch.resize ((size_t) (tone.numSamples() / 512 * 512));   // the blocks rendered
+    const double steady = maxStepOf (master, from), worst = maxStepOf (out, from);
+    size_t at = 0;
+    for (size_t i = (size_t) from; i < out.channels[0].size(); ++i)
+        for (const auto& ch : out.channels)
+            if (std::abs ((double) ch[i] - ch[i - 1]) >= worst) at = i;
+    INFO ("largest step while switching " << worst << " at " << at / sr << " s (step " << at / 512 / 37 << "), the master's own " << steady);
+    CHECK (worst < 1.5 * steady);
+    CHECK (peakFrom (out, 0) <= 1.0);
+}
+
+TEST_CASE ("An offline export never contains Listen, MONO or PHONE; closing the window puts the master back", "[plugin][monitoring]")
+{
+    namespace L = polisher::listen;
+    const double sr = 44100.0;
+    const auto mix = testsig::musicLike (sr, 4.0, -6.0);
+    auto reference = makeProcessor (sr, 512, true);
+    const auto master = renderFixed (*reference, mix, 512);
+
+    // Everything on, then the host renders offline: the export is the master, bit for bit.
+    for (int mode : { (int) L::satAdded, (int) L::tamerRemoved, (int) L::dynSolo + 1, (int) L::maxRemoved })
+    {
+        auto p = makeProcessor (sr, 512, true);
+        p->setListenMode (mode);
+        p->setMonoCheck (true);
+        p->setPhoneCheck (true);
+        p->setNonRealtime (true);
+        const auto exported = renderFixed (*p, mix, 512);
+        INFO ("listen mode " << mode);
+        CHECK (maxAbsDiff (exported, master) == 0.0);
+    }
+    // The same live is what you hear, not the master.
+    auto live = makeProcessor (sr, 512, true);
+    live->setListenMode (L::satAdded);
+    CHECK (maxAbsDiff (renderFixed (*live, mix, 512), master) > 0.01);
+
+    // Listening live, then the export starts mid-song: from that block on it is the master.
+    auto p = makeProcessor (sr, 512, true);
+    p->setListenMode (L::maxRemoved);
+    p->setPhoneCheck (true);
+    AudioClip out = mix;
+    juce::AudioBuffer<float> buf (2, 512);
+    juce::MidiBuffer midi;
+    const int switchAt = 512 * 100;
+    for (int pos = 0; pos + 512 <= mix.numSamples(); pos += 512)
+    {
+        if (pos == switchAt) p->setNonRealtime (true);
+        for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, mix.channels[(size_t) c].data() + pos, 512);
+        p->processBlock (buf, midi);
+        for (int c = 0; c < 2; ++c) std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + 512, out.channels[(size_t) c].begin() + pos);
+    }
+    double before = 0.0, after = 0.0;
+    for (size_t c = 0; c < 2; ++c)
+        for (size_t i = 0; i < (size_t) (mix.numSamples() / 512 * 512); ++i)
+        {
+            const double d = std::abs ((double) out.channels[c][i] - master.channels[c][i]);
+            (i < (size_t) switchAt ? before : after) = std::max (i < (size_t) switchAt ? before : after, d);
+        }
+    CHECK (before > 0.01);
+    CHECK (after == 0.0);
+
+    // The window closing (resetMonitoring) fades back to the master and forgets every check.
+    auto q = makeProcessor (sr, 512, true);
+    q->setListenMode (L::dynSolo);
+    q->setMonoCheck (true);
+    renderFixed (*q, testsig::musicLike (sr, 1.0, -6.0, 3), 512);
+    q->resetMonitoring();
+    CHECK (q->getListenMode() == L::off);
+    CHECK_FALSE (q->getMonoCheck());
+    CHECK_FALSE (q->getPhoneCheck());
+    auto r = makeProcessor (sr, 512, true);
+    renderFixed (*r, testsig::musicLike (sr, 1.0, -6.0, 3), 512);
+    const auto qOut = renderFixed (*q, mix, 512), rOut = renderFixed (*r, mix, 512);
+    CHECK (maxAbsDiff (qOut, rOut, (int) (0.05 * sr)) == 0.0);   // the master after a 15 ms fade
+    CHECK (maxAbsDiff (qOut, rOut) > 0.0);                       // (it did fade, rather than jump)
+}
+
+TEST_CASE ("MONO plays (L + R) / 2 of the master; PHONE is mono; MATCH stays fair", "[plugin][monitoring]")
+{
+    const double sr = 48000.0;
+    const auto mix = testsig::musicLike (sr, 4.0, -8.0, 9);
+    auto ref = makeProcessor (sr, 512, true);
+    set (*ref, "levelMatch", 1.0f);
+    const auto master = renderFixed (*ref, mix, 512);
+
+    auto pm = makeProcessor (sr, 512, true);
+    set (*pm, "levelMatch", 1.0f);
+    pm->setMonoCheck (true);
+    const auto mono = renderFixed (*pm, mix, 512);
+    double err = 0.0;
+    for (size_t i = (size_t) (0.05 * sr); i < master.channels[0].size(); ++i)
+    {
+        const double expect = 0.5 * ((double) master.channels[0][i] + master.channels[1][i]);
+        err = std::max ({ err, std::abs (mono.channels[0][i] - expect), std::abs (mono.channels[1][i] - expect) });
+    }
+    CHECK (err < 1.0e-6);
+    // MATCH learns from the meters before any check, so it turns the master down the same way.
+    CHECK (pm->meters.matchDb.load() == ref->meters.matchDb.load());
+
+    auto pp = makeProcessor (sr, 512, true);
+    pp->setPhoneCheck (true);
+    const auto phone = renderFixed (*pp, mix, 512);
+    double lr = 0.0;
+    for (size_t i = 0; i < phone.channels[0].size(); ++i) lr = std::max (lr, std::abs ((double) phone.channels[0][i] - phone.channels[1][i]));
+    CHECK (lr == 0.0);
+    CHECK (peakFrom (phone, 0) <= 1.0);
+}
+
+TEST_CASE ("Listening never allocates on the audio thread", "[plugin][monitoring]")
+{
+    namespace L = polisher::listen;
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 1024, true);
+    const auto mix = testsig::musicLike (sr, 4.0, -6.0);
+    juce::AudioBuffer<float> buf (2, 1024);
+    juce::MidiBuffer midi;
+    int worst = 0;
+    for (int pos = 0, k = 0; pos + 1024 <= mix.numSamples(); pos += 1024, ++k)
+    {
+        p->setListenMode ((k / 6) % L::count);
+        p->setMonoCheck (k % 5 < 2);
+        p->setPhoneCheck (k % 7 < 3);
+        for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, mix.channels[(size_t) c].data() + pos, 1024);
+        allocations = 0;
+        countAllocations = true;
+        p->processBlock (buf, midi);
+        countAllocations = false;
+        worst = std::max (worst, allocations.load());
+    }
+    CHECK (worst == 0);
 }
 
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:
