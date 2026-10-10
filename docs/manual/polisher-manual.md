@@ -274,6 +274,18 @@ Louder always sounds better, so compare at equal loudness: turn on **MATCH**, th
 
 On headphones, compare at a low, comfortable volume and take breaks. Ears tire fast, and tired ears like everything brighter.
 
+### Blind test: compare masters without knowing which is which
+
+MATCH takes care of loudness, but you still know which side is Polisher. To compare Polisher's master with another one (your old chain, another plug-in, a pro master of the same song) fairly, use **Polisher Blind Test** (`PolisherBlindTest.exe`, in the same download as the plug-in):
+
+1. In Cubase, export each version of the same song with **File > Export > Audio Mixdown** (WAV), for example: your mix with Polisher bypassed (`my mix.wav`), Polisher's master (`polisher.wav`), and the other master (`other.wav`). Two to eight files.
+2. Drag all the files at once onto **PolisherBlindTest.exe**.
+3. It measures each file, turns the louder ones **down** to the quietest one's loudness (never up, never into clipping), shuffles them and saves them as **Sample A**, **Sample B**, ... in a new folder next to your files.
+4. Listen in any player at one fixed volume. Jump between the samples at the same moment of the song and fill in **Score sheet.txt** (score 1–10 and notes for each).
+5. Only then open **Answer key.txt** to see which sample was which.
+
+To compare just one part (say 30 seconds from the hook at 1:00), run it from a command prompt: `PolisherBlindTest.exe my mix.wav polisher.wav --start 60 --length 30`.
+
 ## Learn and Quick Help
 
 The **Learn** panel on the right explains, live, what the selected module is doing to your track. Click **LEARN ON** at the top to show or hide it.

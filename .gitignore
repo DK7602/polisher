@@ -11,3 +11,4 @@ stems-preview/
 tools/stem/data/
 tools/stem/*.pt
 __pycache__/
+tests/ui/node_modules

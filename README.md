@@ -39,6 +39,26 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | Validation in CI: pluginval at strictness 10 plus Steinberg's VST3 validator (537/537) | Done (v0.13) |
 | Match ref (reference-track matching) | Planned |
 
+## Validation
+
+- **Engine tests** (`tests/`, Catch2): every module's exact pass-through at neutral, its behaviour, glides and
+  stability; EBU Tech 3341 / 3342 loudness cases; the true-peak meter and the Maximizer checked by an
+  independent 16x reference meter (`tests/ReferenceTruePeak.h`): the Maximizer holds its ceiling on tones up to
+  20 kHz at 44.1-192 kHz; on hard-clipped audio it sits at the ceiling by BS.1770 (what streaming services
+  read) and within ~0.9 dB of it on an ideal wideband reconstruction, which is why the default ceiling is
+  -1 dBTP.
+- **Plug-in tests** (`tests/plugin/`): the real processor as a DAW drives it: identical output at every
+  block size (1 to 4096, and random sizes), offline export = real time (MATCH never reaches an export),
+  reported latency = real delay at 44.1-192 kHz and the same in bypass, a sample-rate change starts like a
+  fresh plug-in, no memory allocation on the audio thread, saved state restores every control, every control
+  jumping at random never gives NaN or passes the ceiling, double precision = single precision.
+- **Sanitizers** (CI, Linux): the engine tests under AddressSanitizer + UndefinedBehaviorSanitizer.
+- **UI smoke test** (CI, `tests/ui/`): the web UI in headless Chromium: every module's on/off switch, A / B,
+  host changes, no script errors.
+- **pluginval** at strictness 10 + Steinberg's VST3 validator (CI, Windows).
+- **Listening**: `PolisherBlindTest` (built with the plug-in) turns exported masters into a loudness-matched,
+  shuffled blind test with a score sheet and a separate answer key (see the manual).
+
 ## Learn rule
 
 Every warning in Learn and in the Auto-Master report carries a plan: what is happening, **Do I need
@@ -73,6 +93,7 @@ plugin/     JUCE AudioProcessor, web-view editor (+ basic native fallback editor
 tests/      Catch2 unit tests for the engine
 docs/manual/  User manual (bundled into the plug-in; its version line must match the release)
 tools/stem/   Stem EQ model training (Python / PyTorch; see tools/stem/README.md)
+tools/blindtest/  Polisher Blind Test: loudness-matched, shuffled listening test from exported songs
 .github/workflows/build.yml   Windows (every push) and macOS (manual run) builds, tests, validation, artifacts
 ```
 

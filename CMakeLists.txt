@@ -30,6 +30,7 @@ if(POLISHER_BUILD_PLUGIN)
         GIT_SHALLOW    TRUE)
     FetchContent_MakeAvailable(JUCE)
     add_subdirectory(plugin)
+    add_subdirectory(tools/blindtest)
 endif()
 
 if(POLISHER_BUILD_TESTS)

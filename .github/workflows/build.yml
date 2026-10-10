@@ -48,7 +48,9 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel 4
 
-      - name: Unit tests (DSP engine)
+      # Engine tests plus the plug-in-level tests (block sizes, offline vs real time, latency at every
+      # sample rate, no audio-thread allocation, saved state, automation torture).
+      - name: Unit tests (engine + plug-in)
         run: ctest --test-dir build -C Release --output-on-failure
 
       - name: Upload plug-ins
@@ -59,6 +61,7 @@ jobs:
             build/plugin/Polisher_artefacts/Release/VST3
             build/plugin/Polisher_artefacts/Release/AU
             build/plugin/Polisher_artefacts/Release/Standalone
+            build/tools/blindtest/PolisherBlindTest_artefacts/Release/PolisherBlindTest*
           if-no-files-found: warn
 
       - name: pluginval (macOS)
@@ -131,3 +134,48 @@ jobs:
           name: Validation-logs-${{ matrix.name }}
           path: pluginval-logs
           if-no-files-found: ignore
+
+  # The engine tests under AddressSanitizer + UndefinedBehaviorSanitizer: out-of-bounds reads and writes,
+  # use after free, leaks, overflow and other undefined behaviour fail the run.
+  sanitizers:
+    name: Engine tests (ASan + UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPOLISHER_BUILD_PLUGIN=OFF
+          "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined"
+          "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build build --parallel 4
+      - name: Run
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ./build/tests/polisher_tests
+
+  # The web UI in headless Chromium (mock.js stands in for the plug-in): every module's switch, A / B,
+  # host changes, no script errors.
+  ui:
+    name: UI smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Fetch JUCE's web-view bridge
+        run: |
+          mkdir -p plugin/ui/juce
+          for f in index.js check_native_interop.js; do
+            curl -fsSL -o "plugin/ui/juce/$f" "https://raw.githubusercontent.com/juce-framework/JUCE/8.0.15/modules/juce_gui_extra/native/javascript/$f"
+          done
+      - name: Install Playwright
+        working-directory: tests/ui
+        run: npm install --no-save playwright@1.56.1 && npx playwright install --with-deps chromium
+      - name: Run
+        run: |
+          (cd plugin/ui && python3 -m http.server 8765 > /dev/null 2>&1 &)
+          sleep 2
+          node tests/ui/ui_smoke.mjs

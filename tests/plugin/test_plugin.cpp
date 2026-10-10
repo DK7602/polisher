@@ -1,0 +1,342 @@
+// Plug-in-level checks: the real PolisherAudioProcessor (all eleven modules, parameters, MATCH,
+// latency reporting, state) driven the way a DAW drives it. The engine tests check each module on
+// its own; these check what only shows up in the assembled plug-in: block sizes, offline export,
+// host delay compensation, sample-rate changes, allocation on the audio thread, saved state.
+
+#include "PluginProcessor.h"
+#include "../Signals.h"
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <atomic>
+#include <cstdlib>
+#include <new>
+#include <random>
+
+// --- Allocation counter: every operator new while `countAllocations` is set is counted. ----------
+namespace {
+std::atomic<bool> countAllocations { false };
+std::atomic<int> allocations { 0 };
+}
+
+void* operator new (std::size_t n)
+{
+    if (countAllocations.load (std::memory_order_relaxed))
+        allocations.fetch_add (1, std::memory_order_relaxed);
+    if (void* p = std::malloc (n == 0 ? 1 : n))
+        return p;
+    throw std::bad_alloc();
+}
+void* operator new[] (std::size_t n) { return operator new (n); }
+void operator delete (void* p) noexcept { std::free (p); }
+void operator delete[] (void* p) noexcept { std::free (p); }
+void operator delete (void* p, std::size_t) noexcept { std::free (p); }
+void operator delete[] (void* p, std::size_t) noexcept { std::free (p); }
+
+namespace {
+
+using polisher::AudioClip;
+
+/** JUCE needs a message manager for the parameter tree's timers. */
+void initJuce()
+{
+    static juce::ScopedJuceInitialiser_GUI init;
+}
+
+void set (PolisherAudioProcessor& p, const juce::String& id, float plain)
+{
+    auto* param = p.parameters.getParameter (id);
+    REQUIRE (param != nullptr);
+    param->setValueNotifyingHost (param->convertTo0to1 (plain));
+}
+
+/** Every module doing real work, as after an Auto-Master run on a loud trap mix. */
+void busySettings (PolisherAudioProcessor& p)
+{
+    set (p, "ulAmount", 75.0f);
+    set (p, "eqGain1", 2.0f);  set (p, "eqGain4", -1.5f); set (p, "eqGain6", 1.0f);
+    set (p, "stemVoc", 3.0f);  set (p, "stemDrums", -2.0f);
+    set (p, "tsAmount", 40.0f); set (p, "rtAmount", 50.0f);
+    set (p, "bassMono", 120.0f); set (p, "bassTame", 30.0f); set (p, "bassPunch", 30.0f);
+    for (int b = 1; b <= 4; ++b) { set (p, "dynRatio" + juce::String (b), 2.0f); set (p, "dynThr" + juce::String (b), -30.0f); }
+    set (p, "imgHigh", 130.0f);
+    set (p, "satDrive", 6.0f); set (p, "satMix", 50.0f);
+    set (p, "drive", 6.0f);
+    set (p, "clipOn", 1.0f); set (p, "clipLevel", 0.5f);
+    set (p, "ceiling", -1.0f);
+}
+
+std::unique_ptr<PolisherAudioProcessor> makeProcessor (double sr, int maxBlock, bool busy)
+{
+    initJuce();
+    auto p = std::make_unique<PolisherAudioProcessor>();
+    set (*p, "autoreset", 0.0f);
+    if (busy) busySettings (*p);
+    p->setRateAndBufferSizeDetails (sr, maxBlock);
+    p->prepareToPlay (sr, maxBlock);
+    return p;
+}
+
+/** Runs the clip through the processor in blocks whose sizes come from nextBlock(). */
+template <typename NextBlock>
+AudioClip render (PolisherAudioProcessor& p, const AudioClip& in, NextBlock nextBlock)
+{
+    AudioClip out = in;
+    juce::MidiBuffer midi;
+    const int total = in.numSamples();
+    juce::AudioBuffer<float> buf (2, 8192);
+    for (int pos = 0; pos < total;)
+    {
+        const int n = std::min (nextBlock(), total - pos);
+        buf.setSize (2, n, false, false, true);
+        for (int c = 0; c < 2; ++c)
+            buf.copyFrom (c, 0, in.channels[static_cast<size_t> (c)].data() + pos, n);
+        p.processBlock (buf, midi);
+        for (int c = 0; c < 2; ++c)
+            std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + n, out.channels[static_cast<size_t> (c)].begin() + pos);
+        pos += n;
+    }
+    return out;
+}
+
+AudioClip renderFixed (PolisherAudioProcessor& p, const AudioClip& in, int block)
+{
+    return render (p, in, [block] { return block; });
+}
+
+double maxAbsDiff (const AudioClip& a, const AudioClip& b, int from = 0)
+{
+    double d = 0.0;
+    for (size_t c = 0; c < a.channels.size(); ++c)
+        for (size_t i = static_cast<size_t> (from); i < a.channels[c].size(); ++i)
+            d = std::max (d, std::abs ((double) a.channels[c][i] - b.channels[c][i]));
+    return d;
+}
+
+} // namespace
+
+TEST_CASE ("Plug-in: every block size gives the same master", "[plugin]")
+{
+    const double sr = 48000.0;
+    const auto mix = testsig::musicLike (sr, 6.0, -6.0);
+    auto ref = makeProcessor (sr, 4096, true);
+    const auto reference = renderFixed (*ref, mix, 512);
+
+    for (int block : { 1, 32, 100, 441, 480, 1024, 4096 })
+    {
+        auto p = makeProcessor (sr, 4096, true);
+        const auto clip = block == 1 ? testsig::musicLike (sr, 2.0, -6.0) : mix;
+        const auto out = renderFixed (*p, clip, block);
+        const auto refOut = block == 1 ? renderFixed (*makeProcessor (sr, 4096, true), clip, 512) : reference;
+        INFO ("block size " << block << ": largest difference " << maxAbsDiff (out, refOut));
+        CHECK (maxAbsDiff (out, refOut) < 1.0e-5);
+    }
+
+    // A host that changes the block size every call (FL Studio, some offline renders).
+    std::mt19937 rng (3);
+    std::uniform_int_distribution<int> size (1, 4096);
+    auto p = makeProcessor (sr, 4096, true);
+    const auto out = render (*p, mix, [&] { return size (rng); });
+    INFO ("random block sizes: largest difference " << maxAbsDiff (out, reference));
+    CHECK (maxAbsDiff (out, reference) < 1.0e-5);
+}
+
+TEST_CASE ("Plug-in: offline export matches real time, and MATCH never reaches the export", "[plugin]")
+{
+    const double sr = 44100.0;
+    const auto mix = testsig::musicLike (sr, 8.0, -6.0);
+
+    auto live = makeProcessor (sr, 512, true);
+    const auto liveOut = renderFixed (*live, mix, 512);
+
+    auto offline = makeProcessor (sr, 512, true);
+    offline->setNonRealtime (true);
+    const auto offlineOut = renderFixed (*offline, mix, 512);
+    CHECK (maxAbsDiff (liveOut, offlineOut) < 1.0e-6);
+
+    // MATCH on: the live master is turned down to the mix's loudness, the export is not.
+    auto matchedLive = makeProcessor (sr, 512, true);
+    set (*matchedLive, "levelMatch", 1.0f);
+    const auto matchedOut = renderFixed (*matchedLive, mix, 512);
+    auto matchedOffline = makeProcessor (sr, 512, true);
+    set (*matchedOffline, "levelMatch", 1.0f);
+    matchedOffline->setNonRealtime (true);
+    const auto exportOut = renderFixed (*matchedOffline, mix, 512);
+
+    CHECK (maxAbsDiff (exportOut, liveOut) < 1.0e-6);
+    const auto tail = static_cast<int> (4.0 * sr);   // MATCH has learned the gap by now
+    CHECK (polisher::measure (matchedOut).integratedLufs < polisher::measure (liveOut).integratedLufs - 1.0);
+    CHECK (maxAbsDiff (matchedOut, liveOut, tail) > 0.01);
+}
+
+TEST_CASE ("Plug-in: the latency it reports is the real delay, at every sample rate", "[plugin]")
+{
+    for (double sr : { 44100.0, 48000.0, 88200.0, 96000.0, 176400.0, 192000.0 })
+    {
+        // Every module on at its neutral settings, Drive 0, quiet audio: each module is an exact
+        // pass-through there, so the master must be the mix delayed by exactly the reported latency.
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "ceiling", 0.0f);
+        const int latency = p->getLatencySamples();
+        const auto mix = testsig::musicLike (sr, 2.0, -24.0);
+        const auto out = renderFixed (*p, mix, 512);
+
+        double err = 0.0, ref = 0.0;
+        for (int c = 0; c < 2; ++c)
+            for (int i = latency; i < mix.numSamples(); ++i)
+            {
+                const double d = (double) out.channels[(size_t) c][(size_t) i] - mix.channels[(size_t) c][(size_t) (i - latency)];
+                err += d * d;
+                ref += (double) mix.channels[(size_t) c][(size_t) i] * mix.channels[(size_t) c][(size_t) i];
+            }
+        INFO ("sample rate " << sr << ": latency " << latency << " samples, error " << 10.0 * std::log10 (err / ref + 1e-30) << " dB");
+        CHECK (latency > 0);
+        CHECK (err / ref < 1.0e-10);    // -100 dB
+
+        // The global bypass (A) keeps exactly the same delay, so A/B never jumps in time.
+        set (*p, "bypass", 1.0f);
+        CHECK (p->getLatencySamples() == latency);
+    }
+}
+
+TEST_CASE ("Plug-in: changing sample rate starts clean (same as a fresh plug-in)", "[plugin]")
+{
+    const auto mix44 = testsig::musicLike (44100.0, 4.0, -6.0, 11);
+    auto p = makeProcessor (96000.0, 512, true);
+    renderFixed (*p, testsig::musicLike (96000.0, 3.0, 0.0, 5), 512);   // leave state behind at 96k
+    p->setRateAndBufferSizeDetails (44100.0, 512);
+    p->prepareToPlay (44100.0, 512);
+    const auto reused = renderFixed (*p, mix44, 512);
+
+    auto fresh = makeProcessor (44100.0, 512, true);
+    const auto clean = renderFixed (*fresh, mix44, 512);
+    INFO ("largest difference " << maxAbsDiff (reused, clean));
+    CHECK (maxAbsDiff (reused, clean) < 1.0e-5);
+}
+
+TEST_CASE ("Plug-in: processing never allocates memory on the audio thread", "[plugin]")
+{
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 1024, true);
+    const auto mix = testsig::musicLike (sr, 3.0, -6.0);
+    renderFixed (*p, testsig::musicLike (sr, 1.0, -6.0), 1024);     // warm up
+
+    juce::AudioBuffer<float> buf (2, 1024);
+    juce::MidiBuffer midi;
+    std::mt19937 rng (9);
+    std::uniform_real_distribution<float> u (0.0f, 1.0f);
+    const auto& params = p->getParameters();
+    int worst = 0;
+    for (int pos = 0; pos + 1024 <= mix.numSamples(); pos += 1024)
+    {
+        // Automation between blocks (as a host delivers it), then count what the block allocates.
+        for (int k = 0; k < 3; ++k)
+        {
+            auto* param = params[(int) (u (rng) * (float) params.size()) % params.size()];
+            const auto id = dynamic_cast<juce::AudioProcessorParameterWithID*> (param)->paramID;
+            if (id != "bypass" && id != "levelMatch")
+                param->setValueNotifyingHost (u (rng));
+        }
+        for (int c = 0; c < 2; ++c)
+            buf.copyFrom (c, 0, mix.channels[(size_t) c].data() + pos, 1024);
+        allocations = 0;
+        countAllocations = true;
+        p->processBlock (buf, midi);
+        countAllocations = false;
+        worst = std::max (worst, allocations.load());
+    }
+    CHECK (worst == 0);
+}
+
+TEST_CASE ("Plug-in: saved state brings back every setting", "[plugin]")
+{
+    auto a = makeProcessor (48000.0, 512, false);
+    std::mt19937 rng (21);
+    std::uniform_real_distribution<float> u (0.0f, 1.0f);
+    for (auto* param : a->getParameters())
+        param->setValueNotifyingHost (u (rng));
+
+    juce::MemoryBlock state;
+    a->getStateInformation (state);
+    auto b = makeProcessor (48000.0, 512, false);
+    b->setStateInformation (state.getData(), (int) state.getSize());
+
+    const auto& pa = a->getParameters();
+    const auto& pb = b->getParameters();
+    REQUIRE (pa.size() == pb.size());
+    for (int i = 0; i < pa.size(); ++i)
+    {
+        // Compare what each control means (a switch set to 0.42 by a host saves as "on"... or "off").
+        auto* ra = dynamic_cast<juce::RangedAudioParameter*> (pa[i]);
+        auto* rb = dynamic_cast<juce::RangedAudioParameter*> (pb[i]);
+        REQUIRE ((ra != nullptr && rb != nullptr));
+        INFO (ra->paramID << ": " << ra->getCurrentValueAsText() << " vs " << rb->getCurrentValueAsText());
+        CHECK (ra->paramID == rb->paramID);
+        CHECK (std::abs (ra->convertFrom0to1 (ra->getValue()) - rb->convertFrom0to1 (rb->getValue()))
+               <= 1.0e-4f * std::max (1.0f, std::abs (ra->convertFrom0to1 (ra->getValue()))));
+    }
+}
+
+TEST_CASE ("Plug-in: every control jumping at random never produces NaN or goes over the ceiling", "[plugin]")
+{
+    const double sr = 44100.0;
+    auto p = makeProcessor (sr, 512, true);
+    const auto mix = testsig::musicLike (sr, 20.0, 0.0);
+    std::mt19937 rng (5);
+    std::uniform_real_distribution<float> u (0.0f, 1.0f);
+    const auto& params = p->getParameters();
+
+    juce::AudioBuffer<float> buf (2, 512);
+    juce::MidiBuffer midi;
+    bool finite = true;
+    double peak = 0.0;
+    const int settle = (int) (0.5 * sr);
+    for (int pos = 0; pos + 512 <= mix.numSamples(); pos += 512)
+    {
+        for (auto* param : params)
+        {
+            const auto id = dynamic_cast<juce::AudioProcessorParameterWithID*> (param)->paramID;
+            if (id == "bypass" || id == "levelMatch" || id == "ceiling") continue;   // A and MATCH skip the limiter / turn down
+            if (u (rng) < 0.3f) param->setValueNotifyingHost (u (rng));
+        }
+        for (int c = 0; c < 2; ++c)
+            buf.copyFrom (c, 0, mix.channels[(size_t) c].data() + pos, 512);
+        p->processBlock (buf, midi);
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < 512; ++i)
+            {
+                const float v = buf.getSample (c, i);
+                finite = finite && std::isfinite (v);
+                if (pos >= settle) peak = std::max (peak, (double) std::abs (v));
+            }
+    }
+    CHECK (finite);
+    INFO ("highest sample " << 20.0 * std::log10 (peak) << " dBFS");
+    CHECK (20.0 * std::log10 (peak) <= -0.95);    // ceiling -1 dBTP: no sample may pass it
+}
+
+TEST_CASE ("Plug-in: double-precision hosts get the same master as single precision", "[plugin]")
+{
+    const double sr = 48000.0;
+    const auto mix = testsig::musicLike (sr, 4.0, -6.0);
+    auto pf = makeProcessor (sr, 512, true);
+    const auto single = renderFixed (*pf, mix, 512);
+
+    auto pd = makeProcessor (sr, 512, true);
+    AudioClip dbl = mix;
+    juce::AudioBuffer<double> buf (2, 512);
+    juce::MidiBuffer midi;
+    for (int pos = 0; pos + 512 <= mix.numSamples(); pos += 512)
+    {
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < 512; ++i)
+                buf.setSample (c, i, mix.channels[(size_t) c][(size_t) (pos + i)]);
+        pd->processBlock (buf, midi);
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < 512; ++i)
+                dbl.channels[(size_t) c][(size_t) (pos + i)] = (float) buf.getSample (c, i);
+    }
+    INFO ("largest difference " << maxAbsDiff (single, dbl));
+    CHECK (maxAbsDiff (single, dbl) < 1.0e-4);
+}
+

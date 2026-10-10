@@ -20,10 +20,36 @@ add_executable(polisher_tests
     test_saturation.cpp
     test_stemeq.cpp
     test_spectral.cpp
-    test_unlimiter.cpp)
+    test_unlimiter.cpp
+    test_validation.cpp)
 
 target_link_libraries(polisher_tests PRIVATE polisher_dsp Catch2::Catch2WithMain)
 set_target_properties(polisher_tests PROPERTIES FOLDER "Polisher")
 
 include(Catch)
 catch_discover_tests(polisher_tests)
+
+# Plug-in-level tests: the real processor (all modules, parameters, MATCH, latency, state) as a DAW
+# drives it. Built from the plug-in's processor sources without its editors (POLISHER_HEADLESS).
+if(POLISHER_BUILD_PLUGIN)
+    juce_add_console_app(polisher_plugin_tests PRODUCT_NAME "Polisher Plugin Tests")
+    target_sources(polisher_plugin_tests PRIVATE
+        plugin/test_plugin.cpp
+        ${CMAKE_SOURCE_DIR}/plugin/PluginProcessor.cpp
+        ${CMAKE_SOURCE_DIR}/plugin/AutoMasterController.cpp)
+    target_include_directories(polisher_plugin_tests PRIVATE ${CMAKE_SOURCE_DIR}/plugin)
+    target_compile_definitions(polisher_plugin_tests PRIVATE
+        POLISHER_HEADLESS=1
+        JucePlugin_Name="Polisher"
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0)
+    target_link_libraries(polisher_plugin_tests PRIVATE
+        polisher_dsp
+        juce::juce_audio_processors
+        Catch2::Catch2WithMain
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+    set_target_properties(polisher_plugin_tests PROPERTIES FOLDER "Polisher")
+    catch_discover_tests(polisher_plugin_tests DISCOVERY_TIMEOUT 60)
+endif()

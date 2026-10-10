@@ -1,6 +1,8 @@
 #include "PluginProcessor.h"
-#include "PluginEditor.h"
-#include "PolisherWebEditor.h"
+#if ! POLISHER_HEADLESS                 // the plug-in-level tests build the processor without its editors
+ #include "PluginEditor.h"
+ #include "PolisherWebEditor.h"
+#endif
 
 namespace ParamIDs
 {
@@ -194,14 +196,14 @@ bool PolisherAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts)
 void PolisherAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerBlock*/)
 {
     const int channels = juce::jmax (1, getTotalNumOutputChannels());
+    // Every module gets its current settings before it is prepared, so it starts in the saved state.
+    // Set afterwards, Bass Control, Dynamics, the Imager and the spectral stage would fade in from
+    // neutral over the first ~0.3 s of playback (and of an export that starts at bar 1).
+    updateLimiterParams();
     limiter.prepare (sampleRate, channels);
     clipper.prepare (channels);
-    unlimiter.setParams (moduleParams.unlimiter (bypassParam->load() > 0.5f));
     unlimiter.prepare (sampleRate, channels);
     eq.prepare (sampleRate, channels);
-    stemEq.setParams (moduleParams.stem (bypassParam->load() > 0.5f));   // so reset() starts in the saved state
-    stemEq.setToneSteady (moduleParams.steady (bypassParam->load() > 0.5f));
-    stemEq.setResonance (moduleParams.resonance (bypassParam->load() > 0.5f));
     stemEq.prepare (sampleRate, channels);
     bass.prepare (sampleRate, channels);
     dynamics.prepare (sampleRate, channels);
@@ -476,11 +478,15 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
 
 juce::AudioProcessorEditor* PolisherAudioProcessor::createEditor()
 {
+   #if POLISHER_HEADLESS
+    return nullptr;
+   #else
     // The liquid-glass web UI; falls back to the basic native editor if no web view is available
     // (for example a Windows machine without the WebView2 runtime).
     if (PolisherWebEditor::isSupported())
         return new PolisherWebEditor (*this);
     return new PolisherAudioProcessorEditor (*this);
+   #endif
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
