@@ -66,6 +66,7 @@ const P = {
   ulLength: Juce.getSliderState("ulLength"),
   ulFocus: Juce.getComboBoxState("ulFocus"),
   stemOn: Juce.getToggleState("stemOn"),
+  stemKeep: Juce.getToggleState("stemKeep"),
   tsOn: Juce.getToggleState("tsOn"),
   tsAmount: Juce.getSliderState("tsAmount"),
   tsRange: Juce.getSliderState("tsRange"),
@@ -95,7 +96,7 @@ const M = {
   peakRecent: -100, peakL: -100, peakR: -100, gr: 0, clip: 0, mix: null, master: null,
   inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
   amState: 0, amProgress: 0, amHearing: false, amUndo: false, amReport: 0, matchDb: 0, corr: 1,
-  dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
+  dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], stemKeep: 0, rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
   ulBoost: 0, ulSquash: 0,
 };
 let grWindow = [];           // ~3 s of gain-reduction samples for Learn
@@ -122,6 +123,7 @@ const modules = [
     cells: [],
     controls: [["Vocals / Drums / Bass / Other", "Turns that part of the mix up or down (±12 dB). Other is everything else: synths, keys, guitars, pads, effects."],
                ["How it works", "A small AI model listens to the mix and works out, moment by moment and frequency by frequency, how much of the sound is vocals, drums, bass or other. Your four levels are mixed by those shares into one EQ that updates about 180 times a second."],
+               ["Keep Loudness", "On: your moves change the balance, not how loud the mix is. When you turn a part up, Stem EQ turns the whole mix down by the same loudness (and the other way round), so A/B is a fair compare and the Maximizer isn't pushed harder. Off: a move also makes the mix louder or quieter."],
                ["Trade-offs", "Adds about 40 ms of delay at any sample rate (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly. Moves up to about ±6 dB stay clean."]] },
   { id: "ts", name: "Tone Steady", live: true, soon: "",
     what: "Keeps your tone steady as the song plays: when a section drifts muddier, harsher or thinner than the rest of the song, it nudges those frequencies back.",
@@ -671,9 +673,21 @@ function stemHearsCell() {
       <div class="sh-bar screen"><div class="sh-fill" id="sh-fill-${k}"></div></div><span class="sh-val mono" id="sh-val-${k}"></span></div>`).join("")}</div>`;
   return cell;
 }
+// Keep Loudness: a switch whose line underneath shows how much level it is holding right now.
+function stemKeepCell() {
+  const cell = toggleCell({ label: "Keep Loudness", sub: "balance, not level", state: P.stemKeep, onText: "ON", offText: "OFF" });
+  const v = cell.querySelector(".cell-value");
+  v.id = "stemkeep-val";
+  v.removeAttribute("style");
+  return cell;
+}
+const stemKeepText = () => !P.stemKeep.getValue() ? "level moves with you"
+  : P.bypass.getValue() || !P.stemOn.getValue() || stemIsNeutral() ? "nothing to hold"
+  : `Keeping level: ${fmtSigned(Math.abs(M.stemKeep || 0) < 0.05 ? 0 : M.stemKeep)}`;
 const stemCells = [
   ...STEMS.map((name, k) => liveKnobCell({ label: name, sub: k === 3 ? "synths · keys · fx" : "level", state: P.stemGain[k], def: 0,
                                            minText: `${MINUS}12`, maxText: "+12", fmt: fmtSigned })),
+  stemKeepCell(),
   stemHearsCell(),
 ];
 
@@ -1266,6 +1280,7 @@ function renderStemLearn(body) {
   const on = !!P.stemOn.getValue(), bypassed = !!P.bypass.getValue();
   const playing = performance.now() - lastAudioTime < 1500;
   const moves = stemMoves(), share = M.stemShare || [0, 0, 0, 0];
+  const keep = !!P.stemKeep.getValue(), keepDb = Math.abs(M.stemKeep || 0) < 0.05 ? 0 : M.stemKeep || 0;
   const heard = "of what you hear, " + STEMS.map((n, k) => `${n.toLowerCase()} ${share[k]} %`).join(", ");
   body.appendChild(head("WHAT'S HAPPENING"));
   body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
@@ -1279,19 +1294,33 @@ function renderStemLearn(body) {
   const why = [
     (v) => v > 0 ? "Brings the vocal forward, like pushing its fader. Great for a vocal that sits a little low under the beat." : "Tucks the vocal back into the beat.",
     (v) => v > 0 ? "More kick, snare and hats. Adds punch and energy." : "Softer drums: the hits sit back and the music around them opens up.",
-    (v) => v > 5.95 ? "More bass and 808, but at this much the Maximizer has to turn everything down to keep the same loudness: at +12 the 808 ends up only about 4 dB louder while everything from 300 Hz up drops about 6 dB. Run Auto-Master again (or lower Drive) and compare with MATCH."
-      : v > 0 ? "More bass and 808. Check on small speakers and keep an eye on the Maximizer: bass is what limiters grab first, so it turns the rest down a little to make room." : "Less bass and 808. Useful when the low end swamps the mix.",
+    (v) => v > 5.95 ? (keep ? "More bass and 808. In a trap mix the 808 is a big part of the loudness, so to keep the same loudness the rest of the mix comes down: Keep Loudness does that here, cleanly, before the Maximizer."
+                            : "More bass and 808, but at this much the mix gets much louder and the Maximizer has to turn everything down to fit it: at +12 the 808 ends up only about 4 dB louder while everything from 300 Hz up drops about 6 dB, with a lot more limiting.")
+      : v > 0 ? (keep ? "More bass and 808. The 808 carries a lot of a trap mix's loudness, so Keep Loudness turns the whole mix down to hold the level: the 808 steps forward and the rest steps back (see Keeping level under the switch)."
+                      : "More bass and 808. Check on small speakers and keep an eye on the Maximizer: bass is what limiters grab first, so it turns the rest down a little to make room.")
+      : "Less bass and 808. Useful when the low end swamps the mix.",
     (v) => v > 0 ? "More of everything else: synths, keys, guitars, pads and effects." : "Less of everything else, so vocals and drums stand out.",
   ];
   STEMS.forEach((n, k) => {
     const v = stemGainAt(k);
     body.appendChild(item(n, fmtSigned(v), Math.abs(v) < 0.05 ? "Untouched." : why[k](v)));
   });
+  body.appendChild(item("Keep Loudness", keep ? "ON" : "OFF", !keep ? "Off: every move also changes how loud the mix is. Turning something up makes it louder, which always sounds better in a quick A/B."
+    : !moves.length || !on || bypassed ? "On: when you move a part, Stem EQ turns the whole mix up or down so the loudness stays the same. Your moves change the balance, not the level."
+    : keepDb < 0 ? `On: your moves would make the mix louder, so Stem EQ turns all of it down ${fmtNum(-keepDb, 1)} dB. The balance changes; the loudness stays where it was.`
+    : keepDb > 0 ? `On: your moves would make the mix quieter, so Stem EQ turns all of it up ${fmtNum(keepDb, 1)} dB. The balance changes; the loudness stays where it was.`
+    : "On: your moves hardly change the loudness, so there is nothing to make up right now."));
   body.appendChild(item("Model Hears", "", "How the model divides what you hear right now, averaged over about a second. Each frequency counts by how loud it sounds, so a big 808 shows as part of the sound rather than nearly all of it. A part it barely hears won't move much when you turn it up or down."));
   const big = moves.filter((k) => Math.abs(stemGainAt(k)) > 6.05);
-  if (on && !bypassed && stemGainAt(2) > 5.95)
-    body.appendChild(tip("HEADS UP", "Bass is up 6 dB or more. The Maximizer keeps the same loudness, so it turns the whole master down to fit the extra low end: everything above the bass gets quieter (at +12: 808 about +4 dB, 300 Hz to 16 kHz about \u22126 dB).", false,
-      { need: "Only if the vocal and drums sound smaller than before.", steps: ["Run Auto-Master again so the chain is set for the new low end.", "Or lower Drive a little.", "Turn on MATCH and flip A/B to compare at equal loudness."] }));
+  if (on && !bypassed && stemGainAt(2) > 5.95 && keep)
+    body.appendChild(tip("HEADS UP", `Bass is up 6 dB or more. Keep Loudness holds the level by turning the whole mix down${keepDb < -0.05 ? ` (${fmtNum(-keepDb, 1)} dB right now)` : ""}, so the 808 gets louder and everything above the bass sits lower. The Maximizer doesn't have to work harder. At the same loudness, more 808 always means less of the rest, with or without this switch.`, false,
+      { need: "Only if the vocal and drums sound smaller than you want.", steps: ["Back Bass off a little: +3 to +4 dB is often enough.", "Turn on MATCH and flip A/B to compare at equal loudness."] }));
+  else if (on && !bypassed && stemGainAt(2) > 5.95)
+    body.appendChild(tip("HEADS UP", "Bass is up 6 dB or more and Keep Loudness is off. The extra bass makes the mix much louder, so the Maximizer turns the whole master down to fit it and limits a lot harder: everything above the bass gets quieter (at +12: 808 about +4 dB, 300 Hz to 16 kHz about \u22126 dB).", false,
+      { need: "Yes, if the vocal and drums sound smaller or the low end sounds squashed.", steps: ["Turn Keep Loudness on, so the move no longer pushes the Maximizer harder.", "Or run Auto-Master again so the chain is set for the new low end.", "Turn on MATCH and flip A/B to compare at equal loudness."] }));
+  else if (on && !bypassed && !keep && moves.some((k) => Math.abs(stemGainAt(k)) > 3.95))
+    body.appendChild(tip("HEADS UP", `Keep Loudness is off, so this move also makes the mix ${moves.every((k) => stemGainAt(k) < 0) ? "quieter" : "louder"}. Louder always sounds better in a quick A/B, so it's hard to tell whether the new balance is really better.`, false,
+      { need: "Only if you're judging the move by ear.", steps: ["Turn Keep Loudness on (in Stem EQ).", "Or turn on MATCH and flip A/B to compare at equal loudness."] }));
   else if (on && !bypassed && big.length)
     body.appendChild(tip("HEADS UP", `${big.map((k) => STEMS[k]).join(" and ")} ${big.length > 1 ? "are" : "is"} moved more than 6 dB. Big moves can nudge the parts that share notes with ${big.length > 1 ? "them" : "it"} too.`, false,
       { need: "Only if something besides that part changes level.", steps: ["Turn on MATCH and flip A/B.", "Listen to the parts you didn't touch: do they jump or thin out?", "If they do, back the move off to about 6 dB, or make the rest of the change with Tonal EQ."] }));
@@ -2040,6 +2069,8 @@ function updateLiveReadouts() {
     rtf.style.width = (clamp(v / 12, 0, 1) * 100).toFixed(1) + "%";
     $("rtmeter-val").textContent = v < 0.3 ? "resting" : `${MINUS}${v.toFixed(1)} dB @ ${fmtHz(M.rtHz || 0)}`;
   }
+  const skv = $("stemkeep-val");
+  if (skv) skv.textContent = stemKeepText();
   const rst = $("read-stem");
   if (rst) rst.textContent = P.bypass.getValue() ? "Bypassed" : !P.stemOn.getValue() ? "Off" : stemSuggestion() ? "Suggestion ready"
     : stemIsNeutral() ? neutralText("stem")

@@ -457,6 +457,7 @@ void PolisherAudioProcessor::publishMeters()
     stemEq.takeToneSteadyMeter (tsDb, tsHz);
     if (std::abs (tsDb) > std::abs (meters.tsDb.load())) { meters.tsDb.store (static_cast<float> (tsDb)); meters.tsHz.store (static_cast<float> (tsHz)); }
     std::array<double, polisher::kStems> stemE {};
+    meters.stemKeep.store (static_cast<float> (stemEq.keepLevelDb()));
     stemEq.takeStemLoudness (stemE);   // loudness-weighted: the meter shows the share of what you hear
     for (size_t k = 0; k < stemE.size(); ++k)
         addTo (meters.stemEnergy[k], static_cast<float> (stemE[k]));
@@ -489,6 +490,18 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
         {
             const auto savedReport = xml->getStringAttribute ("amReport");
             xml->removeAttribute ("amReport");
+            // Stem EQ Keep loudness (added after v0.15.0) is on for new instances, but a song saved before it
+            // existed was mixed without it: load that state with it off, so it sounds as it did.
+            // (JUCE would give a control missing from the state its default, which is on.)
+            bool hasKeep = false;
+            for (auto* child : xml->getChildIterator())
+                hasKeep = hasKeep || child->getStringAttribute ("id") == "stemKeep";
+            if (! hasKeep)
+            {
+                auto* keep = xml->createNewChildElement ("PARAM");
+                keep->setAttribute ("id", "stemKeep");
+                keep->setAttribute ("value", 0.0);
+            }
             parameters.replaceState (juce::ValueTree::fromXml (*xml));
             autoMaster.onStateRestored (savedReport);
         }

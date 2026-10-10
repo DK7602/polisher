@@ -45,7 +45,7 @@
   sliders.rtSens = { start: 0, end: 100, skew: 1, interval: 0.1, value: 50, label: "%" };
   sliders.rtRelease = { start: 20, end: 300, skew: 0.5, interval: 1, value: 80, label: "ms" };
   for (const k of ["stemVoc", "stemDrums", "stemBass", "stemOther"]) sliders[k] = { start: -12, end: 12, skew: 1, interval: 0.1, value: 0, label: "dB" };
-  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true, eqOn: true, bassOn: true, levelMatch: false, imgOn: true, dynOn: true, dynAdaptive: true, satOn: true, stemOn: true, tsOn: true, rtOn: true, ulOn: true };
+  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true, eqOn: true, bassOn: true, levelMatch: false, imgOn: true, dynOn: true, dynAdaptive: true, satOn: true, stemOn: true, stemKeep: true, tsOn: true, rtOn: true, ulOn: true };
   const combos = {
     clipOversampling: { choices: ["1x", "2x", "4x", "8x"], value: 2 / 3 },
     satMode: { choices: ["Tape", "Tube", "Clip"], value: 0 },
@@ -188,6 +188,9 @@
       tsDb: toggles.tsOn && !bypass && sliders.tsAmount.value > 0.5 ? +(-(0.8 + 1.4 * beat) * sliders.tsAmount.value / 40).toFixed(1) : 0, tsHz: 310,
       ulBoost: toggles.ulOn && !bypass && sliders.ulAmount.value > 0.5 ? +(5 * beat * sliders.ulAmount.value / 75).toFixed(1) : 0, ulSquash: 7.8,
       stemShare: [38 + Math.round(4 * beat), 27 - Math.round(3 * beat), 14, 21 - Math.round(beat)],
+      // Keep loudness: the stems' shares of a trap mix's loudness (the 808 carries about half of it).
+      stemKeep: toggles.stemKeep && toggles.stemOn && !bypass
+        ? +(-10 * Math.log10([0.15, 0.2, 0.5, 0.15].reduce((a, s, k) => a + s * Math.pow(10, sliders[["stemVoc", "stemDrums", "stemBass", "stemOther"][k]].value / 10), 0))).toFixed(1) : 0,
       satHarm: toggles.satOn && !bypass && sliders.satDrive.value > 0.05 && sliders.satMix.value > 0.05
         ? +(-62 + sliders.satDrive.value * 2.4 + 20 * Math.log10(sliders.satMix.value / 100 + 1e-3) + 3 * beat).toFixed(1) : -100,
       mix, master,

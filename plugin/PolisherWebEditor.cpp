@@ -349,6 +349,7 @@ void PolisherWebEditor::timerCallback()
     for (double e : stemHold)
         stemShare.add (juce::roundToInt (stemTotal > 1.0e-6 ? 100.0 * e / stemTotal : 0.0));
     frame->setProperty ("stemShare",  stemShare);
+    frame->setProperty ("stemKeep",   roundTo (m.stemKeep.load(), 0.1f));
     frame->setProperty ("matchDb",    roundTo (m.matchDb.load(), 0.1f));
     frame->setProperty ("sr",         audioProcessor.getSampleRate());
     frame->setProperty ("inShort",    roundTo (m.inputShortTerm.load(), 0.1f));

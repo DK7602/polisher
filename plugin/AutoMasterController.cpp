@@ -121,6 +121,7 @@ void AutoMasterController::launchAnalysis()
     settings.target = static_cast<polisher::LoudnessTarget> (juce::jlimit (0, 2, choice ("amTarget")));
     // Stem EQ is the user's: Auto-Master hears the mix with it and leaves it as it is.
     settings.stem.enabled = state.getRawParameterValue ("stemOn")->load() > 0.5f;
+    settings.stem.keepLoudness = state.getRawParameterValue ("stemKeep")->load() > 0.5f;   // its loudness search hears the compensated stage
     for (int k = 0; k < polisher::kStems; ++k)
         settings.stem.gainDb[static_cast<size_t> (k)] = state.getRawParameterValue (ModuleParams::stemIds[k])->load();
     pendingSettings = settings;

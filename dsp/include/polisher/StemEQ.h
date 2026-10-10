@@ -24,6 +24,10 @@ struct StemEQParams
 {
     bool enabled = true;
     std::array<double, kStems> gainDb {};   // vocals, drums, bass, other: -12 ... +12 dB, 0 = untouched
+    // Keep loudness: the stage turns its whole output up or down by the loudness change the stem
+    // moves cause (K-weighted, averaged over ~2 s), so a move changes the balance, not the level.
+    // Off here (the engine's old behaviour); the plug-in's control is on for new instances.
+    bool keepLoudness = false;
 };
 
 /** Tone Steady: keeps the tonal balance steady as the song plays. Each band's short-term level is
@@ -98,6 +102,14 @@ private:
       glide (30 ms). The model keeps running while neutral, so turning a knob never waits for it.
     - Channels 0 and 1 are processed (a mono input is analysed as L = R); further channels are
       only delayed, so every channel keeps the same latency.
+    - Keep loudness (StemEQParams::keepLoudness): per frame, the K-weighted (BS.1770) energy of the
+      frame is credited to the stems by the model's shares, as a 4 x 4 matrix of share products
+      (sum over bands of E_b * share_s,b * share_t,b) averaged over ~2 s. With the stem gains g,
+      the loudness after the move is g' M g against sum(M) before it, so a knob move is compensated
+      at once (same frame, same glide), while the music's own changes move the estimate slowly. The
+      inverse (clamped to +/-12 dB) is applied as a broadband gain inside the same STFT frames: no
+      extra latency, and an exact pass-through at 0 / 0 / 0 / 0 as before. Switching it glides
+      (0.1 s).
 
     prepare() allocates; process() does not. */
 class StemEQ
@@ -105,6 +117,8 @@ class StemEQ
 public:
     static constexpr int kMaxChannels = 8;
     static constexpr double kMaxGainDb = 12.0;
+    static constexpr double kMaxKeepDb = 12.0;            // Keep loudness never moves the level more than this
+    static constexpr double kKeepAverageSeconds = 2.0;    // how long Keep loudness listens to the music
 
     void prepare (double sampleRate, int numChannels);
     void reset() noexcept;
@@ -141,6 +155,10 @@ public:
     }
 
     bool isActive() const noexcept { return running || mix > 0.0; }
+
+    /** Broadband gain Keep loudness applies right now (dB; negative = turning the stage down to make
+        up for a boost). 0 when off or neutral. Read from the audio thread. */
+    double keepLevelDb() const noexcept { return keepDb; }
 
     /** Features of one stereo frame of fftSize samples, exactly as the model sees them (window,
         FFT, band energies of mid and side, log10). For tests and offline analysis. */
@@ -227,6 +245,12 @@ private:
     std::array<double, kStems> gain { 1.0, 1.0, 1.0, 1.0 };
     std::array<double, kStems> stemEnergy {}, stemLoudness {};
     double gainCoeff = 0.0;
+
+    // Keep loudness
+    std::vector<double> binK;                            // K-weighting power gain per bin
+    std::array<double, kStems * kStems> keepM {};        // ~2 s average of sum_b E_b share_s share_t
+    double keepMix = 0.0, keepCoeff = 0.0, keepAvg = 0.0, keepDb = 0.0;
+    void updateKeepLoudness (const std::complex<double>* L, const std::complex<double>* R) noexcept;
 
     // dry path and cross-fade
     std::array<std::vector<double>, kMaxChannels> dry;

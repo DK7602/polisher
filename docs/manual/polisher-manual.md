@@ -160,9 +160,14 @@ Turns the **Vocals, Drums, Bass** (808 included) or **Other** (synths, keys, gui
 | Control | Range (default) | What it does |
 | --- | --- | --- |
 | Vocals / Drums / Bass / Other | ±12 dB (0) | That part's level. 1–3 dB is usually all you need; up to about ±6 dB stays clean. |
+| Keep Loudness | on / off (on) | Your moves change the balance, not the loudness. The line under the switch shows how much it is turning the whole mix down (or up) right now, e.g. "Keeping level: −4.0 dB". |
 | Model Hears | meter | How the model divides what you hear right now (each frequency counts by how loud it sounds, so a big 808 doesn't fill the whole meter). |
 
-Big Bass boosts: the Maximizer keeps the same loudness, so it turns the whole master down to fit the extra low end. At Bass +12 the 808 ends up only about 4 dB louder while everything from 300 Hz up drops about 6 dB. After a Bass move of 6 dB or more, run Auto-Master again (or lower Drive) and compare with MATCH.
+**Keep Loudness.** Turning a part up also makes the mix louder, and louder always sounds better in a quick A/B. With Keep Loudness on, Stem EQ measures how much louder (or quieter) your moves make the mix, the way a loudness meter hears it, and turns the whole mix down (or up) by that much, so the loudness stays within about half a dB. It listens over about 2 seconds, so it doesn't pump with the beat, and a knob move is made up at once. It never moves the level more than 12 dB. Songs saved before this switch existed open with it off, so they sound exactly as before; new Polisher instances start with it on.
+
+Big Bass boosts: in a trap mix the 808 is a large part of the loudness. At the same loudness, more 808 always means less of everything else, with or without Keep Loudness. On a bass-heavy test mix at Bass +6, the master at −9 LUFS came out the same both ways: the 808 band up about 1 dB, 300 Hz–16 kHz down about 4.5 dB (a 5.5 dB shift in balance). What Keep Loudness changes is where the turning down happens: inside Stem EQ, cleanly, instead of in the Maximizer. With Drive left where it was, the Maximizer limited 4.4 dB instead of 8.7 dB at Bass +6, and 4.1 dB instead of 13.7 dB at Bass +12. With Keep Loudness off, a big Bass move pushes the Maximizer much harder; run Auto-Master again (or lower Drive) and compare with MATCH.
+
+Auto-Master never changes the Stem EQ controls (Keep Loudness included); it hears your mix with them, so its loudness search sets Drive for the mix as Stem EQ plays it.
 
 Trade-offs: it adds about 40 ms of delay at any sample rate (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly.
 

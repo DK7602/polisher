@@ -4,6 +4,8 @@
 #include "Signals.h"
 #include "StemNetReference.h"
 #include "polisher/AutoMaster.h"
+#include "polisher/FilterDesign.h"
+#include "polisher/LoudnessTargeting.h"
 #include "polisher/StemEQ.h"
 
 #include <cmath>
@@ -391,5 +393,210 @@ TEST_CASE ("Stem levels and Auto-Master's vocal suggestion", "[stemeq]")
     {
         CHECK (r.stemSuggestion.gainDb[1] == 0.0);
         CHECK (std::abs (r.stemSuggestion.gainDb[0] - 1.5) <= 3.0);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Keep loudness
+
+namespace {
+// A trap-like mix: pink noise and kicks (musicLike), a sustained 45 Hz 808 (1 s notes), a sung
+// line (220 / 294 Hz harmonics with vibrato, in phrases) and eighth-note hats.
+AudioClip trapMix (double sr, double seconds)
+{
+    AudioClip c = testsig::musicLike (sr, seconds, -20.0, 11);
+    std::uint64_t h = 99;
+    double vPhase = 0.0, hpL = 0.0, hpR = 0.0, prevL = 0.0, prevR = 0.0;
+    for (size_t i = 0; i < c.channels[0].size(); ++i)
+    {
+        const double t = static_cast<double> (i) / sr, tn = std::fmod (t, 1.0);
+        const double sub = 0.22 * std::exp (-tn * 1.2) * std::min (1.0, tn * 200.0) * std::sin (2.0 * std::numbers::pi * 45.0 * t);
+        const double f0 = (std::fmod (t, 4.0) < 2.0 ? 220.0 : 294.0) * (1.0 + 0.01 * std::sin (2.0 * std::numbers::pi * 5.5 * t));
+        vPhase += 2.0 * std::numbers::pi * f0 / sr;
+        double voice = 0.0;
+        for (int n = 1; n * f0 < 4000.0; ++n) voice += std::sin (n * vPhase) / n;
+        const double phrase = std::fmod (t, 2.0) < 1.6 ? std::min (1.0, std::fmod (t, 2.0) * 20.0) : 0.0;
+        voice *= 0.035 * phrase;
+        h = h * 6364136223846793005ull + 1442695040888963407ull;
+        const double wL = static_cast<double> (h >> 11) / 9007199254740992.0 - 0.5;
+        h = h * 6364136223846793005ull + 1442695040888963407ull;
+        const double wR = static_cast<double> (h >> 11) / 9007199254740992.0 - 0.5;
+        hpL = 0.6 * (hpL + wL - prevL); prevL = wL;                   // crude high-pass
+        hpR = 0.6 * (hpR + wR - prevR); prevR = wR;
+        const double hat = 0.12 * std::exp (-std::fmod (t, 0.125) * 60.0);
+        c.channels[0][i] += static_cast<float> (sub + voice + hat * hpL);
+        c.channels[1][i] += static_cast<float> (sub + voice + hat * hpR);
+    }
+    return c;
+}
+
+// Energy (dB) of both channels in a band (two 2nd-order Butterworth high- and low-passes; 0 = open),
+// from fromS seconds on.
+double bandDb (const AudioClip& c, double lo, double hi, double fromS = 1.0)
+{
+    double e = 0.0;
+    for (const auto& ch : c.channels)
+    {
+        Biquad f[4];
+        design::apply (f[0], design::butterworth (true, lo > 0.0 ? lo : 1.0, c.sampleRate));
+        design::apply (f[1], design::butterworth (true, lo > 0.0 ? lo : 1.0, c.sampleRate));
+        design::apply (f[2], design::butterworth (false, hi > 0.0 ? hi : 0.45 * c.sampleRate, c.sampleRate));
+        design::apply (f[3], design::butterworth (false, hi > 0.0 ? hi : 0.45 * c.sampleRate, c.sampleRate));
+        for (size_t i = 0; i < ch.size(); ++i)
+        {
+            double v = ch[i];
+            for (auto& b : f) v = b.process (v);
+            if (static_cast<double> (i) >= fromS * c.sampleRate) e += v * v;
+        }
+    }
+    return 10.0 * std::log10 (e + 1.0e-30);
+}
+}
+
+TEST_CASE ("Stem EQ Keep loudness: moves change the balance, not the loudness", "[stemeq][keep]")
+{
+    const double sr = 48000.0;
+    const auto in = trapMix (sr, 8.0);
+    const double inLufs = measure (in).integratedLufs;
+    for (int stem = 0; stem < kStems; ++stem)
+        for (double db : { -12.0, -6.0, 6.0, 12.0 })
+        {
+            StemEQParams p; p.gainDb[static_cast<size_t> (stem)] = db;
+            const double raw = measure (renderStemEq (in, p)).integratedLufs - inLufs;
+            p.keepLoudness = true;
+            const double kept = measure (renderStemEq (in, p)).integratedLufs - inLufs;
+            UNSCOPED_INFO ("stem " << stem << " " << db << " dB: loudness change " << raw << " LU, with Keep loudness " << kept << " LU");
+            CHECK (std::abs (kept) < 0.5);
+        }
+
+    // Without it a big Bass move changes the loudness a lot; with it the 808 still moves against the rest.
+    StemEQParams p; p.gainDb[kStemBass] = 6.0;
+    const auto off = renderStemEq (in, p);
+    p.keepLoudness = true;
+    const auto on = renderStemEq (in, p);
+    const double offLu = measure (off).integratedLufs - inLufs, onLu = measure (on).integratedLufs - inLufs;
+    const double lowOn = bandDb (on, 0.0, 80.0) - bandDb (in, 0.0, 80.0), restOn = bandDb (on, 300.0, 16000.0) - bandDb (in, 300.0, 16000.0);
+    UNSCOPED_INFO ("bass +6: loudness off " << offLu << " LU, on " << onLu << " LU; with keep: < 80 Hz " << lowOn << " dB, 300 Hz-16 kHz " << restOn << " dB");
+    CHECK (offLu > 2.0);
+    CHECK (std::abs (onLu) < 0.5);
+    CHECK (lowOn - restOn > 3.0);
+}
+
+TEST_CASE ("Stem EQ Keep loudness: exact pass-through at 0 dB, offline = real time", "[stemeq][keep]")
+{
+    const double sr = 48000.0;
+    const auto in = trapMix (sr, 3.0);
+    StemEQParams p; p.keepLoudness = true;
+    CHECK (renderStemEq (in, p).channels == in.channels);
+    {
+        StemEQ s; s.prepare (sr, 2); s.setParams (p); s.reset();
+        const auto out = run (s, in);
+        const auto L = static_cast<size_t> (s.latencySamples());
+        bool exact = true;
+        for (int c = 0; c < 2; ++c)
+            for (size_t i = 0; i < out.channels[0].size(); ++i)
+                exact = exact && out.channels[static_cast<size_t> (c)][i] == (i < L ? 0.0f : in.channels[static_cast<size_t> (c)][i - L]);
+        CHECK (exact);
+        CHECK (s.keepLevelDb() == 0.0);
+    }
+
+    p.gainDb = { 2.0, -3.0, 6.0, 0.0 };
+    const auto off = renderStemEq (in, p);
+    StemEQ s; s.prepare (sr, 2); s.setParams (p); s.reset();
+    AudioClip rt = in;
+    for (int start = 0; start < rt.numSamples(); start += 333)                          // odd block size
+    {
+        float* ch[2] = { rt.channels[0].data() + start, rt.channels[1].data() + start };
+        s.process (ch, 2, std::min (333, rt.numSamples() - start));
+    }
+    const auto L = static_cast<size_t> (s.latencySamples());
+    double worst = 0.0;
+    for (int c = 0; c < 2; ++c)
+        for (size_t i = 0; i + L < rt.channels[0].size(); ++i)
+            worst = std::max (worst, static_cast<double> (std::abs (off.channels[static_cast<size_t> (c)][i] - rt.channels[static_cast<size_t> (c)][i + L])));
+    CHECK (worst == 0.0);
+    UNSCOPED_INFO ("keeping level " << s.keepLevelDb() << " dB");
+    CHECK (s.keepLevelDb() < -0.5);   // bass +6 on an 808 mix: it is turning the stage down
+}
+
+TEST_CASE ("Stem EQ Keep loudness: no clicks when it is switched or the levels move", "[stemeq][keep]")
+{
+    const double sr = 48000.0;
+    StemEQ s; s.prepare (sr, 2);
+    // 200 Hz sine plus a 45 Hz one: the model hears bass and something else, so the gains differ.
+    auto clip = testsig::sine (sr, 2, 200.0, -12.0, 6.0);
+    for (auto& ch : clip.channels)
+        for (size_t i = 0; i < ch.size(); ++i)
+            ch[i] += static_cast<float> (0.25 * std::sin (2.0 * std::numbers::pi * 45.0 * static_cast<double> (i) / sr));
+    const int block = 256;
+    double worstStep = 0.0;
+    float prev = 0.0f;
+    for (int start = 0; start < clip.numSamples(); start += block)
+    {
+        const double t = start / sr;
+        StemEQParams p;
+        p.keepLoudness = std::fmod (t, 1.0) < 0.5;                                       // switched twice a second
+        p.gainDb[kStemBass] = t < 2.0 ? 12.0 : t < 4.0 ? -12.0 : 0.0;                   // and big jumps in level
+        p.gainDb[kStemOther] = t > 3.0 && t < 5.0 ? 12.0 : 0.0;
+        s.setParams (p);
+        float* ch[2] = { clip.channels[0].data() + start, clip.channels[1].data() + start };
+        const int n = std::min (block, clip.numSamples() - start);
+        s.process (ch, 2, n);
+        for (int i = 0; i < n; ++i)
+        {
+            if (start + i > s.latencySamples()) worstStep = std::max (worstStep, static_cast<double> (std::abs (ch[0][i] - prev)));
+            prev = ch[0][i];
+        }
+    }
+    // The input moves at most 0.25 * 2 pi 200 / 48000 + 0.25 * 2 pi 45 / 48000 ~ 0.008 per sample; at
+    // up to 4x gain (+12 dB) that is ~0.032: a click would jump far past it.
+    UNSCOPED_INFO ("worst sample-to-sample step " << worstStep);
+    CHECK (worstStep < 0.04);
+}
+
+TEST_CASE ("Stem EQ Keep loudness through the chain at a fixed Drive", "[stemeq][keep]")
+{
+    // The user's situation: a mix at about -17 LUFS, mastered to -9 LUFS, then Bass turned up with
+    // the Drive left where it was.
+    const double sr = 48000.0;
+    const auto raw = trapMix (sr, 8.0);
+    const auto in = withGain (raw, -17.0 - measure (raw).integratedLufs);
+    MasterChainParams chain;
+    chain.limiter.ceilingDbtp = -1.0;
+    const auto target = findDriveForTarget (in, -9.0, chain.limiter);
+    chain.driveDb = target.driveDb;
+    const auto neutral = renderMaster (in, chain);
+    const double low0 = bandDb (neutral, 30.0, 60.0), rest0 = bandDb (neutral, 300.0, 16000.0);
+    struct Result { double low, rest, master, stage, stageTp, limiterDb, drive, lowAt9, restAt9; };
+    auto moved = [&] (bool keep, double db)
+    {
+        MasterChainParams c = chain;
+        c.stem.gainDb[kStemBass] = db;
+        c.stem.keepLoudness = keep;
+        const auto stage = renderPreDrive (in, c);
+        const auto out = renderMaster (in, c);
+        const auto st = measure (stage);
+        const double master = measure (out).integratedLufs;
+        c.driveDb = findDriveForTarget (stage, -9.0, chain.limiter).driveDb;      // what Auto-Master's search would pick
+        const auto at9 = renderMaster (in, c);
+        return Result { bandDb (out, 30.0, 60.0) - low0, bandDb (out, 300.0, 16000.0) - rest0, master, st.integratedLufs, st.truePeakDbtp,
+                        st.integratedLufs + chain.driveDb - master, c.driveDb, bandDb (at9, 30.0, 60.0) - low0, bandDb (at9, 300.0, 16000.0) - rest0 };
+    };
+    const auto n = moved (false, 0.0);
+    UNSCOPED_INFO ("neutral: drive " << chain.driveDb << " dB, master " << n.master << " LUFS, stage " << n.stage << " LUFS / " << n.stageTp << " dBTP, limiter takes " << n.limiterDb << " LU");
+    for (double db : { 6.0, 12.0 })
+    {
+        const auto off = moved (false, db), on = moved (true, db);
+        for (const auto& [name, r] : { std::pair { "off", off }, std::pair { "on ", on } })
+            UNSCOPED_INFO ("bass +" << db << " keep " << name << ": 30-60 Hz " << r.low << " dB, 300 Hz-16 kHz " << r.rest << " dB, master " << r.master
+                           << " LUFS; stage " << r.stage << " LUFS / " << r.stageTp << " dBTP; limiter takes " << r.limiterDb << " LU; drive for -9: " << r.drive
+                           << " -> 30-60 Hz " << r.lowAt9 << " dB, 300 Hz-16 kHz " << r.restAt9 << " dB");
+        // Keep loudness: the stage stays at the mix's loudness, the Maximizer works less, Auto-Master's
+        // loudness search needs about the same Drive as before the move...
+        CHECK (std::abs (on.stage - n.stage) < 0.5);
+        CHECK (on.limiterDb < off.limiterDb - 1.0);
+        CHECK (on.drive > off.drive + 3.0);
+        // ...and the 808 moves against the rest at least as much as without it.
+        CHECK ((on.low - on.rest) > (off.low - off.rest) - 0.5);
     }
 }

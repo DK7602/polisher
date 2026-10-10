@@ -26,6 +26,18 @@ double aWeightPower (double f) noexcept
                     / ((f2 + 20.6 * 20.6) * std::sqrt ((f2 + 107.7 * 107.7) * (f2 + 737.9 * 737.9)) * (f2 + 12194.0 * 12194.0));
     return ra * ra * 1.5848931924611136;   // +2.0 dB: 0 dB at 1 kHz
 }
+
+// K-weighting (ITU-R BS.1770: the published 48 kHz shelf and high-pass) as a power gain at f Hz,
+// what LUFS meters weigh with. Above 20 kHz the shelf is flat: held at its 20 kHz value.
+double kWeightPower (double f) noexcept
+{
+    const double w = 2.0 * std::numbers::pi * std::min (f, 20000.0) / 48000.0;
+    const std::complex<double> z1 = std::polar (1.0, -w), z2 = z1 * z1;
+    auto biquad = [&] (double b0, double b1, double b2, double a1, double a2)
+    { return std::norm ((b0 + b1 * z1 + b2 * z2) / (1.0 + a1 * z1 + a2 * z2)); };
+    return biquad (1.53512485958697, -2.69169618940638, 1.19839281085285, -1.69065929318241, 0.73248077421585)
+         * biquad (1.0, -2.0, 1.0, -1.99004745483398, 0.99007225036621);
+}
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -195,6 +207,8 @@ void StemEQ::prepare (double newSampleRate, int numChannels)
     rtLin.assign (static_cast<size_t> (bins), 1.0);
     binLoud.assign (static_cast<size_t> (bins), 0.0);
     for (int k = 0; k < bins; ++k) binLoud[static_cast<size_t> (k)] = aWeightPower (k * sampleRate / N);
+    binK.assign (static_cast<size_t> (bins), 0.0);
+    for (int k = 0; k < bins; ++k) binK[static_cast<size_t> (k)] = kWeightPower (k * sampleRate / N);
     prefix.assign (static_cast<size_t> (bins + 1), 0.0);
     framesPerSecond = sampleRate / hopSize;
     scratch.assign (n, 0.0);
@@ -203,6 +217,8 @@ void StemEQ::prepare (double newSampleRate, int numChannels)
 
     mixCoeff = 1.0 - std::exp (-1.0 / (0.020 * sampleRate));
     gainCoeff = 1.0 - std::exp (-hopSize / (0.030 * sampleRate));
+    keepCoeff = 1.0 - std::exp (-hopSize / (0.100 * sampleRate));
+    keepAvg = 1.0 - std::exp (-hopSize / (kKeepAverageSeconds * sampleRate));
     reset();
 }
 
@@ -232,6 +248,9 @@ void StemEQ::reset() noexcept
     const bool stemOn = ! isNeutral (params);
     for (int s = 0; s < kStems; ++s)
         gain[static_cast<size_t> (s)] = stemOn ? std::pow (10.0, std::clamp (params.gainDb[static_cast<size_t> (s)], -kMaxGainDb, kMaxGainDb) / 20.0) : 1.0;
+    keepM.fill (0.0);
+    keepMix = params.keepLoudness && stemOn ? 1.0 : 0.0;
+    keepDb = 0.0;
     rtAmount = isNeutral (rtParams) ? 0.0 : std::clamp (rtParams.amount, 0.0, 100.0) / 100.0;
     tsAmount = isNeutral (tsParams) ? 0.0 : std::clamp (tsParams.amount, 0.0, 100.0) / 100.0;
 }
@@ -547,6 +566,54 @@ SpectralStats StemEQ::takeSpectralStats() noexcept
     return s;
 }
 
+void StemEQ::updateKeepLoudness (const std::complex<double>* L, const std::complex<double>* R) noexcept
+{
+    // K-weighted energy of this frame per band, credited to the stems by the model's shares. Only
+    // frames with sound teach the average (silence and stopped transport keep the last estimate).
+    constexpr int B = StemNet::kBands;
+    const int bins = fftSize / 2 + 1;
+    std::array<double, kStems * kStems> m {};
+    double total = 0.0;
+    for (int band = 0; band < B; ++band)
+    {
+        const double* w = bandW.data() + band * bins;
+        double e = 0.0;
+        for (int k = bandLo[static_cast<size_t> (band)]; k < bandHi[static_cast<size_t> (band)]; ++k)
+            e += w[k] * binK[static_cast<size_t> (k)] * (std::norm (L[k]) + std::norm (R[k]));
+        total += e;
+        for (int s = 0; s < kStems; ++s)
+        {
+            const double es = e * shares[static_cast<size_t> (s * B + band)];
+            for (int t = s; t < kStems; ++t)
+                m[static_cast<size_t> (s * kStems + t)] += es * shares[static_cast<size_t> (t * B + band)];
+        }
+    }
+    if (total > 1.0e-12)   // about -110 dBFS: silence teaches nothing
+        for (int s = 0; s < kStems; ++s)
+            for (int t = s; t < kStems; ++t)
+            {
+                auto& v = keepM[static_cast<size_t> (s * kStems + t)];
+                v += (m[static_cast<size_t> (s * kStems + t)] - v) * keepAvg;
+            }
+
+    // Loudness before the move: every share product (the shares of a band sum to 1); after: with
+    // the stem gains. Their ratio is the change the move makes; the stage takes it back.
+    double before = 0.0, after = 0.0;
+    bool unity = true;   // every stem at 0 dB: no change at all (not the shares' rounding)
+    for (double g : gain) unity = unity && std::abs (g - 1.0) < 1.0e-9;
+    for (int s = 0; s < kStems; ++s)
+        for (int t = s; t < kStems; ++t)
+        {
+            const double v = keepM[static_cast<size_t> (s * kStems + t)] * (s == t ? 1.0 : 2.0);
+            before += v;
+            after += v * gain[static_cast<size_t> (s)] * gain[static_cast<size_t> (t)];
+        }
+    const double changeDb = ! unity && before > 1.0e-30 && after > 1.0e-30 ? 10.0 * std::log10 (after / before) : 0.0;
+    keepMix += ((params.keepLoudness && params.enabled ? 1.0 : 0.0) - keepMix) * keepCoeff;
+    if (keepMix < 1.0e-6) keepMix = 0.0;
+    keepDb = -keepMix * std::clamp (changeDb, -kMaxKeepDb, kMaxKeepDb);
+}
+
 void StemEQ::hop() noexcept
 {
     const int N = fftSize, half = N / 2, bins = half + 1;
@@ -603,21 +670,27 @@ void StemEQ::hop() noexcept
     // gains mixed by the shares, spread over the bins. Until the model has 7 frames, gain 1.
     if (frameCount >= StemNet::kLookahead)
     {
+        const auto old = static_cast<size_t> ((frameCount - StemNet::kLookahead) % 4) * static_cast<size_t> (N);
+        const auto* Lo = spectra[0].data() + old;
+        const auto* Ro = spectra[1].data() + old;
+        // Keep loudness: a broadband gain on the same frame, so it lines up with the move exactly.
+        if (ready) updateKeepLoudness (Lo, Ro);
+        const double keep = keepDb == 0.0 ? 1.0 : std::pow (10.0, keepDb / 20.0);
         std::fill (binGain.begin(), binGain.end(), 0.0);
         for (int band = 0; band < StemNet::kBands; ++band)
         {
             double g = 0.0;
             if (ready)
+            {
                 for (int s = 0; s < kStems; ++s) g += gain[static_cast<size_t> (s)] * shares[static_cast<size_t> (s * StemNet::kBands + band)];
+                g *= keep;
+            }
             else
                 g = 1.0;
             const double* w = bandW.data() + band * bins;
             for (int k = bandLo[static_cast<size_t> (band)]; k < bandHi[static_cast<size_t> (band)]; ++k)
                 binGain[static_cast<size_t> (k)] += w[k] * g;
         }
-        const auto old = static_cast<size_t> ((frameCount - StemNet::kLookahead) % 4) * static_cast<size_t> (N);
-        const auto* Lo = spectra[0].data() + old;
-        const auto* Ro = spectra[1].data() + old;
         // Resonance Tamer and Tone Steady listen to this frame after the Stem EQ move; their dB
         // gains multiply onto it.
         resonanceGains (Lo, Ro);

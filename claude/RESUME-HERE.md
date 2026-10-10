@@ -31,6 +31,17 @@ Open suggestions (not built): reference matching, delta/listen modes, snapshots 
 genre target curve on the spectrum, Stem EQ keep-loudness, stored Tone Steady target, low-band-only harmonics,
 imager meters at the output, whole-song Auto-Master listen.
 
+## Stem EQ Keep Loudness (after v0.15.0, worktree agent)
+Param stemKeep (bool, hint 6): on for new instances; setStateInformation inserts stemKeep=0 into a state
+that lacks it, so songs saved before it sound as before. StemEQParams::keepLoudness (engine default false).
+Per frame: K-weighted band energy x model shares -> 4x4 share-product matrix, ~2 s average; compensation =
+sum(M) / g'Mg (knob moves compensated at once), +/-12 dB, glide 0.1 s on toggle, inside the same STFT.
+Measured (bass-heavy synthetic trap mix): every stem +/-6/12 stays within 0.42 LU (raw: up to +10.2 LU).
+IMPORTANT finding: at the same final loudness (-9 LUFS) the master balance is identical with or without it
+(Bass +6: 808 band +0.95 dB, 300 Hz-16 kHz -4.5 dB both ways): more 808 at equal loudness = less rest. What it
+changes at fixed Drive: Maximizer limiting 4.4 vs 8.7 LU (+6), 4.1 vs 13.7 LU (+12); stage TP stays put.
+UI: Keep Loudness toggle cell + "Keeping level: -x dB" readout (meter stemKeep), Learn texts for both states.
+
 ## 2026-10-10 session (user asked: do all five of the audit follow-ups, one after the other, overnight)
 1. Unlimiter header button fixed: it toggled the GLOBAL bypass (A) instead of ulOn. app.js now has one table
    HEAD_POWER of every module's own switch (the Maximizer's button stays the global bypass); ulOn host changes

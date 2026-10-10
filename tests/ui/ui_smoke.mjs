@@ -69,6 +69,25 @@ await page.waitForTimeout(150);
 check((await state()).button === 'UNLIMITER OFF', 'host turning the Unlimiter off updates its button');
 await page.evaluate(() => window.__JUCE__.backend.emitByBackend('__juce__toggleulOn', JSON.stringify({ eventType: 'valueChanged', value: true })));
 
+// Stem EQ's Keep Loudness switch flips stemKeep only (on by default) and says what it is doing.
+await pick('Stem EQ');
+await page.waitForTimeout(120);
+const keepState = () => page.evaluate(async () => {
+  const juce = await import('./juce/index.js');
+  const btn = [...document.querySelectorAll('#knob-row .cell')].find((c) => c.querySelector('.cell-label').textContent === 'Keep Loudness');
+  return { keep: !!juce.getToggleState('stemKeep').getValue(), on: !!juce.getToggleState('stemOn').getValue(),
+           found: !!btn, label: btn ? btn.querySelector('button').textContent : '', text: document.getElementById('stemkeep-val')?.textContent || '' };
+});
+const k0 = await keepState();
+check(k0.found && k0.keep && k0.label === 'ON', `Stem EQ shows Keep Loudness, on by default ("${k0.label}")`);
+await page.evaluate(() => [...document.querySelectorAll('#knob-row .cell')].find((c) => c.querySelector('.cell-label').textContent === 'Keep Loudness').querySelector('button').click());
+await page.waitForTimeout(150);
+const k1 = await keepState();
+check(!k1.keep && k1.on && k1.label === 'OFF' && k1.text === 'level moves with you', `Keep Loudness switch flips stemKeep only ("${k1.text}")`);
+await page.evaluate(() => [...document.querySelectorAll('#knob-row .cell')].find((c) => c.querySelector('.cell-label').textContent === 'Keep Loudness').querySelector('button').click());
+await page.waitForTimeout(150);
+check((await keepState()).keep, 'second click turns Keep Loudness back on');
+
 // The A / B buttons drive the global bypass.
 await page.click('#btn-a'); await page.waitForTimeout(100);
 check((await state()).globalA, 'A selects the original mix');

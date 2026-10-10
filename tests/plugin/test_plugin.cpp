@@ -435,6 +435,64 @@ TEST_CASE ("Plug-in: a state saved before a control existed puts that control ba
     CHECK (p->parameters.getRawParameterValue ("drive")->load() == 0.0f);    // from the preset
 }
 
+TEST_CASE ("Plug-in: Stem EQ Keep loudness is on for a new instance, off for a song saved before it existed", "[plugin]")
+{
+    auto keepOf = [] (PolisherAudioProcessor& p) { return p.parameters.getRawParameterValue ("stemKeep")->load(); };
+    auto fresh = makeProcessor (48000.0, 512, false);
+    CHECK (keepOf (*fresh) == 1.0f);
+
+    // Round trip keeps whatever was saved (on, or switched off).
+    for (float v : { 1.0f, 0.0f })
+    {
+        set (*fresh, "stemKeep", v);
+        juce::MemoryBlock state;
+        fresh->getStateInformation (state);
+        auto p = makeProcessor (48000.0, 512, false);
+        set (*p, "stemKeep", 1.0f - v);
+        p->setStateInformation (state.getData(), (int) state.getSize());
+        CHECK (keepOf (*p) == v);
+    }
+
+    // A v0.15.0 song (no stemKeep in its state) with Bass +6 loads with Keep loudness off: same sound as before.
+    set (*fresh, "stemBass", 6.0f);
+    juce::MemoryBlock state;
+    fresh->getStateInformation (state);
+    auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+    REQUIRE (xml != nullptr);
+    for (auto* child : xml->getChildIterator())
+        if (child->getStringAttribute ("id") == "stemKeep") { xml->removeChildElement (child, true); break; }
+    juce::MemoryBlock v0150;
+    juce::AudioProcessor::copyXmlToBinary (*xml, v0150);
+    auto old = makeProcessor (48000.0, 512, false);
+    old->setStateInformation (v0150.getData(), (int) v0150.getSize());
+    CHECK (keepOf (*old) == 0.0f);
+    CHECK (old->parameters.getRawParameterValue ("stemBass")->load() == 6.0f);
+}
+
+TEST_CASE ("Plug-in: Stem EQ Keep loudness holds the level of a Bass move and shows how much", "[plugin]")
+{
+    const double sr = 48000.0;
+    const auto mix = testsig::musicLike (sr, 6.0, -12.0);
+    auto loudness = [&] (bool keep, double& keepDb)
+    {
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "ceiling", 0.0f);
+        set (*p, "stemBass", 6.0f);
+        set (*p, "stemKeep", keep ? 1.0f : 0.0f);
+        p->prepareToPlay (sr, 512);
+        const auto out = renderFixed (*p, mix, 512);
+        keepDb = p->meters.stemKeep.load();
+        return polisher::measure (out).integratedLufs;
+    };
+    double dbOn = 0.0, dbOff = 0.0;
+    const double ref = polisher::measure (mix).integratedLufs, on = loudness (true, dbOn), off = loudness (false, dbOff);
+    INFO ("mix " << ref << " LUFS; bass +6: keep on " << on << " (keeping " << dbOn << " dB), off " << off);
+    CHECK (std::abs (on - ref) < 0.5);
+    CHECK (off - ref > 1.0);
+    CHECK (dbOn < -1.0);
+    CHECK (dbOff == 0.0f);
+}
+
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:
 // a function-local static would be torn down after JUCE's own shutdown objects and crash on exit.
 int main (int argc, char* argv[])
