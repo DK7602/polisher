@@ -7,6 +7,19 @@ latest green Actions run.
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
 
+## 2026-10-10 Match ref (reference-track matching), built by a worktree agent
+The footer's "Match ref" pill is real: it opens a file chooser (WAV/AIFF/FLAC/MP3, JUCE_USE_MP3AUDIOFORMAT=1);
+plugin/ReferenceTrack reads the song on its own thread in two passes (whole song <= 15 min through
+polisher::LoudestPartFinder, then only the loudest 30 s) and keeps polisher::ReferenceProfile (analyseMix of that
+part + subVsBassDb + the spectrum display's average curve), never audio; saved as XML attribute "amReference"
+(JSON) next to amReport, no new parameters. Auto-Master with a valid reference: tone target = ref bandDb (same
+deadbands / strength / limits, same solver), loudness = ref loudest-part LUFS clamped -16..-6 (its tier picks
+ceiling / clip rules like a target), Imager toward ref side levels (highs 85-125 %, mids 90-110 %), Mono Below 60 Hz
+when the ref keeps stereo bass, LOW END SHAPE note (30-60 vs 60-120 Hz), NOT AS LOUD AS THE REFERENCE note,
+masterAnalysis for Learn's REF / MIX / MASTER table. Genre still sets dynamics, saturation, clip share, punch.
+Spectrum: dashed yellow curve, shifted by (short-term now - ref LUFS). NOT YET HEARD by the user: ask them to load
+a trap reference and A/B with MATCH. Tests: tests/test_reference.cpp, plug-in tests [reference], UI smoke.
+
 ## 2026-10-10 module-by-module audit (v0.15.0)
 User asked for a module-by-module audit + "next level" suggestions (+ type-in values: done, d054c5c).
 Five read-only audit agents measured every module (scratch programs under /tmp/claude-0/audit-*, gone with the
@@ -27,7 +40,7 @@ spectral stage by worktree agents, merged). Key behaviour changes to remember:
 - Auto-Master: Loud ceiling -1.5 dBTP (Club/Stream -1.0); clipper dropped when it would clip < 0.3 dB;
   quiet-mix NEED/STEP note; report carries capturedLufs and Learn warns when the playing part is >2 LU louder.
 - Host bypass = the "bypass" param (A); tail = latency + 0.2 s.
-Open suggestions (not built): reference matching, delta/listen modes, snapshots + undo, mono/phone checks,
+Open suggestions (not built): delta/listen modes, snapshots + undo, mono/phone checks,
 genre target curve on the spectrum, Stem EQ keep-loudness, stored Tone Steady target, low-band-only harmonics,
 imager meters at the output, whole-song Auto-Master listen.
 

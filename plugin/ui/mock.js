@@ -56,6 +56,21 @@
     amIntensity: { choices: ["Gentle", "Balanced", "Punchy"], value: 0.5 },
     amTarget: { choices: ["Stream -14", "Loud -9", "Club -7"], value: 0.5 },
   };
+  // Simulated Match ref: starts with a reference loaded, so the preview and the smoke test show the pill,
+  // the dashed curve and the comparison. "Loading" another file takes 0.6 s and loads a second song.
+  const refCurve = (tilt) => Array.from({ length: 96 }, (_, i) => {
+    const f = 20 * Math.pow(1000, i / 95);
+    const lo = f < 35 ? -12 * Math.log2(35 / f) : 0;
+    const hi = f > 14000 ? -16 * Math.log2(f / 14000) : 0;
+    return +(-29 + lo + hi + (f > 40 && f < 110 ? 6 : 0) + tilt * Math.log2(f / 1000) + 1.5 * Math.sin(i / 9)).toFixed(1);
+  });
+  const refSongs = [
+    { name: "Mock Reference (Trap)", trackSeconds: 184, startSeconds: 61.5, partSeconds: 30, trackLufs: -8.4, lufs: -7.6, truePeak: -0.4, plr: 7.2,
+      bandDb: [-3.2, 3.1, 0.4, -0.2, -0.6, -2.0, -5.6], bassWidth: 4, midSide: -10.5, highSide: -5.8, correlation: 0.55, subVsBass: 2.4, displayDb: refCurve(0.4) },
+    { name: "Second Reference", trackSeconds: 201, startSeconds: 88, partSeconds: 30, trackLufs: -9.9, lufs: -9.1, truePeak: -1.0, plr: 8.4,
+      bandDb: [-5.5, 2.0, 0.8, 0.1, -0.9, -2.9, -7.4], bassWidth: 2, midSide: -13.0, highSide: -8.0, correlation: 0.7, subVsBass: -1.2, displayDb: refCurve(-0.6) },
+  ];
+  const ref = { state: 2, message: "", profile: refSongs[0], version: 1, next: 1 };
   // Simulated Auto-Master (listening runs 3x faster than the real 12 s).
   const am = { state: 0, progress: 0, undo: false, version: 0, report: "", snapshot: null };
   const setSlider = (name, v) => { sliders[name].value = v; send("__juce__slider" + name, { eventType: "valueChanged", value: v }); };
@@ -66,9 +81,16 @@
                      bassMono: 100, bassTame: 40, bassPunch: 25, clipOn: 1, clipLevel: -1, clipSoftness: 50, drive: 9.4, ceiling: -1, release: 120 };
     for (const [k, v] of Object.entries(values)) (k === "clipOn" ? setToggle(k, !!v) : setSlider(k, v));
     const R = (module, control, value, why) => ({ module, control, value, why });
+    const rp = ref.profile;
+    const refPart = rp ? {
+      reference: { ...rp, displayDb: undefined }, target: `Ref ${rp.lufs < 0 ? "\u2212" : ""}${Math.abs(rp.lufs).toFixed(1)} LUFS`,
+      mixStats: { bandDb: [-6.1, 4.4, 2.9, 0.3, -1.4, -4.6, -11.5], bassWidth: 42, midSide: -15.2, highSide: -11.0, subVsBass: -0.8 },
+      masterStats: { bandDb: [-4.7, 3.6, 1.5, 0.1, -1.0, -3.1, -8.2], bassWidth: 3, midSide: -13.9, highSide: -8.3, subVsBass: 0.1 },
+    } : {};
     am.report = JSON.stringify({
       ok: true, stemSuggest: [2, 0, 0, 0], genre: "Trap / Hip-Hop", intensity: "Balanced", target: "Loud \u22129", values,
-      summary: "Listened to 12 s of the loudest part. Your mix measured \u221217.8 LUFS with peaks at \u22120.4 dBTP. The master now measures \u22129.0 LUFS with true peak \u22121.0 dBTP. The full song will read about 1 LU lower than this loud section, which is normal.",
+      inputLufs: -17.8, outputLufs: -9.0, targetLufs: -9.0, ...refPart,
+      summary: "Listened to 12 s of the loudest part. " + (rp ? `Matched to your reference \u201c${rp.name}\u201d instead of typical Trap / Hip-Hop masters: tone, loudness, stereo width and low end aim for it, part of the way. ` : "") + "Your mix measured \u221217.8 LUFS with peaks at \u22120.4 dBTP. The master now measures \u22129.0 LUFS with true peak \u22121.0 dBTP. The full song will read about 1 LU lower than this loud section, which is normal.",
       notes: ["FIX IT IN THE MIX: your mix is 7.4 dB higher in the low mids (180\u2013600 Hz) than typical Trap / Hip-Hop masters. The master EQ only fixes part of that; adjusting the main source in the mix (often guitars, pads or a boomy vocal) will sound better."],
       reasons: [
         R("eq", "Low Mid", "\u22121.4 dB", "Your mix has about 7.4 dB more low mids (180\u2013600 Hz) than typical Trap / Hip-Hop masters, so a 1.4 dB cut closes part of the gap. Less mud and boxiness, so the mix reads clearer."),
@@ -96,7 +118,8 @@
   window.__JUCE__ = {
     initialisationData: {
       __juce__platform: [],
-      __juce__functions: ["resetMeter", "startAutoMaster", "cancelAutoMaster", "undoAutoMaster", "getAutoMasterReport"],
+      __juce__functions: ["resetMeter", "startAutoMaster", "cancelAutoMaster", "undoAutoMaster", "getAutoMasterReport",
+                          "loadReference", "clearReference", "getReference"],
       __juce__registeredGlobalEventIds: [],
       __juce__sliders: Object.keys(sliders),
       __juce__toggles: Object.keys(toggles),
@@ -127,6 +150,12 @@
         if (payload.name === "startAutoMaster") { am.state = 1; am.progress = 0; }
         if (payload.name === "cancelAutoMaster" && am.state === 1) am.state = 0;
         if (payload.name === "getAutoMasterReport") result = am.report;
+        if (payload.name === "getReference") result = JSON.stringify({ state: ref.state, message: ref.message, profile: ref.profile || undefined });
+        if (payload.name === "clearReference") { ref.profile = null; ref.state = 0; ref.message = ""; ref.version++; }
+        if (payload.name === "loadReference") {   // no file dialog in a browser: "pick" the next mock song
+          ref.state = 1; ref.version++;
+          setTimeout(() => { ref.profile = refSongs[ref.next++ % refSongs.length]; ref.state = 2; ref.message = ""; ref.version++; }, 600);
+        }
         if (payload.name === "undoAutoMaster") {
           result = am.undo;
           if (am.snapshot) {
@@ -178,6 +207,7 @@
       punch: toggles.bassOn && sliders.bassPunch.value > 0 ? +(sliders.bassPunch.value / 100 * 4 * beat).toFixed(1) : 0,
       bassWidth: 42, corr: +(0.55 - (sliders.imgMid.value + sliders.imgHigh.value - 200) / 400).toFixed(2), matchDb: +(-(11 * (1 - Math.exp(-drive / 11)))).toFixed(1),
       amState: am.state, amProgress: +am.progress.toFixed(2), amHearing: true, amUndo: am.undo, amReport: am.version,
+      refVersion: ref.version, refState: ref.state,
       clip: toggles.clipOn && !bypass ? +(-Math.max(0, drive - 1.5 + sliders.clipLevel.value * -0.5) * 0.5 * (0.3 + 0.7 * beat)).toFixed(1) : 0,
       dynGr: [1, 2, 3, 4].map((b) => {
         const r = sliders["dynRatio" + b].value;

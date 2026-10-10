@@ -18,12 +18,26 @@ namespace
         return list;
     }
 
+    /** The measurements Learn compares with the reference (tone, low end, width). */
+    juce::var statsToVar (const polisher::MixAnalysis& a)
+    {
+        auto* o = new juce::DynamicObject();
+        juce::Array<juce::var> bands;
+        for (double v : a.bandDb) bands.add (v);
+        o->setProperty ("bandDb", bands);
+        o->setProperty ("bassWidth", a.bassWidthPercent);
+        o->setProperty ("midSide", a.midSideDb);
+        o->setProperty ("highSide", a.highSideDb);
+        o->setProperty ("subVsBass", a.subVsBassDb);
+        return juce::var (o);
+    }
+
     const char* const kIntensityNames[] = { "Gentle", "Balanced", "Punchy" };
     const char* const kTargetNames[] = { "Stream \xE2\x88\x92" "14", "Loud \xE2\x88\x92" "9", "Club \xE2\x88\x92" "7" };
 }
 
-AutoMasterController::AutoMasterController (juce::AudioProcessorValueTreeState& s)
-    : state (s)
+AutoMasterController::AutoMasterController (juce::AudioProcessorValueTreeState& s, const ReferenceTrack& ref)
+    : state (s), reference (ref)
 {
     const auto maxSamples = static_cast<size_t> (kMaxSampleRate * kListenSeconds);
     captureL.assign (maxSamples, 0.0f);
@@ -124,6 +138,7 @@ void AutoMasterController::launchAnalysis()
     settings.stem.keepLoudness = state.getRawParameterValue ("stemKeep")->load() > 0.5f;   // its loudness search hears the compensated stage
     for (int k = 0; k < polisher::kStems; ++k)
         settings.stem.gainDb[static_cast<size_t> (k)] = state.getRawParameterValue (ModuleParams::stemIds[k])->load();
+    settings.reference = reference.getProfile();   // Match ref (invalid = none: genre targets)
     pendingSettings = settings;
 
     const int thisSession = session;
@@ -265,6 +280,17 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         doc->setProperty ("inputLufs", r.analysis.loudness.integratedLufs);
         doc->setProperty ("capturedLufs", r.capturedLufs);
         doc->setProperty ("bassWidth", r.analysis.bassWidthPercent);
+        // Match ref: what Learn needs for its reference / your mix / master comparison.
+        if (s.reference.valid)
+        {
+            auto ref = ReferenceTrack::profileToVar (s.reference);
+            if (auto* o = ref.getDynamicObject())
+                o->removeProperty ("displayDb");   // the spectrum curve comes from the reference itself
+            doc->setProperty ("reference", ref);
+            doc->setProperty ("target", "Ref " + juce::String (r.targetLufs, 1).replace ("-", juce::String::fromUTF8 ("\xE2\x88\x92")) + " LUFS");
+            doc->setProperty ("mixStats", statsToVar (r.analysis));
+            doc->setProperty ("masterStats", statsToVar (r.masterAnalysis));
+        }
     }
 
     // Saved with the plug-in state (see getReportForSaving), so it survives reopening the project.

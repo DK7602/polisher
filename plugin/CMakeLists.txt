@@ -50,12 +50,14 @@ target_sources(Polisher PRIVATE
     PluginProcessor.cpp
     PluginEditor.cpp
     PolisherWebEditor.cpp
-    AutoMasterController.cpp)
+    AutoMasterController.cpp
+    ReferenceTrack.cpp)
 
 target_compile_definitions(Polisher PUBLIC
     JUCE_WEB_BROWSER=1
     JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1
     JUCE_USE_CURL=0
+    JUCE_USE_MP3AUDIOFORMAT=1
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0)
 

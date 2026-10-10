@@ -114,6 +114,7 @@ img { -webkit-user-drag: none; }
 .sw { display: inline-block; width: 18px; }
 .sw-white { height: 2px; background: #fff; }
 .sw-red { height: 3px; background: var(--red-hot); }
+.sw-ref { height: 0; border-top: 2px dashed #FFD27A; }
 
 .outmeter { width: 85px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 6px; }
 .outmeter-title { font-size: 11px; font-weight: 700; letter-spacing: .1em; }
@@ -186,7 +187,7 @@ img { -webkit-user-drag: none; }
 
 /* ---------- footer ---------- */
 #footer { left: 341px; top: 728px; width: 1221px; height: 120px; }
-.footer-row { position: absolute; left: 16px; right: 24px; top: 12px; bottom: 12px; display: flex; align-items: center; gap: 20px; }
+.footer-row { position: absolute; left: 16px; right: 24px; top: 12px; bottom: 12px; display: flex; align-items: center; gap: 16px; }
 .automaster { width: 340px; height: 90px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
   filter: drop-shadow(0 0 14px rgba(255,40,50,.55)); }
 .automaster .wm { font-size: 23px; text-shadow: 0 2px 5px rgba(0,0,0,.6); }
@@ -206,10 +207,10 @@ img { -webkit-user-drag: none; }
 .l-meta { font-size: 12px; color: var(--dim); margin: -2px 0 6px; }
 .l-changed { font-size: 12px; color: var(--dim); font-style: italic; margin: 2px 0 8px; }
 .choices { display: flex; flex-direction: column; gap: 10px; }
-.choice-row { display: flex; align-items: center; gap: 8px; }
+.choice-row { display: flex; align-items: center; gap: 6px; }
 .choice-row .pill { height: 34px; width: 90px; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
 .choice-label { width: 72px; font-size: 12px; font-weight: 700; letter-spacing: .1em; color: var(--muted); }
-.meters { width: 318px; flex-shrink: 0; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); column-gap: 16px; row-gap: 10px; }
+.meters { width: 304px; flex-shrink: 0; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); column-gap: 16px; row-gap: 10px; }
 .meter { display: flex; flex-direction: column; gap: 4px; }
 .meter-top { display: flex; justify-content: space-between; align-items: baseline; }
 .meter-label { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; color: var(--muted); white-space: nowrap; }
@@ -349,3 +350,23 @@ body.theme-mono .pop-note { background: rgba(255,255,255,.06); border-color: rgb
 .manual-body th, .manual-body td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid rgba(160,210,255,.18); }
 .manual-body th { color: #fff; font-weight: 600; background: rgba(255,255,255,.06); }
 .manual-body .muted { color: var(--dim); }
+
+/* ---------- match ref ---------- */
+.ref-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
+.choice-row .pill.ref-pill { width: 116px; padding: 0 12px; font-size: 13px; display: block; line-height: 34px; text-align: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.choice-row.ref-active .pill[data-i] { opacity: .5; }
+.ref-clear { position: absolute; right: -6px; top: -8px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
+  font-size: 15px; line-height: 19px; font-weight: 700; background: rgba(5,15,34,.95); box-shadow: 0 0 0 1.5px rgba(160,210,255,.75); }
+.ref-clear[hidden] { display: none; }
+.ref-clear:hover { box-shadow: 0 0 0 1.5px #FF5A62, 0 0 10px rgba(255,40,50,.6); }
+.l-cmp { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.l-cmp th { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; color: var(--muted); text-align: right; padding: 2px 4px; }
+.l-cmp th:first-child, .l-cmp td:first-child { text-align: left; padding-left: 0; }
+.l-cmp td { padding: 3px 4px; text-align: right; border-top: 1px solid rgba(140,192,234,.15); font-family: "Plex Mono", ui-monospace, monospace; }
+.l-cmp td:first-child { font-family: inherit; font-weight: 600; color: #DCE8F5; }
+.l-cmp td.ref { color: #FFD27A; }
+.l-cmp td.far { color: #FF9EA3; }
+.l-cmp td.near { color: #9FE3B4; }
+.l-cmp-note { font-size: 11.5px; color: var(--dim); margin: 2px 0 0; line-height: 1.4; }
+body.theme-mono .sw-ref { border-top-color: #E6E6E6; }

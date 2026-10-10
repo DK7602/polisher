@@ -479,6 +479,9 @@ void PolisherAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     if (auto xml = parameters.copyState().createXml())
     {
         xml->setAttribute ("amReport", autoMaster.getReportForSaving());
+        // Match ref: the reference song's measurements and name (no audio). Absent when none is loaded.
+        if (const auto ref = reference.getJsonForSaving(); ref.isNotEmpty())
+            xml->setAttribute ("amReference", ref);
         copyXmlToBinary (*xml, destData);
     }
 }
@@ -489,7 +492,9 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
         if (xml->hasTagName (parameters.state.getType()))
         {
             const auto savedReport = xml->getStringAttribute ("amReport");
+            const auto savedReference = xml->getStringAttribute ("amReference");   // "" in states from before Match ref
             xml->removeAttribute ("amReport");
+            xml->removeAttribute ("amReference");
             // Stem EQ Keep loudness (added after v0.15.0) is on for new instances, but a song saved before it
             // existed was mixed without it: load that state with it off, so it sounds as it did.
             // (JUCE would give a control missing from the state its default, which is on.)
@@ -504,6 +509,7 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
             }
             parameters.replaceState (juce::ValueTree::fromXml (*xml));
             autoMaster.onStateRestored (savedReport);
+            reference.restoreFromJson (savedReference);
         }
 }
 

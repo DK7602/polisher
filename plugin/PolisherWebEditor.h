@@ -15,7 +15,8 @@
 
     C++ -> JS: parameters through JUCE web relays, plus a "polisherMeters" event at 30 Hz with
                loudness readings and two spectra (mix and master).
-    JS -> C++: parameter changes through the relays, and the native function "resetMeter". */
+    JS -> C++: parameter changes through the relays, and native functions (meter reset, Auto-Master,
+               Match ref: loadReference / clearReference / getReference). */
 class PolisherWebEditor final : public juce::AudioProcessorEditor,
                                 private juce::Timer
 {
@@ -95,6 +96,10 @@ private:
     std::vector<std::unique_ptr<juce::WebToggleButtonParameterAttachment>> moduleToggleAttachments;
     std::vector<std::unique_ptr<juce::WebComboBoxParameterAttachment>> moduleComboAttachments;
 
+    std::unique_ptr<juce::FileChooser> referenceChooser;   // Match ref: the open dialog, while it's open
+
+    // Same size and points as polisher::spectrumDisplayCurve, so a reference's curve lines up with the live ones.
+    static_assert (kFftSize == polisher::kDisplayFftSize && kSpectrumPoints == polisher::kDisplayPoints);
     juce::dsp::FFT fft { kFftOrder };
     juce::dsp::WindowingFunction<float> window { static_cast<size_t> (kFftSize), juce::dsp::WindowingFunction<float>::hann, false };
     std::array<float, 2 * kFftSize> fftBuffer {};

@@ -310,12 +310,14 @@ MixAnalysis analyseMix (const AudioClip& clip)
         window[static_cast<size_t> (i)] = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * i / N);
 
     std::vector<std::array<double, kEqBands>> framePower;
+    std::vector<std::array<double, 2>> frameLow;   // energy at 30-60 Hz and 60-120 Hz (the low end's shape)
     std::vector<double> frameDb;
     std::vector<std::complex<double>> buf (static_cast<size_t> (N));
     for (int start = 0; start + N <= n; start += hop)
     {
         std::array<double, kEqBands> bands {};
         std::array<int, kEqBands> counts {};
+        std::array<double, 2> low {};
         double total = 0.0;
         for (int c = 0; c < nch; ++c)
         {
@@ -328,6 +330,8 @@ MixAnalysis analyseMix (const AudioClip& clip)
                 const double f = k * sr / N;
                 const double p = std::norm (buf[static_cast<size_t> (k)]);
                 total += p;
+                if (f >= 30.0 && f < 120.0)
+                    low[f < 60.0 ? 0 : 1] += p;
                 for (int b = 0; b < kEqBands; ++b)
                     if (f >= kEdges[static_cast<size_t> (b)] && f < kEdges[static_cast<size_t> (b + 1)])
                     {
@@ -341,6 +345,7 @@ MixAnalysis analyseMix (const AudioClip& clip)
             if (counts[static_cast<size_t> (b)] > 0)
                 bands[static_cast<size_t> (b)] /= counts[static_cast<size_t> (b)];   // mean power per bin (per Hz)
         framePower.push_back (bands);
+        frameLow.push_back (low);
         frameDb.push_back (toDb (total));
     }
     if (framePower.empty())
@@ -348,14 +353,21 @@ MixAnalysis analyseMix (const AudioClip& clip)
 
     const double loudGate = percentile (frameDb, 0.95) - 15.0;
     std::array<double, kEqBands> mean {};
+    std::array<double, 2> lowSum {};
     int loudFrames = 0;
     for (size_t f = 0; f < framePower.size(); ++f)
         if (frameDb[f] >= loudGate)
         {
             for (int b = 0; b < kEqBands; ++b)
                 mean[static_cast<size_t> (b)] += framePower[f][static_cast<size_t> (b)];
+            lowSum[0] += frameLow[f][0];
+            lowSum[1] += frameLow[f][1];
             ++loudFrames;
         }
+    // Both halves are an octave wide, so this compares the deep sub with the low bass note by note
+    // the way you hear them (an 808 that reaches lower reads higher).
+    if (lowSum[0] > 0.0 && lowSum[1] > 0.0)
+        a.subVsBassDb = toDb (lowSum[0]) - toDb (lowSum[1]);
     a.seconds = loudFrames * hop / sr;
     for (int b = 0; b < kEqBands; ++b)
     {
@@ -464,6 +476,180 @@ MixAnalysis analyseMix (const AudioClip& clip)
 
     a.usable = a.seconds >= 3.0;
     return a;
+}
+
+// =================================================================================================
+// Reference songs ("Match ref")
+// =================================================================================================
+
+void LoudestPartFinder::prepare (double sr, int numChannels)
+{
+    sampleRate = sr;
+    channelCount = std::clamp (numChannels, 1, 2);
+    hopLength = std::max (1, static_cast<int> (std::lround (sr * 0.1)));
+    hopPos = 0;
+    samples = 0;
+    hopSum = 0.0;
+    for (auto& k : weighting) { k.prepare (sr); k.reset(); }
+    hopEnergy.clear();
+    meter.prepare (sr, channelCount);
+    meter.reset();
+}
+
+void LoudestPartFinder::process (const float* const* channels, int numChannels, int numSamples)
+{
+    const int nch = std::min (numChannels, channelCount);
+    if (nch <= 0 || numSamples <= 0)
+        return;
+    meter.process (channels, nch, numSamples);
+    for (int i = 0; i < numSamples; ++i)
+    {
+        for (int c = 0; c < nch; ++c)
+        {
+            const double k = weighting[static_cast<size_t> (c)].process (static_cast<double> (channels[c][i]));
+            hopSum += k * k;
+        }
+        if (++hopPos == hopLength)
+        {
+            hopEnergy.push_back (hopSum / hopLength);
+            hopSum = 0.0;
+            hopPos = 0;
+        }
+    }
+    samples += numSamples;
+}
+
+std::int64_t LoudestPartFinder::loudestStart (double windowSeconds) const
+{
+    const auto window = static_cast<size_t> (std::max (1L, std::lround (windowSeconds / 0.1)));
+    if (hopEnergy.size() <= window)
+        return 0;
+    // Sliding sum over the window; strictly greater keeps the earliest of equally loud parts.
+    double sum = 0.0;
+    for (size_t i = 0; i < window; ++i) sum += hopEnergy[i];
+    double best = sum;
+    size_t bestAt = 0;
+    for (size_t i = window; i < hopEnergy.size(); ++i)
+    {
+        sum += hopEnergy[i] - hopEnergy[i - window];
+        if (sum > best * (1.0 + 1.0e-12)) { best = sum; bestAt = i + 1 - window; }
+    }
+    return static_cast<std::int64_t> (bestAt) * hopLength;
+}
+
+AudioClip loudestPart (const AudioClip& song, double& startSeconds)
+{
+    startSeconds = 0.0;
+    const int n = song.numSamples();
+    if (n == 0)
+        return song;
+    LoudestPartFinder finder;
+    finder.prepare (song.sampleRate, song.numChannels());
+    std::vector<const float*> ptrs;
+    for (const auto& ch : song.channels) ptrs.push_back (ch.data());
+    finder.process (ptrs.data(), song.numChannels(), n);
+    const auto start = static_cast<size_t> (finder.loudestStart (kReferencePartSeconds));
+    const auto len = std::min (static_cast<size_t> (n) - start, static_cast<size_t> (song.sampleRate * kReferencePartSeconds));
+    startSeconds = static_cast<double> (start) / song.sampleRate;
+    AudioClip part;
+    part.sampleRate = song.sampleRate;
+    for (const auto& ch : song.channels)
+        part.channels.emplace_back (ch.begin() + static_cast<std::ptrdiff_t> (start), ch.begin() + static_cast<std::ptrdiff_t> (start + len));
+    return part;
+}
+
+std::vector<double> spectrumDisplayCurve (const AudioClip& clip, int fftSize, int points)
+{
+    std::vector<double> out (static_cast<size_t> (std::max (0, points)), -120.0);
+    const int n = clip.numSamples(), nch = clip.numChannels();
+    if (n < fftSize || nch == 0 || points < 2 || fftSize < 16)
+        return out;
+    // Exactly what PolisherWebEditor::makeSpectrum does with each frame (JUCE's Hann window, magnitude
+    // spectrum, full-scale sine = 0 dB), so the curve sits where a live curve of this audio would.
+    const double sr = clip.sampleRate, binHz = sr / fftSize, fullScale = fftSize * 0.25;
+    const int lastBin = fftSize / 2 - 1;
+    std::vector<int> lo (static_cast<size_t> (points)), hi (static_cast<size_t> (points));
+    std::vector<double> tilt (static_cast<size_t> (points));
+    for (int i = 0; i < points; ++i)
+    {
+        const double f = 20.0 * std::pow (1000.0, static_cast<double> (i) / (points - 1));
+        const auto k = static_cast<size_t> (i);
+        lo[k] = std::clamp (static_cast<int> (std::floor (f * std::pow (2.0, -1.0 / 12.0) / binHz)), 1, lastBin);
+        hi[k] = std::clamp (static_cast<int> (std::ceil (f * std::pow (2.0, 1.0 / 12.0) / binHz)), lo[k], lastBin);
+        tilt[k] = 4.5 * std::log2 (f / 1000.0);
+    }
+    std::vector<double> window (static_cast<size_t> (fftSize));
+    for (int i = 0; i < fftSize; ++i)
+        window[static_cast<size_t> (i)] = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * i / (fftSize - 1));
+
+    // The display refreshes 30 times a second, rising fast and falling slowly; average what it shows.
+    const int hop = std::max (1, static_cast<int> (std::lround (sr / 30.0)));
+    std::vector<std::complex<double>> buf (static_cast<size_t> (fftSize));
+    std::vector<double> smoothed (static_cast<size_t> (points)), sum (static_cast<size_t> (points));
+    int frames = 0;
+    for (int start = 0; start + fftSize <= n; start += hop)
+    {
+        for (int i = 0; i < fftSize; ++i)
+        {
+            double v = 0.0;
+            for (const auto& ch : clip.channels) v += ch[static_cast<size_t> (start + i)];
+            buf[static_cast<size_t> (i)] = v / nch * window[static_cast<size_t> (i)];
+        }
+        fft (buf);
+        for (size_t k = 0; k < static_cast<size_t> (points); ++k)
+        {
+            double power = 0.0;
+            for (int b = lo[k]; b <= hi[k]; ++b) power += std::norm (buf[static_cast<size_t> (b)]);
+            const double mag = std::sqrt (power / (hi[k] - lo[k] + 1)) / fullScale;
+            const double db = std::clamp (20.0 * std::log10 (mag + 1.0e-9) + tilt[k], -120.0, 12.0);
+            auto& sm = smoothed[k];
+            if (frames == 0)   sm = db;
+            else if (db > sm)  sm = 0.55 * db + 0.45 * sm;
+            else               sm = 0.88 * sm + 0.12 * db;
+            sum[k] += sm;
+        }
+        ++frames;
+    }
+    for (size_t k = 0; k < out.size(); ++k)
+        out[k] = std::round (sum[k] / frames * 10.0) / 10.0;
+    return out;
+}
+
+ReferenceProfile analyseReference (const AudioClip& part, double trackSeconds, double trackLufs, double startSeconds)
+{
+    const ScopedFlushDenormals noDenormals;
+    ReferenceProfile p;
+    const MixAnalysis a = analyseMix (part);
+    if (! a.usable)
+        return p;
+    p.valid = true;
+    p.trackSeconds = trackSeconds;
+    p.startSeconds = startSeconds;
+    p.partSeconds = static_cast<double> (part.numSamples()) / part.sampleRate;
+    p.trackLufs = std::isfinite (trackLufs) ? trackLufs : a.loudness.integratedLufs;
+    p.lufs = a.loudness.integratedLufs;
+    p.truePeakDbtp = a.loudness.truePeakDbtp;
+    p.peakToLoudnessDb = a.peakToLoudnessDb;
+    p.bandDb = a.bandDb;
+    p.bassWidthPercent = a.bassWidthPercent;
+    p.midSideDb = a.midSideDb;
+    p.highSideDb = a.highSideDb;
+    p.correlation = a.correlation;
+    p.subVsBassDb = a.subVsBassDb;
+    p.displayDb = spectrumDisplayCurve (part);
+    return p;
+}
+
+ReferenceProfile analyseReference (const AudioClip& song)
+{
+    LoudestPartFinder finder;
+    finder.prepare (song.sampleRate, song.numChannels());
+    std::vector<const float*> ptrs;
+    for (const auto& ch : song.channels) ptrs.push_back (ch.data());
+    finder.process (ptrs.data(), song.numChannels(), song.numSamples());
+    double start = 0.0;
+    const AudioClip part = loudestPart (song, start);
+    return analyseReference (part, finder.seconds(), finder.integratedLufs(), start);
 }
 
 // =================================================================================================
@@ -677,7 +863,16 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     const AudioClip heard = renderStemEq (input, s.stem);
     const bool stemMoved = ! StemEQ::isNeutral (s.stem);
     AutoMasterResult r;
-    r.targetLufs = targetLufs (s.target);
+    // Match ref: a loaded reference song replaces the genre's tone, the target loudness, the stereo width
+    // and the low end. The loudness tier it falls in (Stream / Loud / Club) picks the ceiling and the
+    // clipping rules, the same as choosing that target by hand.
+    const auto& ref = s.reference;
+    const bool useRef = ref.valid;
+    r.targetLufs = useRef ? std::clamp (std::round (ref.lufs * 10.0) / 10.0, kRefMinLufs, kRefMaxLufs) : targetLufs (s.target);
+    const LoudnessTarget tier = ! useRef ? s.target : r.targetLufs <= -12.0 ? LoudnessTarget::stream
+                              : r.targetLufs <= -8.0 ? LoudnessTarget::loud : LoudnessTarget::club;
+    const std::string tname = useRef ? "Ref " + num (r.targetLufs) : std::string (targetName (s.target));
+    const std::string refName = "\xE2\x80\x9C" + ref.name + "\xE2\x80\x9D";   // in curly quotes
     r.analysis = analyseMix (heard);
     if (stemMoved && r.analysis.usable) r.analysis.bandDb = analyseMix (input).bandDb;
     const auto& a = r.analysis;
@@ -740,7 +935,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     // jump out clearly further than without it. Everything after this hears the restored mix.
     // MP3/AAC/Ogg copies of a loud master peak higher than the master itself (measured: a −9 LUFS master
     // at −1 dBTP decodes to about 0 dBTP as MP3 and +1 as Ogg), so the loud target gets more room.
-    const double maxCeiling = s.target == LoudnessTarget::loud ? -1.5 : -1.0;
+    const double maxCeiling = tier == LoudnessTarget::loud ? -1.5 : -1.0;
     {
         const double squash = Unlimiter::measureSquashDb (input.channels, input.sampleRate);   // as the plug-in sees it, before Stem EQ
         auto& ul = chain.unlimiter;
@@ -762,7 +957,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                               - hitJumpAtTargetDb (input, r.targetLufs, maxCeiling);
             if (kept < kMinPunchKeptDb)
             {
-                reason ("ul", "Amount", "0 %", arrives + "But at your " + std::string (targetName (s.target)) + " target the Maximizer would press "
+                reason ("ul", "Amount", "0 %", arrives + "But at your " + tname + " target the Maximizer would press "
                         "the restored hits straight back down: tried at " + pct (tryAmount) + ", they'd jump out only " + num (std::max (0.0, kept)) +
                         " dB further than without it, too little to hear, so the Unlimiter stays off. It pays off when the target is a few dB "
                         "below the " + num (arrivesLufs) + " LUFS your audio arrives at, for example Stream \xE2\x88\x92" "14.");
@@ -775,7 +970,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
             else
             {
                 ul.amount = tryAmount;
-                reason ("ul", "Amount", pct (ul.amount), arrives + "Tried at your " + std::string (targetName (s.target)) + " target, " +
+                reason ("ul", "Amount", pct (ul.amount), arrives + "Tried at your " + tname + " target, " +
                         pct (ul.amount) + " makes the hits jump out about " + num (kept) + " dB further than without it, after the Maximizer has made "
                         "the song loud again. Compare at the final loudness with MATCH on: the drums should hit harder while the level "
                         "between them stays the same.");
@@ -803,10 +998,14 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     // 808-led genres, where the low end is programmed rather than played.
     const bool bassHeavy = s.genre == Genre::trapHipHop || s.genre == Genre::rnb || s.genre == Genre::edm || s.genre == Genre::pop;
 
-    // --- Tonal EQ: move part of the way toward the genre's typical balance --------------------------
+    // --- Tonal EQ: move part of the way toward the genre's typical balance (or the reference's) -------
     // First what each analysis band should change by, then the band gains that achieve that together:
-    // neighbouring bands overlap, so setting each band on its own would over- or under-shoot.
-    const auto target = genreTargetCurve (s.genre);
+    // neighbouring bands overlap, so setting each band on its own would over- or under-shoot. A
+    // reference's balance is measured exactly like the mix's, so it drops in for the genre curve; the
+    // same intensity limits apply, so the EQ still only goes part of the way.
+    const auto target = useRef ? ref.bandDb : genreTargetCurve (s.genre);
+    // What the report compares the mix with.
+    const std::string versus = useRef ? refName : "typical " + genre + " masters";
     const double tRef = (target[1] + target[2] + target[3] + target[4] + target[5]) / 5.0;
     std::array<double, kEqBands> diffs {}, wanted {}, limits {};
     for (int b = 0; b < kEqBands; ++b)
@@ -835,12 +1034,12 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         }
         const std::string more = diff > 0 ? "less" : "more";
         reason ("eq", kBandNames[b], num (gain, true) + " dB",
-                "Your mix has about " + num (std::abs (diff)) + " dB " + more + " " + kBandPlain[b] + " than typical " + genre +
-                " masters, so a " + num (std::abs (gain)) + " dB " + (gain > 0 ? "boost" : "cut") +
+                "Your mix has about " + num (std::abs (diff)) + " dB " + more + " " + kBandPlain[b] + " than " + versus +
+                ", so a " + num (std::abs (gain)) + " dB " + (gain > 0 ? "boost" : "cut") +
                 " closes part of the gap. " + (gain > 0 ? kBoostEffect[b] : kCutEffect[b]));
         if (std::abs (diff) > 7.0)
             r.notes.push_back ("FIX IT IN THE MIX: your mix is " + num (std::abs (diff)) + " dB " + (diff > 0 ? "lower" : "higher") +
-                               " in the " + kBandPlain[b] + " than typical " + genre + " masters. The master EQ only fixes part of that; "
+                               " in the " + kBandPlain[b] + " than " + versus + ". The master EQ only fixes part of that; "
                                "adjusting the main source in the mix (" + (b <= 1 && ! bassHeavy ? "usually the bass or the kick" : kCulprit[b]) +
                                ") will sound better."
                                "\nNEED: Optional. The master EQ already corrects part of it, and the master works as it is."
@@ -864,18 +1063,28 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         std::string list;
         for (size_t k = 0; k < flat.size(); ++k)
             list += (k ? (k + 1 == flat.size() ? " and " : ", ") : "") + flat[k];
-        reason ("eq", "Other bands", "0 dB", list + (flat.size() > 1 ? " are" : " is") + " already close to the " + genre +
+        reason ("eq", "Other bands", "0 dB", list + (flat.size() > 1 ? " are" : " is") + " already close to " + (useRef ? "the reference's" : "the " + genre) +
                 " balance, so " + (flat.size() > 1 ? "they stay" : "it stays") + " flat.");
     }
     else if (flat.size() == static_cast<size_t> (kEqBands))
     {
-        reason ("eq", "All bands", "0 dB", "Your tonal balance is already close to typical " + genre +
-                " masters, so the EQ stays flat. Nothing to fix is a good sign for your mix.");
+        reason ("eq", "All bands", "0 dB", "Your tonal balance is already close to " + versus +
+                ", so the EQ stays flat. Nothing to fix is a good sign for your mix.");
     }
 
     // --- Bass Control ----------------------------------------------------------------------------
     const double width = a.bassWidthPercent;
-    if (bassHeavy || width >= 20.0)
+    const std::string refBass = useRef ? " " + refName + "'s bass is " + pct (ref.bassWidthPercent) + " stereo." : std::string();
+    if (useRef && ref.bassWidthPercent >= 20.0 && (bassHeavy || width >= 20.0))
+    {
+        // The reference keeps stereo in its bass: make only the deep sub mono, as it most likely does.
+        chain.bass.monoHz = 60.0;
+        reason ("bass", "Mono Below", hz (chain.bass.monoHz),
+                refName + " keeps some stereo in its bass (" + pct (ref.bassWidthPercent) + " below 150 Hz; yours is " + pct (width) +
+                "), so only the deep sub below " + hz (chain.bass.monoHz) + " is made mono. That keeps the sub solid on club systems and phones, "
+                "while the bass above it stays as wide as in the reference.");
+    }
+    else if (bassHeavy || width >= 20.0)
     {
         chain.bass.monoHz = s.genre == Genre::edm ? 120.0 : bassHeavy ? 100.0 : 80.0;
         reason ("bass", "Mono Below", hz (chain.bass.monoHz),
@@ -883,12 +1092,12 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                   ? "Your bass is " + pct (width) + " stereo below 150 Hz. Club systems and phones play bass in mono, so stereo bass "
                     "partly cancels there. Making it mono below " + hz (chain.bass.monoHz) + " keeps it solid everywhere."
                   : "Your bass is already nearly mono (" + pct (width) + "), so this is a safety net: you'll hardly hear it now, "
-                    "but keeps any stray stereo sub from cancelling on club systems.");
+                    "but keeps any stray stereo sub from cancelling on club systems." + refBass);
     }
     else
     {
-        reason ("bass", "Mono Below", "Off", width < 10.0 ? "Your bass is already mono (" + pct (width) + " stereo), so there's nothing to fix."
-                                                        : "Your bass is mostly mono (" + pct (width) + " stereo), which is fine for " + genre + ", so it's left as it is.");
+        reason ("bass", "Mono Below", "Off", (width < 10.0 ? "Your bass is already mono (" + pct (width) + " stereo), so there's nothing to fix."
+                                                         : "Your bass is mostly mono (" + pct (width) + " stereo), which is fine for " + genre + ", so it's left as it is.") + refBass);
     }
 
     // Sub Tame is an 808 tool: in genres with played bass, level changes are part of the performance.
@@ -1119,26 +1328,53 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
             const double room = std::clamp ((narrowDb - sideDb) / 9.0, 0.0, 1.0);
             return std::round (100.0 + maxPct * room * scale * genreScale);
         };
-        if (! risky && ! mono)
-        {
-            im.highWidth = widen (a.highSideDb, -6.0, 18.0);
-            im.midWidth = widen (a.midSideDb, -12.0, 8.0);
-            if (a.midSideDb > -3.0) im.midWidth = 92.0;   // very wide mids: pull the center back together
-        }
         const auto sideText = [] (double db) { return db <= -40.0 ? std::string ("almost mono") : num (-db) + " dB below the center"; };
-        reason ("img", "Lows", "100 %", "The lows stay as they are: wide bass costs punch and cancels on mono speakers (Mono Below in Bass Control handles the sub).");
-        reason ("img", "Mids", pct (im.midWidth),
-                mono ? "Your mix is (almost) mono. The Imager widens what is already stereo, so there's nothing for it to open up; widen in the mix with stereo reverbs, doubles or panning."
-                : risky ? "Your mix's correlation is low (" + num (a.correlation) + "), so widening could make parts cancel on phones and club systems. Left alone."
-                : im.midWidth > 100.0 ? "The stereo part of your mids is " + sideText (a.midSideDb) + ", fairly narrow, so a small lift adds space around the vocal without loosening it."
-                : im.midWidth < 100.0 ? "Your mids are already very wide (stereo part only " + num (-a.midSideDb) + " dB below the center), so they're pulled in a little to keep the vocal solid."
-                                      : "Your mids already have a healthy width, so they stay as they are.");
-        reason ("img", "Highs", pct (im.highWidth),
-                mono ? "Left alone: there's no stereo in the highs to widen."
-                : risky ? "Left alone for mono safety (low correlation)."
-                : im.highWidth > 100.0 ? "The stereo part of your highs is " + sideText (a.highSideDb) + ". Opening them to " + pct (im.highWidth) +
-                                         " spreads hats, reverbs and ad-libs, where width sounds best and stays mono-safe."
-                                       : "Your highs are already wide, so they stay as they are.");
+        if (useRef && ! risky && ! mono)
+        {
+            // Match ref: move each band's stereo part part of the way toward the reference's (narrower
+            // too, when the mix is wider). Width scales the side: 10^(dB / 20) x 100 %.
+            auto toward = [&] (double sideDb, double refDb, double lo, double hi)
+            {
+                const double diff = refDb - sideDb;
+                const double beyond = std::copysign (std::max (0.0, std::abs (diff) - 1.0), diff);   // within 1 dB: close enough
+                return std::clamp (std::round (100.0 * std::pow (10.0, 0.6 * scale * beyond / 20.0)), lo, hi);
+            };
+            im.highWidth = toward (a.highSideDb, ref.highSideDb, 85.0, 125.0);
+            im.midWidth = toward (a.midSideDb, ref.midSideDb, 90.0, 110.0);
+            auto explain = [&] (const char* band, double mixDb, double refDb, double w, const char* what)
+            {
+                const std::string compare = "The stereo part of your " + std::string (band) + " is " + sideText (mixDb) + "; in " + refName +
+                                            " it is " + sideText (refDb) + ". ";
+                if (w > 100.0) return compare + "Widening to " + pct (w) + " moves part of the way toward it (" + what + "), staying mono-safe.";
+                if (w < 100.0) return compare + "Yours is wider, so " + pct (w) + " pulls it in part of the way, toward the reference's tighter image.";
+                return compare + "That's close enough, so it stays as it is.";
+            };
+            reason ("img", "Lows", "100 %", "The lows stay as they are: wide bass costs punch and cancels on mono speakers (Mono Below in Bass Control handles the sub).");
+            reason ("img", "Mids", pct (im.midWidth), explain ("mids", a.midSideDb, ref.midSideDb, im.midWidth, "space around the vocal"));
+            reason ("img", "Highs", pct (im.highWidth), explain ("highs", a.highSideDb, ref.highSideDb, im.highWidth, "hats, reverbs and ad-libs spread out"));
+        }
+        else
+        {
+            if (! risky && ! mono)
+            {
+                im.highWidth = widen (a.highSideDb, -6.0, 18.0);
+                im.midWidth = widen (a.midSideDb, -12.0, 8.0);
+                if (a.midSideDb > -3.0) im.midWidth = 92.0;   // very wide mids: pull the center back together
+            }
+            reason ("img", "Lows", "100 %", "The lows stay as they are: wide bass costs punch and cancels on mono speakers (Mono Below in Bass Control handles the sub).");
+            reason ("img", "Mids", pct (im.midWidth),
+                    mono ? "Your mix is (almost) mono. The Imager widens what is already stereo, so there's nothing for it to open up; widen in the mix with stereo reverbs, doubles or panning."
+                    : risky ? "Your mix's correlation is low (" + num (a.correlation) + "), so widening could make parts cancel on phones and club systems. Left alone."
+                    : im.midWidth > 100.0 ? "The stereo part of your mids is " + sideText (a.midSideDb) + ", fairly narrow, so a small lift adds space around the vocal without loosening it."
+                    : im.midWidth < 100.0 ? "Your mids are already very wide (stereo part only " + num (-a.midSideDb) + " dB below the center), so they're pulled in a little to keep the vocal solid."
+                                          : "Your mids already have a healthy width, so they stay as they are.");
+            reason ("img", "Highs", pct (im.highWidth),
+                    mono ? "Left alone: there's no stereo in the highs to widen."
+                    : risky ? "Left alone for mono safety (low correlation)."
+                    : im.highWidth > 100.0 ? "The stereo part of your highs is " + sideText (a.highSideDb) + ". Opening them to " + pct (im.highWidth) +
+                                             " spreads hats, reverbs and ad-libs, where width sounds best and stays mono-safe."
+                                           : "Your highs are already wide, so they stay as they are.");
+        }
     }
 
     // --- Saturation: harmonics for density and small-speaker bass ------------------------------------
@@ -1198,7 +1434,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
 
     // --- Soft Clipper: on or off ------------------------------------------------------------------------
     const double plr = a.peakToLoudnessDb;
-    const bool loudTarget = s.target != LoudnessTarget::stream;
+    const bool loudTarget = tier != LoudnessTarget::stream;
     const bool punchy = s.intensity == Intensity::punchy;
     chain.clipper.enabled = s.intensity != Intensity::gentle && (loudTarget || plr > 16.0) && plr >= 9.0;
     chain.clipper.softness = 0.5;
@@ -1214,9 +1450,9 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         case Genre::rock:                        clipShare = 2.0; break;
         case Genre::acoustic:                    clipShare = 1.5; break;
     }
-    clipShare *= s.target == LoudnessTarget::stream ? 0.6 : s.target == LoudnessTarget::club ? 1.3 : 1.0;
+    clipShare *= tier == LoudnessTarget::stream ? 0.6 : tier == LoudnessTarget::club ? 1.3 : 1.0;
     if (punchy) clipShare += 1.5;
-    const double minLevel = (punchy || s.target == LoudnessTarget::club) ? -2.0 : 0.0;   // below 0 = extra density
+    const double minLevel = (punchy || tier == LoudnessTarget::club) ? -2.0 : 0.0;   // below 0 = extra density
     const double peakBudget = rules.peakBudgetDb + (s.genre == Genre::acoustic ? -1.5 : s.genre == Genre::rock ? -0.5
                                                     : (s.genre == Genre::trapHipHop || s.genre == Genre::edm) ? 1.0 : 0.0);
 
@@ -1343,7 +1579,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                                    genre + " hides well (" + num (clipShare) + " dB)."
                 : clipLevel > -0.05 ? "The clip level sits right at the ceiling (Softness starts rounding peaks a few dB below it): the clipper takes the peaks and the Maximizer just polishes what's left."
                 : "Clipping starts " + num (-clipLevel) + " dB below the ceiling for extra density (" + std::string (rules.name) + ", " +
-                  targetName (s.target) + "); the level comes back up so peaks still use the full headroom.");
+                  tname + "); the level comes back up so peaks still use the full headroom.");
         reason ("clip", "Softness", "50 %", "A medium knee: rounds peaks gently, heard as punch rather than distortion.");
         reason ("clip", "Oversampling", "4x", "Keeps the clipping clean (far less harsh aliasing) at a sensible CPU cost.");
     }
@@ -1372,12 +1608,12 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     if (found.driveDb < 0.0 && drive == 0.0 && ! r.reachedTarget)
         driveWhy = trimDb <= kMinTrimDb
             ? "Your mix arrives at " + num (arrivesLufs) + " LUFS, so loud that even with Input Trim at its " + num (kMinTrimDb) +
-              " dB limit the master lands at " + num (out.integratedLufs) + " LUFS, above the " + std::string (targetName (s.target)) +
+              " dB limit the master lands at " + num (out.integratedLufs) + " LUFS, above the " + tname +
               " target. Turn the mix down before Polisher."
             : "With Drive at 0 dB the master lands at " + num (out.integratedLufs) + " LUFS, " + num (out.integratedLufs - r.targetLufs) +
-              " dB above the " + std::string (targetName (s.target)) + " target. Lower Input Trim by that much, or run Auto-Master again.";
+              " dB above the " + tname + " target. Lower Input Trim by that much, or run Auto-Master again.";
     else if (r.reachedTarget)
-        driveWhy = num (drive, true) + " dB of Drive lands this part at " + num (out.integratedLufs) + " LUFS, your " + targetName (s.target) +
+        driveWhy = num (drive, true) + " dB of Drive lands this part at " + num (out.integratedLufs) + " LUFS, your " + tname +
                    " target. " + (cost < 0.3 ? std::string ("At this level the peaks barely need controlling, so the master stays completely clean.")
                                              : "Holding the peaks down costs about " + num (cost) + " dB of loudness, within the " + rules.name +
                                                " limit of " + num (rules.budgetDb) + " dB, so " +
@@ -1398,7 +1634,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     {
         driveWhy = "Even the maximum Drive only reaches " + num (out.integratedLufs) + " LUFS on this mix.";
         r.notes.push_back ("HEADS UP: your mix arrives very quiet (" + num (arrivesLufs) + " LUFS), so even the maximum Drive leaves the master at "
-                           + num (out.integratedLufs) + " LUFS, short of the " + std::string (targetName (s.target)) + " target (" + num (r.targetLufs) + " LUFS)."
+                           + num (out.integratedLufs) + " LUFS, short of the " + tname + " target (" + num (r.targetLufs) + " LUFS)."
                            "\nNEED: Yes, if you want the target loudness."
                            "\nSTEP: Turn the mix up before Polisher: raise the Stereo Out fader, or the track faders, by about "
                            + num (std::ceil (r.targetLufs - out.integratedLufs), false, 0) + " dB."
@@ -1407,19 +1643,20 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     if (trimDb < 0.0)
         reason ("max", "Input Trim", num (trimDb, true) + " dB",
                 "Your mix arrives at " + num (arrivesLufs) + " LUFS" +
-                (arrivesLufs > r.targetLufs ? ", already louder than the " + std::string (targetName (s.target)) + " target (" + num (r.targetLufs) + " LUFS)"
-                                            : "; with this chain's EQ and make-up gain it would land above the " + std::string (targetName (s.target)) +
+                (arrivesLufs > r.targetLufs ? ", already louder than the " + tname + " target (" + num (r.targetLufs) + " LUFS)"
+                                            : "; with this chain's EQ and make-up gain it would land above the " + tname +
                                               " target (" + num (r.targetLufs) + " LUFS) even at Drive 0") +
                 ". Drive can only push up, so Input Trim turns the mix down " + num (-trimDb) + " dB before the whole chain: the master lands on "
                 "the target instead of overshooting it, and every module works at the level it was set for.");
     reason ("max", "Drive", num (drive, true) + " dB", driveWhy);
     reason ("max", "Ceiling", num (chain.limiter.ceilingDbtp, false) + " dBTP",
-            s.target == LoudnessTarget::loud ? "Loud masters peak higher after the MP3/AAC conversion streaming services do, so the ceiling sits lower (Spotify asks for −2 dBTP on masters this loud). This makes clipping in the streamed version much less likely."
-            : s.target == LoudnessTarget::club ? "DJs mostly play MP3/AAC files, which peak higher than the master. −1 dBTP keeps that small without giving up loudness."
-                                               : "Leaves room for the MP3/AAC conversion streaming services do, so the streamed version is very unlikely to clip.");
+            (useRef ? "Set for a master as loud as your reference (" + num (r.targetLufs) + " LUFS). " : std::string()) +
+            (tier == LoudnessTarget::loud ? "Loud masters peak higher after the MP3/AAC conversion streaming services do, so the ceiling sits lower (Spotify asks for −2 dBTP on masters this loud). This makes clipping in the streamed version much less likely."
+            : tier == LoudnessTarget::club ? "DJs mostly play MP3/AAC files, which peak higher than the master. −1 dBTP keeps that small without giving up loudness."
+                                               : "Leaves room for the MP3/AAC conversion streaming services do, so the streamed version is very unlikely to clip."));
     reason ("max", "Release", "120 ms adaptive", "Recovers fast after drum hits and slowly on sustained bass, so the master doesn't pump.");
 
-    if ((budgetLimited || peakLimited) && s.intensity != Intensity::punchy)
+    if ((budgetLimited || peakLimited) && s.intensity != Intensity::punchy && ! useRef)   // (with a reference: see below)
         r.notes.push_back ("LOUDER, IF YOU WANT: this mix has big peaks for its loudness (" + num (plr) + " dB). " +
                            std::string (bassHeavy ? "Controlling the drum peaks in the mix (a clipper or limiter on the drum bus)"
                                                   : "Taming the biggest peaks in the mix (strums, drum hits, vocal peaks: a compressor on those tracks)") +
@@ -1429,18 +1666,71 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                                                                : "In your mix, put a compressor on the peakiest tracks (strums, drums or vocal) taking 2\xE2\x80\x93" "3 dB off.") +
                            "\nSTEP: Run Auto-Master again: it will get closer to your target."
                            "\nSTEP: Or choose Punchy (it allows more peak control) and run Auto-Master again.");
-    if (s.genre == Genre::acoustic && s.target != LoudnessTarget::stream)
+    if (s.genre == Genre::acoustic && ! useRef && tier != LoudnessTarget::stream)
         r.notes.push_back ("HEADS UP: acoustic releases usually sit around \xE2\x88\x92" "14 to \xE2\x88\x92" "11 LUFS. "
                            "Stream \xE2\x88\x92" "14 keeps the most life in the guitars and vocal; streaming services turn louder masters down anyway."
                            "\nNEED: Your choice. Louder is fine if that's the sound you want."
                            "\nSTEP: For a more natural sound, click Stream \xE2\x88\x92" "14 as the Target."
                            "\nSTEP: Run Auto-Master again and compare with MATCH on.");
 
+    // --- Match ref: honest about loudness and the low end; the master measured like the mix -------------
+    if (useRef)
+    {
+        if (ref.lufs > kRefMaxLufs + 0.05)
+            r.notes.push_back ("REFERENCE LOUDNESS: " + refName + " measures " + num (ref.lufs) + " LUFS in its loudest part. That's louder than Polisher "
+                               "will aim for (" + num (kRefMaxLufs) + " LUFS at most): past that, every mix loses its punch and starts to distort, "
+                               "so Auto-Master aims for " + num (kRefMaxLufs) + "."
+                               "\nNEED: No. Streaming services turn masters this loud down anyway, so the extra loudness wouldn't be heard there."
+                               "\nSTEP: Compare with MATCH on: your master should sound as full as the reference at the same level.");
+        else if (ref.lufs < kRefMinLufs - 0.05)
+            r.notes.push_back ("REFERENCE LOUDNESS: " + refName + " measures only " + num (ref.lufs) + " LUFS in its loudest part, quieter than any "
+                               "release Polisher aims for (" + num (kRefMinLufs) + " LUFS at least), so Auto-Master aims for " + num (kRefMinLufs) + ". "
+                               "It may be a turned-down copy, a live recording or a rough mix."
+                               "\nNEED: Only if this isn't the song you meant to load."
+                               "\nSTEP: Load the released version of the song (a WAV, FLAC or high-quality MP3) with Match ref.");
+        if (! r.reachedTarget && out.integratedLufs < r.targetLufs - kTargetToleranceLu && (peakLimited || budgetLimited))
+            r.notes.push_back ("NOT AS LOUD AS THE REFERENCE: " + refName + " measures " + num (ref.lufs) + " LUFS in its loudest part; your master stops at " +
+                               num (out.integratedLufs) + " LUFS. Getting all the way there would " +
+                               (peakLimited && ! budgetLimited ? "shave your drum peaks deeper than " + std::string (rules.name) + " allows"
+                                                               : "squash your mix harder than " + std::string (rules.name) + " allows") +
+                               ", and you'd hear the drums lose their punch. The reference most likely had its drum peaks controlled in the mix."
+                               "\nNEED: No. A master a little quieter than the reference is fine, and streaming services play both at the same level anyway."
+                               "\nSTEP: To get closer, control the drum peaks in your mix: a clipper or limiter on the drum bus taking 2\xE2\x80\x93" "3 dB off the hits." +
+                               std::string (s.intensity == Intensity::punchy ? "" : "\nSTEP: Or choose Punchy (it allows more peak control).") +
+                               "\nSTEP: Run Auto-Master again.");
+        // Low-end shape: the deep sub (30-60 Hz) against the low bass (60-120 Hz). The Low End band moves the
+        // whole sub range; where the 808's energy sits within it comes from the mix (its tuning and sound).
+        const double shape = ref.subVsBassDb - a.subVsBassDb;
+        if (a.hasLowEnd && bassHeavy && std::abs (shape) > 3.0)
+            r.notes.push_back (shape > 0.0
+                ? "LOW END SHAPE: compared with its low bass (60\xE2\x80\x93" "120 Hz), " + refName + " has about " + num (shape) +
+                  " dB more deep sub (30\xE2\x80\x93" "60 Hz) than your mix: its 808 reaches lower. The master EQ lifts the sub range as a whole; "
+                  "where your 808's weight sits comes from the 808 itself."
+                  "\nNEED: Optional. The master works as it is; this is how to get the reference's deep weight."
+                  "\nSTEP: In your mix, check the 808: a lower note, or an 808 sample with a longer sub tail, gives that deep weight."
+                  "\nSTEP: Or boost 40\xE2\x80\x93" "50 Hz by a few dB on the 808 track only."
+                  "\nSTEP: Run Auto-Master again."
+                : "LOW END SHAPE: compared with its low bass (60\xE2\x80\x93" "120 Hz), " + refName + " has about " + num (-shape) +
+                  " dB less deep sub (30\xE2\x80\x93" "60 Hz) than your mix: its low end sits higher and punchier, while yours leans on the deep sub, "
+                  "which headphones show far more than phones and laptops."
+                  "\nNEED: Optional. The master works as it is; this is how to get the reference's punchier low end."
+                  "\nSTEP: On the 808 track, cut 30\xE2\x80\x93" "45 Hz a little, or boost 80\xE2\x80\x93" "100 Hz."
+                  "\nSTEP: Or add a little saturation to the 808 so it reads on small speakers."
+                  "\nSTEP: Run Auto-Master again.");
+        r.masterAnalysis = analyseMix (renderMaster (shaped, rest));   // rest is at the final Drive and clip level
+    }
+
     // --- Summary -------------------------------------------------------------------------------------
     char head[512];
     std::snprintf (head, sizeof head, "Listened to %.0f s of your mix. ", a.seconds);
-    r.summary = head + std::string ("Your mix measured ") + num (arrivesLufs) + " LUFS with peaks at " +
-                num (arrivesPeak) + " dBTP. Settings: " + genre + ", " + rules.name + ", " + targetName (s.target) +
+    if (useRef)
+        r.summary = std::string (head) + "Matched to your reference " + refName + " (its loudest part measures " + num (ref.lufs) +
+                    " LUFS) instead of typical " + genre + " masters: tone, loudness, stereo width and low end aim for it, part of the way. "
+                    "The genre still sets what a reference can't show: compression, saturation, clipping and punch. ";
+    else
+        r.summary = head;
+    r.summary += std::string ("Your mix measured ") + num (arrivesLufs) + " LUFS with peaks at " +
+                num (arrivesPeak) + " dBTP. Settings: " + genre + ", " + rules.name + ", " + tname +
                 (trimDb < 0.0 ? ". To land on the target, Input Trim turns it down " + num (-trimDb) + " dB first" : std::string()) +
                 ". The master now measures " + num (out.integratedLufs) + " LUFS with true peak " + num (out.truePeakDbtp) +
                 " dBTP. The full song will read about 1 LU lower than this loud section, which is normal.";

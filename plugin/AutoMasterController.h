@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "polisher/AutoMaster.h"
+#include "ReferenceTrack.h"
 
 #include <atomic>
 #include <memory>
@@ -28,7 +29,7 @@ public:
     static constexpr double kMaxSampleRate = 192000.0;
     enum State { idle = 0, listening = 1, analysing = 2 };
 
-    explicit AutoMasterController (juce::AudioProcessorValueTreeState& state);
+    AutoMasterController (juce::AudioProcessorValueTreeState& state, const ReferenceTrack& reference);
     ~AutoMasterController() override;
 
     /** Sets the capture length for the sample rate. A capture in progress starts over if the rate
@@ -92,6 +93,7 @@ private:
     void setReport (const juce::String& json);
 
     juce::AudioProcessorValueTreeState& state;
+    const ReferenceTrack& reference;              // Match ref: when loaded, Auto-Master aims for it
 
     std::vector<float> captureL, captureR;       // sized once, for kMaxSampleRate
     std::atomic<int> capacity { 0 };

@@ -84,7 +84,7 @@ Auto-Master listens to 12 seconds of your song, then sets every module except St
 | --- | --- | --- |
 | Genre | Trap / Hip-Hop, R&B, Pop, EDM, Rock, Acoustic | The tone balance it aims for, the saturation style and the usual vocal level |
 | Intensity | Gentle, Balanced, Punchy | How far it may move the EQ and how hard it may squash peaks |
-| Target | Stream −14, Loud −9, Club −7 | The loudness it aims for, in LUFS |
+| Target | Stream −14, Loud −9, Club −7, or **Match ref** | The loudness it aims for, in LUFS (with Match ref: the reference song's) |
 
 | Intensity | Largest EQ move | Peak control allowed | Character |
 | --- | --- | --- | --- |
@@ -112,6 +112,32 @@ Auto-Master sets the Tonal EQ bands together. Neighbouring bands overlap, so it 
 - If the audio doesn't sound like a full mix (for example, Polisher is on one track), Auto-Master changes nothing and tells you to move it to Stereo Out.
 
 Every warning in the report says **Do I need to fix it?** and gives numbered steps. Auto-Master is a starting point: your ears and MATCH make the final call.
+
+### Match ref: master toward a song you love
+
+Instead of a genre's typical sound, Auto-Master can aim for a **reference**: a released song you want your master to sound like.
+
+1. Pick a commercial song with the sound you want (for trap: a big trap single). Use a good file of the released version: WAV, AIFF, FLAC or MP3.
+2. Click **Match ref** (at the end of the TARGET row) and choose the file. Polisher reads the whole song (up to 15 minutes) and measures its **loudest 30 seconds**, usually the chorus or drop. That takes a few seconds; your music keeps playing.
+3. The pill now shows the song's name, and the spectrum shows its tone as a **dashed yellow line** (moved to the loudness of what's playing, so you compare tone, not volume).
+4. Play the **loudest part of your own song** and click **Auto-Master**, as usual.
+
+What it takes from the reference:
+
+| From the reference | What Auto-Master does with it |
+| --- | --- |
+| Tone (the 7 EQ ranges) | Moves your tone toward it, part of the way, within the same Intensity limits as for a genre |
+| Loudness of its loudest part | Aims for it, kept between −16 and −6 LUFS. If getting there would crush your drums, it stops earlier and says so |
+| Stereo width of the mids and highs | Widens or narrows them toward it with the Stereo Imager (the lows are never widened) |
+| Low end | Mono Below: if the reference keeps stereo in its bass, only the deep sub below 60 Hz is made mono. If its 808 reaches lower or sits higher than yours, the report tells you how to fix that in the mix |
+
+The **genre still decides** what a reference can't show: how much compression, saturation, clipping and kick punch suit the style. The ceiling follows the reference's loudness the way a target would: −1.5 dBTP for references between about −12 and −8 LUFS (like Loud −9), −1 dBTP otherwise.
+
+The report starts with **Matched to your reference "…"**, explains every move against it, and shows a table: **REF / MIX / MASTER** for loudness, deep sub vs bass, bass stereo and width, and the tone difference from the reference in each range. Green means the master is close to the reference, red means it is still far off. Auto-Master closes part of each gap **on purpose**: copying a reference exactly would fight your own mix.
+
+- Only the reference's measurements and its name are saved with your project, not the song. Moving or deleting the file later changes nothing.
+- While a reference is loaded the target pills step back; click the **×** on the reference pill to clear it and go back to the genre and target.
+- Clicking the pill again loads a different song.
 
 ## Every module and its controls
 
@@ -347,6 +373,8 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Auto-Master says "This doesn't sound like a full mix" | Polisher is on one track, not Stereo Out | Remove it from the track, load it in Stereo Out's last insert slot (F3 > Stereo Out), play the chorus and run Auto-Master again |
 | Auto-Master doesn't finish or says it heard too little | The song stopped or was mostly silence | Keep the loudest part playing until it's done (it needs 12 s of music, at least 3 s) |
 | Master lands quieter than the target | Auto-Master protected the drums within the intensity's limit | Fine as it is. To go louder, choose Punchy, or tame the drum peaks in the mix |
+| Master isn't as loud as the reference | The reference had its drum peaks controlled in the mix; reaching it would crush yours | Fine as it is (streaming plays both at the same level). To get closer: a clipper on the drum bus, or Punchy |
+| Match ref says it can't read the file | Not WAV, AIFF, FLAC or MP3, or a damaged file | Export or convert the song to WAV and load that |
 | B sounds better but you're not sure why | B is louder | Turn on MATCH and play B for 10 s before comparing |
 | Kick or snare sounds weaker than the mix | Too much limiting | Lower Drive 1–2 dB, or turn on the Soft Clipper so it takes some peaks |
 | Learn says Diminishing returns | Drive past the point where it adds loudness | Lower Drive until Short-term starts to drop, then back up 0.5 dB |
@@ -363,6 +391,8 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 **Which target should I pick?** Stream −14 for the most natural sound on Spotify and YouTube. Loud −9 is common for trap and hip-hop. Club −7 is for DJ and club playback, not streaming.
 
 **Do I have to use Auto-Master?** No. Every module works by hand. Auto-Master is a fast, explained starting point.
+
+**Should I use Match ref or a genre?** A genre is a safe average. A reference is better when you know exactly whose sound you want. Pick a reference in the same style as your song: a trap reference for a trap song.
 
 **Will Auto-Master change my Stem EQ?** Never. It may suggest a Vocals move with an APPLY button; you decide.
 
