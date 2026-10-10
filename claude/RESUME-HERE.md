@@ -11,7 +11,14 @@ Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Clau
 1. Unlimiter header button fixed: it toggled the GLOBAL bypass (A) instead of ulOn. app.js now has one table
    HEAD_POWER of every module's own switch (the Maximizer's button stays the global bypass); ulOn host changes
    refresh it. tests/ui/ui_smoke.mjs (Playwright, mock.js) checks every module's switch flips only its param.
-2. Stem EQ model: see "Stem EQ, 2026-10-10" below.
+2. Stem EQ model v3 (v0.14.1): all of MUSDB (100 train / 50 held out, tools/stem/fetch_musdb.py), per-stem
+   augmentation, synthetic trap 808s (synth808.py: standard + distorted/octave + clean sub) on the bass stem,
+   EMA. On 40 untouched songs: plain -14.25 (v2 -14.28, static -13.88: v2 ALREADY beat static there; the old
+   "= static" was 6 songs); with 808s v3 beats v2 by 3.3-4.8 dB on the Bass knob and beats static on every
+   set (v2 lost to static whenever an 808 played). Full table + recipe: tools/stem/README.md "Model v3".
+   The user's 13 songs were NOT available (scratchpad gone): v3 never saw them. ASK the user to try Stem EQ
+   Bass on a trap song with 808s (v3 vs v2 = v0.14.0 build). Vocal readings match v2 (-0.07 dB), so the
+   genre vocal norms stay. Ideas not tried: own songs back in (teacher-labelled), bigger model.
 3. Release polish: README at v0.14 + requirements + validation section; COMPANY_WEBSITE (example.com) removed;
    basic fallback editor shows a WebView2 notice + GET WEBVIEW2 button (Windows); manual install note.
 4. Validation: tests/test_validation.cpp + tests/ReferenceTruePeak.h (independent 16x meter: Maximizer holds

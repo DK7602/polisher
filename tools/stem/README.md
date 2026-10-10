@@ -36,3 +36,26 @@ Setup (scratch venv): `pip install torch torchaudio demucs soundfile librosa lam
    checks dsp/src/StemEQ.cpp against PyTorch frame by frame (shares within 1e-5).
 
 Keep `common.py` and the C++ in lock-step: band layout, window, frame timing, features.
+
+## Model v3 (2026-10-10, shipped in v0.14.1)
+
+Same network as v2 (conv + 1-layer GRU, 128 hidden, 247k params, 64-band input; the C++ engine is
+unchanged), new training: all of MUSDB18-HQ (100 songs; the user's own songs were not available this
+session), AUG=1, SYN808=0.35 with SYN_BANK=synth_808_mix (standard + distorted/octave + clean sub 808s),
+EMA=0.999, 12k steps, checkpoint picked by the move error on the first 10 held-out songs
+(`AUG=1 SYN808=0.35 SYN_BANK=synth_808_mix EMA=0.999 VAL_SONGS=10 python train.py 12000`).
+
+Move error on the other 40 held-out MUSDB songs (dB, lower is better; all / Bass +/-6 for the 808 sets):
+
+| test | v2 | v3 | static (best fixed EQ) | oracle |
+| --- | --- | --- | --- | --- |
+| plain songs | -14.28 | -14.25 | -13.88 | -18.23 |
+| + standard 808s | -18.43 / -14.81 | -20.41 / -18.12 | -19.89 / -17.39 | -23.26 / -20.20 |
+| + distorted 808s | -17.90 / -13.94 | -20.78 / -17.71 | -20.26 / -16.86 | -23.10 / -19.55 |
+| + clean sub 808s | -15.38 / -11.27 | -17.96 / -16.06 | -17.55 / -15.58 | -21.37 / -18.96 |
+
+v3 beats static on 80 % of the plain songs (v2: 70 %) and on every 808 set; v2 lost to static whenever an
+808 was present. Caveat: the 808 sets are synthetic (styles training used, other clips and seeds).
+Vocal level readings: v3 - v2 = -0.07 dB mean (Auto-Master's genre vocal norms stay valid), 0.80 dB from
+the true level vs v2's 0.94. Tried and not kept: 9 s excerpts (slower to learn), blending the output with
+its own running average (worse), share-loss weighting by band energy (no gain).

@@ -1,5 +1,5 @@
 """Export a trained StemNet to C++ and write a reference for the C++ test.
-  python export.py [models/stemnet_v2.pt]
+  python export.py [models/stemnet_v3.pt]
 Writes dsp/src/StemNetWeights.h (the weights as float arrays) and tests/StemNetReference.h (shares
 PyTorch computes for a test signal that the C++ test can regenerate exactly: integer-hashed noise
 plus two tones), so dsp/src/StemEQ.cpp can be checked frame by frame."""
@@ -32,7 +32,7 @@ def test_signal(sr, seconds):
 
 
 if __name__ == '__main__':
-    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), 'models', 'stemnet_v2.pt')
+    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), 'models', 'stemnet_v3.pt')
     net = StemNet.load(path)
     assert not net.gru.bidirectional and net.gru.num_layers == 1, 'the plug-in runs a causal 1-layer GRU'
     sd = {k: v.detach().numpy() for k, v in net.state_dict().items()}
