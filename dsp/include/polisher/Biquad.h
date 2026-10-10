@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 namespace polisher {
 
 /** Double-precision biquad, transposed direct form II. Coefficients are normalised (a0 == 1). */
@@ -18,6 +20,15 @@ struct Biquad
     }
 
     void reset() noexcept { z1 = z2 = 0.0; }
+
+    /** Power gain |H|^2 at a normalised angular frequency w = 2 pi f / sampleRate. */
+    double powerGain (double w) const noexcept
+    {
+        const double c1 = std::cos (w), s1 = std::sin (w), c2 = std::cos (2.0 * w), s2 = std::sin (2.0 * w);
+        const double nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2);
+        const double dr = 1.0 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
+        return (nr * nr + ni * ni) / (dr * dr + di * di);
+    }
 
     inline double process (double x) noexcept
     {

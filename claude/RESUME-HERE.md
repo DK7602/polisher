@@ -69,6 +69,24 @@ Auto-Master: Trap and R&B -> Bass only (falls back to Full when the part heard h
 harmonics targets, lands them within 0.2 dB (test +-2). UI: Focus seg cell, Learn + TRY THIS, chain readout
 "· bass". NOT YET HEARD by the user: ask for a phone-speaker A/B (Bass only, Tube, Drive +9, MATCH).
 
+## Spectrum genre line + loudness history (after v0.15.0, worktree agent)
+Engine: polisher::BalanceCurve (AutoMaster.h) turns 7 band levels into a smooth monotone cubic (pchip through
+the band centres, end slopes carried on, 24 dB/oct below 20 Hz) whose nodes are fitted so each band, measured
+like analyseMix (mean power per Hz + tilt at the centre), reads its norm exactly (so at the centres it can sit
+0.5-5 dB off the raw numbers where the balance is steep: Rock's Low End). balanceDisplayCurve / genreDisplayCurve:
+the display's EXPECTED reading for a steady master with that balance in both channels at `lufs` (K-weighting
+integrated analytically, KWeighting::powerGain / Biquad::powerGain added; Hann kernel +/- 8 bins, same bins
+and +/- 1/12 oct as the display). Checked against shaped noise through spectrumDisplayCurve: live reads
++0.2..+1.2 dB above (the display's fast-rise smoothing), mono-sum display means wide highs read ~1 dB under.
+~5 ms per call. Editor native fn getGenreCurve(genre) -> JSON; UI draws it dotted (mint) shifted by
+(short-term - lufs) like the reference; hidden by default while a reference is loaded (legend click toggles,
+remembered per case in localStorage). Loudness HISTORY view (toggle at the legend's right): 0.5 s points from
+the meter frames, 2 min of PLAYED time, master/mix short-term, Maximizer GR from the top (orange past 6 dB),
+target line; pauses on the frame's new "playing" flag (Meters::transport set in processBlock; editor also
+requires sound within 1 s, standalone = sound present); 3 s settle after play; RESET clears it. Learn: EQ
+"Dotted line" item; HISTORY opens its own Learn page (reading + HEAVY LIMITING / SECTIONS FLATTENED tips).
+Also fixed: the "Reference" legend entry never hid (CSS display:flex beat [hidden]). NOT YET SEEN by the user.
+
 ## 2026-10-10 session (user asked: do all five of the audit follow-ups, one after the other, overnight)
 1. Unlimiter header button fixed: it toggled the GLOBAL bypass (A) instead of ulOn. app.js now has one table
    HEAD_POWER of every module's own switch (the Maximizer's button stays the global bypass); ulOn host changes

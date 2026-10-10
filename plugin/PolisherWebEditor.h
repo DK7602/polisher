@@ -16,7 +16,8 @@
     C++ -> JS: parameters through JUCE web relays, plus a "polisherMeters" event at 30 Hz with
                loudness readings and two spectra (mix and master).
     JS -> C++: parameter changes through the relays, and native functions (meter reset, Auto-Master,
-               Match ref: loadReference / clearReference / getReference). */
+               Match ref: loadReference / clearReference / getReference, and getGenreCurve for the
+               spectrum's dotted genre line). */
 class PolisherWebEditor final : public juce::AudioProcessorEditor,
                                 private juce::Timer
 {
@@ -109,6 +110,7 @@ private:
     double satResHold = 0.0, satSigHold = 0.0;
     std::array<double, polisher::kStems> stemHold {};
     float rtHold = 0.0f, rtHzHold = 0.0f, tsHold = 0.0f, tsHzHold = 0.0f, ulHold = 0.0f;
+    juce::uint32 lastSoundMs = 0;   // when the output last carried sound (the loudness history's "playing")
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherWebEditor)
 };

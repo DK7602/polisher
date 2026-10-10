@@ -130,7 +130,7 @@ const ref = () => page.evaluate(() => ({
   red: document.getElementById('btn-ref').classList.contains('pill-red'),
   clearShown: !document.getElementById('btn-ref-clear').hidden,
   curve: (document.getElementById('sp-ref').getAttribute('d') || '').length,
-  legend: !document.getElementById('legend-ref').hidden,
+  legend: getComputedStyle(document.getElementById('legend-ref')).display !== 'none',   // what you see, not just the attribute
   litTargets: [...document.querySelectorAll('#row-target button[data-i]')].filter((b) => b.classList.contains('pill-red')).length,
   learn: document.getElementById('learn-body').textContent,
 }));
@@ -261,6 +261,92 @@ await page.evaluate(() => { window.__mockMonitor.mono = false; });
 await page.waitForTimeout(300);
 m = await mon();
 check(!m.monoOn && !m.banner, 'the UI follows the plug-in when it switches a check off');
+
+// Genre target line (dotted): the plug-in computes it (mock: getGenreCurve) for the chosen genre. A
+// reference is loaded here, so it starts hidden (Auto-Master aims for the reference); its legend entry
+// shows it, it follows the genre selector, and without a reference it shows by default.
+const genre = () => page.evaluate(() => {
+  const d = document.getElementById('sp-genre').getAttribute('d') || '';
+  const ys = d.split(/[ML]/).filter(Boolean).map((p) => Number(p.split(',')[1]));
+  const btn = document.getElementById('legend-genre');
+  return { d, points: ys.length, inside: ys.filter((y) => y > 0.5 && y < 199.5).length, legend: btn.textContent.trim(),
+           shown: getComputedStyle(btn).display !== 'none', pressed: btn.getAttribute('aria-pressed'),
+           refLoaded: !document.getElementById('btn-ref-clear').hidden };
+});
+let gc = await genre();
+check(gc.refLoaded && gc.shown && gc.legend === 'Trap target', `genre line has a legend entry ("${gc.legend}")`);
+check(gc.pressed === 'false' && gc.d === '', 'with a reference loaded the genre line starts hidden (the reference is what Auto-Master aims for)');
+await page.click('#legend-genre');
+await page.waitForTimeout(200);
+gc = await genre();
+check(gc.pressed === 'true' && gc.points === 96 && gc.inside > 60, `clicking its legend entry draws the genre line (${gc.points} points, ${gc.inside} inside the plot)`);
+const trapD = gc.d;
+await page.click('#genre-next');
+await page.waitForTimeout(300);
+gc = await genre();
+check(gc.legend === 'R&B target' && gc.points === 96 && gc.d !== trapD, `the line and its legend follow the genre ("${gc.legend}")`);
+await page.click('#genre-prev');
+await page.waitForTimeout(300);
+check((await genre()).legend === 'Trap target', 'and back to Trap');
+await pick('Tonal EQ');
+await page.waitForTimeout(200);
+const eqLearn = await page.evaluate(() => document.getElementById('learn-body').textContent);
+check(/Dotted line · Trap target/.test(eqLearn) && /above the dotted line/.test(eqLearn), 'EQ Learn explains how to read the dotted line');
+// Everything under the spectrum fits on one line, even with the EQ curve's entry and the longest genre name.
+for (let i = 0; i < 5; i++) await page.click('#genre-next');   // -> Acoustic
+await page.waitForTimeout(300);
+const fit = await page.evaluate(() => {
+  const lg = document.querySelector('.legend'), t = document.querySelector('.view-toggle').getBoundingClientRect();
+  const screen = document.getElementById('spectrum-screen').getBoundingClientRect();
+  return { over: lg.scrollWidth - lg.clientWidth, inside: t.right <= screen.right, name: document.getElementById('legend-genre-name').textContent,
+           oneLine: lg.getBoundingClientRect().height < 26 };
+});
+check(fit.over <= 0 && fit.inside && fit.oneLine, `legend fits on one line with "${fit.name}" and the EQ entry (overflow ${fit.over} px)`);
+await page.click('#genre-next');   // -> Trap again
+await page.click('#btn-ref-clear');
+await page.waitForTimeout(400);
+gc = await genre();
+check(!gc.refLoaded && gc.pressed === 'true' && gc.points === 96, 'without a reference the genre line shows by default');
+
+// Loudness history: the same screen switches to the master's short-term loudness over time, with the
+// Maximizer's gain reduction and the target. The mock has been "playing" all along, so it has data.
+const hv = () => page.evaluate(() => {
+  const pts = (id) => (document.getElementById(id).getAttribute('d') || '').split(/[ML]/).filter(Boolean).length;
+  const vis = (id) => getComputedStyle(document.getElementById(id)).display !== 'none';
+  return { on: document.getElementById('spectrum-screen').classList.contains('view-history'),
+           master: pts('hist-master'), mix: pts('hist-in'), gr: (document.getElementById('hist-gr').getAttribute('d') || '').length,
+           gaps: document.querySelectorAll('#hist-gaps line').length, specVisible: vis('spec-layer'), histVisible: vis('hist-layer'),
+           empty: !document.getElementById('hist-empty').hidden, stats: document.getElementById('hist-stats').textContent,
+           times: document.querySelectorAll('#time-labels span').length, targetY: Number(document.getElementById('hist-target').getAttribute('y1')),
+           target: document.getElementById('hist-target-label').textContent, learn: document.getElementById('learn-body').textContent,
+           pressed: document.getElementById('view-history').getAttribute('aria-pressed') };
+});
+await page.click('#view-history');
+await page.waitForTimeout(700);
+let h = await hv();
+check(h.on && h.pressed === 'true' && !h.specVisible && h.histVisible, 'HISTORY switches the spectrum screen to the loudness history');
+check(h.master > 20 && h.mix > 20 && h.gr > 50 && !h.empty, `history draws the master, the mix and the Maximizer GR from the meter frames (${h.master} points)`);
+check(h.times === 5 && /^LOUD .* LUFS · GR UP TO/.test(h.stats), `history has its time axis and readout ("${h.stats}")`);
+check(h.target === 'TARGET −9.0' && Math.abs(h.targetY - ((-4 - -9) / 24) * 200) < 0.6, `target line at the Loud −9 target ("${h.target}", y ${h.targetY})`);
+check(/LOUDNESS HISTORY/.test(h.learn) && /Blue shading/.test(h.learn) && /turns orange/.test(h.learn), 'Learn explains how to read the history');
+// Stopping the transport pauses it (no new points); playing again continues after a gap.
+await page.evaluate(() => window.__polisherMock.setPlaying(false));
+await page.waitForTimeout(400);
+const paused = (await hv()).master;
+await page.waitForTimeout(1500);
+check((await hv()).master === paused, `stopping playback pauses the history (${paused} points)`);
+await page.evaluate(() => window.__polisherMock.setPlaying(true));
+await page.waitForTimeout(4600);
+h = await hv();
+check(h.master > paused && h.gaps === 1, `playing again adds points after a gap (${h.master} points, ${h.gaps} gap)`);
+await page.click('#btn-reset');
+await page.waitForTimeout(300);
+h = await hv();
+check(h.master === 0 && h.empty, 'RESET clears the history');
+await page.click('#view-spectrum');
+await page.waitForTimeout(300);
+h = await hv();
+check(!h.on && h.specVisible && !h.histVisible, 'SPECTRUM switches back');
 
 check(errors.length === 0, `no script errors (${errors.join(' | ')})`);
 await browser.close();

@@ -96,6 +96,7 @@ public:
         std::atomic<int> listenPlaying { 0 };              // listen mode being heard (polisher::listen::Mode; 0 while it prepares)
         std::atomic<float> listenGainDb { 0.0f };          // gain it is played with (dB, + = turned up to be heard)
         std::atomic<float> listenUnderDb { -100.0f };      // how far it sits under the master, as it is in the master (dB)
+        std::atomic<int> transport { -1 };                 // host transport: 1 playing, 0 stopped, -1 the host doesn't say (standalone)
     };
     Meters meters;
 

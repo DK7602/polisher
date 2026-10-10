@@ -78,6 +78,19 @@
   window.__mockMonitor = mon;
   const monGain = [0, 18, 12, 20, 9, 0, 0, 0, 0, 15, 15, 15, 15];
   const monUnder = [-100, -33, -27, -35, -24, -6, -9, -14, -20, -30, -30, -30, -30];
+  // Simulated getGenreCurve (the plug-in's engine computes the real one from Auto-Master's genre norms):
+  // a smooth made-up tilted balance at -9 LUFS, with each genre's sub and air a little different.
+  const mockGenre = (g) => Array.from({ length: 96 }, (_, i) => {
+    const f = 20 * Math.pow(1000, i / 95), o = Math.log2(f / 1000);
+    const sub = [0, -1.5, -3.5, -0.5, -5.5, -7.5][g], air = [0, 0, 0.5, 1, -0.5, -1][g];
+    const hump = 2.6 * Math.exp(-Math.pow(Math.log2(f / 105), 2) / 1.2);
+    const low = f < 60 ? -(6 - sub * 0.6) * Math.log2(60 / f) + sub : 0;
+    const top = f > 3000 ? -(2.2 - air * 0.3) * Math.pow(Math.log2(f / 3000), 1.4) : 0;
+    return +(-30.5 + hump + low + top - 0.1 * o).toFixed(1);
+  });
+  // The host's transport: the smoke test (and you, in the console) can stop it to see the history pause.
+  const transport = { playing: true };
+  window.__polisherMock = { setPlaying: (on) => { transport.playing = !!on; } };
   // Simulated Auto-Master (listening runs 3x faster than the real 12 s).
   const am = { state: 0, progress: 0, undo: false, version: 0, report: "", snapshot: null };
   const setSlider = (name, v) => { sliders[name].value = v; send("__juce__slider" + name, { eventType: "valueChanged", value: v }); };
@@ -136,7 +149,7 @@
     initialisationData: {
       __juce__platform: [],
       __juce__functions: ["resetMeter", "startAutoMaster", "cancelAutoMaster", "undoAutoMaster", "getAutoMasterReport",
-                          "loadReference", "clearReference", "getReference", "setMonitor"],
+                          "loadReference", "clearReference", "getReference", "setMonitor", "getGenreCurve"],
       __juce__registeredGlobalEventIds: [],
       __juce__sliders: Object.keys(sliders),
       __juce__toggles: Object.keys(toggles),
@@ -173,6 +186,10 @@
           mon.mono = !!mono; mon.phone = !!phone;
         }
         if (payload.name === "getReference") result = JSON.stringify({ state: ref.state, message: ref.message, profile: ref.profile || undefined });
+        if (payload.name === "getGenreCurve") {
+          const g = Math.max(0, Math.min(5, Number(payload.params && payload.params[0]) || 0));
+          result = JSON.stringify({ genre: g, name: combos.amGenre.choices[g], lufs: -9, sr: 48000, displayDb: mockGenre(g) });
+        }
         if (payload.name === "clearReference") { ref.profile = null; ref.state = 0; ref.message = ""; ref.version++; }
         if (payload.name === "loadReference") {   // no file dialog in a browser: "pick" the next mock song
           ref.state = 1; ref.version++;
@@ -206,9 +223,11 @@
     const bypass = toggles.bypass;
     const drive = bypass ? 0 : sliders.drive.value;
     const beat = Math.pow(Math.max(0, Math.sin(t * Math.PI * 2 * 1.2)), 8);   // kick every ~0.8 s
-    const gr = bypass ? 0 : -Math.max(0, drive - 2.5) * (0.35 + 0.65 * beat);
-    const base = -16.5 + 1.5 * Math.sin(t / 6);
-    const loud = base + 11 * (1 - Math.exp(-drive / 11));   // diminishing returns, like a real limiter
+    const chorus = Math.floor(t / 12) % 2;                                     // 12 s verse, 12 s chorus, ...
+    const gr = bypass ? 0 : -Math.max(0, drive - 2.5 + 2 * chorus) * (0.35 + 0.65 * beat);
+    const base = -18 + 3 * chorus + 0.8 * Math.sin(t / 3);
+    // Diminishing returns, like a real limiter: the louder chorus is held down a little more than the verse.
+    const loud = base + 11 * (1 - Math.exp(-drive / 11)) - 1.2 * chorus * Math.min(1, drive / 6);
     integratedAcc.push(loud); if (integratedAcc.length > 3000) integratedAcc.shift();
     const mix = [], master = [];
     for (let i = 0; i < 96; i++) {
@@ -226,7 +245,7 @@
       peakL: +(-7 + drive * 0.5 + 5 * beat).toFixed(1),
       peakR: +(-7.5 + drive * 0.5 + 5 * beat).toFixed(1),
       gr: +(toggles.clipOn ? gr * 0.55 : gr).toFixed(1),
-      inShort: +base.toFixed(1), inIntegrated: -16.5, sr: 48000,
+      inShort: +base.toFixed(1), inIntegrated: -16.5, sr: 48000, playing: transport.playing,
       tame: toggles.bassOn && sliders.bassTame.value > 0 ? +(-sliders.bassTame.value / 100 * 5 * beat).toFixed(1) : 0,
       punch: toggles.bassOn && sliders.bassPunch.value > 0 ? +(sliders.bassPunch.value / 100 * 4 * beat).toFixed(1) : 0,
       bassWidth: 42, corr: +(0.55 - (sliders.imgMid.value + sliders.imgHigh.value - 200) / 400).toFixed(2), matchDb: +(-(11 * (1 - Math.exp(-drive / 11)))).toFixed(1),
