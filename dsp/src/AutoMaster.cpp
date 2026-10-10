@@ -629,12 +629,16 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
 {
     const AudioClip input = withGain (raw, trimDb);
     wantTrimDb = 0.0;
-    // Stem EQ is the user's call: Auto-Master keeps their moves and hears the mix with them (Stem
-    // EQ and Tonal EQ only scale frequencies, so applying it first is close to the plug-in's order).
+    // Stem EQ is the user's call: Auto-Master keeps their moves and hears the mix with them, except
+    // for the tone. In the plug-in the Tonal EQ comes before Stem EQ, so it is set for the mix as it
+    // reaches it: without the user's Stem moves (Bass +12 must not read as "20 dB more sub than
+    // typical" and be EQ'd back down). Everything after Stem EQ is decided on the mix with them.
     const AudioClip heard = renderStemEq (input, s.stem);
+    const bool stemMoved = ! StemEQ::isNeutral (s.stem);
     AutoMasterResult r;
     r.targetLufs = targetLufs (s.target);
     r.analysis = analyseMix (heard);
+    if (stemMoved && r.analysis.usable) r.analysis.bandDb = analyseMix (input).bandDb;
     const auto& a = r.analysis;
     // The mix as it arrives, before the Input Trim: what the report quotes.
     const double arrivesLufs = a.loudness.integratedLufs - trimDb, arrivesPeak = a.loudness.truePeakDbtp - trimDb;
@@ -713,9 +717,13 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         }
     }
     // Plug-in order: Unlimiter first, then the user's Stem EQ (the Unlimiter is not linear, so the order matters).
-    const AudioClip clip = Unlimiter::isNeutral (chain.unlimiter) ? heard : renderStemEq (renderUnlimiter (input, chain.unlimiter), s.stem);
+    const AudioClip restored = Unlimiter::isNeutral (chain.unlimiter) ? input : renderUnlimiter (input, chain.unlimiter);
+    const AudioClip clip = Unlimiter::isNeutral (chain.unlimiter) ? heard : renderStemEq (restored, s.stem);
     if (! Unlimiter::isNeutral (chain.unlimiter))
+    {
         r.analysis = analyseMix (clip);   // the rest of the chain is set for the restored mix
+        if (stemMoved) r.analysis.bandDb = analyseMix (restored).bandDb;   // tone: before Stem EQ, as above
+    }
 
     // 808-led genres, where the low end is programmed rather than played.
     const bool bassHeavy = s.genre == Genre::trapHipHop || s.genre == Genre::rnb || s.genre == Genre::edm || s.genre == Genre::pop;
@@ -853,23 +861,28 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
 
         auto& rt = chain.resonance;
         rt = ResonanceParams {};
+        // fullCut is weighted by loudness (A-weighting), so an 808 carrying most of the energy can't
+        // hide a ring the ear picks out at once. On that scale a 3 kHz ring reads ~7x and a 300 Hz
+        // ring ~1.5x what plain power gave; 0.3 dB keeps the boxiness decisions where the old 0.15
+        // dB had them and catches harsh rings a little earlier (and now also over an 808).
         const double fullCut = -st.resonanceCutDb;
-        if (fullCut < 0.15)
+        if (fullCut < 0.3)
             reason ("rt", "Amount", "0 %", "I hardly hear any tones ringing out of your mix (at full strength the tamer would cut only " +
-                    num (fullCut, false, 2) + " dB on average), so Resonance Tamer stays off.");
+                    num (fullCut, false, 2) + " dB on average, weighted by how loud each range sounds), so Resonance Tamer stays off.");
         else
         {
-            const double aim = gentle ? 0.3 : punchy ? 0.8 : 0.5;   // average trim, dB
+            const double aim = gentle ? 0.6 : punchy ? 1.6 : 1.0;   // average trim, dB (loudness-weighted)
             // Mild ringing gets a mild Amount: capped at 60 % rather than chasing the average trim.
             rt.amount = std::clamp (std::round (100.0 * aim / fullCut / 5.0) * 5.0, 15.0, 60.0);
             const char* where = st.boxinessShare > 0.65 ? "the low mids (boxiness)" : st.harshnessShare > 0.65 ? "the upper mids (harshness)" : "several places across the range";
             reason ("rt", "Amount", pct (rt.amount), "Some tones in your mix ring out above the sound around them, mostly in " + std::string (where) +
-                    ". At full strength the tamer would cut " + num (fullCut) + " dB on average; " + pct (rt.amount) + " trims them by about " +
+                    ". At full strength the tamer would cut " + num (fullCut) + " dB on average (weighted by how loud each range sounds); " + pct (rt.amount) + " trims them by about " +
                     num (std::min (aim, fullCut * rt.amount / 100.0)) + " dB, enough to clean them up without dulling the sound.");
             if (st.boxinessShare > 0.65)
             {
                 rt.focus = ResonanceFocus::boxiness;
-                reason ("rt", "Focus", "Boxiness", "Most of the ringing sits between 150 and 800 Hz, so the tamer only looks there and leaves vocals and hats alone.");
+                reason ("rt", "Focus", "Boxiness", "Most of the ringing sits between 150 and 800 Hz, so the tamer only looks there and leaves the highs (hats, S's, vocal presence) alone. "
+                        "The body of a vocal lives in that range too, so listen to the vocal with MATCH: if it thins out, lower Amount.");
             }
             else if (st.harshnessShare > 0.65)
             {
@@ -892,8 +905,8 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
             ts.speed = swing > 1.2 ? 1 : 0;
             reason ("ts", "Amount", pct (ts.amount), "Your tone shifts from moment to moment: at full strength Tone Steady would move " + num (swing) +
                     " dB on average. " + pct (ts.amount) + " keeps the parts consistent while they keep their own character. Range stays at 3 dB (boosts at most 1.5 dB).");
-            reason ("ts", "Speed", ts.speed == 1 ? "Medium" : "Slow", ts.speed == 1 ? "The shifts come phrase by phrase, so Medium follows them."
-                                                                                    : "The shifts are gradual, so Slow follows whole sections, the gentlest setting.");
+            reason ("ts", "Speed", ts.speed == 1 ? "Medium" : "Slow", ts.speed == 1 ? "The shifts are large (over 1.2 dB on average at full strength), so Medium, which reacts within about half a second, catches them before they're heard."
+                                                                                    : "The shifts are small, so Slow, which reacts over about a second, is enough and is the gentlest setting.");
         }
     }
 

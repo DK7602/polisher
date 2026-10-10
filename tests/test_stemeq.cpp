@@ -52,9 +52,56 @@ TEST_CASE ("Stem EQ latency is NFFT + 3 hops at every rate", "[stemeq]")
 {
     CHECK (StemEQ::latencyFor (44100.0) == 1792);
     CHECK (StemEQ::latencyFor (48000.0) == 1792);
+    CHECK (StemEQ::latencyFor (88200.0) == 3584);
     CHECK (StemEQ::latencyFor (96000.0) == 3584);
+    CHECK (StemEQ::latencyFor (176400.0) == 7168);
+    CHECK (StemEQ::latencyFor (192000.0) == 7168);
     StemEQ s; s.prepare (48000.0, 2);
     CHECK (s.latencySamples() == 1792);
+    // About 40 ms at every rate (the model sees the same Hz per bin and frames per second).
+    for (double sr : { 44100.0, 48000.0, 88200.0, 96000.0, 176400.0, 192000.0 })
+    {
+        const double ms = 1000.0 * StemEQ::latencyFor (sr) / sr;
+        CHECK ((ms > 36.0 && ms < 42.0));
+    }
+}
+
+TEST_CASE ("Stem EQ Bass +6 lifts an 808 as much at 176.4 / 192 kHz as at 44.1 kHz", "[stemeq]")
+{
+    // At NFFT 2048 the model ran ~4x faster in time than it was trained to and hardly moved the bass
+    // (+0.7 dB at 192 kHz); the NFFT must grow with the rate.
+    auto lift = [] (double sr)
+    {
+        AudioClip in = testsig::musicLike (sr, 4.0, -18.0, 3);
+        for (auto& ch : in.channels)                                   // a sustained 808: 45 Hz notes, 1 s each
+            for (size_t i = 0; i < ch.size(); ++i)
+            {
+                const double t = static_cast<double> (i) / sr, tn = std::fmod (t, 1.0);
+                ch[i] += static_cast<float> (0.3 * std::exp (-tn * 1.2) * std::min (1.0, tn * 200.0) * std::sin (2.0 * std::numbers::pi * 45.0 * t));
+            }
+        StemEQParams p; p.gainDb[kStemBass] = 6.0;
+        const AudioClip out = renderStemEq (in, p);                    // lined up with the input
+        auto tone = [&] (const AudioClip& c)
+        {
+            double cs = 0.0, ss = 0.0;
+            for (size_t i = static_cast<size_t> (2.0 * sr); i < static_cast<size_t> (3.0 * sr); ++i)
+            {
+                const double ph = 2.0 * std::numbers::pi * 45.0 * static_cast<double> (i) / sr;
+                cs += c.channels[0][i] * std::cos (ph);
+                ss += c.channels[0][i] * std::sin (ph);
+            }
+            return cs * cs + ss * ss;
+        };
+        return 10.0 * std::log10 (tone (out) / tone (in));
+    };
+    const double base = lift (44100.0);
+    for (double sr : { 176400.0, 192000.0 })
+    {
+        const double l = lift (sr);
+        UNSCOPED_INFO ("bass +6: 808 " << base << " dB at 44.1 kHz, " << l << " dB at " << sr);
+        CHECK (l > 4.5);
+        CHECK (std::abs (l - base) < 1.0);
+    }
 }
 
 TEST_CASE ("Stem EQ at 0 dB (or off) is an exact delayed pass-through", "[stemeq]")
@@ -266,6 +313,52 @@ TEST_CASE ("Stem EQ meter credits nothing during silence, and something during m
     run (s, testsig::musicLike (48000.0, 1.0, -12.0));
     s.takeStemEnergies (e);
     CHECK (e[0] + e[1] + e[2] + e[3] > 0.0);
+}
+
+TEST_CASE ("Stem EQ meter: loudness-weighted shares don't let the sub swamp the meter", "[stemeq]")
+{
+    // A trap-like mix: the 808 is most of the energy but far less of what is heard.
+    AudioClip in = testsig::musicLike (44100.0, 6.0, -18.0, 3);
+    for (auto& ch : in.channels)
+        for (size_t i = 0; i < ch.size(); ++i)
+        {
+            const double t = static_cast<double> (i) / 44100.0, tn = std::fmod (t, 1.0);
+            ch[i] += static_cast<float> (0.35 * std::exp (-tn * 1.2) * std::min (1.0, tn * 200.0) * std::sin (2.0 * std::numbers::pi * 45.0 * t));
+        }
+    StemEQ s; s.prepare (44100.0, 2);
+    run (s, in);
+    std::array<double, kStems> e {}, l {};
+    s.takeStemEnergies (e);
+    s.takeStemLoudness (l);
+    const double te = e[0] + e[1] + e[2] + e[3], tl = l[0] + l[1] + l[2] + l[3];
+    REQUIRE (te > 0.0);
+    REQUIRE (tl > 0.0);
+    UNSCOPED_INFO ("bass share: raw " << 100.0 * e[kStemBass] / te << " %, loudness-weighted " << 100.0 * l[kStemBass] / tl << " %");
+    CHECK (e[kStemBass] / te > 0.8);          // raw energy: nearly all "bass"
+    CHECK (l[kStemBass] / tl < 0.6);          // what you hear: the rest of the mix counts too
+    // Silence credits nothing either way.
+    StemEQ quiet; quiet.prepare (44100.0, 2);
+    run (quiet, testsig::silence (44100.0, 2, 1.0));
+    quiet.takeStemLoudness (l);
+    CHECK (l[0] + l[1] + l[2] + l[3] == 0.0);
+}
+
+TEST_CASE ("Auto-Master sets the Tonal EQ for the mix before the user's Stem EQ moves", "[stemeq]")
+{
+    // The Tonal EQ comes before Stem EQ in the plug-in: Bass +12 must not read as a sub-heavy mix
+    // that the Tonal EQ then cuts back down.
+    const auto mix = testsig::musicLike (44100.0, 14.0, -16.0, 3);
+    AutoMasterSettings plain, boosted;
+    boosted.stem.gainDb[kStemBass] = 12.0;
+    const auto r0 = autoMaster (mix, plain), r12 = autoMaster (mix, boosted);
+    REQUIRE (r0.ok);
+    REQUIRE (r12.ok);
+    for (size_t b = 0; b < r0.chain.eq.gainDb.size(); ++b)
+    {
+        CHECK_THAT (r12.analysis.bandDb[b], WithinAbs (r0.analysis.bandDb[b], 1e-9));
+        CHECK (r12.chain.eq.gainDb[b] == r0.chain.eq.gainDb[b]);
+    }
+    CHECK (r12.chain.stem.gainDb == boosted.stem.gainDb);
 }
 
 TEST_CASE ("Stem levels and Auto-Master's vocal suggestion", "[stemeq]")

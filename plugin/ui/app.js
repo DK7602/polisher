@@ -122,12 +122,12 @@ const modules = [
     cells: [],
     controls: [["Vocals / Drums / Bass / Other", "Turns that part of the mix up or down (±12 dB). Other is everything else: synths, keys, guitars, pads, effects."],
                ["How it works", "A small AI model listens to the mix and works out, moment by moment and frequency by frequency, how much of the sound is vocals, drums, bass or other. Your four levels are mixed by those shares into one EQ that updates about 180 times a second."],
-               ["Trade-offs", "Adds 40 ms of delay (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly. Moves up to about ±6 dB stay clean."]] },
+               ["Trade-offs", "Adds about 40 ms of delay at any sample rate (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly. Moves up to about ±6 dB stay clean."]] },
   { id: "ts", name: "Tone Steady", live: true, soon: "",
     what: "Keeps your tone steady as the song plays: when a section drifts muddier, harsher or thinner than the rest of the song, it nudges those frequencies back.",
     cells: [], controls: [] },
   { id: "rt", name: "Resonance Tamer", live: true, soon: "",
-    what: "Finds ringing tones that stick out (boxiness, whistly vocal tones, harsh hats) and cuts just those, only while they ring.",
+    what: "Finds ringing tones that stick out (boxiness, whistly vocal tones, harsh hats) and cuts them, only while they ring. Above about 1 kHz the cuts are narrow; below about 800 Hz each cut is roughly 3/4 octave wide, so it takes some of the sound around the ring with it.",
     cells: [], controls: [] },
   { id: "bass", name: "Bass Control", live: true, soon: "",
     what: "Keeps the low end solid on every system: mono below a crossover, controls 808 level jumps, and adds kick punch.",
@@ -666,7 +666,7 @@ const stemMoves = () => [0, 1, 2, 3].filter((k) => Math.abs(stemGainAt(k)) >= 0.
 function stemHearsCell() {
   const cell = document.createElement("div");
   cell.className = "cell";
-  cell.innerHTML = `<span class="cell-label">Model Hears</span><span class="cell-sub mono">share of the music</span>
+  cell.innerHTML = `<span class="cell-label">Model Hears</span><span class="cell-sub mono">share of what you hear</span>
     <div class="stemhear">${STEMS.map((n, k) => `<div class="sh-row"><span class="sh-name mono">${n[0]}</span>
       <div class="sh-bar screen"><div class="sh-fill" id="sh-fill-${k}"></div></div><span class="sh-val mono" id="sh-val-${k}"></span></div>`).join("")}</div>`;
   return cell;
@@ -1266,7 +1266,7 @@ function renderStemLearn(body) {
   const on = !!P.stemOn.getValue(), bypassed = !!P.bypass.getValue();
   const playing = performance.now() - lastAudioTime < 1500;
   const moves = stemMoves(), share = M.stemShare || [0, 0, 0, 0];
-  const heard = STEMS.map((n, k) => `${n.toLowerCase()} ${share[k]} %`).join(", ");
+  const heard = "of what you hear, " + STEMS.map((n, k) => `${n.toLowerCase()} ${share[k]} %`).join(", ");
   body.appendChild(head("WHAT'S HAPPENING"));
   body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
     : !on ? "Stem EQ is off, so every part of the mix passes untouched."
@@ -1279,16 +1279,20 @@ function renderStemLearn(body) {
   const why = [
     (v) => v > 0 ? "Brings the vocal forward, like pushing its fader. Great for a vocal that sits a little low under the beat." : "Tucks the vocal back into the beat.",
     (v) => v > 0 ? "More kick, snare and hats. Adds punch and energy." : "Softer drums: the hits sit back and the music around them opens up.",
-    (v) => v > 0 ? "More bass and 808. Check on small speakers and keep an eye on the Maximizer: bass is what limiters grab first." : "Less bass and 808. Useful when the low end swamps the mix.",
+    (v) => v > 5.95 ? "More bass and 808, but at this much the Maximizer has to turn everything down to keep the same loudness: at +12 the 808 ends up only about 4 dB louder while everything from 300 Hz up drops about 6 dB. Run Auto-Master again (or lower Drive) and compare with MATCH."
+      : v > 0 ? "More bass and 808. Check on small speakers and keep an eye on the Maximizer: bass is what limiters grab first, so it turns the rest down a little to make room." : "Less bass and 808. Useful when the low end swamps the mix.",
     (v) => v > 0 ? "More of everything else: synths, keys, guitars, pads and effects." : "Less of everything else, so vocals and drums stand out.",
   ];
   STEMS.forEach((n, k) => {
     const v = stemGainAt(k);
     body.appendChild(item(n, fmtSigned(v), Math.abs(v) < 0.05 ? "Untouched." : why[k](v)));
   });
-  body.appendChild(item("Model Hears", "", "How the model divides the music right now, averaged over about a second. A part it barely hears won't move much when you turn it up or down."));
+  body.appendChild(item("Model Hears", "", "How the model divides what you hear right now, averaged over about a second. Each frequency counts by how loud it sounds, so a big 808 shows as part of the sound rather than nearly all of it. A part it barely hears won't move much when you turn it up or down."));
   const big = moves.filter((k) => Math.abs(stemGainAt(k)) > 6.05);
-  if (on && !bypassed && big.length)
+  if (on && !bypassed && stemGainAt(2) > 5.95)
+    body.appendChild(tip("HEADS UP", "Bass is up 6 dB or more. The Maximizer keeps the same loudness, so it turns the whole master down to fit the extra low end: everything above the bass gets quieter (at +12: 808 about +4 dB, 300 Hz to 16 kHz about \u22126 dB).", false,
+      { need: "Only if the vocal and drums sound smaller than before.", steps: ["Run Auto-Master again so the chain is set for the new low end.", "Or lower Drive a little.", "Turn on MATCH and flip A/B to compare at equal loudness."] }));
+  else if (on && !bypassed && big.length)
     body.appendChild(tip("HEADS UP", `${big.map((k) => STEMS[k]).join(" and ")} ${big.length > 1 ? "are" : "is"} moved more than 6 dB. Big moves can nudge the parts that share notes with ${big.length > 1 ? "them" : "it"} too.`, false,
       { need: "Only if something besides that part changes level.", steps: ["Turn on MATCH and flip A/B.", "Listen to the parts you didn't touch: do they jump or thin out?", "If they do, back the move off to about 6 dB, or make the rest of the change with Tonal EQ."] }));
   else if (on && !bypassed && moves.includes(3))
@@ -1346,13 +1350,13 @@ function renderTsLearn(body) {
   body.appendChild(sep());
   body.appendChild(head("WHAT EACH CONTROL IS DOING"));
   body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `Corrects about ${Math.round(amount)} % of each drift, beyond a 1 dB dead zone (3 dB in the highs, where hats and cymbals come and go), so small natural changes are left alone.`));
-  body.appendChild(item("Range", `${MINUS}${range.toFixed(1)} / +${(range / 2).toFixed(1)} dB`, `Cuts go at most ${range.toFixed(1)} dB, boosts at most ${(range / 2).toFixed(1)} dB, so it can never reshape your mix, only steady it.`));
-  body.appendChild(item("Speed", speed, speed === "Slow" ? "Follows whole sections: the gentlest, best for most masters."
-    : speed === "Medium" ? "Follows phrases: catches a verse that gets muddier or a hook that gets harsher." : "Follows single notes and hits: strongest, can make the mix feel controlled."));
-  body.appendChild(item("Reference", "", "Your song's own balance over the last ~10 seconds, so the Tonal EQ sets the tone and Tone Steady only keeps it. Quiet breakdowns are left alone."));
+  body.appendChild(item("Range", `${MINUS}${range.toFixed(1)} / +${(range / 2).toFixed(1)} dB`, `Cuts go at most ${range.toFixed(1)} dB, boosts at most ${(range / 2).toFixed(1)} dB: the most it can move any part of the spectrum. A section meant to sound different (a drop with more bass) can be pulled by up to this much, so lower Range if a big moment sounds smaller.`));
+  body.appendChild(item("Speed", speed, speed === "Slow" ? "Reacts over about a second: the gentlest, best for most masters."
+    : speed === "Medium" ? "Reacts within about half a second: catches a phrase that gets muddier or a hook that gets harsher." : "Reacts within a few notes (0.15 s): strongest, can make the mix feel controlled."));
+  body.appendChild(item("Reference", "", "Your song's own balance over the last ~10 seconds, so the Tonal EQ sets the tone and Tone Steady only keeps it. Quiet breakdowns are left alone. When a bass or 808 comes in (the low end jumps more than 4 dB against the rest), it re-learns the balance within about a second instead of cutting the new low end."));
   if (on && !bypassed && amount > 70 && speed === "Fast")
     body.appendChild(tip("HEADS UP", "High Amount at Fast speed follows single notes. That can flatten moves you made on purpose, like a drop that's meant to hit with more bass.", false,
-      { need: "Only if the big moments sound smaller with it on.", steps: ["Turn on MATCH and flip A/B through the drop or chorus.", "If the impact shrinks: Speed to Medium or Slow.", "Or lower Amount to about 40 %."] }));
+      { need: "Only if the big moments sound smaller with it on.", steps: ["Turn on MATCH and flip A/B through the drop or chorus.", "If the impact shrinks: lower Range to about 1.5 dB.", "Or lower Amount to about 40 %, or Speed to Slow."] }));
   else
     body.appendChild(tip("TRY THIS", "Amount 40 %, Range 3 dB, Speed Slow: sections stay consistent without losing their character. Compare with MATCH on.", true));
 }

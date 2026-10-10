@@ -457,7 +457,7 @@ void PolisherAudioProcessor::publishMeters()
     stemEq.takeToneSteadyMeter (tsDb, tsHz);
     if (std::abs (tsDb) > std::abs (meters.tsDb.load())) { meters.tsDb.store (static_cast<float> (tsDb)); meters.tsHz.store (static_cast<float> (tsHz)); }
     std::array<double, polisher::kStems> stemE {};
-    stemEq.takeStemEnergies (stemE);
+    stemEq.takeStemLoudness (stemE);   // loudness-weighted: the meter shows the share of what you hear
     for (size_t k = 0; k < stemE.size(); ++k)
         addTo (meters.stemEnergy[k], static_cast<float> (stemE[k]));
     double satRes = 0.0, satSig = 0.0;

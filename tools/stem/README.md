@@ -8,7 +8,9 @@ passes through exactly (delayed). The big HT-Demucs model (MIT) is only the teac
 Ceiling (teacher's own shares as "perfect" masks, user's song): a +/-6 dB stem move lands within
 -18 to -25 dB of the ideal result at 1024/256, 64 bands (bass +6 is the weakest at -18).
 
-Latency: NFFT 1024 + LOOKAHEAD 3 x HOP 256 = 1792 samples (about 40 ms at 44.1 kHz).
+Latency: NFFT 1024 + LOOKAHEAD 3 x HOP 256 = 1792 samples (about 40 ms at 44.1 kHz). The plug-in scales
+NFFT to 2048 from 88.2 kHz and 4096 from 176.4 kHz, so the model sees the same bins and frame rate (and the
+same ~40 ms) at every rate.
 
 Setup (scratch venv): `pip install torch torchaudio demucs soundfile librosa lameenc`
 

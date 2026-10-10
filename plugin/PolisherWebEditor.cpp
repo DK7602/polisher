@@ -337,7 +337,8 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("rtHz",  juce::roundToInt (rtHzHold));
     frame->setProperty ("tsDb",  roundTo (tsHold, 0.1f));
     frame->setProperty ("tsHz",  juce::roundToInt (tsHzHold));
-    // Stem EQ: share of the music the model hears as vocals / drums / bass / other (%, ~1 s average).
+    // Stem EQ: share of what you hear (A-weighted energy) that the model credits to vocals / drums /
+    // bass / other (%, ~1 s average). Raw energy would be mostly sub: an 808 would read 70-90 %.
     double stemTotal = 0.0;
     for (size_t k = 0; k < stemHold.size(); ++k)
     {

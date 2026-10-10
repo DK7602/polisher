@@ -107,7 +107,7 @@ Auto-Master sets the Tonal EQ bands together. Neighbouring bands overlap, so it 
 - If your mix is **already louder than the target** (for example a −8 LUFS beat with Stream −14 picked), it turns the mix down with **Input Trim** before the chain, then sets every module for that level, so the master lands on the target instead of overshooting it.
 - It may stop **short of the target** on purpose. If reaching it would crush the drums past the intensity's limit, it keeps the punch and tells you. On a trap mix at about −17 LUFS in, Loud −9 typically lands near −9.7 LUFS.
 - A module marked **Checked · kept** was measured and needed no change.
-- **Stem EQ** is never changed. If your vocal sits unusually low or loud for the genre, it suggests a Vocals move (up to ±3 dB) with an **APPLY** button.
+- **Stem EQ** is never changed. If your vocal sits unusually low or loud for the genre, it suggests a Vocals move (up to ±3 dB) with an **APPLY** button. The Tonal EQ comes before Stem EQ, so Auto-Master sets it for your mix without your Stem moves and never EQs them back out; everything after Stem EQ is set for the mix with them.
 - If you change a module after Auto-Master, Learn notes that its reasons no longer describe what you hear.
 - If the audio doesn't sound like a full mix (for example, Polisher is on one track), Auto-Master changes nothing and tells you to move it to Stereo Out.
 
@@ -158,9 +158,11 @@ Turns the **Vocals, Drums, Bass** (808 included) or **Other** (synths, keys, gui
 | Control | Range (default) | What it does |
 | --- | --- | --- |
 | Vocals / Drums / Bass / Other | ±12 dB (0) | That part's level. 1–3 dB is usually all you need; up to about ±6 dB stays clean. |
-| Model Hears | meter | How the model divides your music right now. |
+| Model Hears | meter | How the model divides what you hear right now (each frequency counts by how loud it sounds, so a big 808 doesn't fill the whole meter). |
 
-Trade-offs: it adds about 40 ms of delay (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly.
+Big Bass boosts: the Maximizer keeps the same loudness, so it turns the whole master down to fit the extra low end. At Bass +12 the 808 ends up only about 4 dB louder while everything from 300 Hz up drops about 6 dB. After a Bass move of 6 dB or more, run Auto-Master again (or lower Drive) and compare with MATCH.
+
+Trade-offs: it adds about 40 ms of delay at any sample rate (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly.
 
 ### 04 Tone Steady
 
@@ -170,14 +172,14 @@ Keeps the tone consistent through the song. When a section drifts muddier, harsh
 | --- | --- | --- |
 | Amount | 0–100 % (0) | How much drift is corrected. 40 % is a good start. |
 | Range | 1–6 dB (3) | Largest cut; boosts go up to half of it. |
-| Speed | Slow, Medium, Fast (Medium) | Reacts to sections (1 s), phrases (0.4 s) or notes (0.15 s). |
+| Speed | Slow, Medium, Fast (Medium) | How fast it reacts: about 1 s, 0.4 s or 0.15 s. |
 | Steadying meter | 0–6 dB | The biggest move right now. |
 
-It learns your song's balance over about 10 seconds, leaves quiet breakdowns alone, and is gentle on the top end so busy hi-hats keep their sparkle. If the drop feels smaller, use Slow or lower Amount.
+It learns your song's balance over about 10 seconds, leaves quiet breakdowns alone, and is gentle on the top end so busy hi-hats keep their sparkle. When a bass or 808 comes in (the low end jumps more than 4 dB against the rest, say from the intro into the chorus), it re-learns the balance within about a second instead of cutting the new low end. Range is the most it can move any part of the spectrum, so a section meant to sound different can be pulled by up to that much: if the drop feels smaller, lower Range (to about 1.5 dB) or Amount.
 
 ### 05 Resonance Tamer
 
-Finds ringing tones that stick out (boxiness, whistly vocal tones, harsh hats) and cuts only those, only while they ring.
+Finds ringing tones that stick out (boxiness, whistly vocal tones, harsh hats) and cuts them, only while they ring. Above about 1 kHz the cuts are narrow; below about 800 Hz each cut is roughly 3/4 octave wide, so it takes some of the sound around the ring with it (vocal body included, in the Boxiness range).
 
 | Control | Range (default) | What it does |
 | --- | --- | --- |
