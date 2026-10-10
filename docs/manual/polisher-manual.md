@@ -92,6 +92,8 @@ Auto-Master listens to 12 seconds of your song, then sets every module except St
 | Balanced | 3 dB | 3.5 dB | The everyday choice |
 | Punchy | 4 dB | 5.5 dB | Louder and harder; more Punch and clipping |
 
+Auto-Master sets the Tonal EQ bands together. Neighbouring bands overlap, so it works out the gains whose combined curve moves each range by the amount it wants, instead of setting each band as if it were alone (which over-boosts the middle bands when several move the same way). A band whose range its neighbours already cover stays at 0 dB, and the report says so.
+
 ### How to run it
 
 1. Set Genre, Intensity and Target.
@@ -142,6 +144,10 @@ Shapes the overall tone in seven bands. Turn a band's knob, or drag its numbered
 | Upper Mid | 2.5 kHz | 1.2–5 kHz | Vocal clarity, snare crack | Smooths harshness |
 | Presence | 5 kHz | 2.5–10 kHz | Edge on vocals and hats | Softens 's' sounds |
 | Air (shelf) | 12 kHz | 6–20 kHz | Sheen on top | Darker, tames fizzy hats |
+
+Every band keeps its true shape right up to 20 kHz, at 44.1 and 48 kHz too, so the curve on the spectrum is what you hear. Air set high is still a subtle move: at 44.1 or 48 kHz the shelf above about 16 kHz only lifts the last few kHz before the top of the file, where most people hear little. For audible sheen, keep Air between 10 and 14 kHz.
+
+**Subsonic filter.** While Low End is boosted, a gentle high-pass at 15 Hz fades in by itself, so the boost doesn't also pump up rumble below 20 Hz that no speaker plays but the Maximizer still has to make room for. It costs less than 0.5 dB at 20 Hz and nothing you can measure from 30 Hz up. With Low End at 0 dB or cut, it's out of the path.
 
 On the spectrum, the white line is your mix, the blue curve is the EQ change and the red line is the master after the whole chain.
 

@@ -112,10 +112,9 @@ const modules = [
     cells: [], controls: [] },
   { id: "eq", name: "Tonal EQ", live: true, soon: "",
     what: "Shapes the overall tone in seven musical bands, from the sub up to the air, and nudges the mix toward your genre's reference balance.",
-    cells: [["Low End", "30 Hz", "0.0 dB", .5], ["Bass", "90 Hz", "0.0 dB", .5], ["Low Mid", "350 Hz", "0.0 dB", .5], ["Mid", "1 kHz", "0.0 dB", .5],
-            ["Upper Mid", "2.5 kHz", "0.0 dB", .5], ["Presence", "5 kHz", "0.0 dB", .5], ["Air", "12 kHz", "0.0 dB", .5]],
+    cells: [],
     controls: [["Low End / Bass", "Weight of the kick and 808. Small moves here change how big the record feels."],
-               ["Low Mid", "Where mud and boxiness build up. Cutting here often reads as clearer and louder."],
+               ["Low Mid", "Where mud and boxiness build up. Cutting here often reads as clearer, and frees headroom the Maximizer can turn into loudness."],
                ["Upper Mid / Presence", "Vocal consonants, snare crack and edge. A little goes a long way."],
                ["Air", "Sheen on top. Shelves rather than peaks, so hats get shine instead of bite."]] },
   { id: "stem", name: "Stem EQ", live: true, soon: "",
@@ -167,14 +166,14 @@ let amReport = null;           // last Auto-Master report (parsed), or null
 // curve drawn here is the plug-in's real response.
 const EQ_BANDS = [
   { name: "Low End", shape: "low", def: 45, q: 0.707,
-    boost: "More sub weight: the 808 and kick tail feel bigger on big speakers. Phones and laptops barely reproduce it.",
+    boost: "More sub weight: the 808 and kick tail feel bigger on big speakers. Phones and laptops barely reproduce it. A subsonic filter switches in below 20 Hz, so the boost doesn't also pump up rumble you can't hear.",
     cut: "Less sub rumble: a cleaner bottom and more headroom, so the Maximizer can make it louder." },
   { name: "Bass", shape: "bell", def: 100, q: 0.8,
     boost: "More body in the kick and 808: fuller and warmer. This is the low end most speakers actually play.",
     cut: "A tighter low end: less boom, so the kick punches through." },
   { name: "Low Mid", shape: "bell", def: 350, q: 0.9,
     boost: "More warmth and thickness, but a little too much turns muddy and boxy.",
-    cut: "Clears mud and boxiness. The mix often sounds cleaner, and louder at the same level." },
+    cut: "Clears mud and boxiness. The mix often sounds cleaner, and the headroom it frees lets the Maximizer make it louder." },
   { name: "Mid", shape: "bell", def: 1000, q: 0.8,
     boost: "Pushes vocals, snares and melodies forward.",
     cut: "Scoops the middle for a more hyped sound, but the vocal can sink." },
@@ -195,28 +194,78 @@ const eqFreqAt = (b) => P.eqFreq[b].getScaledValue();
 const eqEnabled = () => !!P.eqOn.getValue();
 const eqIsFlat = () => EQ_BANDS.every((_, b) => Math.abs(eqGainAt(b)) < 0.005);
 
-// RBJ cookbook biquad for one band -> magnitude (dB) at frequency f.
-function eqBandDb(b, gain, freq, f, sr) {
-  const band = EQ_BANDS[b];
-  const f0 = Math.min(freq, 0.45 * sr);
-  const w0 = (2 * Math.PI * f0) / sr, cw = Math.cos(w0), sw = Math.sin(w0);
-  const A = Math.pow(10, gain / 40), alpha = sw / (2 * band.q);
-  let b0, b1, b2, a0, a1, a2;
-  if (band.shape === "bell") {
-    b0 = 1 + alpha * A; b1 = -2 * cw; b2 = 1 - alpha * A; a0 = 1 + alpha / A; a1 = -2 * cw; a2 = 1 - alpha / A;
-  } else {
-    const k = 2 * Math.sqrt(A) * alpha, s = band.shape === "low" ? 1 : -1;
-    b0 = A * ((A + 1) - s * (A - 1) * cw + k); b1 = s * 2 * A * ((A - 1) - s * (A + 1) * cw); b2 = A * ((A + 1) - s * (A - 1) * cw - k);
-    a0 = (A + 1) + s * (A - 1) * cw + k; a1 = -s * 2 * ((A - 1) + s * (A + 1) * cw); a2 = (A + 1) + s * (A - 1) * cw - k;
+// Each band is the RBJ analog prototype realised as a magnitude-matched biquad (Vicanek), exactly as
+// TonalEQ::designBand does it, so the drawn curve stays honest near 20 kHz at 44.1 / 48 kHz.
+function eqAnalogPower(shape, A, q, x) {
+  const x2 = x * x;
+  if (shape === "bell") {
+    const d = (1 - x2) * (1 - x2);
+    return (d + (A * x / q) ** 2) / (d + (x / (A * q)) ** 2);
   }
+  const k2 = (A * x2) / (q * q);
+  return shape === "low"
+    ? (A * A * ((A - x2) ** 2 + k2)) / ((1 - A * x2) ** 2 + k2)
+    : (A * A * ((1 - A * x2) ** 2 + k2)) / ((A - x2) ** 2 + k2);
+}
+function eqMatchedCut(shape, A, q, w0, wTop) {
+  let wp = w0, qp = q;
+  if (shape === "bell") qp = q * A;
+  else if (shape === "low") wp = w0 / Math.sqrt(A);
+  else wp = w0 * Math.sqrt(A);
+  const zeta = 0.5 / qp, r = Math.exp(-zeta * wp);
+  const a1 = zeta <= 1 ? -2 * r * Math.cos(Math.sqrt(1 - zeta * zeta) * wp) : -2 * r * Math.cosh(Math.sqrt(zeta * zeta - 1) * wp);
+  const a2 = r * r;
+  const A0 = (1 + a1 + a2) ** 2, A1 = (1 - a1 + a2) ** 2, A2 = -4 * a2;
+  const phi = (w) => { const s = Math.sin(0.5 * w) ** 2; return [1 - s, s, 4 * (1 - s) * s]; };
+  const target = (w, p) => eqAnalogPower(shape, A, q, w / w0) * (A0 * p[0] + A1 * p[1] + A2 * p[2]);
+  const B0 = A0 * eqAnalogPower(shape, A, q, 0), pm = phi(w0), Tm = target(w0, pm);
+  const G = 12, lo = 0.5 * w0, ratio = Math.pow(wTop / lo, 1 / (G - 1));
+  let num = 0, den = 0;
+  for (let k = 0, w = lo; k < G; k++, w *= ratio) {
+    const p = phi(w), T = target(w, p);
+    const c = B0 * p[0] + (p[1] * (Tm - B0 * pm[0])) / pm[1] - T, d = p[2] - (p[1] * pm[2]) / pm[1], wt = 1 / (T * T);
+    num += wt * c * d; den += wt * d * d;
+  }
+  const B2 = den > 0 ? -num / den : (A2 * B0) / A0;
+  const B1 = Math.max(0, (Tm - B0 * pm[0] - B2 * pm[2]) / pm[1]);
+  const s0 = Math.sqrt(B0), s1 = Math.sqrt(B1), W = 0.5 * (s0 + s1);
+  const b0 = 0.5 * (W + Math.sqrt(Math.max(0, W * W + B2)));
+  return { b0, b1: 0.5 * (s0 - s1), b2: -B2 / (4 * b0), a1, a2 };
+}
+function eqBandCoeffs(b, gain, freq, sr) {
+  const band = EQ_BANDS[b];
+  const f0 = Math.min(freq, 0.45 * sr), w0 = (2 * Math.PI * f0) / sr;
+  const wTop = Math.min((2 * Math.PI * 20000) / sr, Math.PI);
+  const g = clamp(gain, -EQ_MAX, EQ_MAX);
+  if (g <= 0) return eqMatchedCut(band.shape, Math.pow(10, g / 40), band.q, w0, wTop);
+  const c = eqMatchedCut(band.shape, Math.pow(10, -g / 40), band.q, w0, wTop);   // a boost = the inverse of the cut
+  return { b0: 1 / c.b0, b1: c.a1 / c.b0, b2: c.a2 / c.b0, a1: c.b1 / c.b0, a2: c.b2 / c.b0 };
+}
+function biquadDb(c, f, sr) {
   const w = (2 * Math.PI * f) / sr, c1 = Math.cos(w), s1 = Math.sin(w), c2 = Math.cos(2 * w), s2 = Math.sin(2 * w);
-  const nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2);
-  const dr = a0 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
+  const nr = c.b0 + c.b1 * c1 + c.b2 * c2, ni = -(c.b1 * s1 + c.b2 * s2);
+  const dr = 1 + c.a1 * c1 + c.a2 * c2, di = -(c.a1 * s1 + c.a2 * s2);
   return 10 * Math.log10((nr * nr + ni * ni) / (dr * dr + di * di));
 }
+function eqBandDb(b, gain, freq, f, sr) { return biquadDb(eqBandCoeffs(b, gain, freq, sr), f, sr); }
+
+// Subsonic filter (TonalEQ::designSubsonic): 4th-order Butterworth high-pass at 15 Hz, engaged while
+// Low End is boosted, so the shelf doesn't also boost inaudible rumble.
+const EQ_SUBSONIC_HZ = 15;
+function eqSubsonicDb(f, sr) {
+  const w0 = (2 * Math.PI * EQ_SUBSONIC_HZ) / sr, cw = Math.cos(w0), sw = Math.sin(w0);
+  let total = 0;
+  [0.5 / Math.cos(Math.PI / 8), 0.5 / Math.cos((3 * Math.PI) / 8)].forEach((q) => {
+    const alpha = sw / (2 * q), a0 = 1 + alpha;
+    total += biquadDb({ b0: (0.5 * (1 + cw)) / a0, b1: -(1 + cw) / a0, b2: (0.5 * (1 + cw)) / a0, a1: (-2 * cw) / a0, a2: (1 - alpha) / a0 }, f, sr);
+  });
+  return total;
+}
+const eqSubsonicOn = () => eqGainAt(0) > 0.005;
 function eqResponseDb(f, sr) {
   let total = 0;
   EQ_BANDS.forEach((_, b) => { const g = eqGainAt(b); if (Math.abs(g) > 1e-4) total += eqBandDb(b, g, eqFreqAt(b), f, sr); });
+  if (eqSubsonicOn()) total += eqSubsonicDb(f, sr);
   return total;
 }
 let learnOn = true;
@@ -1000,7 +1049,7 @@ function renderEqLearn(body) {
   else modules.find((m) => m.id === "eq").controls.forEach(([n, w]) => body.appendChild(item(n, null, w)));
 
   if (bypassed || !on) {
-    body.appendChild(tip("TIP", "Cut before you boost: a 1–2 dB Low Mid cut often sounds clearer and louder than boosting the highs.", true));
+    body.appendChild(tip("TIP", "Cut before you boost: a 1–2 dB Low Mid cut often sounds clearer than boosting the highs. It can end up louder too, but only because the Maximizer turns the headroom the cut frees into level.", true));
     return;
   }
   const big = moved.filter((x) => Math.abs(x.g) >= 4.5).sort((a, c) => Math.abs(c.g) - Math.abs(a.g))[0];

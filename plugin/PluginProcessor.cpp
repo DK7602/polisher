@@ -129,7 +129,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
         ParameterID { ParamIDs::clipOversampling, 1 }, "Clipper Oversampling",
         StringArray { "1x", "2x", "4x", "8x" }, 2));
 
-    // Tonal EQ (first in the chain). On by default: flat bands are skipped, so it costs nothing.
+    // Tonal EQ (after the Unlimiter, before Stem EQ). On by default: flat bands are skipped, so it costs nothing.
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::eqOn, 1 }, "EQ On", true));
     for (int b = 0; b < polisher::kEqBands; ++b)
     {

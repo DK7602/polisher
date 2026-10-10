@@ -52,6 +52,20 @@ struct MixAnalysis
 
 MixAnalysis analyseMix (const AudioClip& clip);
 
+/** How much the level of each analysis band changes (dB) with these EQ settings at this sample
+    rate, measured the way analyseMix() measures bands: the EQ's power gain averaged over the band
+    per Hz, for a typical master's spectrum (falling 4.5 dB/oct). Neighbouring bands overlap, so a
+    band's own move only partly lands in its own analysis band and partly spills next door. */
+std::array<double, kEqBands> eqBandChangeDb (const TonalEQParams& eq, double sampleRate) noexcept;
+
+/** EQ band gains (default band frequencies) whose combined effect brings each analysis band's
+    change as close as possible to `wanted` (regularised least squares on the band-interaction
+    matrix, refined on the real response). Only bands with a non-zero wish move, each in the
+    direction it was asked to and by at most limitDb[b]; gains are rounded to 0.1 dB and moves
+    under 0.4 dB are dropped (and the rest re-solved without them). */
+std::array<double, kEqBands> solveEqGains (const std::array<double, kEqBands>& wanted,
+                                           const std::array<double, kEqBands>& limitDb, double sampleRate) noexcept;
+
 /** One explained decision. module: "ul", "eq", "bass", "dyn", "img", "sat", "clip" or "max". */
 struct AutoMasterReason
 {
