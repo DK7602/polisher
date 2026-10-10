@@ -180,13 +180,13 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                                                                 {
                                                                     const auto file = chooser.getResult();
                                                                     if (safe != nullptr && file.existsAsFile())
-                                                                        safe->audioProcessor.reference.load (file);
+                                                                        safe->audioProcessor.loadReference (file);   // marks the project changed
                                                                 });
                                  complete (true);
                              })
         .withNativeFunction ("clearReference", [this] (const juce::Array<juce::var>&, auto complete)
                              {
-                                 audioProcessor.reference.clear();
+                                 audioProcessor.clearReference();   // marks the project changed
                                  complete (true);
                              })
         .withNativeFunction ("getReference", [this] (const juce::Array<juce::var>&, auto complete)
@@ -275,9 +275,10 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
     addAndMakeVisible (webView);
     webView.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
 
-    // Fixed 16:9 design, freely resizable; the page scales itself to fit.
+    // Fixed 16:9 design, freely resizable; the page scales itself to fit. Not smaller than 70 % of the
+    // design: below that the smallest texts (meter labels, Learn) shrink under ~8 px and can't be read.
     setResizable (true, true);
-    setResizeLimits (800, 450, 2400, 1350);
+    setResizeLimits (kMinWidth, kMinHeight, 2400, 1350);
     if (auto* c = getConstrainer())
         c->setFixedAspectRatio (static_cast<double> (kDesignWidth) / kDesignHeight);
     setSize (1280, 720);
@@ -458,6 +459,7 @@ void PolisherWebEditor::timerCallback()
         frame->setProperty ("tsTarget", tone.valid ? roundTo (static_cast<float> (juce::jmax (1.0, tone.seconds)), 0.1f) : 0.0f);
         frame->setProperty ("tsLearnFail", am.getToneLearnFailures());
     }
+    audioProcessor.pollReference();   // a reference load that just ended marks the project changed again
     frame->setProperty ("refVersion", audioProcessor.reference.getVersion());
     frame->setProperty ("refState",   static_cast<int> (audioProcessor.reference.getState()));
     frame->setProperty ("corr",       roundTo (m.correlation.load(), 0.01f));

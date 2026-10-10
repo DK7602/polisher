@@ -77,9 +77,17 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     history.setExtraState ([this] { return captureExtraState(); },
                            [this] (const juce::String& extra) { restoreExtraState (extra); });
     autoMaster.onApplyBegin = [this] (const juce::String& label) { history.beginGroup (label); };
-    autoMaster.onApplyEnd = [this] { history.endGroup(); };
+    autoMaster.onApplyEnd = [this]
+    {
+        history.endGroup();
+        markStateChanged();   // its report and Tone Steady's target are saved with the project, but aren't parameters
+    };
     snapshots.onSwitch = [this] (int leaving, int entering) { matchSwitchRequest.store (0x100 | (leaving + 1) | ((entering + 1) << 4)); };
-    snapshots.onStore = [this] (int slot) { matchForgetRequest.fetch_or (1 << slot); };
+    snapshots.onStore = [this] (int slot)
+    {
+        matchForgetRequest.fetch_or (1 << slot);
+        markStateChanged();   // the slots are saved with the project, but they are not parameters
+    };
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::createParameterLayout()
@@ -113,8 +121,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
     // Read by the editor: restart the loudness measurement shortly after you change a control, so
     // Integrated describes the current settings instead of averaging in the old ones.
     // Level-matched A/B: while on, B (the master) is turned down to the original's loudness so a
-    // comparison is about tone and punch, not volume. Off during offline export and when the editor
-    // closes, so it can't end up in a bounce by accident.
+    // comparison is about tone and punch, not volume. Off during offline export, when the editor
+    // closes and when a project opens (setStateInformation), so it can't end up in a bounce by accident.
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::levelMatch, 1 }, "Level Match", false,
                                                       AudioParameterBoolAttributes().withAutomatable (false)));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::resetOnChange, 1 }, "Reset Meter On Change", true,
@@ -246,6 +254,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     const int longest = polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples() + limiter.latencySamples();
     monForm.prepare (longest);
     monOut.prepare (longest);
+    monClipDelay.prepare (longest);
     listenMix.prepare (sampleRate);
     monitorOut.prepare (sampleRate);
     stemEq.setTamerDelta (false);
@@ -287,6 +296,7 @@ void PolisherAudioProcessor::startListenMode (int mode) noexcept
     const auto [form, out] = listenDelays (mode, limiter.latencySamples());
     monForm.setDelay (form);
     monOut.setDelay (out);
+    monClipDelay.setDelay (limiter.latencySamples());
 }
 
 void PolisherAudioProcessor::updateLimiterParams()
@@ -378,6 +388,11 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
 {
     juce::ScopedNoDenormals noDenormals;
 
+    // A host may call with no samples (e.g. only to hand over parameter changes). Nothing to do: the
+    // Drive, Trim and MATCH ramps would otherwise jump to their new gain without ramping.
+    if (buffer.getNumSamples() <= 0)
+        return;
+
     const int numIn = getTotalNumInputChannels();
     const int numOut = getTotalNumOutputChannels();
     for (int c = numIn; c < numOut; ++c)
@@ -439,6 +454,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
         listenMix.request (wanted, listenArmSamples (wanted));
         monitorOut.setMono (monoRequest.load());
         monitorOut.setPhone (phoneRequest.load());
+        monitorOut.setListenWanted (wanted != L::off);
         lm = listenMix.beginBlock();
         if (listenMix.startedArming())
             startListenMode (lm);
@@ -491,7 +507,8 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     {
         // Monitored signals formed before Drive: what Saturation added (output minus its aligned input),
         // or the tamer's cut / the Dynamics band (with mono input, channel 1 repeats channel 0). They get
-        // the same Drive the master gets here, then travel on to the output.
+        // the same Drive the master gets here, then travel on to the output (and get the Soft Clipper's
+        // and the limiter's gain there, below).
         const double driveStep = (newGain - currentDriveGain) / numSamples;
         for (int i = 0; i < numSamples; ++i)
         {
@@ -520,7 +537,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     currentDriveGain = newGain;
 
     if (lm == L::clipRemoved) copyPre();
-    clipper.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, lm == L::clipRemoved ? monClipGain.data() : nullptr);
+    clipper.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, lm != L::off && lm != L::maxRemoved ? monClipGain.data() : nullptr);
     if (lm == L::clipRemoved)
     {
         // What the clipping shaved off: the aligned input at the clipper's clean gain (its makeup) minus its output.
@@ -551,9 +568,22 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     else if (lm != L::off)
     {
         // Everything formed before the limiter is turned down with the master, sample by sample, so it
-        // plays at the level it really has in the master.
-        for (int c = 0; c < 2; ++c)
-            for (int i = 0; i < numSamples; ++i) sig[c][i] *= monLimGain[static_cast<size_t> (i)];
+        // plays at the level it really has in the master. What was formed before the Soft Clipper also
+        // gets the clipper's clean gain (its makeup when Clip Level is below 0; 1 when the clipper is
+        // off), as the clipper applied it, carried past the limiter's look-ahead so it lines up.
+        const bool beforeClipper = lm != L::clipRemoved;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            double g = monLimGain[static_cast<size_t> (i)];
+            if (beforeClipper)
+            {
+                double clipGain = monClipGain[static_cast<size_t> (i)], unused = 0.0;
+                monClipDelay.process (clipGain, unused);
+                g *= clipGain;
+            }
+            sig[0][i] *= g;
+            sig[1][i] *= g;
+        }
     }
     outputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     outputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
@@ -613,8 +643,35 @@ void PolisherAudioProcessor::clearToneTarget()
     history.beginGroup ("Tone Steady: follow the music");
     toneTarget.clear();
     history.endGroup();
-    // Not a parameter: tell the host the song changed, so the project asks to be saved.
+    markStateChanged();   // not a parameter: tell the host the song changed, so the project asks to be saved
+}
+
+void PolisherAudioProcessor::markStateChanged()
+{
     updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+}
+
+void PolisherAudioProcessor::loadReference (const juce::File& file)
+{
+    reference.load (file);
+    referenceLoadPending = true;
+    markStateChanged();
+}
+
+void PolisherAudioProcessor::clearReference()
+{
+    reference.clear();
+    referenceLoadPending = false;
+    markStateChanged();
+}
+
+void PolisherAudioProcessor::pollReference()
+{
+    if (referenceLoadPending && reference.getState() != ReferenceTrack::loading)
+    {
+        referenceLoadPending = false;
+        markStateChanged();
+    }
 }
 
 juce::String PolisherAudioProcessor::captureExtraState() const
@@ -630,20 +687,22 @@ juce::String PolisherAudioProcessor::captureExtraState() const
 
 void PolisherAudioProcessor::restoreExtraState (const juce::String& extra)
 {
+    const auto before = captureExtraState();
     const auto v = extra.isNotEmpty() ? juce::JSON::parse (extra) : juce::var();
     if (! v.isObject() || ! v.hasProperty ("polisherExtra"))
     {
         autoMaster.restoreReport (extra);   // a snapshot stored before Tone Steady targets: the report alone
-        return;
     }
-    autoMaster.restoreReport (v["report"].toString());
-    const auto tone = v["tone"].toString();
-    if (tone != toneTarget.toJson())
+    else
     {
-        toneTarget.restoreFromJson (tone);
-        // Not a parameter: tell the host the song changed, so the project asks to be saved.
-        updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+        autoMaster.restoreReport (v["report"].toString());
+        if (const auto tone = v["tone"].toString(); tone != toneTarget.toJson())
+            toneTarget.restoreFromJson (tone);
     }
+    // Not parameters: tell the host the song changed (undo, redo or a recall brought back another report
+    // or tone), so the project asks to be saved.
+    if (captureExtraState() != before)
+        markStateChanged();
 }
 
 void PolisherAudioProcessor::handleMatchRequests() noexcept
@@ -813,6 +872,12 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
                 keep->setAttribute ("id", "stemKeep");
                 keep->setAttribute ("value", 0.0);
             }
+            // MATCH is a listening aid, but the host saves it like any parameter: a song saved while
+            // comparing would reopen with the master turned down (also in a Realtime Export, with no
+            // window open to show it). A project always opens with MATCH off.
+            for (auto* child : xml->getChildIterator())
+                if (child->getStringAttribute ("id") == "levelMatch")
+                    child->setAttribute ("value", 0.0);
             parameters.replaceState (juce::ValueTree::fromXml (*xml));
             autoMaster.onStateRestored (savedReport);
             reference.restoreFromJson (savedReference);

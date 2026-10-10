@@ -415,13 +415,15 @@ body.theme-mono .sw-ref { border-top-color: #E6E6E6; }
 .module-head .wm, .module-head .chip { white-space: nowrap; }
 .module-head .module-note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
 .listen.on { box-shadow: 0 0 0 1.5px #FFB3B7, 0 0 14px rgba(255,40,50,.8); }
-.monitor-banner { position: absolute; left: 24px; right: 118px; top: 20px; height: 30px; z-index: 6; display: flex; align-items: center; gap: 10px;
-  padding: 0 6px 0 12px; border-radius: 10px; background: linear-gradient(180deg, rgba(240,30,40,.96), rgba(170,8,16,.96));
+.monitor-banner { position: absolute; left: 24px; right: 118px; top: 20px; min-height: 30px; z-index: 6; display: flex; align-items: center; gap: 10px;
+  padding: 3px 6px 3px 12px; box-sizing: border-box; border-radius: 10px; background: linear-gradient(180deg, rgba(240,30,40,.96), rgba(170,8,16,.96));
   box-shadow: 0 0 0 1.5px #FFB3B7, 0 0 18px rgba(255,40,50,.75); text-shadow: 0 1px 2px rgba(0,0,0,.6); animation: mb-glow 1.8s ease-in-out infinite; }
 .monitor-banner[hidden] { display: none; }
 @keyframes mb-glow { 0%, 100% { box-shadow: 0 0 0 1.5px #FFB3B7, 0 0 10px rgba(255,40,50,.55); } 50% { box-shadow: 0 0 0 1.5px #FFD2D4, 0 0 24px rgba(255,60,70,.95); } }
 .mb-icon { flex-shrink: 0; }
-.mb-text { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A long description wraps onto a second line rather than losing its end ("— not the master"). */
+.mb-text { flex: 1; min-width: 0; font-size: 13px; line-height: 1.2; font-weight: 700; letter-spacing: .02em; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .mb-level { flex-shrink: 0; font-size: 11px; color: #FFE3E4; white-space: nowrap; }
 .mb-stop { flex-shrink: 0; height: 22px; padding: 0 10px; border: 0; border-radius: 7px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
   background: rgba(5,15,34,.85); box-shadow: inset 0 0 0 1px rgba(255,255,255,.55); cursor: pointer; }

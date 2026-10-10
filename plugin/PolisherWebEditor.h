@@ -34,6 +34,8 @@ public:
 
     static constexpr int kDesignWidth = 1600;
     static constexpr int kDesignHeight = 900;
+    static constexpr int kMinWidth = 1120;    // 70 % of the design (smaller and the small texts can't be read)
+    static constexpr int kMinHeight = 630;
 
 private:
     static constexpr int kFftOrder = 12;

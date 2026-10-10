@@ -141,12 +141,27 @@ void ListenMix::step() noexcept
 
 // --- MonitorOutput ----------------------------------------------------------------------------
 
+namespace {
+    /** RBJ high-pass with a given Q (two of them with Butterworth Qs make a 4th-order Butterworth). */
+    design::Coeffs highPassQ (double f, double q, double sr) noexcept
+    {
+        const double w0 = 2.0 * std::numbers::pi * std::min (f, 0.45 * sr) / sr;
+        const double cw = std::cos (w0), alpha = std::sin (w0) / (2.0 * q);
+        const double a0 = 1.0 + alpha, b0 = (1.0 + cw) / 2.0;
+        return { b0 / a0, -(1.0 + cw) / a0, b0 / a0, -2.0 * cw / a0, (1.0 - alpha) / a0 };
+    }
+}
+
 void MonitorOutput::prepare (double sampleRate) noexcept
 {
     sr = sampleRate > 0.0 ? sampleRate : 48000.0;
     fadeStep = 1.0 / (kFadeSeconds * sr);
     safetyRelease = std::exp (-1.0 / (kSafetyReleaseSeconds * sr));
-    design::apply (phoneHp, design::butterworth (true, kPhoneLowHz, sr));
+    safetyLetGo = std::exp (-1.0 / (kSafetyLetGoSeconds * sr));
+    holdSamples = static_cast<int> (std::lround (kSafetyHoldSeconds * sr));
+    // 4th-order Butterworth: Qs 1 / (2 cos(pi/8)) and 1 / (2 cos(3 pi/8)).
+    design::apply (phoneHp, highPassQ (kPhoneLowHz, 0.5 / std::cos (std::numbers::pi / 8.0), sr));
+    design::apply (phoneHp2, highPassQ (kPhoneLowHz, 0.5 / std::cos (3.0 * std::numbers::pi / 8.0), sr));
     design::apply (phoneLp, design::butterworth (false, kPhoneHighHz, sr));
     design::apply (phoneBump, design::bell (kPhoneBumpHz, kPhoneBumpDb, kPhoneBumpQ, sr));
     phoneMakeup = std::pow (10.0, kPhoneMakeupDb / 20.0);
@@ -155,10 +170,11 @@ void MonitorOutput::prepare (double sampleRate) noexcept
 
 void MonitorOutput::reset() noexcept
 {
-    monoWanted = phoneWanted = false;
+    monoWanted = phoneWanted = listenWanted = false;
     monoMix = phoneMix = 0.0;
     safetyGain = 1.0;
-    for (auto* f : { &phoneHp, &phoneLp, &phoneBump }) f->reset();
+    safetyHold = 0;
+    for (auto* f : { &phoneHp, &phoneHp2, &phoneLp, &phoneBump }) f->reset();
 }
 
 double MonitorOutput::phoneResponseDb (double f) const noexcept
@@ -166,7 +182,7 @@ double MonitorOutput::phoneResponseDb (double f) const noexcept
     const double w = 2.0 * std::numbers::pi * f / sr;
     const std::complex<double> z1 = std::polar (1.0, -w), z2 = z1 * z1;
     double mag = phoneMakeup;
-    for (const auto* b : { &phoneHp, &phoneLp, &phoneBump })
+    for (const auto* b : { &phoneHp, &phoneHp2, &phoneLp, &phoneBump })
         mag *= std::abs ((b->b0 + b->b1 * z1 + b->b2 * z2) / (1.0 + b->a1 * z1 + b->a2 * z2));
     return 20.0 * std::log10 (std::max (mag, 1.0e-12));
 }

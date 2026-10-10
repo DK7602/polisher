@@ -136,6 +136,18 @@ public:
 
     /** The reference song for Match ref (its measurements only), saved with the state. */
     ReferenceTrack reference;
+    /** Match ref from the window: read and measure a song / forget it. Both mark the project as changed
+        (the reference is saved with it, not a parameter). Message thread. */
+    void loadReference (const juce::File& file);
+    void clearReference();
+    /** Message thread, regularly (the editor's timer): when a load started here has ended, marks the
+        project changed again (the host may have saved while it was still being measured). */
+    void pollReference();
+
+    /** Tells the host the project changed although no parameter did (a snapshot stored, a reference
+        loaded or cleared, Tone Steady's target learned or cleared), so it asks to save it. A VST3 host
+        marks a project changed only for parameter edits or this call. Message thread. */
+    void markStateChanged();
 
     /** Tone Steady's stored target (the song's own tone, learned by Auto-Master), saved with the state. */
     ToneTargetStore toneTarget;
@@ -228,6 +240,7 @@ private:
     std::array<MatchMemory, SettingsSnapshots::kSlots> matchMemory {};
     std::atomic<int> matchSwitchRequest { 0 };   // 0x100 | (leaving + 1) | (entering + 1) << 4
     std::atomic<int> matchForgetRequest { 0 };   // one bit per slot
+    bool referenceLoadPending = false;           // a Match ref load started from the window is still running
     static constexpr double kMatchHoldSeconds = 3.0;    // after a switch: the short-term readings' window
     static constexpr double kMatchLearnSeconds = 10.0;  // a slot's level is kept once learned this long
 
@@ -240,6 +253,7 @@ private:
     polisher::ListenMix listenMix;
     polisher::MonitorOutput monitorOut;
     polisher::MonitorDelay monForm, monOut;
+    polisher::MonitorDelay monClipDelay;   // the Soft Clipper's clean gain, carried on past the limiter's look-ahead
     std::array<std::vector<double>, 2> monPre, monSig, monAux;
     std::vector<double> monLimGain, monClipGain;
     int monCapacity = 0;
