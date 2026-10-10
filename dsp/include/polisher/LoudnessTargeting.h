@@ -49,7 +49,8 @@ AudioClip renderSpectral (const AudioClip& clip, const StemEQParams& stem, const
 inline AudioClip renderStemEq (const AudioClip& clip, const StemEQParams& params) { return renderSpectral (clip, params, {}, {}); }
 
 /** How loud each stem (vocals, drums, bass, other) is in a clip as Stem EQ's model hears it, in dB
-    relative to the whole clip (-100 when it hears none of it). */
+    relative to the whole clip (-100 when it hears none of it). Raw energy, not loudness-weighted:
+    the genre vocal norms were measured this way (see genreVocalLevelDb). */
 std::array<double, kStems> measureStemLevels (const AudioClip& clip);
 
 /** Runs Tone Steady and Resonance Tamer over a clip and reports how much they had to do. */

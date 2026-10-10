@@ -15,6 +15,17 @@ static_assert (sn::kTaps == 2 * StemNet::kLookahead + 1, "the model's look-ahead
 
 namespace {
 inline float sigmoid (float v) noexcept { return 1.0f / (1.0f + std::exp (-v)); }
+
+// A-weighting (IEC 61672) as a power gain, 1 at 1 kHz: how loud the ear hears energy at f Hz
+// compared with the same energy at 1 kHz.
+double aWeightPower (double f) noexcept
+{
+    if (f <= 0.0) return 0.0;
+    const double f2 = f * f;
+    const double ra = 12194.0 * 12194.0 * f2 * f2
+                    / ((f2 + 20.6 * 20.6) * std::sqrt ((f2 + 107.7 * 107.7) * (f2 + 737.9 * 737.9)) * (f2 + 12194.0 * 12194.0));
+    return ra * ra * 1.5848931924611136;   // +2.0 dB: 0 dB at 1 kHz
+}
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -143,6 +154,7 @@ void StemEQ::prepare (double newSampleRate, int numChannels)
     for (int b = 0; b < B; ++b)
         cf[static_cast<size_t> (b)] = (std::pow (10.0, (e0 + (e1 - e0) * b / (B - 1)) / 21.4) - 1.0) / 0.00437;
     bandCf.assign (cf.begin(), cf.end());
+    for (int b = 0; b < B; ++b) bandLoud[static_cast<size_t> (b)] = aWeightPower (cf[static_cast<size_t> (b)]);
     bandW.assign (static_cast<size_t> (B * bins), 0.0);
     for (int k = 0; k < bins; ++k)
     {
@@ -181,6 +193,8 @@ void StemEQ::prepare (double newSampleRate, int numChannels)
     binGain.assign (static_cast<size_t> (bins), 1.0);
     for (auto* v : { &power, &levelDb, &rtCut, &rtTarget, &rtSmooth, &tsBin }) v->assign (static_cast<size_t> (bins), 0.0);
     rtLin.assign (static_cast<size_t> (bins), 1.0);
+    binLoud.assign (static_cast<size_t> (bins), 0.0);
+    for (int k = 0; k < bins; ++k) binLoud[static_cast<size_t> (k)] = aWeightPower (k * sampleRate / N);
     prefix.assign (static_cast<size_t> (bins + 1), 0.0);
     framesPerSecond = sampleRate / hopSize;
     scratch.assign (n, 0.0);
@@ -201,13 +215,14 @@ void StemEQ::reset() noexcept
     net.reset();
     shares.fill (0.25f);
     stemEnergy.fill (0.0);
+    stemLoudness.fill (0.0);
     inPos = queuePos = dryPos = 0;
     frameCount = analysed = 0;
     for (auto* v : { &rtCut, &rtTarget, &rtSmooth, &tsBin }) std::fill (v->begin(), v->end(), 0.0);
     std::fill (rtLin.begin(), rtLin.end(), 1.0);
-    tsShort.fill (0.0); tsLong.fill (0.0); tsGain.fill (0.0);
+    tsShort.fill (0.0); tsLong.fill (0.0); tsGain.fill (0.0); tsJump.fill (0.0);
     tsLevelShort = tsLevelLong = 0.0;
-    tsFrames = 0;
+    tsFrames = tsRelearn = 0;
     rtDeepest = rtDeepestHz = tsLargest = tsLargestHz = 0.0;
     statPower = statCut = statCutLow = statCutHigh = statSteady = 0.0;
     statSteadyFrames = 0;
@@ -322,6 +337,7 @@ void StemEQ::resonanceGains (const std::complex<double>* L, const std::complex<d
     // A ringing tone covers its neighbours too (the window's main lobe): cut them alike.
     const double attack = 1.0 - std::exp (-hopSize / (0.003 * sampleRate));
     const double release = 1.0 - std::exp (-hopSize / (std::clamp (rtParams.releaseMs, 20.0, 300.0) * 0.001 * sampleRate));
+    int deepest = -1;
     for (int k = 0; k < bins; ++k)
     {
         const auto K = static_cast<size_t> (k);
@@ -332,15 +348,35 @@ void StemEQ::resonanceGains (const std::complex<double>* L, const std::complex<d
         g += (t - g) * (t < g ? attack : release);
         if (g > -1.0e-6) g = 0.0;
         rtLin[K] = g == 0.0 ? 1.0 : std::exp (g * (std::numbers::ln10 / 20.0));
+        // Statistics for Auto-Master, weighted by how loud each bin is to the ear (see SpectralStats).
+        const double heard = power[K] * binLoud[K];
         if (g < 0.0)
         {
-            const double f = k * binHz, c = -g * power[K];
+            const double f = k * binHz, c = -g * heard;
             statCut += c;
             if (f >= 150.0 && f <= 800.0) statCutLow += c;
             else if (f >= 1500.0 && f <= 8000.0) statCutHigh += c;
         }
-        statPower += power[K];
-        if (g < rtDeepest) { rtDeepest = g; rtDeepestHz = k * binHz; }
+        statPower += heard;
+        if (deepest < 0 || g < rtCut[static_cast<size_t> (deepest)]) deepest = k;
+    }
+    // Meter: the deepest cut and where the ringing tone is. The cut covers the tone's bin and both
+    // neighbours alike, so the loudest of those three is the tone; a parabola through its level and
+    // its neighbours' places it between bins.
+    if (deepest >= 0 && rtCut[static_cast<size_t> (deepest)] < rtDeepest)
+    {
+        int peak = deepest;
+        for (int k = std::max (1, deepest - 1); k <= std::min (half - 1, deepest + 1); ++k)
+            if (levelDb[static_cast<size_t> (k)] > levelDb[static_cast<size_t> (peak)]) peak = k;
+        double offset = 0.0;
+        if (peak > 0 && peak < half)
+        {
+            const double l = levelDb[static_cast<size_t> (peak - 1)], c = levelDb[static_cast<size_t> (peak)], r = levelDb[static_cast<size_t> (peak + 1)];
+            const double den = l - 2.0 * c + r;
+            if (den < 0.0) offset = std::clamp (0.5 * (l - r) / den, -0.5, 0.5);
+        }
+        rtDeepest = rtCut[static_cast<size_t> (deepest)];
+        rtDeepestHz = (peak + offset) * binHz;
     }
 }
 
@@ -390,19 +426,60 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
     if (tsFrames > 0 || signal)
     {
         const bool warming = tsFrames < static_cast<long> (2.0 * framesPerSecond);   // both averages follow fast at first
+        // A new section (an 808 or bass entering after an intro): the reference re-learns from the
+        // short-term balance within about a second, so the new low end isn't cut for the next ~10 s.
+        const bool relearn = tsRelearn > 0;
         const double aL = warming ? aS : 1.0 - std::exp (-1.0 / (10.0 * framesPerSecond));
+        const double aR = 1.0 - std::exp (-1.0 / (0.25 * framesPerSecond));
+        // Each band relative to the whole frame: an overall level change (a louder chorus) never
+        // reaches the averages, so the slower top bands can't lag behind it. Empty bands: -90 dB.
+        std::array<double, B> cur {};
+        for (size_t b = 0; b < static_cast<size_t> (B); ++b)
+            cur[b] = std::max (10.0 * std::log10 (e[b] + 1.0e-20) - totalDb, -90.0);
+
+        // Section-change detector: how far each band in 30-160 Hz sits above the reference, with the
+        // overall change taken out the same way the corrections below take it out, averaged over
+        // ~1 s (whatever the Speed). More than kNewPartDb is a part coming in (the 808 enters for the
+        // chorus), not a drift: the reference re-learns instead of cutting it for the next ~10 s.
+        constexpr double kNewPartDb = 4.0;
+        bool jump = false;
+        if (signal && ! warming && ! relearn)
+        {
+            double top = -400.0;
+            for (double v : tsLong) top = std::max (top, v);
+            double mean = 0.0, wsum = 0.0;
+            for (size_t b = 0; b < static_cast<size_t> (B); ++b)
+            {
+                if (tsLong[b] < top - 60.0) continue;
+                const double w = std::pow (10.0, (tsLong[b] - top) / 20.0);
+                mean += w * (cur[b] - tsLong[b]); wsum += w;
+            }
+            mean = wsum > 0.0 ? mean / wsum : 0.0;
+            const double aJ = 1.0 - std::exp (-1.0 / framesPerSecond);
+            for (size_t b = 0; b < static_cast<size_t> (B); ++b)
+            {
+                if (bandCf[b] < 30.0 || bandCf[b] > 160.0 || tsLong[b] < top - 60.0) continue;
+                tsJump[b] += (cur[b] - tsLong[b] - mean - tsJump[b]) * aJ;
+                jump = jump || tsJump[b] > kNewPartDb;
+            }
+        }
         for (size_t b = 0; b < static_cast<size_t> (B); ++b)
         {
-            // Each band relative to the whole frame: an overall level change (a louder chorus) never
-            // reaches the averages, so the slower top bands can't lag behind it. Empty bands: -90 dB.
-            const double db = std::max (10.0 * std::log10 (e[b] + 1.0e-20) - totalDb, -90.0);
+            const double db = cur[b];
             const double aB = topW (b) > 0.0 && ! warming ? 1.0 - std::exp (-1.0 / ((shortS + (2.0 - shortS) * topW (b)) * framesPerSecond)) : aS;
             if (! signal) continue;   // band balances freeze in silence (the slow top bands would lag after it)
             tsShort[b] += (db - tsShort[b]) * aB;
-            tsLong[b] += (db - tsLong[b]) * aL;
+            if (relearn) tsLong[b] += (tsShort[b] - tsLong[b]) * aR;
+            else tsLong[b] += (db - tsLong[b]) * aL;
         }
         tsLevelShort += (totalDb - tsLevelShort) * aS;
-        if (signal) { tsLevelLong += (totalDb - tsLevelLong) * aL; ++tsFrames; }
+        if (signal)
+        {
+            tsLevelLong += ((relearn ? tsLevelShort : totalDb) - tsLevelLong) * (relearn ? aR : aL);
+            ++tsFrames;
+            if (relearn) --tsRelearn;
+            if (jump) { tsRelearn = static_cast<long> (1.5 * framesPerSecond); tsJump.fill (0.0); }
+        }
     }
     double maxLong = -400.0;
     for (double v : tsLong) maxLong = std::max (maxLong, v);
@@ -505,7 +582,11 @@ void StemEQ::hop() noexcept
             const double e = std::max (0.0, std::pow (10.0, static_cast<double> (feat[static_cast<size_t> (band)])) - 1.0e-9)
                            + std::max (0.0, std::pow (10.0, static_cast<double> (feat[static_cast<size_t> (band + StemNet::kBands)])) - 1.0e-9);
             for (int st = 0; st < kStems; ++st)
-                stemEnergy[static_cast<size_t> (st)] += e * shares[static_cast<size_t> (st * StemNet::kBands + band)];
+            {
+                const double credited = e * shares[static_cast<size_t> (st * StemNet::kBands + band)];
+                stemEnergy[static_cast<size_t> (st)] += credited;
+                stemLoudness[static_cast<size_t> (st)] += credited * bandLoud[static_cast<size_t> (band)];
+            }
         }
     }
 

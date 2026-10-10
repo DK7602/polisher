@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "Signals.h"
+#include "polisher/AutoMaster.h"
 #include "polisher/LoudnessTargeting.h"
 #include "polisher/StemEQ.h"
 
@@ -107,7 +108,7 @@ TEST_CASE ("Resonance Tamer cuts a ringing tone, not the music around it", "[spe
     double deepest = 0.0, at = 0.0;
     s.takeResonanceMeter (deepest, at);
     CHECK (deepest < -4.0);
-    CHECK_THAT (at, Catch::Matchers::WithinAbs (2400.0, 150.0));
+    CHECK_THAT (at, Catch::Matchers::WithinAbs (2400.0, 30.0));
 
     // The same noise without the ring: almost untouched.
     const auto clean = testsig::musicLike (sr, 4.0, -18.0, 5);
@@ -115,6 +116,108 @@ TEST_CASE ("Resonance Tamer cuts a ringing tone, not the music around it", "[spe
     const double change = energyDb (cleanOut.channels[0], a + static_cast<size_t> (L), b + static_cast<size_t> (L)) - energyDb (clean.channels[0], a, b);
     UNSCOPED_INFO ("clean noise level change " << change << " dB");
     CHECK (std::abs (change) < 0.6);
+}
+
+TEST_CASE ("Resonance Tamer meter names the ringing tone's frequency, low rings too", "[spectral]")
+{
+    // The cut spans the tone's bin and both neighbours; the meter must name the tone, not the lower
+    // neighbour (a 90 Hz ring used to read 43-47 Hz, 250 Hz read 188-215 Hz).
+    for (double hz : { 90.0, 250.0, 1000.0 })
+        for (double sr : { 44100.0, 48000.0 })
+        {
+            auto in = testsig::musicLike (sr, 3.0, -18.0, 5);
+            for (auto& ch : in.channels)
+                for (size_t i = 0; i < ch.size(); ++i)
+                    ch[i] += static_cast<float> (0.05 * std::sin (2.0 * std::numbers::pi * hz * static_cast<double> (i) / sr));
+            ResonanceParams rt; rt.amount = 100.0;
+            StemEQ s;
+            runStage (in, {}, rt, &s);
+            double deepest = 0.0, at = 0.0;
+            s.takeResonanceMeter (deepest, at);
+            UNSCOPED_INFO (hz << " Hz ring at " << sr << ": meter " << deepest << " dB at " << at << " Hz");
+            CHECK (deepest < -1.0);
+            CHECK_THAT (at, Catch::Matchers::WithinAbs (hz, 0.1 * hz + 5.0));
+        }
+}
+
+TEST_CASE ("Resonance Tamer's statistics hear a ringing tone over a loud 808", "[spectral]")
+{
+    // Loudness-weighted: an 808 carrying most of the energy must not hide a 3 kHz ring the ear picks
+    // out at once (power-weighted it read 0.44 dB without the 808 and 0.01 dB with it).
+    const double sr = 44100.0;
+    auto mix = [&] (bool with808, bool ring)
+    {
+        AudioClip c = testsig::musicLike (sr, 14.0, -16.0, 3);
+        for (auto& ch : c.channels)
+            for (size_t i = 0; i < ch.size(); ++i)
+            {
+                const double t = static_cast<double> (i) / sr, tn = std::fmod (t, 1.0);
+                if (with808) ch[i] += static_cast<float> (0.3 * std::exp (-tn * 1.2) * std::min (1.0, tn * 200.0) * std::sin (2.0 * std::numbers::pi * 45.0 * t));
+                if (ring) ch[i] += static_cast<float> (0.012 * std::sin (2.0 * std::numbers::pi * 3000.0 * t));
+            }
+        return c;
+    };
+    ResonanceParams probe; probe.amount = 100.0;
+    const double without808 = -measureSpectral (mix (false, true), {}, probe).resonanceCutDb;
+    const SpectralStats with = measureSpectral (mix (true, true), {}, probe);
+    const double clean808 = -measureSpectral (mix (true, false), {}, probe).resonanceCutDb;
+    UNSCOPED_INFO ("full cut: ring " << without808 << " dB, ring + 808 " << -with.resonanceCutDb << " dB, 808 alone " << clean808 << " dB");
+    CHECK (-with.resonanceCutDb > 0.5 * without808);
+    CHECK (with.harshnessShare > 0.65);
+    CHECK (clean808 < 0.1);
+
+    // And Auto-Master turns the tamer on for the ring, 808 or not, and leaves it off without one.
+    AutoMasterSettings s;
+    const auto ringing = autoMaster (mix (true, true), s), clean = autoMaster (mix (true, false), s);
+    REQUIRE (ringing.ok);
+    REQUIRE (clean.ok);
+    CHECK (ringing.chain.resonance.amount > 0.0);
+    CHECK (ringing.chain.resonance.focus == ResonanceFocus::harshness);
+    CHECK (clean.chain.resonance.amount == 0.0);
+}
+
+TEST_CASE ("Tone Steady re-learns when an 808 comes in instead of cutting it", "[spectral]")
+{
+    // 16 s intro without an 808, then a chorus with one. The 808 is the arrangement, not a drift:
+    // before, Range 3 cut it by ~2.3-2.9 dB for the first 8 s of the chorus.
+    const double sr = 44100.0;
+    AudioClip in = testsig::musicLike (sr, 26.0, -18.0, 3);
+    const double notes[3] = { 45.0, 50.0, 41.0 };
+    for (auto& ch : in.channels)
+    {
+        double ph = 0.0;
+        for (size_t i = static_cast<size_t> (16.0 * sr); i < ch.size(); ++i)
+        {
+            const double t = static_cast<double> (i) / sr - 16.0, tn = std::fmod (t, 1.0);
+            ph += 2.0 * std::numbers::pi * notes[static_cast<int> (t) % 3] / sr;
+            ch[i] += static_cast<float> (0.35 * std::exp (-tn * 1.2) * std::min (1.0, tn * 200.0) * (std::sin (ph) + 0.15 * std::sin (2.0 * ph)));
+        }
+    }
+    auto lowDb = [&] (const AudioClip& c, double from, double to)   // energy below ~130 Hz (4th-order low-pass)
+    {
+        const double w0 = 2.0 * std::numbers::pi * 130.0 / sr, alpha = std::sin (w0) / std::sqrt (2.0), cw = std::cos (w0);
+        const double b0 = (1.0 - cw) / 2.0, b1 = 1.0 - cw, a0 = 1.0 + alpha, a1 = -2.0 * cw, a2 = 1.0 - alpha;
+        double x1[2] {}, x2[2] {}, y1[2] {}, y2[2] {}, e = 0.0;
+        for (size_t i = 0; i < c.channels[0].size(); ++i)
+        {
+            double x = c.channels[0][i];
+            for (size_t st = 0; st < 2; ++st)
+            {
+                const double y = (b0 * x + b1 * x1[st] + b0 * x2[st] - a1 * y1[st] - a2 * y2[st]) / a0;
+                x2[st] = x1[st]; x1[st] = x; y2[st] = y1[st]; y1[st] = y; x = y;
+            }
+            if (i >= static_cast<size_t> (from * sr) && i < static_cast<size_t> (to * sr)) e += x * x;
+        }
+        return 10.0 * std::log10 (e + 1e-30);
+    };
+    ToneSteadyParams ts; ts.amount = 100.0; ts.rangeDb = 3.0;
+    const auto out = renderSpectral (in, {}, ts, {});
+    for (double t0 : { 16.0, 18.0, 20.0, 22.0 })
+    {
+        const double change = lowDb (out, t0, t0 + 2.0) - lowDb (in, t0, t0 + 2.0);
+        UNSCOPED_INFO ("chorus " << t0 - 16.0 << "-" << t0 - 14.0 << " s: low end " << change << " dB");
+        CHECK (change > -1.0);
+    }
 }
 
 TEST_CASE ("Resonance Tamer Focus keeps cuts in its range", "[spectral]")

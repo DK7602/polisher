@@ -12,7 +12,9 @@ enum StemIndex { kStemVocals = 0, kStemDrums = 1, kStemBass = 2, kStemOther = 3 
 /** What Resonance Tamer and Tone Steady did over a stretch of audio (for Auto-Master). */
 struct SpectralStats
 {
-    double resonanceCutDb = 0.0;   // energy-weighted average resonance cut (dB, <= 0)
+    // Weighted by loudness (A-weighted power), not raw power: an 808 or sub carries most of a trap
+    // mix's energy but little of what is heard, and must not hide a ring the ear picks out at once.
+    double resonanceCutDb = 0.0;   // loudness-weighted average resonance cut (dB, <= 0)
     double boxinessShare = 0.0;    // share of that cutting in 150-800 Hz (0..1)
     double harshnessShare = 0.0;   // share in 1.5-8 kHz (0..1)
     double steadyMoveDb = 0.0;     // energy-weighted average size of Tone Steady's corrections (dB, >= 0)
@@ -27,7 +29,10 @@ struct StemEQParams
 /** Tone Steady: keeps the tonal balance steady as the song plays. Each band's short-term level is
     compared with the song's own long-term balance; where a passage drifts (muddier, harsher,
     thinner) the band is nudged back, cuts up to Range, boosts up to half of it. Above ~2.5 kHz it
-    reacts only to a top end that stays brighter for seconds, never to hats coming and going. */
+    reacts only to a top end that stays brighter for seconds, never to hats coming and going.
+    In 30-160 Hz a jump of more than 4 dB beyond the rest of the spectrum that lasts about a second
+    (an 808 or bass coming in for the chorus) is taken as the arrangement, not a drift: the
+    reference re-learns within about a second instead of cutting the new low end for the next ten. */
 struct ToneSteadyParams
 {
     bool enabled = true;
@@ -38,8 +43,10 @@ struct ToneSteadyParams
 
 enum class ResonanceFocus { full = 0, boxiness = 1, harshness = 2 };
 
-/** Resonance Tamer: finds narrow peaks standing out of the spectrum around them (ringing boxiness,
-    whistly or harsh tones) and cuts only those, only while they ring. */
+/** Resonance Tamer: finds peaks standing out of the spectrum around them (ringing boxiness,
+    whistly or harsh tones) and cuts them, only while they ring. The cut spans the peak's bin and
+    its two neighbours, so it is narrow above ~1 kHz but about 3/4 octave wide below ~800 Hz
+    (an FFT bin is ~47 Hz wide). */
 struct ResonanceParams
 {
     bool enabled = true;
@@ -81,11 +88,12 @@ private:
     The mix is not split into stems. StemNet predicts, per frame and band, how the energy divides
     between the four; the four stem gains are mixed by those shares into one gain per band, spread
     over the FFT bins (triangular ERB bands whose weights sum to 1 in every bin) and applied in an
-    STFT (Hann, NFFT 1024 / hop 256; 2048 / 512 from 88.2 kHz so the bands stay in Hz), overlap-
-    added with a Hann synthesis window. With every gain at 0 dB that gain is exactly 1.
+    STFT (Hann, NFFT 1024 / hop 256; 2048 / 512 from 88.2 kHz, 4096 / 1024 from 176.4 kHz, so
+    the bins and the frame rate stay what the model was trained on), overlap-added with a Hann
+    synthesis window. With every gain at 0 dB that gain is exactly 1.
 
-    - Constant latency NFFT + 3 hops (1792 samples at 44.1 / 48 kHz, ~40 ms) in every state: the
-      model looks 3 frames ahead.
+    - Constant latency NFFT + 3 hops (1792 samples at 44.1 / 48 kHz, 3584 at 88.2 / 96, 7168 at
+      176.4 / 192: 37-41 ms at every rate) in every state: the model looks 3 frames ahead.
     - Exact pass-through (delayed) when off or at 0 / 0 / 0 / 0, with 20 ms cross-fades; gain moves
       glide (30 ms). The model keeps running while neutral, so turning a knob never waits for it.
     - Channels 0 and 1 are processed (a mono input is analysed as L = R); further channels are
@@ -111,7 +119,9 @@ public:
     static bool isNeutral (const ResonanceParams& p) noexcept { return ! p.enabled || p.amount < 0.5; }
     bool allNeutral() const noexcept { return isNeutral (params) && isNeutral (tsParams) && isNeutral (rtParams); }
 
-    static int fftSizeFor (double sampleRate) noexcept { return sampleRate < 80000.0 ? 1024 : 2048; }
+    // The model was trained at 44.1 kHz (NFFT 1024, ~187 frames a second): every rate must keep
+    // about the same Hz per bin and frames per second, or it hears the music sped up.
+    static int fftSizeFor (double sampleRate) noexcept { return sampleRate < 80000.0 ? 1024 : sampleRate < 160000.0 ? 2048 : 4096; }
     static int latencyFor (double sampleRate) noexcept { return fftSizeFor (sampleRate) * 7 / 4; }
     int latencySamples() const noexcept { return latencyFor (sampleRate); }
 
@@ -137,12 +147,20 @@ public:
     void computeFeatures (const double* left, const double* right, float* features) noexcept;
 
     /** How much of the music's energy the model has credited to each stem since the last call
-        (vocals, drums, bass, other; for the "what the model hears" meter). Not atomic: call from
-        the audio thread and hand the numbers on. */
+        (vocals, drums, bass, other; raw power, what Auto-Master's vocal level uses). Not atomic:
+        call from the audio thread and hand the numbers on. */
     void takeStemEnergies (std::array<double, kStems>& out) noexcept
     {
         out = stemEnergy;
         stemEnergy.fill (0.0);
+    }
+    /** The same, weighted by loudness (A-weighting at each band's centre) for the "Model Hears"
+        meter: raw power is mostly sub-bass, so an 808 would read 70-90 % of the music while the
+        ear hears it as a fraction of that. Kept separately from takeStemEnergies(). */
+    void takeStemLoudness (std::array<double, kStems>& out) noexcept
+    {
+        out = stemLoudness;
+        stemLoudness.fill (0.0);
     }
 
     /** Deepest Resonance Tamer cut (dB, <= 0) and its frequency since the last call. */
@@ -191,8 +209,9 @@ private:
     std::vector<double> binGain, scratch;
 
     // Resonance Tamer (per bin, dB) and Tone Steady (per band) state
-    std::vector<double> power, levelDb, prefix, rtCut, rtLin, rtTarget, rtSmooth, tsBin, bandCf;
-    std::array<double, 64> tsShort {}, tsLong {}, tsGain {};
+    std::vector<double> power, levelDb, prefix, rtCut, rtLin, rtTarget, rtSmooth, tsBin, bandCf, binLoud;
+    std::array<double, 64> tsShort {}, tsLong {}, tsGain {}, tsJump {}, bandLoud {};
+    long tsRelearn = 0;
     double rtAmount = 0.0, tsAmount = 0.0, framesPerSecond = 187.5, tsLevelShort = 0.0, tsLevelLong = 0.0;
     long tsFrames = 0;
     double rtDeepest = 0.0, rtDeepestHz = 0.0, tsLargest = 0.0, tsLargestHz = 0.0;
@@ -206,7 +225,7 @@ private:
     std::array<float, StemNet::kIn> feat {};
     std::array<float, kStems * StemNet::kBands> shares {};
     std::array<double, kStems> gain { 1.0, 1.0, 1.0, 1.0 };
-    std::array<double, kStems> stemEnergy {};
+    std::array<double, kStems> stemEnergy {}, stemLoudness {};
     double gainCoeff = 0.0;
 
     // dry path and cross-fade

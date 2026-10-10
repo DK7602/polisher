@@ -24,7 +24,10 @@ std::array<double, kEqBands> genreTargetCurve (Genre) noexcept;
 /** Where the lead vocal usually sits in a genre's masters, as Stem EQ's model hears it (dB relative to
     the whole mix, loudest section). Trap / Hip-Hop and R&B come from the user's own 13 released songs
     (median -2.8 dB, middle 60 % -3.8 ... -2.0); the others are starting points (MUSDB pop / rock
-    measures -5.9 dB median). */
+    measures -5.9 dB median). Raw energy shares, not loudness-weighted like the "Model Hears" meter:
+    the norms were measured that way and the songs are not at hand to re-measure them weighted. So
+    the reading still depends on how loud the 808 is (a louder 808 reads the vocal lower); re-derive
+    the norms on the songs before switching measureStemLevels() to StemEQ::takeStemLoudness(). */
 double genreVocalLevelDb (Genre) noexcept;
 
 /** Stem EQ vocal move Auto-Master suggests for a measured vocal level (dB as above): 0 when the vocal
@@ -38,7 +41,7 @@ struct MixAnalysis
     double seconds = 0.0;                       // audio analysed (loud parts only)
     LoudnessStats loudness;                     // of the incoming mix
     double peakToLoudnessDb = 0.0;              // true peak minus integrated (PLR)
-    std::array<double, kEqBands> bandDb {};     // tilted band levels, mean of bands 2..6 = 0
+    std::array<double, kEqBands> bandDb {};     // tilted band levels, mean of bands 2..6 = 0 (before the user's Stem EQ, as the Tonal EQ hears it)
     double bassWidthPercent = 0.0;              // how stereo the bass is below 150 Hz
     double lowJumpDb = 0.0;                     // how far the loudest bass moments rise above typical ones
     double lowCrestDb = 0.0;                    // peak vs average of the low band (kick punch)
@@ -46,7 +49,7 @@ struct MixAnalysis
     double midSideDb = -100.0;                  // side vs mid energy, 250 Hz - 5 kHz (stereo width of the mids)
     double highSideDb = -100.0;                 // side vs mid energy above 5 kHz
     double correlation = 1.0;                   // L/R correlation of the loud parts (+1 mono, 0 wide, < 0 out of phase)
-    std::array<double, kStems> stemLevelDb {};  // as Stem EQ's model hears it (after the user's Stem EQ)
+    std::array<double, kStems> stemLevelDb {};  // as Stem EQ's model hears it (after the user's Stem EQ; raw energy shares)
     bool usable = false;                        // false: silent or too short
 };
 
