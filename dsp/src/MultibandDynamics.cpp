@@ -6,14 +6,6 @@ namespace polisher {
 namespace {
     double perSample (double seconds, double sr) noexcept { return 1.0 - std::exp (-1.0 / (std::max (seconds, 1.0e-5) * sr)); }
 
-    /** The 2nd-order all-pass that equals the sum of a Linkwitz-Riley 4th-order low- and high-pass
-        at the same frequency (the Butterworth denominator, mirrored). */
-    design::Coeffs allpassFor (double f, double sr) noexcept
-    {
-        const auto lp = design::butterworth (false, f, sr);
-        return { lp.a2, lp.a1, 1.0, lp.a1, lp.a2 };
-    }
-
     constexpr std::array<double, kDynBands> kRmsWindowMs { 30.0, 10.0, 5.0, 3.0 };
 }
 
@@ -22,7 +14,7 @@ bool MultibandDynamics::isNeutral (const DynamicsParams& p) noexcept
     if (! p.enabled)
         return true;
     for (const auto& b : p.bands)
-        if (b.ratio > 1.0 || b.gainDb != 0.0)
+        if (b.ratio > 1.0 || std::abs (b.gainDb) >= kDynGainNeutralDb)
             return false;
     return true;
 }
@@ -55,6 +47,7 @@ void MultibandDynamics::resetFilters() noexcept
     for (auto& d : det)
     {
         d.meanSquare = 0.0;
+        d.channelMeanSquare = {};
         d.grDb = d.grAverage = 0.0;
     }
 }
@@ -69,7 +62,8 @@ void MultibandDynamics::reset() noexcept
     mix = mixTarget = running ? 1.0 : 0.0;
     for (size_t k = 0; k < kDynBands; ++k)
     {
-        det[k].makeupDb = det[k].targetMakeupDb = running ? params.bands[k].gainDb : 0.0;
+        const double g = params.bands[k].gainDb;
+        det[k].makeupDb = det[k].targetMakeupDb = running && std::abs (g) >= kDynGainNeutralDb ? std::clamp (g, -24.0, 24.0) : 0.0;
         det[k].maxGr = 0.0;
     }
     countdown = 0;
@@ -81,7 +75,7 @@ void MultibandDynamics::applyCrossovers() noexcept
     const auto lp1 = design::butterworth (false, f1, sampleRate), hp1 = design::butterworth (true, f1, sampleRate);
     const auto lp2 = design::butterworth (false, f2, sampleRate), hp2 = design::butterworth (true, f2, sampleRate);
     const auto lp3 = design::butterworth (false, f3, sampleRate), hp3 = design::butterworth (true, f3, sampleRate);
-    const auto ap1 = allpassFor (f1, sampleRate), ap3 = allpassFor (f3, sampleRate);
+    const auto ap1 = design::allpass (f1, sampleRate), ap3 = design::allpass (f3, sampleRate);
     for (auto& c : chan)
     {
         for (auto& f : c.x1lp) design::apply (f, lp1);
@@ -136,11 +130,27 @@ void MultibandDynamics::update() noexcept
     if (moved)
         applyCrossovers();
 
+    // Snap tiny state to zero so silence never decays into denormals, which are very slow on some
+    // CPUs (offline renders run without the host's flush-to-zero).
+    const auto flush = [] (double& v) { if (std::abs (v) < 1.0e-20) v = 0.0; };
+    for (auto& c : chan)
+    {
+        for (auto* g : { &c.x1lp, &c.x1hp, &c.x2lp, &c.x2hp, &c.x3lp, &c.x3hp })
+            for (auto& f : *g) { flush (f.z1); flush (f.z2); }
+        for (auto* f : { &c.apX1, &c.apX3 }) { flush (f->z1); flush (f->z2); }
+    }
+    for (auto& d : det)
+    {
+        flush (d.grDb);
+        flush (d.grAverage);
+        if (std::abs (d.makeupDb - d.targetMakeupDb) < 1.0e-9) d.makeupDb = d.targetMakeupDb;
+    }
+
     for (size_t k = 0; k < kDynBands; ++k)
     {
         auto& d = det[k];
         const auto& b = params.bands[k];
-        d.targetMakeupDb = params.enabled ? std::clamp (b.gainDb, -24.0, 24.0) : 0.0;
+        d.targetMakeupDb = params.enabled && std::abs (b.gainDb) >= kDynGainNeutralDb ? std::clamp (b.gainDb, -24.0, 24.0) : 0.0;
         if (b.attackMs != d.setAttackMs)
         {
             d.setAttackMs = b.attackMs;

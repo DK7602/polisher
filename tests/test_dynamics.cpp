@@ -63,6 +63,55 @@ TEST_CASE ("Dynamics at neutral is an exact pass-through", "[dynamics]")
     CHECK_FALSE (d.isActive());
 }
 
+TEST_CASE ("A band gain too small to hear counts as 0 dB", "[dynamics]")
+{
+    // The UI shows anything under 0.05 dB as 0; such a gain mustn't switch the crossovers in.
+    auto mix = testsig::musicLike (48000.0, 1.0, -6.0);
+    const auto original = mix;
+    DynamicsParams p;
+    p.bands[2].gainDb = 0.005;
+    CHECK (MultibandDynamics::isNeutral (p));
+    MultibandDynamics d;
+    d.prepare (48000.0, 2);
+    d.setParams (p);
+    d.reset();
+    run (d, mix);
+    CHECK (mix.channels == original.channels);
+    CHECK_FALSE (d.isActive());
+}
+
+TEST_CASE ("Stereo detection reads a wide sound the same as a centred one", "[dynamics]")
+{
+    // Same level in both channels, once identical and once 90 degrees apart (as wide as it gets
+    // without cancelling). The louder-channel detector must read both alike.
+    const double sr = 48000.0;
+    DynamicsParams p;
+    for (auto& b : p.bands) { b.ratio = 2.0; b.thresholdDb = 0.0; }   // active, nothing compressing
+    for (auto [hz, band] : { std::pair { 60.0, 0 }, std::pair { 400.0, 1 }, std::pair { 2500.0, 2 }, std::pair { 10000.0, 3 } })
+    {
+        double read[2] {};
+        for (int wide = 0; wide < 2; ++wide)
+        {
+            AudioClip c = testsig::silence (sr, 2, 1.0);
+            for (int i = 0; i < c.numSamples(); ++i)
+            {
+                const double w = 2.0 * std::numbers::pi * hz * i / sr;
+                c.channels[0][static_cast<size_t> (i)] = static_cast<float> (0.1 * std::sin (w));
+                c.channels[1][static_cast<size_t> (i)] = static_cast<float> (0.1 * (wide ? std::cos (w) : std::sin (w)));
+            }
+            MultibandDynamics d;
+            d.prepare (sr, 2);
+            d.setParams (p);
+            d.reset();
+            run (d, c);
+            read[wide] = d.currentLevelDb (band);
+        }
+        INFO (hz << " Hz: centred " << read[0] << " dB, wide " << read[1] << " dB");
+        CHECK_THAT (read[1], WithinAbs (read[0], 0.3));
+        CHECK_THAT (read[0], WithinAbs (-20.0, 1.0));
+    }
+}
+
 TEST_CASE ("The four bands sum flat when nothing is compressing", "[dynamics]")
 {
     for (double sr : { 44100.0, 48000.0, 96000.0 })

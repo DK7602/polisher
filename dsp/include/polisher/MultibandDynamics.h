@@ -9,6 +9,7 @@
 namespace polisher {
 
 inline constexpr int kDynBands = 4;
+inline constexpr double kDynGainNeutralDb = 0.01;   // band gains closer to 0 dB than this count as 0 dB
 
 struct DynBandParams
 {
@@ -39,9 +40,9 @@ inline constexpr std::array<std::array<double, 2>, kDynBands - 1> kDynCrossoverR
     - Split: Linkwitz-Riley 4th-order crossovers in a tree (mid split first), with 2nd-order all-pass
       compensation on the opposite branch, so the four bands always sum to a flat magnitude response.
       Zero latency.
-    - Detection: stereo-linked (the louder channel drives both, so the image never shifts), RMS with
-      a per-band window (30 / 10 / 5 / 3 ms, longest in the lows so bass cycles don't ripple the
-      gain), calibrated so a sine reads its peak level.
+    - Detection: stereo-linked (each channel's RMS is measured, the louder one drives both, so the
+      image never shifts), RMS with a per-band window (30 / 10 / 5 / 3 ms, longest in the lows so
+      bass cycles don't ripple the gain), calibrated so a sine reads its peak level.
     - Gain computer: 6 dB soft knee; attack / release smoothing in dB; optional program-dependent
       release (quick after short hits, the set release on sustained compression).
     - Exact pass-through when every band is at 1:1 with 0 dB gain (or the module is off): the split
@@ -73,7 +74,6 @@ public:
                 continue;
 
             std::array<std::array<double, kDynBands>, 2> band {};
-            std::array<double, kDynBands> energy {};
             std::array<double, 2> dry {};
             for (int c = 0; c < nch; ++c)
             {
@@ -89,15 +89,23 @@ public:
                 b[1] = s.x1hp[1].process (s.x1hp[0].process (lo));
                 b[2] = s.x3lp[1].process (s.x3lp[0].process (hi));
                 b[3] = s.x3hp[1].process (s.x3hp[0].process (hi));
-                for (size_t k = 0; k < kDynBands; ++k)
-                    energy[k] = std::max (energy[k], b[k] * b[k]);
             }
 
             std::array<double, kDynBands> gain {};
             for (size_t k = 0; k < kDynBands; ++k)
             {
+                // Each channel's RMS is smoothed on its own, then the louder one drives both. (Taking
+                // the louder sample first would read a wide stereo sound ~2 dB too hot.)
                 auto& d = det[k];
-                d.meanSquare += (energy[k] - d.meanSquare) * d.rmsCoeff;
+                d.meanSquare = 0.0;
+                for (int c = 0; c < nch; ++c)
+                {
+                    const double v = band[static_cast<size_t> (c)][k];
+                    double& ms = d.channelMeanSquare[static_cast<size_t> (c)];
+                    ms += (v * v - ms) * d.rmsCoeff;
+                    if (ms < 1.0e-30) ms = 0.0;   // no denormals in silence (offline renders too)
+                    d.meanSquare = std::max (d.meanSquare, ms);
+                }
                 const double levelDb = 10.0 * std::log10 (2.0 * d.meanSquare + 1.0e-30);
                 const double target = gainComputer (levelDb, k);
                 const bool attacking = target < d.grDb;
@@ -151,6 +159,7 @@ private:
     };
     struct Detector
     {
+        std::array<double, 2> channelMeanSquare {};
         double meanSquare = 0.0, grDb = 0.0, grAverage = 0.0, maxGr = 0.0;
         double makeupDb = 0.0, targetMakeupDb = 0.0;
         double rmsCoeff = 0.0, attackCoeff = 0.0, releaseCoeff = 0.0, fastReleaseCoeff = 0.0;

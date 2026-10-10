@@ -6,6 +6,8 @@
 
 #include <cmath>
 #include <numbers>
+#include <utility>
+#include <vector>
 
 using namespace polisher;
 using Catch::Matchers::WithinAbs;
@@ -43,17 +45,75 @@ double levelDb (const AudioClip& c, bool side, double from, double to)
     return 10.0 * std::log10 (sum / (b - a) + 1.0e-30);
 }
 
-/** Kick-like hits: a 55 Hz sine burst with a fast decay, every 0.5 s. */
-AudioClip kicks (double sr, double seconds)
+/** One kick: a 55 Hz thump with a fast decay, plus the short click (1.7-4.3 kHz) every kick has. */
+double kickAt (double t)
+{
+    if (t < 0.0) return 0.0;
+    const double w = 2.0 * std::numbers::pi * t;
+    return 0.5 * std::exp (-t * 8.0) * std::sin (55.0 * w)
+         + 0.25 * std::exp (-t / 0.0015) * (std::sin (1700.0 * w) + std::sin (2900.0 * w) + std::sin (4300.0 * w)) / 1.5;
+}
+
+/** One clean 808 note: a low sine with a 2 ms fade-in, a slow decay and a 5 ms fade-out. */
+double note808At (double t, double length, double hz, double peakDb, double decaySeconds)
+{
+    if (t < 0.0 || t >= length) return 0.0;
+    const double env = std::pow (10.0, peakDb / 20.0) * std::exp (-t / decaySeconds)
+                     * std::min (1.0, t / 0.002) * std::min (1.0, (length - t) / 0.005);
+    return env * std::sin (2.0 * std::numbers::pi * hz * t);
+}
+
+/** A mono clip from a function of time. */
+template <typename F>
+AudioClip monoClip (double sr, double seconds, F f)
 {
     AudioClip clip = testsig::silence (sr, 2, seconds);
     for (int i = 0; i < clip.numSamples(); ++i)
-    {
-        const double t = std::fmod (i / sr, 0.5);
-        const double v = 0.5 * std::exp (-t * 8.0) * std::sin (2.0 * std::numbers::pi * 55.0 * t);
-        clip.channels[0][static_cast<size_t> (i)] = clip.channels[1][static_cast<size_t> (i)] = static_cast<float> (v);
-    }
+        clip.channels[0][static_cast<size_t> (i)] = clip.channels[1][static_cast<size_t> (i)] = static_cast<float> (f (i / sr));
     return clip;
+}
+
+/** Kick hits every 0.5 s. */
+AudioClip kicks (double sr, double seconds)
+{
+    return monoClip (sr, seconds, [] (double t) { return kickAt (std::fmod (t, 0.5)); });
+}
+
+/** Runs Bass Control live in chunks of `period` s and returns the biggest Punch boost (dB) and the
+    deepest Sub Tame cut (dB) in each chunk. */
+std::vector<std::pair<double, double>> perChunk (AudioClip clip, const BassParams& p, double period)
+{
+    BassControl b;
+    b.prepare (clip.sampleRate, 2);
+    b.setParams (p);
+    b.reset();
+    std::vector<std::pair<double, double>> out;
+    const int n = clip.numSamples(), chunk = static_cast<int> (period * clip.sampleRate);
+    for (int start = 0; start + chunk <= n; start += chunk)
+    {
+        for (int j = 0; j < chunk; j += 256)
+        {
+            float* ch[2] = { clip.channels[0].data() + start + j, clip.channels[1].data() + start + j };
+            b.process (ch, 2, std::min (256, chunk - j));
+        }
+        const double punch = b.takeMaxPunchDb();
+        out.emplace_back (punch, b.takeMaxTameDb());
+    }
+    return out;
+}
+
+/** Level (dB, peak-calibrated) of one tone in one channel over [from, to) seconds. */
+double toneDb (const AudioClip& c, int channel, double hz, double from, double to)
+{
+    double re = 0.0, im = 0.0;
+    const int a = static_cast<int> (from * c.sampleRate), b = static_cast<int> (to * c.sampleRate);
+    for (int i = a; i < b; ++i)
+    {
+        const double w = 2.0 * std::numbers::pi * hz * i / c.sampleRate;
+        re += c.channels[static_cast<size_t> (channel)][static_cast<size_t> (i)] * std::cos (w);
+        im += c.channels[static_cast<size_t> (channel)][static_cast<size_t> (i)] * std::sin (w);
+    }
+    return 20.0 * std::log10 (2.0 * std::hypot (re, im) / (b - a) + 1.0e-12);
 }
 
 } // namespace
@@ -91,13 +151,43 @@ TEST_CASE ("Mono Below removes stereo bass and keeps everything else", "[bass]")
     const auto highSide = renderBass (midSide (sr, 2.0, 1000.0, -300, 1000.0, -12.0), p);
     CHECK_THAT (levelDb (highSide, true, 1.0, 2.0), WithinAbs (-12.0 - 3.01, 0.05));
 
-    // Mid (mono) bass is untouched, sample for sample.
-    const auto monoIn = midSide (sr, 2.0, 50.0, -12.0, 1000.0, -300);
-    const auto monoOut = renderBass (monoIn, p);
-    double worst = 0.0;
-    for (size_t i = 0; i < monoIn.channels[0].size(); ++i)
-        worst = std::max (worst, static_cast<double> (std::abs (monoOut.channels[0][i] - monoIn.channels[0][i])));
-    CHECK (worst < 1.0e-6);
+    // Mid (mono) keeps its level at every frequency (it only gets the matching phase shift).
+    for (double hz : { 30.0, 50.0, 120.0, 200.0, 1000.0, 8000.0 })
+    {
+        const auto monoOut = renderBass (midSide (sr, 2.0, hz, -12.0, 1000.0, -300), p);
+        INFO (hz << " Hz");
+        CHECK_THAT (levelDb (monoOut, false, 1.0, 2.0), WithinAbs (-12.0 - 3.01, 0.02));
+        CHECK (levelDb (monoOut, true, 1.0, 2.0) < -200.0);   // and stays mono
+    }
+}
+
+TEST_CASE ("Mono Below keeps a hard-panned sound on its side above the frequency", "[bass]")
+{
+    // A sine on the left only, Mono Below at 100 Hz. Below 100 Hz it becomes mono (on both sides);
+    // above, it has to stay on the left: the right side only gets the LR4 low-pass's share.
+    const double sr = 48000.0;
+    BassParams p;
+    p.monoHz = 100.0;
+    struct Point { double hz, maxRightDb; };
+    for (auto [hz, maxRightDb] : { Point { 150.0, -20.5 }, Point { 200.0, -29.0 }, Point { 400.0, -52.0 }, Point { 2000.0, -90.0 } })
+    {
+        AudioClip in = testsig::silence (sr, 2, 2.0);
+        for (int i = 0; i < in.numSamples(); ++i)
+            in.channels[0][static_cast<size_t> (i)] = static_cast<float> (std::sin (2.0 * std::numbers::pi * hz * i / sr));
+        const auto out = renderBass (in, p);
+        const double left = toneDb (out, 0, hz, 1.0, 2.0), right = toneDb (out, 1, hz, 1.0, 2.0);
+        INFO (hz << " Hz: left " << left << " dB, right " << right << " dB");
+        CHECK (right < maxRightDb);
+        CHECK (right < left - 20.0);   // never louder on the wrong side
+        CHECK (left > -1.0);
+    }
+    // Well below the frequency: mono, half on each side.
+    AudioClip in = testsig::silence (sr, 2, 2.0);
+    for (int i = 0; i < in.numSamples(); ++i)
+        in.channels[0][static_cast<size_t> (i)] = static_cast<float> (std::sin (2.0 * std::numbers::pi * 30.0 * i / sr));
+    const auto out = renderBass (in, p);
+    CHECK_THAT (toneDb (out, 0, 30.0, 1.0, 2.0), WithinAbs (-6.02, 0.3));
+    CHECK_THAT (toneDb (out, 1, 30.0, 1.0, 2.0), WithinAbs (-6.02, 0.3));
 }
 
 TEST_CASE ("Bass width is measured", "[bass]")
@@ -182,6 +272,65 @@ TEST_CASE ("Punch lifts the start of each kick, not its tail", "[bass]")
     INFO ("attack +" << attackGain << " dB, tail +" << tailGain << " dB");
     CHECK (attackGain > 1.5);
     CHECK (std::abs (tailGain) < 0.5);
+}
+
+TEST_CASE ("Punch leaves 808 notes alone and still finds a kick over a long 808", "[bass]")
+{
+    const double sr = 48000.0;
+    BassParams p;
+    p.punch = 1.0;
+
+    // Clean 808 notes on their own (several pitches and levels): no click, so no boost.
+    for (double hz : { 30.0, 45.0, 60.0 })
+        for (double db : { -12.0, -6.0, 0.0 })
+        {
+            const auto in = monoClip (sr, 4.0, [=] (double t) { return note808At (std::fmod (t, 0.5), 0.5, hz, db, 0.6); });
+            double worst = 0.0;
+            for (auto [punch, tame] : perChunk (in, p, 0.5))
+                worst = std::max (worst, punch);
+            INFO (hz << " Hz at " << db << " dB: up to +" << worst << " dB");
+            CHECK (worst < 1.0);
+        }
+
+    // A kick every 0.5 s over a long 808 note (re-struck every 2 s): every kick gets a real boost.
+    const auto mix = monoClip (sr, 6.0, [] (double t) {
+        return note808At (std::fmod (t, 2.0), 2.0, 45.0, -8.0, 3.0) + kickAt (std::fmod (t, 0.5)); });
+    const auto hits = perChunk (mix, p, 0.5);
+    double weakest = 99.0;
+    for (size_t k = 2; k < hits.size(); ++k)
+        weakest = std::min (weakest, hits[k].first);
+    INFO ("weakest kick boost +" << weakest << " dB");
+    CHECK (weakest > 2.0);
+}
+
+TEST_CASE ("Sub Tame treats the first notes like the rest", "[bass]")
+{
+    // Identical 808 notes from the very start: the first one must not be cut harder than later
+    // ones (the average isn't judged from the note's own first 10 ms). Sparse, short notes do get
+    // a little cut once the average has settled; the first, heard before that, may get less.
+    const double sr = 48000.0;
+    BassParams p;
+    p.tame = 1.0;
+    for (auto [period, decay] : { std::pair { 0.5, 0.8 }, std::pair { 1.0, 0.5 } })
+    {
+        const auto in = monoClip (sr, 8.0, [=] (double t) { return note808At (std::fmod (t, period), period, 45.0, -8.0, decay); });
+        const auto notes = perChunk (in, p, period);
+        const double first = notes.front().second, later = notes.back().second;
+        INFO ("every " << period << " s: first note " << first << " dB, later " << later << " dB");
+        CHECK (first > later - 1.0);
+        CHECK (first > -2.0);
+        CHECK (later > -2.0);
+    }
+
+    // A drop after an intro with no bass: judged on its own, not ducked.
+    const auto drop = monoClip (sr, 10.0, [] (double t) {
+        return t < 5.0 ? 0.05 * std::sin (2.0 * std::numbers::pi * 3000.0 * t)
+                       : note808At (std::fmod (t, 0.5), 0.5, 45.0, -8.0, 0.8); });
+    double deepest = 0.0;
+    for (auto [punch, tame] : perChunk (drop, p, 0.5))
+        deepest = std::min (deepest, tame);
+    INFO ("drop cut " << deepest << " dB");
+    CHECK (deepest > -1.0);
 }
 
 TEST_CASE ("Bass Control never clicks when switched and stays stable", "[bass]")

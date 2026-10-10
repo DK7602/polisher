@@ -590,7 +590,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                 width >= 15.0
                   ? "Your bass is " + pct (width) + " stereo below 150 Hz. Club systems and phones play bass in mono, so stereo bass "
                     "partly cancels there. Making it mono below " + hz (chain.bass.monoHz) + " keeps it solid everywhere."
-                  : "Your bass is already nearly mono (" + pct (width) + "), so this is a safety net: it changes almost nothing now, "
+                  : "Your bass is already nearly mono (" + pct (width) + "), so this is a safety net: you'll hardly hear it now, "
                     "but keeps any stray stereo sub from cancelling on club systems.");
     }
     else
@@ -624,7 +624,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     chain.bass.punch = punch / 100.0;
     reason ("bass", "Punch", pct (punch),
             punch > 0.0 ? "Your low end is " + std::string (a.lowCrestDb < 9.0 ? (bassHeavy ? "mostly sustained (808s)" : "mostly sustained") : "fairly sustained") +
-                          ", so kicks can get lost under it. Punch adds thump to the start of each kick without turning the sub up."
+                          ", so kicks can get lost under it. Punch adds thump to the start of each kick (it spots kicks by their click), so 808 notes and the sub aren't turned up."
                         : s.intensity == Intensity::gentle ? "Gentle keeps the kick as it is."
                         : ! a.hasLowEnd ? "There's very little low end in what I heard, so there are no kicks to punch up."
                                         : "Your kicks already hit clearly above the bass, so no extra punch is needed.");

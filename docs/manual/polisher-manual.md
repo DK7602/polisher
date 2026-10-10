@@ -188,8 +188,8 @@ Keeps the low end solid on every system.
 | Control | Range (default) | What it does |
 | --- | --- | --- |
 | Mono Below | off–250 Hz (off) | Makes the bass below this mono. About 100 Hz is safe and helps clubs and phones. |
-| Sub Tame | 0–100 % (0) | Turns down 808 notes that jump above the song's usual low end (up to 12 dB, around 120 Hz). |
-| Punch | 0–100 % (0) | Adds up to 4 dB of thump (around 80 Hz) to the start of each kick, without raising the sub. |
+| Sub Tame | 0–100 % (0) | Turns down 808 notes that jump above the song's usual low end (up to 12 dB, below about 120 Hz). It listens for about a second before it cuts anything. |
+| Punch | 0–100 % (0) | Adds up to 4 dB of thump (around 80 Hz) to the start of each kick, without raising the sub. It spots kicks by the click at their start, so 808 notes on their own aren't boosted (and a kick with no click gets little). |
 | Taming meter | 0 to −12 dB | How much Sub Tame is cutting. |
 | Bass Width meter | mono … wide | How stereo your mix is below 150 Hz. |
 
@@ -209,7 +209,7 @@ Four-band compression. Click a band button (LOW, LO-MID, HI-MID, HIGH) to edit i
 | Split | 40–300 Hz, 300 Hz–3 kHz, 3–12 kHz | Where the band starts or ends. |
 | Threshold | −48 to 0 dB (−20) | Where compression starts. |
 | Ratio | 1:1–10:1 (1:1 = off) | How firmly the band is held. 2:1 is plenty. |
-| Attack | 0.5–100 ms (30 / 20 / 10 / 5) | Slow lets drum hits through; fast catches peaks. |
+| Attack | 0.5–100 ms (30 / 20 / 10 / 5) | Slow lets drum hits through; fast catches peaks. The Low band never reacts faster than about 20 ms, so bass notes don't wobble. |
 | Release | 20–1000 ms (200 / 150 / 120 / 100) | How fast it lets go. |
 | Gain | ±12 dB (0) | The band's level after compression. |
 | Adaptive release | on | Lets go quickly after short hits, slower on long notes. |
