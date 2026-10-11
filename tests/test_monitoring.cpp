@@ -334,6 +334,41 @@ TEST_CASE ("Dynamics solo: the four bands add up to the output; removed + compre
 
 TEST_CASE ("Resonance Tamer listen hook: what it cut, lined up with the output; silent when it rests", "[monitoring][spectral]")
 {
+    // Output + what was cut = the input, delayed, at every rate (the FFT size changes with the rate).
+    for (double rate : { 44100.0, 88200.0, 96000.0, 176400.0, 192000.0 })
+    {
+        const auto mix = ringingMix (rate, 2.0, 2400.0);
+        StemEQ s;
+        s.prepare (rate, 2);
+        ResonanceParams rt; rt.amount = 100.0;
+        s.setResonance (rt);
+        s.reset();
+        s.setTamerDelta (true);
+        AudioClip c = mix;
+        std::array<std::vector<double>, 2> cut;
+        for (auto& d : cut) d.assign (static_cast<size_t> (c.numSamples()), 0.0);
+        for (int pos = 0; pos < c.numSamples(); pos += 333)
+        {
+            const int n = std::min (333, c.numSamples() - pos);
+            float* ch[2] = { c.channels[0].data() + pos, c.channels[1].data() + pos };
+            double* dl[2] = { cut[0].data() + pos, cut[1].data() + pos };
+            s.process (ch, 2, n, dl);
+        }
+        const auto lat = static_cast<size_t> (s.latencySamples());
+        double err = 0.0, ref = 0.0, cutEnergy = 0.0;
+        for (size_t ch = 0; ch < 2; ++ch)
+            for (size_t i = lat + 2 * static_cast<size_t> (StemEQ::fftSizeFor (rate)); i < c.channels[ch].size(); ++i)
+            {
+                const double x = mix.channels[ch][i - lat];
+                err = std::max (err, std::abs ((double) c.channels[ch][i] + cut[ch][i] - x));
+                ref = std::max (ref, std::abs (x));
+                cutEnergy += cut[ch][i] * cut[ch][i];
+            }
+        UNSCOPED_INFO (rate << " Hz: output + cut vs input, largest difference " << err);
+        CHECK (err < 1.0e-6 * std::max (1.0, ref));
+        CHECK (cutEnergy > 0.0);
+    }
+
     const double sr = 48000.0;
     const auto in = ringingMix (sr, 4.0, 2400.0);
     auto runTamer = [&] (double amount, std::array<std::vector<double>, 2>& delta)

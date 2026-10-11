@@ -10,6 +10,9 @@
     (polisher::SongListener::toneTarget, as the mix arrives at the plug-in). Saved with the plug-in
     state as JSON (XML attribute "toneTarget", with a format number); a state without it (every song
     saved before stored targets existed) has none, and Tone Steady follows the music as before.
+    The song's level ("level", ToneTarget::levelDb) is optional in the same format: a target saved
+    before it loads without one (quiet passages then judged against the last ~10 s, as before), and
+    an older Polisher reading a newer state ignores it.
 
     set / clear / restore come from the message thread; the audio thread picks the target up with
     fetch(), which never waits (when the store is being written it tries again on the next block). */

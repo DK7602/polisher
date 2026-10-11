@@ -110,6 +110,8 @@ const M = {
   amState: 0, amProgress: 0, amHearing: false, amReport: 0, matchDb: 0, corr: 1,
   // Whole-song listen (mode 0 Auto-Master, 1 learn Tone Steady's target only) and the stored target (s of song, 0 = none).
   amMode: 0, amHeard: 0, amLoudAt: -1, amLoudLufs: -100, amCanFinish: false, amByItself: false, tsTarget: 0, tsLearnFail: 0,
+  // How far the music playing sits from that stored tone (dB, -1 unknown), and whether far for long (another song's?).
+  tsFar: false, tsDist: -1,
   undo: "", redo: "", snaps: [{}, {}, {}, {}], snapActive: -1, snapModified: false,
   dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], stemKeep: 0, rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
   ulBoost: 0, ulSquash: 0, refVersion: 0, refState: 0,
@@ -150,7 +152,7 @@ const modules = [
     controls: [["Vocals / Drums / Bass / Other", "Turns that part of the mix up or down (±12 dB). Other is everything else: synths, keys, guitars, pads, effects."],
                ["How it works", "A small AI model listens to the mix and works out, moment by moment and frequency by frequency, how much of the sound is vocals, drums, bass or other. Your four levels are mixed by those shares into one EQ that updates about 180 times a second."],
                ["Keep Loudness", "On: your moves change the balance, not how loud the mix is. When you turn a part up, Stem EQ turns the whole mix down by the same loudness (and the other way round), so A/B is a fair compare and the Maximizer isn't pushed harder. Off: a move also makes the mix louder or quieter."],
-               ["Trade-offs", "Adds about 40 ms of delay at any sample rate (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly. Moves up to about ±6 dB stay clean."]] },
+               ["Trade-offs", "Adds about 40 ms of delay at any sample rate (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly. Moves up to about ±6 dB stay clean. At 96 kHz or higher, set your audio buffer to 256 samples or more: Stem EQ (with Tone Steady and the Resonance Tamer) does its work in short bursts, and very small buffers there can crackle."]] },
   { id: "ts", name: "Tone Steady", live: true, soon: "",
     what: "Keeps your tone steady as the song plays: when a section drifts muddier, harsher or thinner than the rest of the song, it nudges those frequencies back.",
     cells: [], controls: [] },
@@ -721,7 +723,7 @@ const stemMoves = () => [0, 1, 2, 3].filter((k) => Math.abs(stemGainAt(k)) >= 0.
 function stemHearsCell() {
   const cell = document.createElement("div");
   cell.className = "cell";
-  cell.innerHTML = `<span class="cell-label">Model Hears</span><span class="cell-sub mono">share of what you hear</span>
+  cell.innerHTML = `<span class="cell-label">Model Hears</span><span class="cell-sub mono">loudness share \u00b7 mix in</span>
     <div class="stemhear">${STEMS.map((n, k) => `<div class="sh-row"><span class="sh-name mono">${n[0]}</span>
       <div class="sh-bar screen"><div class="sh-fill" id="sh-fill-${k}"></div></div><span class="sh-val mono" id="sh-val-${k}"></span></div>`).join("")}</div>`;
   return cell;
@@ -811,7 +813,7 @@ function tsTargetCell() {
     learn.setAttribute("aria-pressed", String(learning));
     clear.className = "pill pill-blue" + (M.tsTarget ? "" : " is-disabled");
     clear.disabled = !M.tsTarget;
-    val.textContent = M.tsTarget ? `your song \u00b7 ${fmtTime(M.tsTarget)}` : "following the music";
+    val.textContent = !M.tsTarget ? "following the music" : M.tsFar ? `another song? \u00b7 ${fmtTime(M.tsTarget)}` : `your song \u00b7 ${fmtTime(M.tsTarget)}`;
   }
   cell.refresh = refresh;
   refresh();
@@ -1418,7 +1420,7 @@ function renderStemLearn(body) {
   const playing = performance.now() - lastAudioTime < 1500;
   const moves = stemMoves(), share = M.stemShare || [0, 0, 0, 0];
   const keep = !!P.stemKeep.getValue(), keepDb = Math.abs(M.stemKeep || 0) < 0.05 ? 0 : M.stemKeep || 0;
-  const heard = "of what you hear, " + STEMS.map((n, k) => `${n.toLowerCase()} ${share[k]} %`).join(", ");
+  const heard = "the loudness coming in as " + STEMS.map((n, k) => `${n.toLowerCase()} ${share[k]} %`).join(", ");
   body.appendChild(head("WHAT'S HAPPENING"));
   body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
     : !on ? "Stem EQ is off, so every part of the mix passes untouched."
@@ -1447,7 +1449,7 @@ function renderStemLearn(body) {
     : keepDb < 0 ? `On: your moves would make the mix louder, so Stem EQ turns all of it down ${fmtNum(-keepDb, 1)} dB. The balance changes; the loudness stays where it was.`
     : keepDb > 0 ? `On: your moves would make the mix quieter, so Stem EQ turns all of it up ${fmtNum(keepDb, 1)} dB. The balance changes; the loudness stays where it was.`
     : "On: your moves hardly change the loudness, so there is nothing to make up right now."));
-  body.appendChild(item("Model Hears", "", "How the model divides what you hear right now, averaged over about a second. Each frequency counts by how loud it sounds, so a big 808 shows as part of the sound rather than nearly all of it. A part it barely hears won't move much when you turn it up or down."));
+  body.appendChild(item("Model Hears", "", "How the model divides the mix coming in (before your moves), averaged over about a second: each part's share of the loudness, the way a loudness meter weighs it. So the share tells you what a move does: with Keep Loudness off, turning up a part with a 70 % share by 6 dB makes the mix about 5 dB louder, a part with a 10 % share about 1 dB. In trap the 808 is often most of the loudness, even when it doesn't sound like most of the mix."));
   const big = moves.filter((k) => Math.abs(stemGainAt(k)) > 6.05);
   if (on && !bypassed && stemGainAt(2) > 5.95 && keep)
     body.appendChild(tip("HEADS UP", `Bass is up 6 dB or more. Keep Loudness holds the level by turning the whole mix down${keepDb < -0.05 ? ` (${fmtNum(-keepDb, 1)} dB right now)` : ""}, so the 808 gets louder and everything above the bass sits lower. The Maximizer doesn't have to work harder. At the same loudness, more 808 always means less of the rest, with or without this switch.`, false,
@@ -1517,14 +1519,18 @@ function renderTsLearn(body) {
   body.appendChild(sep());
   body.appendChild(head("WHAT EACH CONTROL IS DOING"));
   body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `Corrects about ${Math.round(amount)} % of each drift, beyond a 1 dB dead zone (3 dB in the highs, where hats and cymbals come and go), so small natural changes are left alone.`));
-  body.appendChild(item("Range", `${MINUS}${range.toFixed(1)} / +${(range / 2).toFixed(1)} dB`, `Cuts go at most ${range.toFixed(1)} dB, boosts at most ${(range / 2).toFixed(1)} dB: the most it can move any part of the spectrum. A section meant to sound different (a drop with more bass) can be pulled by up to this much, so lower Range if a big moment sounds smaller.`));
+  body.appendChild(item("Range", `${MINUS}${range.toFixed(1)} / +${(range / 2).toFixed(1)} dB`, `Cuts go at most ${range.toFixed(1)} dB${M.tsTarget ? ` (above the bass ${(range / 2).toFixed(1)} dB, while it holds your song's tone)` : ""}, boosts at most ${(range / 2).toFixed(1)} dB: the most it can move any part of the spectrum. A section meant to sound different (a drop with more bass) can be pulled by up to this much, so lower Range if a big moment sounds smaller.`));
   body.appendChild(item("Speed", speed, speed === "Slow" ? "Reacts over about a second: the gentlest, best for most masters."
     : speed === "Medium" ? "Reacts within about half a second: catches a phrase that gets muddier or a hook that gets harsher." : "Reacts within a few notes (0.15 s): strongest, can make the mix feel controlled."));
   if (M.tsTarget)
-    body.appendChild(item("Target", `your song · ${fmtTime(M.tsTarget)}`, `Tone Steady now holds your song to its own overall tone, learned when it listened to ${fmtTime(M.tsTarget)} of your song. So what you hear is what you export, from any start point. Parts that come and go are left alone: an 808 that enters after the intro isn't cut, and a part that isn't playing isn't faked back. It follows your Tonal EQ moves, and it's saved with your project. CLEAR goes back to following the music.`));
+    body.appendChild(item("Target", `your song · ${fmtTime(M.tsTarget)}`, `Tone Steady now holds your song to its own overall tone, learned when it listened to ${fmtTime(M.tsTarget)} of music. So what you hear is what you export, from any start point. Parts that come and go in the low end are left alone: an 808 that enters after the intro isn't cut, and the intro without it isn't lifted. A part that isn't playing isn't faked back. A part that comes in above the bass (a lead in the chorus) is treated like a drift: it's pulled down, by at most half the Range, for as long as it plays. It follows your Tonal EQ moves. It's saved with your project, and also in presets and copies of Polisher, so on a new song press LEARN again. CLEAR goes back to following the music.`));
   else
     body.appendChild(item("Target", "following the music", "Your song's own balance over the last ~10 seconds, so the Tonal EQ sets the tone and Tone Steady only keeps it. Quiet breakdowns are left alone. When a bass or 808 comes in (the low end jumps more than 4 dB against the rest), it re-learns the balance within about a second instead of cutting the new low end. Because it follows the music, what you hear can depend a little on where playback starts. LEARN holds it to your whole song's tone instead."));
-  if (on && !bypassed && amount >= 0.5 && M.tsTarget && M.tsTarget < 30)
+  if (on && !bypassed && amount >= 0.5 && M.tsTarget && M.tsFar)
+    body.appendChild(tip("HEADS UP", `Your song sits far from the tone Tone Steady is holding it to (about ${fmtNum(Math.max(0, M.tsDist || 0))} dB off, for 20 seconds or more of music). That happens when the tone was learned on another song: presets, copies of Polisher and older projects carry it along. Held to another song's tone, parts of your mix get cut or lifted by up to the Range.`, false,
+      { need: "Yes, if this tone came from another song (a preset, a copied Polisher, another project). If you learned it on this song, a section that sounds very different (a beat switch) can show this too: then you can leave it.",
+        steps: ["Press LEARN in this panel.", "Play your whole song from the start. It finishes by itself when the song ends.", "Or press CLEAR to follow the music instead."] }));
+  else if (on && !bypassed && amount >= 0.5 && M.tsTarget && M.tsTarget < 30)
     body.appendChild(tip("HEADS UP", `Tone Steady learned your song's tone from only ${fmtTime(M.tsTarget)} of music, so it may not describe the whole song.`, false,
       { need: "Only if your song's sections sound quite different from each other.", steps: ["Press LEARN in this panel.", "Play the whole song from the start. It finishes by itself when the song ends."] }));
   else if (on && !bypassed && amount > 70 && speed === "Fast")
@@ -1635,11 +1641,11 @@ function watchLouderPart() {
 
 // The whole-song listen as the plug-in reports it: says when the song's end finished it, announces a learned
 // tone, keeps the LISTENING view in Learn current.
-function watchListening(wasAm, wasTarget, wasFail) {
+function watchListening(wasAm, wasTarget, wasFail, wasFar) {
   if (wasAm === 1 && M.amState === 2 && !amFinishClicked && M.amByItself)
     toast(`The song ended: Auto-Master heard ${fmtTime(M.amHeard)} and is choosing every setting…`);
   if (wasAm !== 0 && M.amState === 0) amFinishClicked = false;
-  if (M.tsTarget !== wasTarget || M.tsLearnFail !== wasFail) {
+  if (M.tsTarget !== wasTarget || M.tsLearnFail !== wasFail || !!M.tsFar !== !!wasFar) {
     if (toneRequested && M.amState === 0) {
       toneRequested = false;
       if (M.tsLearnFail !== wasFail)
@@ -3032,9 +3038,9 @@ function updateLiveReadouts() {
 // Meter events from the plug-in (30 per second).
 window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   const srChanged = frame.sr && frame.sr !== M.sr;
-  const wasAm = M.amState, wasTarget = M.tsTarget, wasFail = M.tsLearnFail;
+  const wasAm = M.amState, wasTarget = M.tsTarget, wasFail = M.tsLearnFail, wasFar = M.tsFar;
   Object.assign(M, frame);
-  watchListening(wasAm, wasTarget, wasFail);
+  watchListening(wasAm, wasTarget, wasFail, wasFar);
   if (srChanged) { drawEq(); fetchGenreCurve(); }
   refreshHistory();
   refreshSnapshots();

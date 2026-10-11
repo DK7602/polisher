@@ -1246,6 +1246,19 @@ TEST_CASE ("Tone Steady: Learn listens to the song for its tone only; the target
     REQUIRE (b->toneTarget.isSet());
     CHECK (b->toneTarget.get().bandDb == learned.bandDb);
     CHECK (std::abs (b->toneTarget.get().seconds - learned.seconds) < 1.0e-9);
+    REQUIRE (learned.hasLevel());   // and the song's level, which quiet passages are judged against
+    CHECK (std::abs (b->toneTarget.get().levelDb - learned.levelDb) < 1.0e-9);
+    {
+        // A target saved before the level existed loads without one (judged against the last ~10 s, as before).
+        auto v = juce::JSON::parse (a->toneTarget.toJson());
+        REQUIRE (v.getDynamicObject() != nullptr);
+        v.getDynamicObject()->removeProperty ("level");
+        ToneTargetStore older;
+        older.restoreFromJson (juce::JSON::toString (v));
+        REQUIRE (older.isSet());
+        CHECK_FALSE (older.get().hasLevel());
+        CHECK (older.get().bandDb == learned.bandDb);
+    }
 
     // The restored song plays exactly like one given the same target, and not like following the music.
     auto direct = makeProcessor (sr, 512, false);
@@ -1289,6 +1302,118 @@ TEST_CASE ("Tone Steady: Learn listens to the song for its tone only; the target
     CHECK_FALSE (b->autoMaster.finish());                  // under 12 s: keeps listening
     b->autoMaster.cancel();
     CHECK (b->toneTarget.get().bandDb == learned.bandDb);
+}
+
+namespace {
+/** The tone the song listener learns from a whole clip (as LEARN would). */
+polisher::ToneTarget learnToneOf (const AudioClip& clip)
+{
+    polisher::SongListener l;
+    l.prepare (clip.sampleRate, 12.0, 600.0);
+    for (int pos = 0; pos < clip.numSamples(); pos += 1000)
+    {
+        const int n = std::min (1000, clip.numSamples() - pos);
+        l.process (clip.channels[0].data() + pos, clip.channels[1].data() + pos, n, pos / clip.sampleRate);
+    }
+    return l.toneTarget();
+}
+
+AudioClip sliceOf (const AudioClip& clip, double from, double to)
+{
+    AudioClip out;
+    out.sampleRate = clip.sampleRate;
+    for (const auto& ch : clip.channels)
+        out.channels.emplace_back (ch.begin() + (std::ptrdiff_t) (from * clip.sampleRate), ch.begin() + (std::ptrdiff_t) (to * clip.sampleRate));
+    return out;
+}
+} // namespace
+
+TEST_CASE ("Auto-Master: a short listen keeps a stored tone only when it is this song's", "[plugin][automaster]")
+{
+    // A preset, a copied Polisher or an older project can carry another song's tone. A quick Auto-Master
+    // run (under 30 s) used to keep any stored tone learned from more music: song B was then held to A's.
+    const double sr = 48000.0;
+    const auto song = testsig::trapLike (sr, 45.0);
+    const auto own = learnToneOf (song), foreign = learnToneOf (testsig::musicLike (sr, 60.0, -18.0, 9));
+    REQUIRE (own.valid);
+    REQUIRE (foreign.valid);
+    auto quickRun = [&] (const polisher::ToneTarget& stored)
+    {
+        auto p = makeProcessor (sr, 512, false);
+        p->toneTarget.set (stored);
+        FakePlayHead head;
+        p->setPlayHead (&head);
+        REQUIRE (p->autoMaster.start());
+        play (*p, head, sliceOf (song, 20.0, 35.0));   // 15 s of the hook, then FINISH NOW
+        REQUIRE (p->autoMaster.finish());
+        REQUIRE (waitForAutoMaster (*p));
+        REQUIRE (static_cast<bool> (reportOf (*p)["ok"]));
+        return std::pair { p->toneTarget.get(), p->autoMaster.getReportJson() };
+    };
+    // Another song's tone: replaced by the tone of what it heard (and Learn's short-learn tip applies).
+    const auto [replaced, report1] = quickRun (foreign);
+    REQUIRE (replaced.valid);
+    CHECK (std::abs (replaced.seconds - 15.0) < 0.1);
+    CHECK (replaced.bandDb != foreign.bandDb);
+    CHECK_FALSE (report1.contains ("learned earlier"));
+    // This song's own tone, learned from all of it: kept, and the report says it was learned earlier.
+    const auto [kept, report2] = quickRun (own);
+    REQUIRE (kept.valid);
+    CHECK (kept.bandDb == own.bandDb);
+    CHECK (std::abs (kept.seconds - own.seconds) < 1.0e-9);
+    CHECK (report2.contains ("learned earlier from 0:45"));
+}
+
+TEST_CASE ("Tone Steady: the plug-in says when the music sits far from the stored tone", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    const auto song = testsig::trapLike (sr, 40.0);
+    auto run = [&] (const polisher::ToneTarget& stored)
+    {
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "tsAmount", 40.0f);
+        p->toneTarget.set (stored);
+        renderFixed (*p, song, 512);
+        return std::pair { p->meters.tsFar.load(), p->meters.tsDistance.load() };
+    };
+    const auto [ownFar, ownDist] = run (learnToneOf (song));
+    const auto [otherFar, otherDist] = run (learnToneOf (testsig::musicLike (sr, 60.0, -18.0, 9)));
+    INFO ("live distance: own tone " << ownDist << " dB, another song's " << otherDist << " dB");
+    CHECK_FALSE (ownFar);
+    CHECK (otherFar);
+    CHECK (ownDist >= 0.0f);
+    CHECK (otherDist > (float) polisher::StemEQ::kTargetFarDb);
+    // No stored tone: nothing to be far from.
+    const auto [noneFar, noneDist] = run ({});
+    CHECK_FALSE (noneFar);
+    CHECK (noneDist < 0.0f);
+}
+
+TEST_CASE ("Tone Steady with a stored tone never allocates while the EQ and Input Trim move", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 1024, true);
+    set (*p, "tsAmount", 60.0f);
+    p->toneTarget.set (learnToneOf (testsig::trapLike (sr, 20.0)));
+    const auto mix = testsig::trapLike (sr, 4.0, 5);
+    renderFixed (*p, testsig::musicLike (sr, 1.0, -6.0), 1024);   // warm up (picks the target up)
+    juce::AudioBuffer<float> buf (2, 1024);
+    juce::MidiBuffer midi;
+    int worst = 0, k = 0;
+    for (int pos = 0; pos + 1024 <= mix.numSamples(); pos += 1024, ++k)
+    {
+        // The stage's copy of the target is recomputed whenever the EQ, the trim or the rate changes.
+        set (*p, "eqGain" + juce::String (1 + k % 5), (float) ((k % 9) - 4));
+        set (*p, "inTrim", (float) -(k % 7));
+        if (k % 5 == 0) p->toneTarget.set (learnToneOf (testsig::trapLike (sr, 12.0, (unsigned) k)));   // LEARN again (message thread)
+        for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, mix.channels[(size_t) c].data() + pos, 1024);
+        allocations = 0;
+        countAllocations = true;
+        p->processBlock (buf, midi);
+        countAllocations = false;
+        worst = std::max (worst, allocations.load());
+    }
+    CHECK (worst == 0);
 }
 
 TEST_CASE ("Snapshots store and recall Tone Steady's target; a snapshot from before targets leaves it", "[plugin][snapshots]")

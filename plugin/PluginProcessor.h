@@ -89,12 +89,14 @@ public:
         std::atomic<float> correlation { 1.0f };      // output L/R correlation (+1 mono ... -1 out of phase)
         std::array<std::atomic<float>, polisher::kDynBands> dynGr {};   // deepest Dynamics gain reduction per band since read (dB, <= 0)
         std::atomic<float> satResidual { 0.0f }, satSignal { 0.0f };   // Saturation energies since read (harmonics, signal)
-        std::array<std::atomic<float>, polisher::kStems> stemEnergy {};   // loudness-weighted energy the Stem EQ model credited to each stem since read
+        std::array<std::atomic<float>, polisher::kStems> stemEnergy {};   // K-weighted energy the Stem EQ model credited to each stem since read
         std::atomic<float> stemKeep { 0.0f };              // broadband gain Stem EQ Keep loudness applies now (dB)
         std::atomic<float> rtCut { 0.0f }, rtHz { 0.0f };   // deepest Resonance Tamer cut since read (dB, <= 0) and where
         std::atomic<float> ulBoost { 0.0f };               // largest Unlimiter lift since read (dB, >= 0)
         std::atomic<float> ulSquash { 0.0f };              // how squashed the incoming audio is (dB, 0 = not measured yet)
         std::atomic<float> tsDb { 0.0f }, tsHz { 0.0f };    // largest Tone Steady correction since read (dB, signed) and where
+        std::atomic<float> tsDistance { -1.0f };           // how far the music sits from Tone Steady's stored tone (dB, -1: not known)
+        std::atomic<bool> tsFar { false };                 // ... far for long: probably another song's tone
         std::atomic<int> listenPlaying { 0 };              // listen mode being heard (polisher::listen::Mode; 0 while it prepares)
         std::atomic<float> listenGainDb { 0.0f };          // gain it is played with (dB, + = turned up to be heard)
         std::atomic<float> listenUnderDb { -100.0f };      // how far it sits under the master, as it is in the master (dB)
@@ -214,7 +216,7 @@ private:
     polisher::ToneTarget songTone, stageTone;
     int songToneVersion = -1;
     polisher::TonalEQParams stageToneEq;
-    double stageToneRate = 0.0;
+    double stageToneRate = 0.0, stageToneTrimDb = 0.0;
     double currentMatchGain = 1.0;
 
     // MATCH per snapshot: the gap learned while a slot played unchanged, so flipping back to it is

@@ -457,6 +457,9 @@ void PolisherWebEditor::timerCallback()
         const auto tone = audioProcessor.toneTarget.get();
         frame->setProperty ("tsTarget", tone.valid ? roundTo (static_cast<float> (juce::jmax (1.0, tone.seconds)), 0.1f) : 0.0f);
         frame->setProperty ("tsLearnFail", am.getToneLearnFailures());
+        // ... and whether the music playing sits far from it for long (another song's tone?).
+        frame->setProperty ("tsFar",      tone.valid && m.tsFar.load());
+        frame->setProperty ("tsDist",     tone.valid ? roundTo (m.tsDistance.load(), 0.1f) : -1.0f);
     }
     frame->setProperty ("refVersion", audioProcessor.reference.getVersion());
     frame->setProperty ("refState",   static_cast<int> (audioProcessor.reference.getState()));
@@ -489,8 +492,8 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("rtHz",  juce::roundToInt (rtHzHold));
     frame->setProperty ("tsDb",  roundTo (tsHold, 0.1f));
     frame->setProperty ("tsHz",  juce::roundToInt (tsHzHold));
-    // Stem EQ: share of what you hear (A-weighted energy) that the model credits to vocals / drums /
-    // bass / other (%, ~1 s average). Raw energy would be mostly sub: an 808 would read 70-90 %.
+    // Stem EQ: share of the loudness of the mix coming in (K-weighted energy, like a LUFS meter) that
+    // the model credits to vocals / drums / bass / other (%, ~1 s average): what a move of each does.
     double stemTotal = 0.0;
     for (size_t k = 0; k < stemHold.size(); ++k)
     {

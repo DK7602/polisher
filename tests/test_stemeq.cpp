@@ -317,34 +317,6 @@ TEST_CASE ("Stem EQ meter credits nothing during silence, and something during m
     CHECK (e[0] + e[1] + e[2] + e[3] > 0.0);
 }
 
-TEST_CASE ("Stem EQ meter: loudness-weighted shares don't let the sub swamp the meter", "[stemeq]")
-{
-    // A trap-like mix: the 808 is most of the energy but far less of what is heard.
-    AudioClip in = testsig::musicLike (44100.0, 6.0, -18.0, 3);
-    for (auto& ch : in.channels)
-        for (size_t i = 0; i < ch.size(); ++i)
-        {
-            const double t = static_cast<double> (i) / 44100.0, tn = std::fmod (t, 1.0);
-            ch[i] += static_cast<float> (0.35 * std::exp (-tn * 1.2) * std::min (1.0, tn * 200.0) * std::sin (2.0 * std::numbers::pi * 45.0 * t));
-        }
-    StemEQ s; s.prepare (44100.0, 2);
-    run (s, in);
-    std::array<double, kStems> e {}, l {};
-    s.takeStemEnergies (e);
-    s.takeStemLoudness (l);
-    const double te = e[0] + e[1] + e[2] + e[3], tl = l[0] + l[1] + l[2] + l[3];
-    REQUIRE (te > 0.0);
-    REQUIRE (tl > 0.0);
-    UNSCOPED_INFO ("bass share: raw " << 100.0 * e[kStemBass] / te << " %, loudness-weighted " << 100.0 * l[kStemBass] / tl << " %");
-    CHECK (e[kStemBass] / te > 0.8);          // raw energy: nearly all "bass"
-    CHECK (l[kStemBass] / tl < 0.6);          // what you hear: the rest of the mix counts too
-    // Silence credits nothing either way.
-    StemEQ quiet; quiet.prepare (44100.0, 2);
-    run (quiet, testsig::silence (44100.0, 2, 1.0));
-    quiet.takeStemLoudness (l);
-    CHECK (l[0] + l[1] + l[2] + l[3] == 0.0);
-}
-
 TEST_CASE ("Auto-Master sets the Tonal EQ for the mix before the user's Stem EQ moves", "[stemeq]")
 {
     // The Tonal EQ comes before Stem EQ in the plug-in: Bass +12 must not read as a sub-heavy mix
@@ -599,4 +571,111 @@ TEST_CASE ("Stem EQ Keep loudness through the chain at a fixed Drive", "[stemeq]
         // ...and the 808 moves against the rest at least as much as without it.
         CHECK ((on.low - on.rest) > (off.low - off.rest) - 0.5);
     }
+}
+
+TEST_CASE ("Model Hears: each stem's share is its share of the loudness, so it predicts what a move does", "[stemeq]")
+{
+    // Weighted like a loudness meter (K): Bass +6 on an 808 mix adds what its share says. A-weighted it
+    // read 5.9 % bass for a move that adds 4.8 LU; raw power credits the sub with more than it adds.
+    const double sr = 48000.0;
+    for (int which = 0; which < 2; ++which)
+    {
+        const auto in = which == 0 ? trapMix (sr, 10.0) : testsig::trapLike (sr, 10.0);
+        StemEQ s;
+        s.prepare (sr, 2);
+        s.reset();
+        AudioClip c = in;
+        for (int pos = 0; pos < c.numSamples(); pos += 512)
+        {
+            float* ch[2] = { c.channels[0].data() + pos, c.channels[1].data() + pos };
+            s.process (ch, 2, std::min (512, c.numSamples() - pos));
+            if (pos < static_cast<int> (2.0 * sr)) { std::array<double, kStems> skip {}; s.takeStemLoudness (skip); }   // settle first
+        }
+        std::array<double, kStems> l {}, e {};
+        s.takeStemLoudness (l);
+        s.takeStemEnergies (e);
+        const double tl = l[0] + l[1] + l[2] + l[3], te = e[0] + e[1] + e[2] + e[3];
+        REQUIRE (tl > 0.0);
+        const double inLufs = measure (in).integratedLufs;
+        for (int stem : { kStemVocals, kStemBass })
+        {
+            const double share = l[static_cast<size_t> (stem)] / tl;
+            StemEQParams p; p.gainDb[static_cast<size_t> (stem)] = 6.0;
+            const double moved = measure (renderStemEq (in, p)).integratedLufs - inLufs;
+            const double predicted = 10.0 * std::log10 (share * std::pow (10.0, 0.6) + 1.0 - share);
+            UNSCOPED_INFO ((which ? "trapLike" : "trapMix") << " stem " << stem << ": share " << 100.0 * share << " % (raw power "
+                           << 100.0 * e[static_cast<size_t> (stem)] / te << " %) predicts +6 dB = " << predicted << " LU; it moved " << moved << " LU");
+            CHECK (std::abs (predicted - moved) < 0.75);
+        }
+    }
+    // Silence credits nothing.
+    StemEQ quiet;
+    quiet.prepare (44100.0, 2);
+    run (quiet, testsig::silence (44100.0, 2, 1.0));
+    std::array<double, kStems> l {};
+    quiet.takeStemLoudness (l);
+    CHECK (l[0] + l[1] + l[2] + l[3] == 0.0);
+}
+
+TEST_CASE ("Stem EQ Keep loudness: a quieter section after a loud one takes over within a few seconds", "[stemeq][keep]")
+{
+    // Bass +6 on a trap mix, then a breakdown 6 dB down without the 808 (vocal and hats). The loud part's
+    // energy used to rule the ~2 s average for 8-10 s: the breakdown played -4.0 LU for 4 s, -2.3 LU after.
+    const double sr = 48000.0;
+    AudioClip song = trapMix (sr, 15.0);
+    {
+        AudioClip bd = trapMix (sr, 15.0);
+        std::uint64_t h = 7;
+        double vPhase = 0.0, hpL = 0.0, hpR = 0.0, prevL = 0.0, prevR = 0.0;
+        for (size_t i = 0; i < bd.channels[0].size(); ++i)            // the trap mix without its bed and 808: vocal + hats, 6 dB down
+        {
+            const double t = static_cast<double> (i) / sr;
+            const double f0 = (std::fmod (t, 4.0) < 2.0 ? 220.0 : 294.0) * (1.0 + 0.01 * std::sin (2.0 * std::numbers::pi * 5.5 * t));
+            vPhase += 2.0 * std::numbers::pi * f0 / sr;
+            double voice = 0.0;
+            for (int n = 1; n * f0 < 4000.0; ++n) voice += std::sin (n * vPhase) / n;
+            h = h * 6364136223846793005ull + 1442695040888963407ull;
+            const double wL = static_cast<double> (h >> 11) / 9007199254740992.0 - 0.5;
+            h = h * 6364136223846793005ull + 1442695040888963407ull;
+            const double wR = static_cast<double> (h >> 11) / 9007199254740992.0 - 0.5;
+            hpL = 0.6 * (hpL + wL - prevL); prevL = wL;
+            hpR = 0.6 * (hpR + wR - prevR); prevR = wR;
+            const double hat = 0.12 * std::exp (-std::fmod (t, 0.125) * 60.0);
+            bd.channels[0][i] = static_cast<float> (0.5 * (0.035 * voice + hat * hpL));
+            bd.channels[1][i] = static_cast<float> (0.5 * (0.035 * voice + hat * hpR));
+        }
+        for (size_t c = 0; c < 2; ++c) song.channels[c].insert (song.channels[c].end(), bd.channels[c].begin(), bd.channels[c].end());
+    }
+    StemEQParams p; p.gainDb[kStemBass] = 6.0; p.keepLoudness = true;
+    StemEQ s;
+    s.prepare (sr, 2);
+    s.setParams (p);
+    s.reset();
+    AudioClip out = song;
+    std::vector<std::pair<double, double>> keep;   // (time, Keeping level)
+    for (int pos = 0; pos < out.numSamples(); pos += 480)
+    {
+        float* ch[2] = { out.channels[0].data() + pos, out.channels[1].data() + pos };
+        s.process (ch, 2, std::min (480, out.numSamples() - pos));
+        keep.emplace_back ((pos + 480) / sr, s.keepLevelDb());
+    }
+    auto keepAt = [&] (double t) { double v = 0.0; for (auto [tt, k] : keep) if (tt <= t) v = k; return v; };
+    auto lu = [&] (const AudioClip& c, double a, double b)
+    {
+        AudioClip x;
+        x.sampleRate = sr;
+        for (const auto& ch : c.channels)
+            x.channels.emplace_back (ch.begin() + static_cast<std::ptrdiff_t> (a * sr), ch.begin() + static_cast<std::ptrdiff_t> (b * sr));
+        return measure (x).integratedLufs;
+    };
+    const double lat = s.latencySamples() / sr;
+    const double loud = keepAt (14.0), seven = keepAt (22.0);
+    const double first = lu (out, 15.0 + lat, 19.0 + lat) - lu (song, 15.0, 19.0), next = lu (out, 19.0 + lat, 23.0 + lat) - lu (song, 19.0, 23.0);
+    UNSCOPED_INFO ("keeping " << loud << " dB in the loud part, " << seven << " dB 7 s into the breakdown; breakdown "
+                   << first << " LU for its first 4 s, " << next << " LU for the next 4");
+    CHECK (loud < -3.0);
+    CHECK (seven > -1.2);         // was -2.2
+    CHECK (first > -3.2);         // was -4.0
+    CHECK (std::abs (next) < 1.0);   // was -2.3
+    CHECK (std::abs (lu (out, 5.0 + lat, 15.0) - lu (song, 5.0, 15.0 - lat)) < 0.5);   // the loud part stays put
 }

@@ -94,9 +94,10 @@
   // Simulated Auto-Master: it "listens" to a 2:30 song 30x faster than real time (its loudest part at
   // 0:54), finishes by itself at the song's end (or on FINISH from 12 s of music on), then thinks for
   // 0.9 s. Mode 1 is Tone Steady's LEARN: it only stores the song's tone (toneTarget: seconds heard),
-  // as an undo step of its own.
+  // as an undo step of its own. toneFar: the music sits far from the stored tone (another song's?);
+  // the smoke test sets it.
   const SONG = 150, LOUD_AT = 54;
-  const am = { state: 0, mode: 0, heard: 0, byItself: false, version: 0, report: "", toneTarget: 0, toneFail: 0 };
+  const am = { state: 0, mode: 0, heard: 0, byItself: false, version: 0, report: "", toneTarget: 0, toneFail: 0, toneFar: false };
   window.__mockAm = am;
   const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
   function amDecide(byItself) {
@@ -405,6 +406,7 @@
       amMode: am.mode, amHeard: am.heard, amCanFinish: am.state === 1 && am.heard >= 12, amByItself: am.byItself,
       amLoudAt: am.heard < 12 ? -1 : Math.min(LOUD_AT, am.heard - 12), amLoudLufs: am.heard >= LOUD_AT + 12 ? -17.6 : -21.2,
       tsTarget: am.toneTarget, tsLearnFail: am.toneFail,
+      tsFar: !!am.toneTarget && am.toneFar, tsDist: !am.toneTarget ? -1 : am.toneFar ? 6.4 : 1.2,
       undo: undoLabel(), redo: redoLabel(), ...snapStatus(),
       refVersion: ref.version, refState: ref.state,
       clip: toggles.clipOn && !bypass ? +(-Math.max(0, drive - 1.5 + sliders.clipLevel.value * -0.5) * 0.5 * (0.3 + 0.7 * beat)).toFixed(1) : 0,

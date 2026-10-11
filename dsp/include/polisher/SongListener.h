@@ -80,8 +80,9 @@ public:
     AudioClip loudestWindow() const;
     SongStats stats() const;
     /** The song's tone as Tone Steady measures it, as the mix arrives: per band, the median over the
-        1 s readings of music (those within 15 dB of the song's level) of the band's level relative to
-        the frame. Invalid with fewer than kMinToneBlocks of them. */
+        1 s readings of music (those within 15 dB of the song's loudness: K-weighted power mean) of the
+        band's level relative to the frame, and that level (ToneTarget::levelDb). Invalid with fewer
+        than kMinToneBlocks of them. */
     ToneTarget toneTarget() const;
 
     /** Bytes held (fixed by prepare(): it does not grow with the song). */
@@ -115,6 +116,7 @@ private:
     // Tone: frames of the stage's FFT (every half frame), 64 band levels relative to the frame.
     int fftSize = 0, framePos = 0, frameFill = 0, sinceFrame = 0;
     std::vector<double> window, bandW, bandCf;
+    std::array<double, kToneBands> bandK {};             // K-weighting at each band's centre
     std::vector<int> bandLo, bandHi;
     std::array<std::vector<double>, 2> frameIn;
     std::vector<std::complex<double>> work, twiddle;
@@ -124,7 +126,7 @@ private:
     double blockEnergy = 0.0;
     int blockFrames = 0;
     std::vector<float> toneBlocks;                       // [block][band] mean relative dB
-    std::vector<float> toneLevel;                        // [block] mean frame level (dB)
+    std::vector<float> toneLevel;                        // [block] mean frame level, K-weighted (dB)
     int toneCount = 0, maxBlocks = 0;
 
     // Progress, published by the audio thread.
@@ -134,7 +136,9 @@ private:
 };
 
 /** A tone target as learned (the mix arriving at the plug-in) moved to what the spectral stage hears
-    after the Tonal EQ: each band shifted by the EQ's response at its centre. No allocation. */
-ToneTarget toneTargetAtStage (const ToneTarget& song, const TonalEQParams& eq, double sampleRate) noexcept;
+    after Input Trim and the Tonal EQ: each band shifted by the EQ's response at its centre, the
+    song's level by the trim and by what the EQ does to the song's energy (by its own tone). No
+    allocation. */
+ToneTarget toneTargetAtStage (const ToneTarget& song, const TonalEQParams& eq, double sampleRate, double inputTrimDb = 0.0) noexcept;
 
 } // namespace polisher
