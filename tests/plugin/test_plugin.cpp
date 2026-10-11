@@ -5,6 +5,7 @@
 
 #include "PluginProcessor.h"
 #include "../Signals.h"
+#include "../SwitchLevel.h"
 
 #include <catch2/catch_session.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -1898,15 +1899,30 @@ TEST_CASE ("Snapshots are saved with the project; a project from before snapshot
     CHECK_FALSE (b->snapshots.recall (0));
 }
 
-TEST_CASE ("Snapshots: a recall glides like a knob move (no click)", "[plugin][snapshots]")
+TEST_CASE ("Snapshots: a recall glides like a knob move (no click, no hole)", "[plugin][snapshots]")
 {
     const double sr = 48000.0;
-    // A low tone: any jump in the output would stand far above its own sample-to-sample steps.
+    // A low tone: a click would bend the waveform far more sharply than the tone itself does. The
+    // sharpness is read against the tone's own size around it (step / local peak), so the level change a
+    // recall makes on purpose (S2 compresses, drives and lifts the lows) is not taken for a click.
     const auto tone = testsig::sine (sr, 2, 110.0, -12.0, 9.0);
+    const int period = (int) std::lround (sr / 110.0);
+    auto sharpness = [&] (const AudioClip& c, int from)
+    {
+        double worst = 0.0;
+        for (const auto& ch : c.channels)
+            for (int i = std::max (from, period); i + period < (int) ch.size(); ++i)
+            {
+                double peak = 0.0;
+                for (int j = i - period; j <= i + period; j += 4) peak = std::max (peak, (double) std::abs (ch[(size_t) j]));
+                worst = std::max (worst, std::abs ((double) ch[(size_t) i] - ch[(size_t) i - 1]) / (peak + 1.0e-9));
+            }
+        return worst;
+    };
     auto steady = [&] (bool busy)
     {
         auto p = makeProcessor (sr, 512, busy);
-        return maxStepOf (renderFixed (*p, tone, 512), (int) (0.5 * sr));
+        return sharpness (renderFixed (*p, tone, 512), (int) (0.5 * sr));
     };
     const double calm = std::max (steady (false), steady (true));
 
@@ -1927,9 +1943,23 @@ TEST_CASE ("Snapshots: a recall glides like a knob move (no click)", "[plugin][s
         for (int c = 0; c < 2; ++c)
             std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + 512, out.channels[(size_t) c].begin() + pos);
     }
-    const double flipping = maxStepOf (out, (int) (0.5 * sr));
-    INFO ("largest sample step: flipping S1/S2 " << flipping << ", steady " << calm);
+    const double flipping = sharpness (out, (int) (0.5 * sr));
+    INFO ("sharpest step (re the tone's size): flipping S1/S2 " << flipping << ", steady " << calm);
     CHECK (flipping < 1.5 * calm);
+
+    // No hole either: through each recall the tone's short-time level never drops far below the lower of
+    // the two settings (Mono Below, the Imager and the Dynamics used to cut it by ~18 dB for ~50 ms). (It can
+    // rise for a moment going to S2: Drive and the EQ arrive before the compressor's attack.)
+    std::vector<double> mid (out.channels[0].size());
+    for (size_t i = 0; i < mid.size(); ++i) mid[i] = 0.5 * ((double) out.channels[0][i] + out.channels[1][i]);
+    for (int k = 1; 120 * 512 * k + (int) (1.1 * sr) <= (int) mid.size(); ++k)
+    {
+        const int at = 120 * 512 * k;
+        const std::vector<double> part (mid.begin() + at - (int) (0.4 * sr), mid.begin() + at + (int) (1.1 * sr));
+        const auto r = switchlevel::measure (part, sr, 110.0, (int) (0.4 * sr));
+        INFO ("recall " << k << (k % 2 == 1 ? " (S2 -> S1)" : " (S1 -> S2)") << ": dip " << r.dipDb << " dB, rise +" << r.bumpDb << " dB");
+        CHECK (r.dipDb > -3.0);
+    }
 }
 
 TEST_CASE ("Snapshots: MATCH remembers the level of each snapshot it heard, so flipping back is matched at once", "[plugin][snapshots]")
@@ -2511,6 +2541,48 @@ TEST_CASE ("Plug-in: the reported tail covers what really rings on after the inp
     const double rings = (last - stop) / sr;
     INFO ("output rings on " << rings << " s after the input stops; reported tail " << p->getTailLengthSeconds() << " s");
     CHECK (rings <= p->getTailLengthSeconds());
+}
+
+TEST_CASE ("Plug-in: flipping A / B with Mono Below, Dynamics, the Imager and Saturation working leaves no hole", "[plugin][switching]")
+{
+    // The flip the user makes most. These modules used to blend their plain and all-passed paths there, which
+    // cut a hole at each crossover (a 1 kHz tone -12 dB for 35 ms, 5-6 kHz -14 to -16 dB for 40 ms; 60-250 Hz
+    // -6 dB). Now (park and glide, see dsp ParkGlide) a centre tone at each of their crossover frequencies
+    // keeps its short-time level through B -> A and A -> B. (The maximum sample step never showed this.)
+    const double sr = 48000.0;
+    for (double hz : { 60.0, 120.0, 250.0, 1000.0, 5000.0, 6000.0 })
+    {
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "bassMono", 120.0f);
+        for (int b = 1; b <= 4; ++b) { set (*p, "dynRatio" + juce::String (b), 2.0f); set (*p, "dynThr" + juce::String (b), -30.0f); }
+        set (*p, "imgHigh", 130.0f);
+        set (*p, "satDrive", 6.0f); set (*p, "satMix", 50.0f);
+        p->prepareToPlay (sr, 512);
+        const auto tone = testsig::sine (sr, 2, hz, -12.0, 4.0);
+        const int toA = (int) (1.0 * sr) / 512 * 512, toB = (int) (2.5 * sr) / 512 * 512;
+        AudioClip out = tone;
+        juce::AudioBuffer<float> buf (2, 512);
+        juce::MidiBuffer midi;
+        for (int pos = 0; pos + 512 <= tone.numSamples(); pos += 512)
+        {
+            if (pos == toA) set (*p, "bypass", 1.0f);
+            if (pos == toB) set (*p, "bypass", 0.0f);
+            for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, tone.channels[(size_t) c].data() + pos, 512);
+            p->processBlock (buf, midi);
+            for (int c = 0; c < 2; ++c)
+                std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + 512, out.channels[(size_t) c].begin() + pos);
+        }
+        std::vector<double> mid ((size_t) tone.numSamples() / 512 * 512);
+        for (size_t i = 0; i < mid.size(); ++i) mid[i] = 0.5 * ((double) out.channels[0][i] + out.channels[1][i]);
+        const std::vector<double> first (mid.begin(), mid.begin() + (long) (2.4 * sr)), second (mid.begin() + (long) (1.6 * sr), mid.end());
+        const auto bToA = switchlevel::measure (first, sr, hz, toA);
+        const auto aToB = switchlevel::measure (second, sr, hz, toB - (int) (1.6 * sr));
+        INFO (hz << " Hz centre tone: B -> A dip " << bToA.dipDb << " dB, swell +" << bToA.bumpDb << " dB; A -> B dip " << aToB.dipDb << " dB, swell +" << aToB.bumpDb << " dB");
+        CHECK (bToA.dipDb > -1.5);
+        CHECK (aToB.dipDb > -1.5);
+        CHECK (bToA.bumpDb < 1.5);
+        CHECK (aToB.bumpDb < 1.5);
+    }
 }
 
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:

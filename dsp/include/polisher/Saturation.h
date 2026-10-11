@@ -49,9 +49,12 @@ struct SaturationParams
       Drive: on a trap mix the Harmonics meter reads about what Full reads at that Drive.
     - Constant latency (kLatency) in every state; exact pass-through (delayed) when off, at Drive 0
       or Mix 0, with 20 ms cross-fades (after reset() it starts fully in the set state). Drive glides, so moves never zipper.
-      Switching Focus warms the other path up next to the one playing (~50 ms, unheard), then
-      cross-fades to it over 30 ms (raised cosine): no click, no thump. Full is bit-for-bit what it
-      was before Focus.
+      Switching Focus or Mode warms a second residual path up next to the one playing (~50 ms,
+      unheard; a tube path measures its DC meanwhile), then cross-fades to it over 30 ms (raised
+      cosine): no click, no thump. Started by reset() (no warm-up, nothing measured), the tube DC
+      filter starts at kDcStartHz and glides down to 1 Hz (kDcGlideSeconds), so a render that starts
+      mid-song lets out no thump. Full is bit-for-bit what it was before Focus, apart from that start
+      after reset() and the Mode cross-fade.
 
     prepare() allocates; process() does not. */
 class Saturation
@@ -66,7 +69,9 @@ public:
     static constexpr double kBassSplitHz = 150.0;     // Bass only: the curve hears below this (LR4)
     static constexpr double kBassResidualHz = 70.0;   // Bass only: what it adds is high-passed here (2nd order)
     static constexpr double kBassDriveDb = 6.0;       // Bass only: the curve bends this much earlier
-    static constexpr double kFocusFadeSeconds = 0.03; // Full <-> Bass only cross-fade
+    static constexpr double kFocusFadeSeconds = 0.03; // cross-fade between residual paths (Focus or Mode change)
+    static constexpr double kDcStartHz = 40.0;        // tube DC filter right after reset() ...
+    static constexpr double kDcGlideSeconds = 0.05;   // ... gliding down to 1 Hz with this time constant
 
     void prepare (double sampleRate, int numChannels);
     void reset() noexcept;
@@ -131,39 +136,49 @@ public:
     }
 
 private:
-    struct Channel
-    {
-        std::array<HalfbandStage, 2> stages { HalfbandStage (95), HalfbandStage (33) };
-        std::vector<double> dry;   // latency-matched dry path
-        int dryPos = 0;
-        double hpX = 0.0, hpY = 0.0;
-        double dcSum = 0.0;        // the residual summed over the warm-up's DC window
-        // Bass only: its own oversampling, the low-pass in front of the curve, the high-pass after it.
-        std::array<HalfbandStage, 2> bassStages { HalfbandStage (95), HalfbandStage (33) };
-        std::array<Biquad, 2> split {};
-        Biquad bassHp {};
-    };
-    /** One way of making the residual (Full or Bass only): runs while it is heard or warming up. */
-    struct Path
+    /** One way of making the residual (a Focus and a Mode): runs while it is heard or warming up. */
+    struct Slot
     {
         bool active = false;
-        int warm = 0;   // samples left before it may be heard
+        int warm = 0;          // samples left before it may be heard
+        SaturationFocus focus = SaturationFocus::full;
+        SaturationMode mode = SaturationMode::tape;
+        int dcCount = 0;       // Full + tube: samples of the warm-up's DC window measured so far
+        double dcHz = 1.0;     // Full + tube: the DC filter's corner (above 1 Hz only right after reset())
+        bool is (SaturationFocus f, SaturationMode m) const noexcept { return active && focus == f && mode == m; }
+    };
+    /** A slot's filters and state for one channel. */
+    struct SlotState
+    {
+        std::array<HalfbandStage, 2> stages { HalfbandStage (95), HalfbandStage (33) };
+        std::array<Biquad, 2> split {};   // Bass only: the low-pass in front of the curve
+        Biquad bassHp {};                 // Bass only: the high-pass after it
+        double hpX = 0.0, hpY = 0.0;      // Full: the 1 Hz DC filter (tube)
+        double dcSum = 0.0;               // the residual summed over the warm-up's DC window
+    };
+    struct Channel
+    {
+        std::vector<double> dry;   // latency-matched dry path
+        int dryPos = 0;
+        std::array<SlotState, 2> slot;
     };
 
-    double curve (double x) const noexcept { return shape (x, params.mode, bend); }
-    void startPath (bool bass, int warmSamples) noexcept;
-    void stopPath (bool bass) noexcept;
+    void startSlot (int index, SaturationFocus focus, SaturationMode mode, int warmSamples) noexcept;
+    void stopSlot (int index) noexcept;
+    double slotWet (const Slot& slot, SlotState& st, double x, double dcWeight, bool measuringDc, bool seedDc, double dcCoeff) const noexcept;
 
     SaturationParams params;
     int channelCount = 2;
+    double sampleRate = 48000.0;
     std::vector<Channel> channelState;
     double bend = 4.0, bendTarget = 4.0, glideCoeff = 0.0;
-    double mix = 0.0, mixCoeff = 0.0, hpCoeff = 0.0;
-    double focus = 0.0;   // 0 = the Full path is heard, 1 = Bass only, between = cross-fading
-    double focusStep = 0.001, bassBendScale = 0.5;
+    double mix = 0.0, mixCoeff = 0.0, hpCoeff = 0.0, dcGlideCoeff = 0.0;
+    std::array<Slot, 2> slots;
+    int heard = 0;          // the slot that is heard; the other one warms up, fades in or rests
+    double blend = 0.0;     // 0 = the heard slot, 1 = the other one, between = cross-fading
+    double blendStep = 0.001, bassBendScale = 0.5;
     double resEnergy = 0.0, sigEnergy = 0.0;
-    int dcWindow = 1200, dcCount = 0;
-    Path fullPath, bassPath;
+    int dcWindow = 1200;
     bool running = false;
 };
 
