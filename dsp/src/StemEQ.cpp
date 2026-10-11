@@ -207,7 +207,9 @@ void StemEQ::prepare (double newSampleRate, int numChannels)
     // Triangular ERB bands, columns normalised to 1 (tools/stem/common.py: band_centres, tri_weights).
     constexpr int B = StemNet::kBands;
     makeBands (sampleRate, N, bandCf, bandW, bandLo, bandHi);
-    for (int b = 0; b < B; ++b) bandLoud[static_cast<size_t> (b)] = aWeightPower (bandCf[static_cast<size_t> (b)]);
+    // Model Hears: each band weighted as a loudness meter weighs it (see takeStemLoudness).
+    for (int b = 0; b < B; ++b) bandLoud[static_cast<size_t> (b)] = kWeightPower (bandCf[static_cast<size_t> (b)]);
+    frameScaleDb = 20.0 * std::log10 (static_cast<double> (N));   // a frame's summed bin power grows with N^2
 
     for (int c = 0; c < 2; ++c)
     {
@@ -237,6 +239,7 @@ void StemEQ::prepare (double newSampleRate, int numChannels)
     gainCoeff = 1.0 - std::exp (-hopSize / (0.030 * sampleRate));
     keepCoeff = 1.0 - std::exp (-hopSize / (0.100 * sampleRate));
     keepAvg = 1.0 - std::exp (-hopSize / (kKeepAverageSeconds * sampleRate));
+    keepBeatAvg = 1.0 - std::exp (-hopSize / (kKeepBeatSeconds * sampleRate));
     reset();
 }
 
@@ -255,8 +258,11 @@ void StemEQ::reset() noexcept
     frameCount = analysed = 0;
     for (auto* v : { &rtCut, &rtTarget, &rtSmooth, &tsBin }) std::fill (v->begin(), v->end(), 0.0);
     std::fill (rtLin.begin(), rtLin.end(), 1.0);
-    tsShort.fill (0.0); tsLong.fill (0.0); tsGain.fill (0.0); tsJump.fill (0.0);
-    tsLevelShort = tsLevelLong = 0.0;
+    tsShort.fill (0.0); tsLong.fill (0.0); tsGain.fill (0.0); tsJump.fill (0.0); tsLive.fill (0.0);
+    tsLiveFrames = 0;
+    tsDistance = -1.0;
+    tsFarSeconds = 0.0;
+    tsLevelShort = tsLevelLong = tsLoudShort = 0.0;
     tsFrames = tsRelearn = 0;
     rtDeepest = rtDeepestHz = tsLargest = tsLargestHz = 0.0;
     statPower = statCut = statCutLow = statCutHigh = statSteady = 0.0;
@@ -268,6 +274,8 @@ void StemEQ::reset() noexcept
     for (int s = 0; s < kStems; ++s)
         gain[static_cast<size_t> (s)] = stemOn ? std::pow (10.0, std::clamp (params.gainDb[static_cast<size_t> (s)], -kMaxGainDb, kMaxGainDb) / 20.0) : 1.0;
     keepM.fill (0.0);
+    keepBeat = 0.0;
+    keepPeakDb = -400.0;
     keepMix = params.keepLoudness && stemOn ? 1.0 : 0.0;
     keepDb = 0.0;
     rtAmount = isNeutral (rtParams) ? 0.0 : std::clamp (rtParams.amount, 0.0, 100.0) / 100.0;
@@ -325,12 +333,51 @@ void StemEQ::computeFeatures (const double* left, const double* right, float* fe
 }
 
 namespace {
+// toneDistanceDb on raw arrays: bands above 160 Hz, offset taken out, RMS weighted by the target's level.
+template <typename T, typename L>
+double shapeDistanceDb (const T* target, const L* tone, const double* centreHz) noexcept
+{
+    double top = -400.0;
+    for (int b = 0; b < kToneBands; ++b)
+        if (centreHz[b] > 160.0) top = std::max (top, static_cast<double> (target[b]));
+    std::array<double, kToneBands> w {};
+    double mean = 0.0, wsum = 0.0;
+    for (int b = 0; b < kToneBands; ++b)
+    {
+        const auto i = static_cast<size_t> (b);
+        if (centreHz[b] <= 160.0 || target[b] < top - 60.0) continue;
+        w[i] = std::pow (10.0, (static_cast<double> (target[b]) - top) / 20.0);
+        mean += w[i] * (static_cast<double> (tone[b]) - static_cast<double> (target[b]));
+        wsum += w[i];
+    }
+    if (wsum <= 0.0) return 0.0;
+    mean /= wsum;
+    double sq = 0.0;
+    for (int b = 0; b < kToneBands; ++b)
+    {
+        const double x = static_cast<double> (tone[b]) - static_cast<double> (target[b]) - mean;
+        sq += w[static_cast<size_t> (b)] * x * x;
+    }
+    return std::sqrt (sq / wsum);
+}
+
 // 1 inside [lo, hi] Hz, fading to 0 over half an octave outside.
 inline double focusWeight (double f, double lo, double hi) noexcept
 {
     if (f <= 0.0) return 0.0;
     return std::clamp (1.0 + 2.0 * std::log2 (f / lo), 0.0, 1.0) * std::clamp (1.0 + 2.0 * std::log2 (hi / f), 0.0, 1.0);
 }
+}
+
+double StemEQ::kWeightAt (double hz) noexcept { return kWeightPower (hz); }
+
+double toneDistanceDb (const ToneTarget& target, const ToneTarget& tone, double sampleRate) noexcept
+{
+    if (! target.valid || ! tone.valid || sampleRate <= 0.0)
+        return 0.0;
+    std::array<double, kToneBands> centre {};
+    for (int b = 0; b < kToneBands; ++b) centre[static_cast<size_t> (b)] = StemEQ::bandCentreHz (b, sampleRate);
+    return shapeDistanceDb (target.bandDb.data(), tone.bandDb.data(), centre.data());
 }
 
 void StemEQ::resonanceGains (const std::complex<double>* L, const std::complex<double>* R) noexcept
@@ -425,6 +472,10 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
     tsAmount += ((isNeutral (tsParams) ? 0.0 : std::clamp (tsParams.amount, 0.0, 100.0) / 100.0) - tsAmount) * gainCoeff;
     // A stored target (the whole song's tone): the reference is fixed, nothing is learned while playing.
     const bool useTarget = tsParams.target.valid;
+    // The level quiet passages and silence are judged against: the song's stored level when the
+    // target has one (the same wherever playback starts), else the last ~10 s of music.
+    const bool targetLevel = useTarget && tsParams.target.hasLevel();
+    const double songLevelDb = tsParams.target.levelDb + frameScaleDb;   // K-weighted, like the frame's below
 
     // Band energies after the Stem EQ move and the resonance cuts (with a target: as the music enters
     // the stage, like the target was measured; the Stem EQ move and the tamer's cuts are yours).
@@ -455,18 +506,24 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
     auto topW = [this] (size_t b) { return std::clamp ((bandCf[b] - 2500.0) / 2500.0, 0.0, 1.0); };
     // Both averages are of dB levels: a loud new passage moves the slow reference by its dB, not
     // by its (much bigger) energy, so the song's own balance stays put for ~10 s.
-    double eTotal = 0.0;
-    for (double v : e) eTotal += v;
+    double eTotal = 0.0, eLoud = 0.0;
+    for (size_t b = 0; b < static_cast<size_t> (B); ++b) { eTotal += e[b]; eLoud += e[b] * bandLoud[b]; }
     const double totalDb = 10.0 * std::log10 (eTotal + 1.0e-20);
+    // The frame's level as a loudness meter weighs it (K-weighting at each band's centre): against the
+    // song's stored level, "quiet" means quieter to the ear, so an intro without the 808 (much less
+    // energy, a little less loudness) isn't mistaken for a breakdown.
+    const double loudDb = 10.0 * std::log10 (eLoud + 1.0e-20);
     // Silence and near-silence (stopped transport, a gap, a fade) must not teach the reference
     // anything: the averages start at the first frame with signal, and the slow reference and its
     // clock freeze while the frame is 30 dB or more under the song.
-    const bool signal = totalDb > -80.0 && (tsFrames == 0 || totalDb > tsLevelLong - 30.0);
+    const bool signal = totalDb > -80.0 && (targetLevel ? loudDb > songLevelDb - 30.0 : (tsFrames == 0 || totalDb > tsLevelLong - 30.0));
+    bool liveUpdated = false;
     if (tsFrames == 0 && signal)
     {
         for (size_t b = 0; b < static_cast<size_t> (B); ++b)
             tsShort[b] = tsLong[b] = std::max (10.0 * std::log10 (e[b] + 1.0e-20) - totalDb, -90.0);
         tsLevelShort = tsLevelLong = totalDb;
+        tsLoudShort = loudDb;
     }
     if (tsFrames > 0 || signal)
     {
@@ -518,12 +575,22 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
             else tsLong[b] += (db - tsLong[b]) * aL;
         }
         tsLevelShort += (totalDb - tsLevelShort) * aS;
+        tsLoudShort += (loudDb - tsLoudShort) * aS;
         if (signal)
         {
             tsLevelLong += ((relearn ? tsLevelShort : totalDb) - tsLevelLong) * (relearn ? aR : aL);
             ++tsFrames;
             if (relearn) --tsRelearn;
             if (jump) { tsRelearn = static_cast<long> (1.5 * framesPerSecond); tsJump.fill (0.0); }
+        }
+        // The music playing, averaged over ~20 s of it at the song's level: how far that sits from a
+        // stored target tells whether the target belongs to this song at all (toneTargetFar).
+        if (signal && (targetLevel ? tsLoudShort > songLevelDb - 15.0 : tsLevelShort > tsLevelLong - 15.0))
+        {
+            ++tsLiveFrames;
+            const double aLive = std::max (1.0 / static_cast<double> (tsLiveFrames), 1.0 - std::exp (-1.0 / (kTargetLiveSeconds * framesPerSecond)));
+            for (size_t b = 0; b < static_cast<size_t> (B); ++b) tsLive[b] += (cur[b] - tsLive[b]) * aLive;
+            liveUpdated = true;
         }
     }
     // With a target the reference is the song's own tone (only the shape counts: the corrections
@@ -533,24 +600,100 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
             tsLong[b] = std::max (static_cast<double> (tsParams.target.bandDb[b]), -90.0);
     double maxLong = -400.0;
     for (double v : tsLong) maxLong = std::max (maxLong, v);
+    if (useTarget && tsLiveFrames >= static_cast<long> (kTargetLiveSeconds * framesPerSecond))
+    {
+        tsDistance = shapeDistanceDb (tsParams.target.bandDb.data(), tsLive.data(), bandCf.data());
+        if (tsDistance > kTargetFarDb) { if (liveUpdated) tsFarSeconds = std::min (tsFarSeconds + 1.0 / framesPerSecond, 3600.0); }
+        else if (tsDistance < kTargetFarDb - 0.5) tsFarSeconds = 0.0;
+    }
+    else
+    {
+        tsDistance = -1.0;
+        tsFarSeconds = 0.0;
+    }
+
+    // With a target, a band far from the song's tone is the arrangement (a part coming or going), not
+    // a drift: the low end (below 160 Hz, judged as one), where 808s and basses come and go, both ways
+    // from 4 dB (gone at 6): an 808 entering after an intro isn't cut, an intro without it isn't lifted.
+    // Elsewhere only lifts, from 6 dB (gone at 9): a part that isn't playing isn't faked back. 1 =
+    // corrected fully, 0 = left alone.
+    auto partKeep = [this] (size_t b, double x)
+    {
+        const bool low = bandCf[b] <= 160.0;
+        if (! low && x <= 0.0) return 1.0;
+        const double from = low ? kTargetLowPartDb : kTargetPartDb, width = low ? 2.0 : 3.0;
+        return std::clamp ((from + width - std::abs (x)) / width, 0.0, 1.0);
+    };
 
     // Drift of each band from the song's own balance, with the overall level change taken out.
     // Quiet passages (more than 15 dB under the song) are left alone: a breakdown is not a drift.
+    // With a stored level that is the whole song's; else the last ~10 s of music.
     std::array<double, B> t {};
-    const bool active = tsAmount > 1.0e-4 && tsLevelLong > -150.0 && tsLevelShort > tsLevelLong - 15.0
+    const bool active = tsAmount > 1.0e-4 && tsLevelLong > -150.0
+                        && (targetLevel ? tsLoudShort > songLevelDb - 15.0 : tsLevelShort > tsLevelLong - 15.0)
                         && tsFrames > static_cast<long> (framesPerSecond);
     if (active)
     {
-        std::array<double, B> d {};
+        std::array<double, B> d {}, wb {};
         double wsum = 0.0, mean = 0.0;
         for (size_t b = 0; b < static_cast<size_t> (B); ++b)
         {
             if (tsLong[b] < maxLong - 60.0) continue;
             d[b] = tsLong[b] - tsShort[b];
-            const double w = std::pow (10.0, (tsLong[b] - maxLong) / 20.0);   // louder bands weigh more
-            mean += w * d[b]; wsum += w;
+            wb[b] = std::pow (10.0, (tsLong[b] - maxLong) / 20.0);   // louder bands weigh more
+            mean += wb[b] * d[b]; wsum += wb[b];
         }
         mean = wsum > 0.0 ? mean / wsum : 0.0;
+        if (useTarget)
+        {
+            // With a target the low end (below 160 Hz) is judged as one: its energy against the song's.
+            // An 808 going from note to note moves energy between the low bands (each band alone would
+            // read it as a drift); the whole low end getting boomier or thinner is one, and an 808
+            // coming or going is the arrangement (the guard below, from 4 dB).
+            double song = 0.0, now = 0.0;
+            for (size_t b = 0; b < static_cast<size_t> (B); ++b)
+                if (bandCf[b] <= 160.0 && tsLong[b] >= maxLong - 60.0)
+                {
+                    song += std::pow (10.0, tsLong[b] / 10.0);
+                    now += std::pow (10.0, tsShort[b] / 10.0);
+                }
+            const double lowD = song > 0.0 && now > 0.0 ? 10.0 * std::log10 (song / now) : 0.0;
+            for (size_t b = 0; b < static_cast<size_t> (B); ++b)
+                if (bandCf[b] <= 160.0) d[b] = lowD;
+            // The overall offset comes from the rest of the spectrum: the mean of the middle half of it
+            // (by weight), without the bands left alone (a part coming or going). In an intro without
+            // the song's 808 an offset set by the 808 bands read everything else as too loud and cut
+            // all of it (-1.5 to -3 dB); a part that enters in a few bands (a lead in the chorus) moves
+            // the middle half little, and the 808's own swell and decay no longer pump the mids. A
+            // passage where most of the spectrum above 160 Hz rises at once reads partly as a thinner
+            // low end (lifted at most half the Range). Three passes: the bands kept depend on the offset.
+            for (int pass = 0; pass < 3; ++pass)
+            {
+                std::array<std::pair<double, double>, B> v {};   // (drift, weight)
+                size_t n = 0;
+                double total = 0.0;
+                for (size_t b = 0; b < static_cast<size_t> (B); ++b)
+                {
+                    if (bandCf[b] <= 160.0 || wb[b] <= 0.0) continue;
+                    const double w = wb[b] * (pass == 0 ? 1.0 : partKeep (b, d[b] - mean));
+                    if (w <= 0.0) continue;
+                    v[n++] = { d[b], w };
+                    total += w;
+                }
+                if (n == 0) break;
+                std::sort (v.begin(), v.begin() + static_cast<std::ptrdiff_t> (n));
+                const double lo = 0.25 * total, hi = 0.75 * total;
+                double below = 0.0, sum = 0.0, used = 0.0;
+                for (size_t i = 0; i < n; ++i)
+                {
+                    const double inside = std::max (0.0, std::min (below + v[i].second, hi) - std::max (below, lo));
+                    sum += inside * v[i].first;
+                    used += inside;
+                    below += v[i].second;
+                }
+                if (used > 0.0) mean = sum / used;
+            }
+        }
         const double range = std::clamp (tsParams.rangeDb, 1.0, 6.0);
         for (size_t b = 0; b < static_cast<size_t> (B); ++b)
         {
@@ -558,21 +701,11 @@ void StemEQ::toneSteadyGains (const std::complex<double>* L, const std::complex<
             const double x = d[b] - mean;
             const double db = 1.0 + 2.0 * topW (b);                                                // 1 dB dead band (3 dB up top)
             const double dead = x > 0.0 ? std::max (0.0, x - db) : std::min (0.0, x + db);
-            t[b] = std::clamp (tsAmount * dead, -range * (1.0 - 0.5 * topW (b)), range * 0.5);
-            if (useTarget)
-            {
-                // Far from the song's tone is the arrangement, not a drift, and is left alone: in the
-                // low end (below 160 Hz), where 808s and basses come and go, both ways from 4 dB (gone at 6): an 808
-                // entering after an intro isn't cut, an intro without it isn't lifted. Elsewhere only
-                // lifts, from 6 dB (gone at 9): a part that isn't playing isn't faked back, while a
-                // muddier or harsher passage is still pulled down however far it drifts.
-                const bool low = bandCf[b] <= 160.0;
-                if (low || x > 0.0)
-                {
-                    const double from = low ? kTargetLowPartDb : kTargetPartDb, width = low ? 2.0 : 3.0;
-                    t[b] *= std::clamp ((from + width - std::abs (x)) / width, 0.0, 1.0);
-                }
-            }
+            // With a target, above 160 Hz a part coming in reads like a drift and is held down for as
+            // long as it plays: cuts there go at most half the Range (like boosts).
+            const double cutCap = useTarget && bandCf[b] > 160.0 ? 0.5 * range : range * (1.0 - 0.5 * topW (b));
+            t[b] = std::clamp (tsAmount * dead, -cutCap, range * 0.5);
+            if (useTarget) t[b] *= partKeep (b, x);
         }
     }
     const double aG = 1.0 - std::exp (-1.0 / (0.08 * framesPerSecond));
@@ -633,13 +766,32 @@ void StemEQ::updateKeepLoudness (const std::complex<double>* L, const std::compl
                 m[static_cast<size_t> (s * kStems + t)] += es * shares[static_cast<size_t> (t * B + band)];
         }
     }
-    if (total > 1.0e-12)   // about -110 dBFS: silence teaches nothing
-        for (int s = 0; s < kStems; ++s)
-            for (int t = s; t < kStems; ++t)
-            {
-                auto& v = keepM[static_cast<size_t> (s * kStems + t)];
-                v += (m[static_cast<size_t> (s * kStems + t)] - v) * keepAvg;
-            }
+    if (total > 1.0e-12)   // silence teaches nothing
+    {
+        // The music's level over about a beat (energy: a loud hit counts more than the gap after it,
+        // as in a loudness meter), and the loudest it has been lately, falling 3 dB a second: music
+        // 40 dB or more under that (a fade's tail, noise after a stop) teaches nothing either.
+        keepBeat += (total - keepBeat) * keepBeatAvg;
+        const double db = 10.0 * std::log10 (keepBeat + 1.0e-300);
+        keepPeakDb = std::max (db, keepPeakDb - kKeepPeakFallDbPerSecond * hopSize / sampleRate);
+        if (db > keepPeakDb - kKeepGateDb)
+        {
+            double sum = 0.0;
+            for (int s = 0; s < kStems; ++s)
+                for (int t = s; t < kStems; ++t)
+                {
+                    const auto i = static_cast<size_t> (s * kStems + t);
+                    keepM[i] += (m[i] - keepM[i]) * keepAvg;
+                    sum += keepM[i] * (s == t ? 1.0 : 2.0);
+                }
+            // After a loud section, its energy would outweigh a quieter one that follows for many
+            // seconds (a breakdown without the 808 kept the chorus's correction 8-10 s). The memory
+            // never weighs more than the music now: a quieter section takes over within the ~2 s
+            // average, the same as at a steady level.
+            if (sum > keepBeat)
+                for (auto& v : keepM) v *= keepBeat / sum;
+        }
+    }
 
     // Loudness before the move: every share product (the shares of a band sum to 1); after: with
     // the stem gains. Their ratio is the change the move makes; the stage takes it back.

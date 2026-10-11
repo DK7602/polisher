@@ -217,9 +217,13 @@ void AutoMasterController::launchAnalysis()
         return;
     }
 
-    // A short Auto-Master listen (finished early) doesn't replace a tone learned from more of the song.
+    // A short Auto-Master listen (finished early) doesn't replace a tone learned from more of the song,
+    // as long as that tone is this song's: a preset, a copied Polisher or an older project can carry
+    // another song's. It is kept only when what was heard now sits close to it; a tone it can't check
+    // (too little music heard at the song's level) isn't kept either.
     const auto stored = toneTarget.get();
-    if (stored.valid && (! tone.valid || (tone.seconds < kAutoFinishSeconds && tone.seconds < stored.seconds)))
+    if (stored.valid && tone.valid && tone.seconds < kAutoFinishSeconds && tone.seconds < stored.seconds
+        && polisher::toneDistanceDb (stored, tone, listener.getSampleRate()) <= kSameSongToneDb)
         tone = stored;
 
     polisher::AudioClip clip = listener.loudestWindow();

@@ -598,6 +598,17 @@ check((await tsView()).target === 0, 'CLEAR forgets the tone');
 await page.evaluate(() => document.querySelectorAll('#snaps .snap')[3].click()); await page.waitForTimeout(250);
 tv = await tsView();
 check(tv.target === learnedTarget, `recalling the snapshot brings Tone Steady's target back ("${tv.val}")`);
+// The music sits far from the stored tone (a preset from another song): the cell and Learn say so, with a plan.
+await page.evaluate(async () => { window.__mockAm.toneFar = true; (await import('./juce/index.js')).getSliderState('tsAmount').setNormalisedValue(0.4); });
+await page.waitForTimeout(300);
+tv = await tsView();
+check(/^another song\? · \d:\d\d$/.test(tv.val), `the Target cell asks whether the tone is another song's ("${tv.val}")`);
+check(/far from the tone Tone Steady is holding it to/.test(tv.learn) && /Do I need to fix it\?/.test(tv.learn) && /Press LEARN in this panel/.test(tv.learn),
+      'Learn warns about a tone from another song, with a plan');
+await page.evaluate(() => { window.__mockAm.toneFar = false; });
+await page.waitForTimeout(300);
+tv = await tsView();
+check(/^your song · \d:\d\d$/.test(tv.val) && !/far from the tone/.test(tv.learn), `the warning goes when the music matches again ("${tv.val}")`);
 
 // ---------------------------------------------------------------------------------------------
 // Re-audit fixes.

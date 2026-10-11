@@ -355,14 +355,18 @@ void PolisherAudioProcessor::updateLimiterParams()
 
     unlimiter.setParams (moduleParams.unlimiter (p.bypassed));
     stemEq.setParams (moduleParams.stem (p.bypassed));
-    // Tone Steady holds the song to its stored tone when there is one, moved by the Tonal EQ in front.
+    // Tone Steady holds the song to its stored tone when there is one, moved by Input Trim and the
+    // Tonal EQ in front.
     auto steady = moduleParams.steady (p.bypassed);
     const bool newTone = toneTarget.fetch (songTone, songToneVersion);
-    if (newTone || getSampleRate() != stageToneRate || e.enabled != stageToneEq.enabled || e.gainDb != stageToneEq.gainDb || e.freqHz != stageToneEq.freqHz)
+    const double trimDb = static_cast<double> (trimParam->load());
+    if (newTone || getSampleRate() != stageToneRate || trimDb != stageToneTrimDb || e.enabled != stageToneEq.enabled
+        || e.gainDb != stageToneEq.gainDb || e.freqHz != stageToneEq.freqHz)
     {
         stageToneEq = e;
         stageToneRate = getSampleRate();
-        stageTone = polisher::toneTargetAtStage (songTone, e, stageToneRate);
+        stageToneTrimDb = trimDb;
+        stageTone = polisher::toneTargetAtStage (songTone, e, stageToneRate, trimDb);
     }
     steady.target = stageTone;
     stemEq.setToneSteady (steady);
@@ -835,9 +839,11 @@ void PolisherAudioProcessor::publishMeters()
     if (rtDb < meters.rtCut.load()) { meters.rtCut.store (static_cast<float> (rtDb)); meters.rtHz.store (static_cast<float> (rtHz)); }
     stemEq.takeToneSteadyMeter (tsDb, tsHz);
     if (std::abs (tsDb) > std::abs (meters.tsDb.load())) { meters.tsDb.store (static_cast<float> (tsDb)); meters.tsHz.store (static_cast<float> (tsHz)); }
+    meters.tsDistance.store (static_cast<float> (stemEq.toneTargetDistanceDb()));
+    meters.tsFar.store (stemEq.toneTargetFar());
     std::array<double, polisher::kStems> stemE {};
     meters.stemKeep.store (static_cast<float> (stemEq.keepLevelDb()));
-    stemEq.takeStemLoudness (stemE);   // loudness-weighted: the meter shows the share of what you hear
+    stemEq.takeStemLoudness (stemE);   // K-weighted: each stem's share of the loudness of the mix coming in
     for (size_t k = 0; k < stemE.size(); ++k)
         addTo (meters.stemEnergy[k], static_cast<float> (stemE[k]));
     double satRes = 0.0, satSig = 0.0;

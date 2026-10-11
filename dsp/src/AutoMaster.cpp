@@ -1422,6 +1422,12 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         // hide a ring the ear picks out at once. On that scale a 3 kHz ring reads ~7x and a 300 Hz
         // ring ~1.5x what plain power gave; 0.3 dB keeps the boxiness decisions where the old 0.15
         // dB had them and catches harsh rings a little earlier (and now also over an 808).
+        // Checked against clean harmonic lines (2026-10 re-audit, synthetic): a sung line (harmonics,
+        // 1 % vibrato) reads under 0.3 when it sits 9 LU or more under the mix, but 0.5-1.2 dB at
+        // lead-vocal level, while a steady whistle 15-20 LU under the mix reads 0.3-2 dB. No
+        // threshold tells a loud clean line from a faint ring, so it stays at 0.3: on such a line the
+        // tamer trims the harmonics by about half a dB, and with Focus Boxiness (where such a line
+        // mostly reads) the report says to check the vocal with MATCH.
         const double fullCut = -st.resonanceCutDb;
         if (fullCut < 0.3)
             reason ("rt", "Amount", "0 %", "I hardly hear any tones ringing out of your mix (at full strength the tamer would cut only " +
@@ -1469,14 +1475,19 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         // hears it, after this EQ), so playback from any point and the export sound the same.
         if (s.songTone.valid)
         {
-            ts.target = toneTargetAtStage (s.songTone, chain.eq, clip.sampleRate);
+            ts.target = toneTargetAtStage (s.songTone, chain.eq, clip.sampleRate, trimDb);
             const int secs = static_cast<int> (std::lround (s.songTone.seconds));
             char heardText[16];
             std::snprintf (heardText, sizeof heardText, "%d:%02d", secs / 60, secs % 60);
+            // A tone learned earlier from more of the song (kept because what was heard now matches it).
+            const bool earlier = s.songSeconds > 0.0 && s.songTone.seconds > s.songSeconds + 1.0;
             reason ("ts", "Target", "Your song",
-                    std::string ("I learned your song's overall tone from the ") + heardText + " I heard. Tone Steady holds every part to it instead of the last few seconds, "
-                    "so what you hear from any start point is what you export. A part that comes or goes (an 808 entering after the intro) is the arrangement, "
-                    "not a drift, and is left alone." + (ts.amount < 0.5 ? " It's ready for when you turn Amount up." : ""));
+                    (earlier ? std::string ("Tone Steady keeps the overall tone it learned earlier from ") + heardText + " of your song (what I heard now matches it). "
+                             : std::string ("I learned your song's overall tone from the ") + heardText + " I heard. ") +
+                    "Tone Steady holds every part to it instead of the last few seconds, so what you hear from any start point is what you export. "
+                    "A part that comes or goes in the low end (an 808 entering after the intro) is the arrangement, not a drift, and is left alone. "
+                    "A part that comes in above the bass (a lead in the chorus) is treated like a drift: it is pulled down at most half the Range while it plays." +
+                    (ts.amount < 0.5 ? " It's ready for when you turn Amount up." : ""));
         }
     }
 

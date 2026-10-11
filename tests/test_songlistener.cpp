@@ -2,6 +2,9 @@
 
 #include "Signals.h"
 #include "polisher/AutoMaster.h"
+#include "polisher/Biquad.h"
+#include "polisher/FilterDesign.h"
+#include "polisher/LoudnessMeter.h"
 #include "polisher/LoudnessTargeting.h"
 #include "polisher/SongListener.h"
 #include "polisher/StemEQ.h"
@@ -107,6 +110,28 @@ double bandDb (const AudioClip& c, double hz, double from, double to)
         if (i >= static_cast<size_t> (from * sr) && i < static_cast<size_t> (to * sr)) e += y * y;
     }
     return 10.0 * std::log10 (e + 1e-30);
+}
+
+// Energy (dB) of both channels in [lo, hi) Hz (two 2nd-order Butterworth high- and low-passes) over [from, to) s.
+double rangeDb (const AudioClip& c, double lo, double hi, double from, double to)
+{
+    double e = 0.0;
+    for (const auto& ch : c.channels)
+    {
+        Biquad f[4];
+        design::apply (f[0], design::butterworth (true, lo, c.sampleRate));
+        design::apply (f[1], design::butterworth (true, lo, c.sampleRate));
+        design::apply (f[2], design::butterworth (false, hi, c.sampleRate));
+        design::apply (f[3], design::butterworth (false, hi, c.sampleRate));
+        for (size_t i = 0; i < ch.size(); ++i)
+        {
+            double v = ch[i];
+            for (auto& b : f) v = b.process (v);
+            const double t = static_cast<double> (i) / c.sampleRate;
+            if (t >= from && t < to) e += v * v;
+        }
+    }
+    return 10.0 * std::log10 (e + 1.0e-30);
 }
 
 ToneTarget learnTone (const AudioClip& song)
@@ -295,11 +320,14 @@ TEST_CASE ("Tone Steady with a stored target gives the same master wherever play
         CHECK (following > 10.0 * withTarget);   // following the music, where playback started still shows
     }
 
-    // The muddy passage is still pulled back with the target.
+    // The muddy passage is still pulled back with the target. (This noise lifts most of the spectrum
+    // above 160 Hz, 200-500 Hz by 9.7 dB, 2-5 kHz by 2 dB: the offset then reads part of it as a thinner
+    // low end, which is lifted a little; a passage muddier only in the low mids is cut fully.)
     const auto out = renderSpectral (song, {}, held, {});
-    const double drift = bandDb (song, 300.0, 51.0, 55.5) - bandDb (song, 300.0, 40.0, 44.5);
-    const double after = bandDb (out, 300.0, 51.0, 55.5) - bandDb (song, 300.0, 51.0, 55.5);
-    UNSCOPED_INFO ("low mids drift " << drift << " dB; Tone Steady moved them " << after << " dB");
+    const double drift = rangeDb (song, 200.0, 500.0, 51.0, 55.5) - rangeDb (song, 200.0, 500.0, 40.0, 44.5);
+    const double after = rangeDb (out, 200.0, 500.0, 51.0, 55.5) - rangeDb (song, 200.0, 500.0, 51.0, 55.5);
+    UNSCOPED_INFO ("low mids drift " << drift << " dB; Tone Steady moved them " << after << " dB, the low end "
+                   << lowDb (out, 51.0, 55.5) - lowDb (song, 51.0, 55.5) << " dB");
     CHECK (after < -1.0);
 }
 
@@ -386,7 +414,260 @@ TEST_CASE ("Auto-Master holds the song to its own tone when it listened to the s
     for (const auto& x : r.reasons) explained = explained || (x.module == "ts" && x.control == "Target");
     CHECK (explained);
 
+    // A tone learned earlier from more of the song (a short listen kept it): the report says so.
+    s.songSeconds = 15.0;
+    bool earlier = false;
+    for (const auto& x : autoMaster (slice (song, 20.0, 32.0), s).reasons)
+        earlier = earlier || (x.module == "ts" && x.control == "Target" && x.why.find ("learned earlier from 0:40") != std::string::npos);
+    CHECK (earlier);
+
     // Without a listen of the song (a state from before, or nothing learned): following the music, as before.
     const auto plain = autoMaster (slice (song, 20.0, 32.0), AutoMasterSettings {});
     CHECK_FALSE (plain.chain.steady.target.valid);
+}
+
+// --- Tone Steady with a stored target: sections, parts above the bass, quiet passages, other songs ---
+
+namespace {
+// A synth lead (six harmonics of C5 / D5) from `from` to `to` s: a part that comes in above the bass.
+void addLead (AudioClip& c, double from, double to, double amp)
+{
+    const double sr = c.sampleRate;
+    for (auto& ch : c.channels)
+    {
+        double ph = 0.0;
+        for (size_t i = static_cast<size_t> (from * sr); i < ch.size() && static_cast<double> (i) < to * sr; ++i)
+        {
+            const double t = static_cast<double> (i) / sr;
+            ph += 2.0 * std::numbers::pi * (std::fmod (t, 2.0) < 1.0 ? 523.25 : 587.33) / sr;
+            double v = 0.0;
+            for (int n = 1; n <= 6; ++n) v += std::sin (n * ph) / n;
+            ch[i] += static_cast<float> (amp * v);
+        }
+    }
+}
+
+// Difference energy of two renders over [from, to) s of the song (b starts `offset` s into it), dB re a's energy.
+double diffDb (const AudioClip& a, const AudioClip& b, double offset, double from, double to)
+{
+    const double sr = a.sampleRate;
+    const auto off = static_cast<size_t> (std::lround (offset * sr));
+    double e = 0.0, d = 0.0;
+    for (size_t c = 0; c < 2; ++c)
+        for (size_t i = static_cast<size_t> (from * sr); i < static_cast<size_t> (to * sr); ++i)
+        {
+            const double x = a.channels[c][i], y = b.channels[c][i - off];
+            e += x * x;
+            d += (x - y) * (x - y);
+        }
+    return 10.0 * std::log10 (d / (e + 1.0e-30) + 1.0e-30);
+}
+} // namespace
+
+TEST_CASE ("Tone Steady with a target leaves the rest of the spectrum alone where the song's 808 doesn't play", "[songlistener][spectral]")
+{
+    // The overall offset used to be set mostly by the 808 bands: in an intro without the 808 everything
+    // else read as too loud and was cut 1.5-3 dB (6 dB at full strength), the intro 0.6 LU quieter.
+    const double sr = 44100.0;
+    const double bands[][2] = { { 200.0, 500.0 }, { 500.0, 2000.0 }, { 2000.0, 5000.0 }, { 5000.0, 16000.0 } };
+    auto song = testsig::musicLike (sr, 70.0, -18.0, 3);
+    add808 (song, 16.0);
+    const auto tone = learnTone (song);
+    REQUIRE (tone.valid);
+    struct Setting { double amount, range; int speed; };
+    for (const auto set : { Setting { 40.0, 3.0, 0 }, Setting { 100.0, 6.0, 1 } })
+    {
+        ToneSteadyParams ts; ts.amount = set.amount; ts.rangeDb = set.range; ts.speed = set.speed; ts.target = tone;
+        const auto out = renderSpectral (song, {}, ts, {});
+        for (const auto& b : bands)
+        {
+            const double change = rangeDb (out, b[0], b[1], 4.0, 15.0) - rangeDb (song, b[0], b[1], 4.0, 15.0);
+            UNSCOPED_INFO ("amount " << set.amount << ", intro without the 808, " << b[0] << "-" << b[1] << " Hz: " << change << " dB");
+            CHECK (std::abs (change) < 0.5);
+        }
+        const double lu = measure (slice (out, 4.0, 15.0)).integratedLufs - measure (slice (song, 4.0, 15.0)).integratedLufs;
+        UNSCOPED_INFO ("intro loudness " << lu << " LU");
+        CHECK (std::abs (lu) < 0.2);
+    }
+
+    // The 808 leaves for the second half (it was cut -1.3 to -1.8 dB there).
+    auto half = testsig::musicLike (sr, 60.0, -18.0, 3);
+    add808 (half, 0.0, 30.0);
+    ToneSteadyParams ts; ts.amount = 40.0; ts.rangeDb = 3.0; ts.speed = 0; ts.target = learnTone (half);
+    REQUIRE (ts.target.valid);
+    const auto out = renderSpectral (half, {}, ts, {});
+    for (const auto& b : bands)
+    {
+        const double change = rangeDb (out, b[0], b[1], 36.0, 58.0) - rangeDb (half, b[0], b[1], 36.0, 58.0);
+        UNSCOPED_INFO ("after the 808 leaves, " << b[0] << "-" << b[1] << " Hz: " << change << " dB");
+        CHECK (std::abs (change) < 0.3);
+    }
+}
+
+TEST_CASE ("Tone Steady with a target: a part entering above the bass is pulled down, at most half the Range", "[songlistener][spectral]")
+{
+    // A new part above 160 Hz can't be told from a harsher passage: it is treated like a drift for as
+    // long as it plays, but cuts there go at most half the Range (they went the full Range: -1.3 dB at
+    // Amount 40, Range 3, for all 20 s).
+    const double sr = 44100.0;
+    auto song = testsig::musicLike (sr, 90.0, -18.0, 4);
+    add808 (song, 0.0);
+    addLead (song, 30.0, 50.0, 0.03);
+    const auto tone = learnTone (song);
+    REQUIRE (tone.valid);
+    for (double amount : { 40.0, 100.0 })
+    {
+        ToneSteadyParams ts; ts.amount = amount; ts.rangeDb = 3.0; ts.speed = 1; ts.target = tone;
+        const auto out = renderSpectral (song, {}, ts, {});
+        const double lead = rangeDb (out, 500.0, 3000.0, 36.0, 49.0) - rangeDb (song, 500.0, 3000.0, 36.0, 49.0);
+        const double after = rangeDb (out, 500.0, 3000.0, 60.0, 80.0) - rangeDb (song, 500.0, 3000.0, 60.0, 80.0);
+        UNSCOPED_INFO ("amount " << amount << ": lead band while it plays " << lead << " dB, after it " << after << " dB");
+        CHECK (lead < -0.2);                // treated like a drift (as Learn and the manual say)
+        CHECK (lead > -0.5 * ts.rangeDb);   // but never more than half the Range
+        CHECK (std::abs (after) < 0.3);
+    }
+}
+
+TEST_CASE ("Tone Steady with a stored target: a quiet intro and breakdown, and a stop and locate, don't change the master", "[songlistener][spectral]")
+{
+    // Quiet passages are judged against the song's stored level, not the last ~10 s: before, a breakdown
+    // 17 dB under the chorus came out differently from bar 1 than from the chorus (-18 dB re signal).
+    const double sr = 48000.0;
+    AudioClip song;
+    append (song, testsig::musicLike (sr, 20.0, -36.0, 21));     //  0-20  quiet intro
+    auto chorus = testsig::musicLike (sr, 20.0, -20.0, 22);
+    add808 (chorus, 0.0);
+    append (song, chorus);                                        // 20-40  chorus
+    auto breakdown = testsig::musicLike (sr, 12.0, -37.0, 23);
+    std::mt19937 rng (4);
+    std::normal_distribution<double> wn (0.0, 1.0);
+    for (auto& ch : breakdown.channels)                           // a muddier breakdown
+    {
+        const double w0 = 2.0 * std::numbers::pi * 300.0 / sr, alpha = std::sin (w0) / 4.0;
+        const double b0 = alpha, a0 = 1.0 + alpha, a1 = -2.0 * std::cos (w0), a2 = 1.0 - alpha;
+        double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        for (auto& v : ch)
+        {
+            const double x = wn (rng), y = (b0 * x - b0 * x2 - a1 * y1 - a2 * y2) / a0;
+            x2 = x1; x1 = x; y2 = y1; y1 = y;
+            v += static_cast<float> (0.004 * y);
+        }
+    }
+    append (song, breakdown);                                     // 40-52  breakdown
+    auto chorus2 = testsig::musicLike (sr, 28.0, -20.0, 24);
+    add808 (chorus2, 0.0);
+    append (song, chorus2);                                       // 52-80  chorus
+    ToneSteadyParams ts; ts.amount = 100.0; ts.rangeDb = 6.0; ts.target = learnTone (song);
+    REQUIRE (ts.target.valid);
+    REQUIRE (ts.target.hasLevel());
+
+    const int grid = StemEQ::fftSizeFor (sr);
+    const double at = std::floor (20.0 * sr / grid) * grid / sr;   // the chorus, on the export's frame grid
+    const auto fromStart = renderSpectral (song, {}, ts, {});
+    const auto fromChorus = renderSpectral (slice (song, at, 80.0), {}, ts, {});
+    for (auto [a, b] : { std::pair { 40.0, 46.0 }, { 46.0, 52.0 }, { 60.0, 78.0 } })
+    {
+        const double d = diffDb (fromStart, fromChorus, at, a, b);
+        UNSCOPED_INFO (a << "-" << b << " s: from bar 1 vs from the chorus " << d << " dB re signal");
+        CHECK (d < -60.0);
+    }
+
+    // Real time: play the second chorus, stop (silent blocks), locate back into the first chorus, play.
+    StemEQ s;
+    s.prepare (sr, 2);
+    s.setToneSteady (ts);
+    s.reset();
+    auto run = [&] (AudioClip c)
+    {
+        for (int pos = 0; pos < c.numSamples(); pos += 512)
+        {
+            float* ch[2] = { c.channels[0].data() + pos, c.channels[1].data() + pos };
+            s.process (ch, 2, std::min (512, c.numSamples() - pos));
+        }
+        return c;
+    };
+    run (slice (song, 60.0, 75.0));
+    run (testsig::silence (sr, 2, 2.0));
+    const auto live = run (slice (song, 25.0, 35.0));
+    const double lat = s.latencySamples() / sr;
+    // Tone Steady's short-term average needs its own few seconds; from then on live = export.
+    const double d = diffDb (slice (fromStart, 28.0, 35.0), slice (live, 3.0 + lat, 10.0), 0.0, 0.0, 6.9 - lat);
+    UNSCOPED_INFO ("after a stop and locate, 3-10 s in: live vs export " << d << " dB re signal");
+    CHECK (d < -60.0);
+}
+
+TEST_CASE ("A tone learned on another song is told apart from the song's own", "[songlistener][spectral]")
+{
+    const double sr = 48000.0;
+    const auto trap = testsig::trapLike (sr, 45.0);
+    auto other = testsig::musicLike (sr, 45.0, -18.0, 9);
+    const auto own = learnTone (trap), foreign = learnTone (other);
+    REQUIRE (own.valid);
+    REQUIRE (foreign.valid);
+    // A short listen of the same song sits close to its whole-song tone; another song's tone far.
+    const auto part = learnTone (slice (trap, 20.0, 35.0));
+    REQUIRE (part.valid);
+    const double same = toneDistanceDb (own, part, sr), apart = toneDistanceDb (foreign, part, sr);
+    UNSCOPED_INFO ("15 s of the song vs its tone " << same << " dB, vs another song's " << apart << " dB");
+    CHECK (same < 3.0);
+    CHECK (apart > 4.0);
+    CHECK (toneDistanceDb (own, own, sr) == 0.0);
+    CHECK (toneDistanceDb (ToneTarget {}, part, sr) == 0.0);
+
+    // Live: held to its own tone it reads close; held to the other song's, Tone Steady says so (after
+    // 20 s of music and 10 s far from it).
+    auto play = [&] (const ToneTarget& target, double& distance)
+    {
+        StemEQ s;
+        s.prepare (sr, 2);
+        ToneSteadyParams ts; ts.amount = 40.0; ts.rangeDb = 3.0; ts.speed = 0; ts.target = target;
+        s.setToneSteady (ts);
+        s.reset();
+        AudioClip c = trap;
+        bool far = false, early = false;
+        for (int pos = 0; pos < c.numSamples(); pos += 4800)
+        {
+            float* ch[2] = { c.channels[0].data() + pos, c.channels[1].data() + pos };
+            s.process (ch, 2, std::min (4800, c.numSamples() - pos));
+            far = s.toneTargetFar();
+            early = early || (far && pos < static_cast<int> (25.0 * sr));
+        }
+        distance = s.toneTargetDistanceDb();
+        CHECK_FALSE (early);   // not before ~30 s
+        return far;
+    };
+    double dOwn = 0.0, dForeign = 0.0;
+    CHECK_FALSE (play (own, dOwn));
+    CHECK (play (foreign, dForeign));
+    UNSCOPED_INFO ("live: own tone " << dOwn << " dB, another song's " << dForeign << " dB");
+    CHECK (dOwn < 2.5);
+    CHECK (dForeign > StemEQ::kTargetFarDb);
+    // Without a target there is nothing to be far from.
+    StemEQ none;
+    none.prepare (sr, 2);
+    CHECK (none.toneTargetDistanceDb() < 0.0);
+    CHECK_FALSE (none.toneTargetFar());
+}
+
+TEST_CASE ("A stored tone keeps the song's level, moved by Input Trim and the Tonal EQ", "[songlistener][spectral]")
+{
+    const double sr = 48000.0;
+    const auto song = testsig::musicLike (sr, 30.0, -16.0, 6);
+    const auto tone = learnTone (song);
+    REQUIRE (tone.valid);
+    REQUIRE (tone.hasLevel());
+    // The same song 6 dB quieter reads 6 dB lower, at any rate (the level is per FFT size).
+    auto quieter = song;
+    for (auto& ch : quieter.channels) for (auto& v : ch) v *= 0.5f;
+    CHECK (std::abs (learnTone (quieter).levelDb - (tone.levelDb - 6.02)) < 0.05);
+    CHECK (toneTargetAtStage (tone, {}, sr, -6.0).levelDb == tone.levelDb - 6.0);
+    TonalEQParams eq;
+    eq.gainDb[2] = 4.0;   // Low Mid +4 dB
+    const double up = toneTargetAtStage (tone, eq, sr).levelDb - tone.levelDb;
+    UNSCOPED_INFO ("Low Mid +4 dB moves the song's level " << up << " dB");
+    CHECK (up > 0.2);
+    CHECK (up < 4.0);
+    ToneTarget old = tone;
+    old.levelDb = ToneTarget::kNoLevel;   // a target saved before the level: stays without one
+    CHECK_FALSE (toneTargetAtStage (old, eq, sr, -6.0).hasLevel());
 }

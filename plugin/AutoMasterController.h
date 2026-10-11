@@ -28,6 +28,8 @@
        report is saved with the plug-in state so it's still there when the project is reopened.
 
     start (toneOnly) listens the same way but only learns the song's tone for Tone Steady.
+    A short Auto-Master listen (under kAutoFinishSeconds) keeps a stored tone learned from more of
+    the song only when what it heard matches it (kSameSongToneDb); otherwise the new tone replaces it.
 
     The listener's memory is allocated by start() for the current sample rate (on the message thread,
     never while the audio thread may be using it), so nothing reallocates while the audio thread
@@ -42,6 +44,11 @@ public:
     static constexpr double kAutoFinishSeconds = 30.0;      // music heard before the song's end finishes it by itself
     static constexpr double kSongEndSilenceSeconds = 4.0;   // ...this long without music (or without audio at all; 2 bars at 120 BPM)
     static constexpr double kMaxListenSeconds = 15.0 * 60.0;
+    // A short listen keeps a tone learned earlier from more of the song only when what it heard sits
+    // within this of it (polisher::toneDistanceDb): a preset, a copied instance or an older project
+    // can carry another song's tone. Synthetic songs: a 15 s listen reads 0.1-2.7 dB from its own
+    // song's tone in steady songs, other songs 3-19 dB (see toneDistanceDb).
+    static constexpr double kSameSongToneDb = 3.0;
     enum State { idle = 0, listening = 1, analysing = 2 };
     enum Mode { fullMaster = 0, toneOnly = 1 };
 

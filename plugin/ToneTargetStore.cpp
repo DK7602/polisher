@@ -41,6 +41,8 @@ juce::String ToneTargetStore::toJson() const
     auto* o = new juce::DynamicObject();
     o->setProperty ("format", kFormat);
     o->setProperty ("seconds", t.seconds);
+    if (t.hasLevel())
+        o->setProperty ("level", t.levelDb);   // the song's level (optional: targets saved before it have none)
     juce::Array<juce::var> bands;
     for (float v : t.bandDb) bands.add (static_cast<double> (v));
     o->setProperty ("bands", bands);
@@ -65,6 +67,9 @@ void ToneTargetStore::restoreFromJson (const juce::String& json)
         }
         const auto secs = v.getProperty ("seconds", 0.0);
         t.seconds = secs.isDouble() || secs.isInt() || secs.isInt64() ? static_cast<double> (secs) : 0.0;
+        const auto level = v.getProperty ("level", {});
+        const double l = level.isDouble() || level.isInt() || level.isInt64() ? static_cast<double> (level) : NAN;
+        t.levelDb = std::isfinite (l) && l > polisher::ToneTarget::kNoLevel && l < 100.0 ? l : polisher::ToneTarget::kNoLevel;
     }
     set (t);
 }

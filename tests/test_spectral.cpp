@@ -432,3 +432,44 @@ TEST_CASE ("Tone Steady doesn't touch the top end when the song gets louder", "[
         CHECK (worst < 0.5);
     }
 }
+
+TEST_CASE ("Resonance Tamer statistics: a clean line well under the mix isn't ringing, a steady whistle is", "[spectral]")
+{
+    // What Auto-Master's 0.3 dB threshold sees (full strength, loudness-weighted). A clean sung line
+    // (harmonics, 1 % vibrato, in phrases) 9 LU or more under the mix reads under it; a steady 3 kHz
+    // whistle 9-19 LU under the mix reads over it, 808 or not. (At lead-vocal level a line this clean
+    // reads 0.5-1.2 dB: no threshold tells that from a faint ring; see AutoMaster.cpp.)
+    const double sr = 44100.0;
+    ResonanceParams probe; probe.amount = 100.0;
+    for (bool with808 : { false, true })
+    {
+        auto bed = testsig::musicLike (sr, 14.0, -18.0, 3);
+        if (with808)
+            for (auto& ch : bed.channels)
+                for (size_t i = 0; i < ch.size(); ++i)
+                {
+                    const double t = static_cast<double> (i) / sr, tn = std::fmod (t, 1.0);
+                    ch[i] += static_cast<float> (0.3 * std::exp (-tn * 1.2) * std::min (1.0, tn * 200.0) * std::sin (2.0 * std::numbers::pi * 45.0 * t));
+                }
+        auto line = bed, whistle = bed;
+        double ph = 0.0;
+        for (size_t i = 0; i < bed.channels[0].size(); ++i)
+        {
+            const double t = static_cast<double> (i) / sr;
+            const double f0 = (std::fmod (t, 4.0) < 2.0 ? 220.0 : 294.0) * (1.0 + 0.01 * std::sin (2.0 * std::numbers::pi * 5.5 * t));
+            ph += 2.0 * std::numbers::pi * f0 / sr;
+            double v = 0.0;
+            for (int n = 1; n * f0 < 4000.0; ++n) v += std::sin (n * ph) / n;
+            const double phrase = std::fmod (t, 2.0) < 1.6 ? std::min (1.0, std::fmod (t, 2.0) * 20.0) : 0.0;
+            for (size_t c = 0; c < 2; ++c)
+            {
+                line.channels[c][i] += static_cast<float> (0.01 * phrase * v);
+                whistle.channels[c][i] += static_cast<float> (0.008 * std::sin (2.0 * std::numbers::pi * 3000.0 * t));
+            }
+        }
+        const double lineCut = -measureSpectral (line, {}, probe).resonanceCutDb, whistleCut = -measureSpectral (whistle, {}, probe).resonanceCutDb;
+        UNSCOPED_INFO ((with808 ? "with an 808" : "no 808") << ": clean line " << lineCut << " dB, whistle " << whistleCut << " dB");
+        CHECK (lineCut < 0.3);
+        CHECK (whistleCut > 0.6);
+    }
+}
