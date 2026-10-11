@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Biquad.h"
+#include "ParkGlide.h"
 
 #include <algorithm>
 #include <array>
@@ -21,9 +22,12 @@ struct ImagerParams
     is passed through the 5 kHz all-pass so the bands sum flat), each band gets its own gain. The
     split sums to an all-pass, so while the imager runs the mid goes through the same all-passes:
     mid and side stay in phase and a hard-panned sound stays on its side.
-    Zero latency; exact pass-through at 100 / 100 / 100 (the processed side is cross-faded in and
-    out over ~20 ms, so switching never clicks). Also measures the output's L/R correlation
-    (+1 mono, 0 wide, below 0 out of phase). */
+    Zero latency; exact pass-through at 100 / 100 / 100. Switching on (see ParkGlide), the processed
+    path is blended in over 20 ms with both crossovers parked just under Nyquist, they glide down to
+    5 kHz and 250 Hz (~0.1 s), and only then do the band widths move; switching off runs the other way
+    (widths back to 100 %, crossovers up to the park, blend out). Blending plain and all-passed with the
+    crossovers in place would cut a hole at 250 Hz and 5 kHz. Also measures the output's L/R
+    correlation (+1 mono, 0 wide, below 0 out of phase). */
 class StereoImager
 {
 public:
@@ -45,6 +49,12 @@ public:
             double l = ch[0][i], r = ch[1][i];
             if (running)
             {
+                if (lowSegment.active() || highSegment.active())
+                {
+                    if (lowSegment.active()) logLow = lowSegment.next();
+                    if (highSegment.active()) logHigh = highSegment.next();
+                    setCrossovers();
+                }
                 const double m = 0.5 * (l + r), side = 0.5 * (l - r);
                 const double low = lp250[1].process (lp250[0].process (side));
                 const double rest = hp250[1].process (hp250[0].process (side));
@@ -55,7 +65,11 @@ public:
                 // The mid through the same two all-passes (250 Hz, then 5 kHz) as the side.
                 const double m250 = mLp250[1].process (mLp250[0].process (m)) + mHp250[1].process (mHp250[0].process (m));
                 const double mWet = mLp5k[1].process (mLp5k[0].process (m250)) + mHp5k[1].process (mHp5k[0].process (m250));
-                mix += (mixTarget - mix) * mixCoeff;
+                if (fade != fadeGoal)
+                {
+                    fade = fadeGoal > fade ? std::min (fadeGoal, fade + fadeStep) : std::max (fadeGoal, fade - fadeStep);
+                    mix = ParkGlide::fadeWeight (fade);
+                }
                 const double s2 = side + (wet - side) * mix;
                 const double m2 = m + (mWet - m) * mix;
                 l = m2 + s2;
@@ -78,11 +92,15 @@ public:
 
 private:
     void update() noexcept;
+    void setCrossovers() noexcept;
 
     ImagerParams params;
     double sampleRate = 48000.0, glide = 0.0, corrCoeff = 0.0;
     double gLow = 1.0, gMid = 1.0, gHigh = 1.0;       // current (smoothed) band gains
-    double mix = 0.0, mixTarget = 0.0, mixCoeff = 0.0;
+    double mix = 0.0, fade = 0.0, fadeGoal = 0.0, fadeStep = 0.0;   // blend at the park: linear position, raised-cosine weight
+    double logLow = 0.0, logHigh = 0.0;               // crossovers now (natural log of Hz): 250 Hz / 5 kHz, parked or between
+    bool engaged = false;                             // crossovers in place after switching on: the widths may move
+    ParkGlide::Segment lowSegment, highSegment;       // the switching glide, a sample at a time
     std::array<Biquad, 2> lp250 {}, hp250 {}, lp5k {}, hp5k {}, apLp {}, apHp {};
     std::array<Biquad, 2> mLp250 {}, mHp250 {}, mLp5k {}, mHp5k {};   // the mid's matching all-passes
     bool running = false;

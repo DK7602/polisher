@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Biquad.h"
+#include "ParkGlide.h"
 
 #include <algorithm>
 #include <array>
@@ -27,8 +28,11 @@ struct BassParams
     - Mono Below: high-passes the side (L-R) signal with a 4th-order Linkwitz-Riley filter, so the
       bass below the frequency is mono. The mid (L+R) goes through the matching all-pass (what the
       LR4 low- and high-pass add up to), so above the frequency mid and side stay in phase and a
-      sound panned hard left stays on the left. Mid level is unchanged at every frequency. Mid and
-      side are blended in and out together over ~20 ms.
+      sound panned hard left stays on the left. Mid level is unchanged at every frequency. Switching
+      on (see ParkGlide): mid and side go through the same all-pass, blended in over 20 ms with it
+      parked just under Nyquist, which then glides down to the frequency (~0.15 s at 120 Hz, ~0.5 s at
+      30 Hz); only then is the side's bass taken out (20 ms). Switching off runs the other way.
+      Blending plain and all-passed at the frequency itself would cut a hole there.
     - Sub Tame: a dynamic low shelf (120 Hz). A detector compares the low band's short-term level
       with its own ~2 s average; when a note leaps above that average, the shelf turns it down
       (up to 12 dB). More Tame = lower threshold and higher ratio. It listens for ~0.75 s of low
@@ -80,12 +84,30 @@ public:
 
             if (monoRunning && nch >= 2)
             {
-                monoMix += (monoTarget - monoMix) * mixCoeff;
-                if (std::abs (monoTarget - monoMix) < 1.0e-6)
-                    monoMix = monoTarget;
+                if (monoSegment.active())
+                {
+                    monoLogFreq = monoSegment.next();
+                    setMonoFilters();
+                }
+                if (monoFade != monoFadeGoal)
+                {
+                    ParkGlide::fadeToward (monoFade, monoFadeGoal, fadeStep);
+                    monoMix = ParkGlide::fadeWeight (monoFade);
+                }
+                if (monoCut != monoCutGoal)
+                {
+                    ParkGlide::fadeToward (monoCut, monoCutGoal, fadeStep);
+                    monoCutWeight = ParkGlide::fadeWeight (monoCut);
+                }
                 const double mid = 0.5 * (x[0] + x[1]);
                 const double side = 0.5 * (x[0] - x[1]);
-                const double hp = monoHp[1].process (monoHp[0].process (side));
+                // The side's LR4 high-pass. While switching, the side goes through the same all-pass as the mid
+                // (so a panned sound stays put while the filters glide), minus the LR4 low-pass part as the
+                // cut fades in: all-pass - low = high. The filters all run, so either way is ready.
+                const double hpSide = monoHp[1].process (monoHp[0].process (side));
+                const double lpSide = monoLp[1].process (monoLp[0].process (side));
+                const double apSide = monoApSide.process (side);
+                const double hp = monoCutWeight >= 1.0 ? hpSide : apSide - monoCutWeight * lpSide;
                 const double ap = monoAp.process (mid);
                 const double m = mid + monoMix * (ap - mid);
                 const double s = side + monoMix * (hp - side);
@@ -157,11 +179,16 @@ private:
     int updateCountdown = 0;
 
     // Mono Below
-    std::array<Biquad, 2> monoHp {};
-    Biquad monoAp;   // mid all-pass matching monoHp's phase
+    std::array<Biquad, 2> monoHp {}, monoLp {};   // the side's LR4 high-pass, and its low-pass (while switching)
+    Biquad monoAp;       // mid all-pass matching monoHp's phase
+    Biquad monoApSide;   // the same all-pass for the side (while switching)
     double monoLogFreq = std::log (100.0), monoTargetLogFreq = std::log (100.0);
-    double monoMix = 0.0, monoTarget = 0.0, mixCoeff = 0.0, glideCoeff = 0.0;
+    double monoMix = 0.0, monoTarget = 0.0, glideCoeff = 0.0;
+    double monoFade = 0.0, monoFadeGoal = 0.0, fadeStep = 0.0;   // plain -> all-passed blend (at the park): position, weight monoMix
+    double monoCut = 0.0, monoCutGoal = 0.0, monoCutWeight = 0.0;   // the side's bass taken out: position, weight
     bool monoRunning = false;
+    bool monoEngaged = false;   // arrived at the set frequency after switching on: frequency moves glide as a knob does
+    ParkGlide::Segment monoSegment;   // the switching glide, a sample at a time
 
     // Detectors
     std::array<Biquad, 2> detectLp {}, widthLpM {}, widthLpS {}, clickHp {}, clickLp {}, airHp {};

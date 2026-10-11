@@ -2700,7 +2700,7 @@ function renderSnapLearn(body) {
   body.appendChild(head("SNAPSHOTS S1–S4"));
   body.appendChild(para("l-p", "Each slot keeps a whole sound: every knob and switch in every module, plus the Auto-Master report that explains it. They're saved with your Cubase project."));
   body.appendChild(item("Empty slot", null, "Click it to keep the settings you hear now."));
-  body.appendChild(item("Stored slot", null, "Click it to switch to those settings. They glide in like a knob move, so there's no click, and the undo arrow takes you back."));
+  body.appendChild(item("Stored slot", null, "Click it to switch to those settings. Knobs glide there and switches fade over, so nothing clicks or drops out, and the undo arrow takes you back."));
   body.appendChild(item("Red slot", null, "The one playing. A dot (S1•) means you've changed something since. To keep the change, click STORE, then the slot (or Shift-click the slot)."));
   body.appendChild(item("Not in a snapshot", null, "A / B, MATCH, MONO, PHONE and Listen, and Auto-Master's genre, intensity and target. Switching snapshots never changes how you listen. S1–S4 are not A / B: A is always your original mix, B the master."));
   body.appendChild(sep());

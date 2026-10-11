@@ -23,7 +23,7 @@ void MultibandDynamics::prepare (double sr, int numChannels)
 {
     sampleRate = sr > 0.0 ? sr : 48000.0;
     channelCount = std::clamp (numChannels, 1, 2);
-    mixCoeff = perSample (0.02, sampleRate);
+    fadeStep = 1.0 / (ParkGlide::kFadeSeconds * sampleRate);
     makeupCoeff = perSample (0.02, sampleRate);
     averageCoeff = perSample (0.4, sampleRate);
     glideCoeff = 1.0 - std::exp (-static_cast<double> (kUpdateInterval) / (0.02 * sampleRate));
@@ -35,15 +35,47 @@ void MultibandDynamics::prepare (double sr, int numChannels)
     reset();
 }
 
-void MultibandDynamics::resetFilters() noexcept
-{
-    for (auto& c : chan)
+namespace {
+    void resetSplit (auto& c) noexcept
     {
         for (auto* g : { &c.x1lp, &c.x1hp, &c.x2lp, &c.x2hp, &c.x3lp, &c.x3hp })
             for (auto& f : *g) f.reset();
         c.apX1.reset();
         c.apX3.reset();
     }
+    void designSplit (auto& c, double f1, double f2, double f3, double sampleRate) noexcept
+    {
+        // (Exactly the shared designs at the settings; ParkGlide's also reach the park just under Nyquist.)
+        const auto lp1 = ParkGlide::butterworth (false, f1, sampleRate), hp1 = ParkGlide::butterworth (true, f1, sampleRate);
+        const auto lp2 = ParkGlide::butterworth (false, f2, sampleRate), hp2 = ParkGlide::butterworth (true, f2, sampleRate);
+        const auto lp3 = ParkGlide::butterworth (false, f3, sampleRate), hp3 = ParkGlide::butterworth (true, f3, sampleRate);
+        for (auto& f : c.x1lp) design::apply (f, lp1);
+        for (auto& f : c.x1hp) design::apply (f, hp1);
+        for (auto& f : c.x2lp) design::apply (f, lp2);
+        for (auto& f : c.x2hp) design::apply (f, hp2);
+        for (auto& f : c.x3lp) design::apply (f, lp3);
+        for (auto& f : c.x3hp) design::apply (f, hp3);
+        design::apply (c.apX1, ParkGlide::allpass (f1, sampleRate));
+        design::apply (c.apX3, ParkGlide::allpass (f3, sampleRate));
+    }
+    void copyCoefficients (const auto& from, auto& to) noexcept
+    {
+        const auto one = [] (const Biquad& f, Biquad& t) { t.b0 = f.b0; t.b1 = f.b1; t.b2 = f.b2; t.a1 = f.a1; t.a2 = f.a2; };
+        for (size_t i = 0; i < 2; ++i)
+        {
+            one (from.x1lp[i], to.x1lp[i]); one (from.x1hp[i], to.x1hp[i]);
+            one (from.x2lp[i], to.x2lp[i]); one (from.x2hp[i], to.x2hp[i]);
+            one (from.x3lp[i], to.x3lp[i]); one (from.x3hp[i], to.x3hp[i]);
+        }
+        one (from.apX1, to.apX1);
+        one (from.apX3, to.apX3);
+    }
+}
+
+void MultibandDynamics::resetFilters() noexcept
+{
+    for (auto& c : chan)
+        resetSplit (c);
 }
 
 void MultibandDynamics::resetDetectors() noexcept
@@ -62,10 +94,15 @@ void MultibandDynamics::reset() noexcept
     resetDetectors();
     for (size_t k = 0; k < kDynBands - 1; ++k)
         logFreq[k] = targetLogFreq[k] = std::log (std::clamp (params.crossoverHz[k], kDynCrossoverRange[k][0], kDynCrossoverRange[k][1]));
+    for (auto& sg : segment) sg.stop();
+    gliding = false;
     applyCrossovers();
-    running = ! isNeutral (params);
+    running = engaged = ! isNeutral (params);   // start fully in the set state
     clocking = running || monitorBand >= 0;
-    mix = mixTarget = running ? 1.0 : 0.0;
+    mix = fade = fadeGoal = running ? 1.0 : 0.0;
+    compWeight = comp = compGoal = running ? 1.0 : 0.0;
+    bandsWeight = bands = bandsGoal = 1.0;
+    auxRunning = false;
     for (size_t k = 0; k < kDynBands; ++k)
     {
         const double g = params.bands[k].gainDb;
@@ -77,69 +114,133 @@ void MultibandDynamics::reset() noexcept
 
 void MultibandDynamics::applyCrossovers() noexcept
 {
-    const double f1 = std::exp (logFreq[0]), f2 = std::exp (logFreq[1]), f3 = std::exp (logFreq[2]);
-    const auto lp1 = design::butterworth (false, f1, sampleRate), hp1 = design::butterworth (true, f1, sampleRate);
-    const auto lp2 = design::butterworth (false, f2, sampleRate), hp2 = design::butterworth (true, f2, sampleRate);
-    const auto lp3 = design::butterworth (false, f3, sampleRate), hp3 = design::butterworth (true, f3, sampleRate);
-    const auto ap1 = design::allpass (f1, sampleRate), ap3 = design::allpass (f3, sampleRate);
-    for (auto& c : chan)
-    {
-        for (auto& f : c.x1lp) design::apply (f, lp1);
-        for (auto& f : c.x1hp) design::apply (f, hp1);
-        for (auto& f : c.x2lp) design::apply (f, lp2);
-        for (auto& f : c.x2hp) design::apply (f, hp2);
-        for (auto& f : c.x3lp) design::apply (f, lp3);
-        for (auto& f : c.x3hp) design::apply (f, hp3);
-        design::apply (c.apX1, ap1);
-        design::apply (c.apX3, ap3);
-    }
+    designSplit (chan[0], std::exp (logFreq[0]), std::exp (logFreq[1]), std::exp (logFreq[2]), sampleRate);
+    copyCoefficients (chan[0], chan[1]);
+}
+
+void MultibandDynamics::applyAuxCrossovers() noexcept
+{
+    auxLogFreq = targetLogFreq;
+    designSplit (chan[0].a, std::exp (targetLogFreq[0]), std::exp (targetLogFreq[1]), std::exp (targetLogFreq[2]), sampleRate);
+    copyCoefficients (chan[0].a, chan[1].a);
 }
 
 void MultibandDynamics::update() noexcept
 {
-    const bool neutral = isNeutral (params);
-
-    // Crossover targets and glide.
+    const bool wanted = ! isNeutral (params);
+    const bool canPark = monitorBand < 0;   // a soloed band is heard: it stays in place even while switching
+    const double park = ParkGlide::parkLog (sampleRate);
     bool moved = false;
     for (size_t k = 0; k < kDynBands - 1; ++k)
-    {
         targetLogFreq[k] = std::log (std::clamp (params.crossoverHz[k], kDynCrossoverRange[k][0], kDynCrossoverRange[k][1]));
-        const double d = targetLogFreq[k] - logFreq[k];
-        if (d != 0.0)
+
+    if (wanted && ! running)
+    {
+        running = true;
+        engaged = false;
+        resetDetectors();   // compression starts from a clean state
+        if (! clocking)
         {
-            logFreq[k] = std::abs (d) < 1.0e-5 ? targetLogFreq[k] : logFreq[k] + d * glideCoeff;
+            // Start clean, parked (park and glide, see ParkGlide). Filters a solo is already running are
+            // left alone, so the solo doesn't click.
+            resetFilters();
+            for (size_t k = 0; k < kDynBands - 1; ++k)
+            {
+                logFreq[k] = canPark ? park : targetLogFreq[k];
+                segment[k].stop();
+            }
+            gliding = false;
             moved = true;
         }
     }
-
-    if (! neutral)
+    if (! running && monitorBand >= 0 && ! clocking)
     {
-        mixTarget = 1.0;
-        if (! running)
+        resetFilters();   // a solo of a resting module: the split starts at the settings
+        logFreq = targetLogFreq;
+        for (auto& sg : segment) sg.stop();
+        gliding = false;
+        moved = true;
+    }
+
+    if (running)
+    {
+        // On: blend in at the park, glide down, then fade the compression and band gains in.
+        // Off: fade them out, glide up to the park, then blend out.
+        if (! wanted)
+            engaged = false;
+        const bool down = wanted && fade >= 1.0;
+        const bool holding = ! wanted && comp > 0.0;
+        std::array<double, kDynBands - 1> goal {};
+        int moving = 0;
+        for (size_t k = 0; k < kDynBands - 1; ++k)
         {
-            // Starting from a clean state; the cross-fade hides the filters settling. (Filters a solo
-            // is already running are left alone below, so the solo doesn't click.)
-            resetDetectors();
-            running = true;
+            goal[k] = down || ! canPark ? targetLogFreq[k] : park;
+            moving += logFreq[k] != goal[k] ? 1 : 0;
+        }
+        bool inPlace = true, parked = true;
+        for (size_t k = 0; k < kDynBands - 1; ++k)
+        {
+            const double d = goal[k] - logFreq[k];
+            if (! holding && d != 0.0)
+            {
+                if (engaged)
+                {
+                    logFreq[k] = std::abs (d) < 1.0e-5 ? goal[k] : logFreq[k] + d * glideCoeff;   // a crossover knob move
+                    moved = true;
+                }
+                else
+                {
+                    segment[k].start (logFreq[k], ParkGlide::step (logFreq[k], goal[k], kUpdateInterval / sampleRate, sampleRate, moving), kUpdateInterval);
+                    gliding = true;
+                }
+            }
+            inPlace = inPlace && logFreq[k] == targetLogFreq[k];
+            parked = parked && logFreq[k] == park;
+        }
+        if (down && inPlace)
+            engaged = true;
+        // Until the crossovers are in place, the detectors hear a second split at the settings, and the
+        // gains apply as one wideband gain (they turn into per-band gains once the crossovers are in place).
+        const bool needAux = ! engaged && (wanted || comp > 0.0);
+        if (needAux && ! auxRunning)
+        {
+            for (auto& c : chan)
+                resetSplit (c.a);
+            applyAuxCrossovers();
+            if (comp <= 0.0)
+            {
+                resetDetectors();
+                bands = bandsWeight = bandsGoal = 0.0;
+            }
+            auxRunning = true;
+        }
+        else if (needAux && auxLogFreq != targetLogFreq)
+            applyAuxCrossovers();   // (a crossover knob moved while switching)
+        auxRunning = needAux;
+        if (engaged)
+            bandsGoal = 1.0;
+        compGoal = wanted ? 1.0 : 0.0;
+        fadeGoal = wanted || comp > 0.0 || (canPark && ! parked) ? 1.0 : 0.0;
+        if (! wanted && fade <= 0.0 && comp <= 0.0)
+        {
+            running = false;   // blended out: exact pass-through again
+            mix = 0.0;
         }
     }
     else
     {
-        mixTarget = 0.0;
-        if (running && mix < 1.0e-5)
+        // Resting: the crossovers follow the settings (for a solo).
+        for (size_t k = 0; k < kDynBands - 1; ++k)
         {
-            running = false;   // faded out: exact pass-through again
-            mix = 0.0;
+            const double d = targetLogFreq[k] - logFreq[k];
+            if (d != 0.0)
+            {
+                logFreq[k] = std::abs (d) < 1.0e-5 ? targetLogFreq[k] : logFreq[k] + d * glideCoeff;
+                moved = true;
+            }
         }
     }
-    const bool split = running || monitorBand >= 0;
-    if (split && ! clocking)
-    {
-        resetFilters();
-        logFreq = targetLogFreq;
-        moved = true;
-    }
-    clocking = split;
+    clocking = running || monitorBand >= 0;
     if (moved)
         applyCrossovers();
 

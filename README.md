@@ -31,7 +31,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | Auto-Master recognises a single instrument (one band far above any genre balance), changes nothing and says to put Polisher on the master | Done (v0.8.1) |
 | MATCH never boosts (the louder side is turned down) and gives a clipping original headroom, so A doesn't distort the interface | Done (v0.8.2) |
 | Dynamics: 4-band compressor (LR4 splits, zero latency, per-band threshold / ratio / attack / release / gain, program-dependent release, per-band reduction meters, Learn) | Done (v0.9) |
-| Saturation: tape / tube / clip, 4x oversampled (aliasing 119 dB down), Drive, Mix, harmonics meter, exact pass-through at Drive 0, Learn | Done (v0.9) |
+| Saturation: tape / tube / clip, 4x oversampled (aliasing 74–119 dB below full scale: 119 dB on a single tone, about 74 dB with hot highs at full Drive), Drive, Mix, harmonics meter, exact pass-through at Drive 0, Learn | Done (v0.9) |
 | Auto-Master sets Dynamics (per-band glue, thresholds found by running the compressor on your mix), Stereo Imager (opens narrow highs, never the lows, mono-safe) and Saturation (mode by genre, Drive found by measuring the harmonics against a target) | Done (v0.10) |
 | Stem EQ: per-stem level for vocals / drums / bass / other from a small built-in model (64 bands, ~40 ms latency, plain C++ inference), exact pass-through at 0 dB; Auto-Master suggests a vocal move | Done (v0.11) |
 | Tone Steady (keeps the tonal balance steady through the song) and Resonance Tamer (cuts ringing peaks), inside the Stem EQ's spectral stage (no extra latency); set by Auto-Master | Done (v0.12) |

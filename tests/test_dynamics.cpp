@@ -2,10 +2,14 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "Signals.h"
+#include "SwitchLevel.h"
 #include "polisher/MultibandDynamics.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <numbers>
+#include <vector>
 
 using namespace polisher;
 using Catch::Matchers::WithinAbs;
@@ -249,5 +253,97 @@ TEST_CASE ("Dynamics never clicks and stays stable", "[dynamics]")
         INFO ("sr " << sr << " worst " << worst << " limit " << limit);
         CHECK (worst < limit);
         CHECK_FALSE (d.isActive());   // back to neutral: pass-through again
+    }
+}
+
+TEST_CASE ("Dynamics switches on and off without a hole at its crossovers", "[dynamics][switching]")
+{
+    // The four bands add up to an all-pass. Blending them with the plain signal used to cancel around each
+    // crossover: a 1 kHz tone fell 21 dB for ~50 ms when a band gain left 0 dB (even for 0.1 dB) or the
+    // module was switched (A / B, a snapshot, undo). Now the short-time level stays within 1 dB, and once
+    // through it is exactly the steady setting (or an exact pass-through).
+    DynamicsParams air;
+    air.bands[3].gainDb = 0.1;
+    DynamicsParams glue;   // compressing settings, low split at 40 Hz; the -6 dB tone stays under the threshold
+    glue.crossoverHz[0] = 40.0;
+    for (auto& b : glue.bands) { b.ratio = 2.0; b.thresholdDb = 0.0; }
+    DynamicsParams glueOff = glue;
+    glueOff.enabled = false;
+    struct Switch { const char* what; DynamicsParams off, on; };
+    for (double sr : { 44100.0, 48000.0, 96000.0, 192000.0 })
+        for (const auto& sw : { Switch { "neutral -> Air +0.1 dB", DynamicsParams {}, air }, Switch { "module switch, low split 40 Hz", glueOff, glue } })
+            for (double hz : { 40.0, 120.0, 1000.0, 6000.0, 12000.0 })
+            {
+                const auto tone = tones (sr, 2.0, { { hz, -6.0 } });
+                const int n = tone.numSamples(), at = static_cast<int> (0.5 * sr) / 64 * 64;
+                auto render = [&] (const DynamicsParams& from, const DynamicsParams& to, MultibandDynamics& d)
+                {
+                    AudioClip c = tone;
+                    d.prepare (sr, 2);
+                    d.setParams (from);
+                    d.reset();
+                    for (int s = 0; s < n; s += 64)
+                    {
+                        if (s == at) d.setParams (to);
+                        float* ch[2] = { c.channels[0].data() + s, c.channels[1].data() + s };
+                        d.process (ch, 2, std::min (64, n - s));
+                    }
+                    return std::vector<double> (c.channels[0].begin(), c.channels[0].end());
+                };
+                MultibandDynamics steady;
+                const auto steadyOn = render (sw.on, sw.on, steady);
+                const std::vector<double> plain (tone.channels[0].begin(), tone.channels[0].end());
+                for (bool switchOn : { true, false })
+                {
+                    MultibandDynamics d;
+                    const auto out = render (switchOn ? sw.off : sw.on, switchOn ? sw.on : sw.off, d);
+                    const auto r = switchlevel::measure (out, sr, hz, at);
+                    INFO ("sr " << sr << ", " << sw.what << " switched " << (switchOn ? "on" : "off") << ", " << hz << " Hz tone: dip " << r.dipDb << " dB, swell +" << r.bumpDb << " dB");
+                    CHECK (r.dipDb > -1.0);
+                    CHECK (r.bumpDb < 1.0);
+                    if (hz <= 1000.0)   // and no click: no sample-to-sample step beyond the tone's own
+                        CHECK (switchlevel::stepRatio (out, at) < 1.2);
+                    double diff = 0.0;
+                    for (int i = static_cast<int> (1.5 * sr); i < n; ++i)
+                        diff = std::max (diff, std::abs (out[static_cast<size_t> (i)] - (switchOn ? steadyOn : plain)[static_cast<size_t> (i)]));
+                    if (switchOn)
+                        CHECK (diff < 1.0e-6);   // (the output is float)
+                    else
+                    {
+                        CHECK (diff == 0.0);
+                        CHECK_FALSE (d.isActive());
+                    }
+                }
+            }
+}
+
+TEST_CASE ("Dynamics: a soloed band plays on while the module switches", "[dynamics][switching][monitoring]")
+{
+    // With a band soloed, the solo is what is heard: the crossovers stay in place while the module switches
+    // on or off, so the soloed band doesn't drop out or wander.
+    const double sr = 48000.0;
+    DynamicsParams glue;
+    for (auto& b : glue.bands) { b.ratio = 2.0; b.thresholdDb = 0.0; }
+    for (bool switchOn : { true, false })
+    {
+        const auto tone = tones (sr, 2.0, { { 400.0, -6.0 } });   // in the low-mid band (120 Hz - 1 kHz)
+        const int n = tone.numSamples(), at = static_cast<int> (0.5 * sr) / 64 * 64;
+        MultibandDynamics d;
+        d.setParams (switchOn ? DynamicsParams {} : glue);
+        d.setMonitorBand (1, false);
+        d.prepare (sr, 2);
+        AudioClip c = tone;
+        std::array<std::vector<double>, 2> mon { std::vector<double> (static_cast<size_t> (n)), std::vector<double> (static_cast<size_t> (n)) };
+        for (int s = 0; s < n; s += 64)
+        {
+            if (s == at) d.setParams (switchOn ? glue : DynamicsParams {});
+            float* ch[2] = { c.channels[0].data() + s, c.channels[1].data() + s };
+            double* mo[2] = { mon[0].data() + s, mon[1].data() + s };
+            d.process (ch, 2, std::min (64, n - s), mo);
+        }
+        const auto r = switchlevel::measure (mon[0], sr, 400.0, at);
+        INFO ("module switched " << (switchOn ? "on" : "off") << " during a low-mid solo: dip " << r.dipDb << " dB, swell +" << r.bumpDb << " dB");
+        CHECK (r.dipDb > -0.5);
+        CHECK (r.bumpDb < 0.5);
     }
 }

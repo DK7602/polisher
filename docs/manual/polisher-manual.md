@@ -149,6 +149,8 @@ The report starts with **Matched to your reference "…"**, explains every move 
 
 Click a module in the **Signal Chain** (left) to open it. Each module has its own on/off switch (the button at the top right of the module panel, for example **UNLIMITER ON**), and every module is an exact pass-through at its neutral settings, so a module you don't use changes nothing. The Maximizer's button is different: **BYPASS** there bypasses the whole chain, the same as **A**.
 
+Switching a module on or off (or A / B, a snapshot, undo) fades over smoothly, so nothing clicks or drops out. Mono Below, Dynamics and the Stereo Imager ease their filters into place first: they take about 0.15 s to settle, up to half a second with Mono Below or the lowest Dynamics split set very low.
+
 ### 01 Unlimiter
 
 Puts back the punch a limiter or clipper squashed out of a beat, loop or mix. It lifts the start of each hit; the level between hits stays put. Every clear hit gets about the same lift, so identical kicks come back alike. It can't rebuild a waveform a clipper flattened, but it restores the contrast between hits and the rest.
@@ -270,7 +272,7 @@ How to set a band: raise Ratio to 2:1, then lower Threshold until the band butto
 
 ### 08 Stereo Imager
 
-Sets the width of lows, mids and highs. Only the stereo (side) part changes; the centre (vocal, kick, 808) is never touched.
+Sets the width of lows, mids and highs. Only the stereo (side) part changes; the centre (vocal, kick, 808) keeps its level and its place.
 
 | Control | Range (default) | What it does |
 | --- | --- | --- |
@@ -285,7 +287,7 @@ Adds harmonics so bass translates on small speakers and the master feels denser.
 
 | Control | Range (default) | What it does |
 | --- | --- | --- |
-| Mode | Tape, Tube, Clip (Tape) | Tape = smooth and warm. Tube = rich, fuller bass. Clip = firm and bright. |
+| Mode | Tape, Tube, Clip (Tape) | Tape = smooth and warm. Tube = rich, fuller bass. Clip = firm and bright. Changing it while playing fades over in about 0.1 s. |
 | Focus | Full, Bass only (Full) | Full = the whole mix gets harmonics. Bass only = only the low end (below about 150 Hz: 808 and kick). |
 | Drive | 0–18 dB (0) | How many harmonics. 0 = off. |
 | Mix | 0–100 % (100) | Blend with the clean sound. |
@@ -366,7 +368,7 @@ The four small slots next to the arrows each keep a **whole sound**: every knob 
 | You do | What happens |
 | --- | --- |
 | Click an **empty** slot (dim) | It keeps the settings you hear now. |
-| Click a **stored** slot | Those settings come back. Every control glides there like a knob move, so nothing clicks. One undo step. |
+| Click a **stored** slot | Those settings come back smoothly: knobs glide there and switches fade over, so nothing clicks or drops out. One undo step. |
 | Click **STORE**, then a slot (or **Shift-click** a slot) | The slot is replaced with what you hear now. |
 
 The **red** slot is the one playing; a dot after it (**S1•**) means you've changed something since you stored or recalled it. Snapshots are saved with your Cubase project. They don't store A / B, MATCH, the listening aids or Auto-Master's genre / intensity / target, and recalling one never changes them.
