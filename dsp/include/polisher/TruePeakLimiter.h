@@ -16,7 +16,7 @@ struct LimiterParams
     double releaseMs      = 120.0;  // base release time
     bool   adaptiveRelease = true;  // faster on transients, slower on sustained gain reduction
     double outputTrimDb   = 0.0;    // post-limiter trim (<= 0 keeps the ceiling guarantee)
-    bool   bypassed       = false;  // passes audio through, still delayed by the latency
+    bool   bypassed       = false;  // passes audio through, still delayed by the latency (see TruePeakLimiter)
 };
 
 /** Look-ahead brick-wall limiter with 4x oversampled (true-peak) detection. The core of the
@@ -31,12 +31,24 @@ struct LimiterParams
     The audio is delayed by L + TruePeakDetector::kLatency samples, so peaks are caught before they
     happen, with no overshoot.
 
+    Bypass (A in the plug-in) passes the delayed input through untouched. The gain computer keeps
+    running underneath, so it always knows what is in the delay line. When bypass switches on, the
+    samples still in the delay line were pushed for B (and the plug-in ramps its Drive out over that
+    first block), so the limiter keeps limiting them: for the delay line, the block that came in with
+    the switch and kBypassDrainMs more (while the other modules fade out), with a fast release so it
+    lets go as soon as the level drops. Then it glides to unity over kBypassGlideMs. A B -> A switch
+    never lets an unlimited peak out: the output stays at or under the ceiling until the glide, and
+    the glide only fades the plain input in.
+
     prepare() allocates; process() does not. */
 class TruePeakLimiter
 {
 public:
     static constexpr int kMaxChannels = 8;
     static constexpr double kLookaheadMs = 3.0;
+    static constexpr double kBypassDrainMs = 50.0;
+    static constexpr double kBypassDrainReleaseMs = 3.0;
+    static constexpr double kBypassGlideMs = 10.0;
 
     void prepare (double sampleRate, int numChannels);
     void reset() noexcept;
@@ -68,6 +80,7 @@ public:
     template <typename Sample>
     void process (Sample* const* channels, int numChannels, int numSamples, double* gainOut) noexcept
     {
+        armDrain (numSamples);   // a switch to bypass: this block (Drive ramping out) is still limited
         const int nch = std::min (numChannels, channelCount);
         for (int i = 0; i < numSamples; ++i)
         {
@@ -89,6 +102,17 @@ public:
     void processFrame (const double* in, double* out, int numChannels) noexcept;
 
 private:
+    /** After a switch to bypass, how long the limiter keeps limiting: the delay line, the samples of
+        the block that came with the switch, and kBypassDrainMs. */
+    void armDrain (int blockSamples) noexcept
+    {
+        if (! drainArmed)
+            return;
+        drainArmed = false;
+        drainLeft = delayLength + std::max (0, blockSamples) + drainExtra;
+        glideLeft = 0;
+    }
+
     // Monotonic-deque sliding-window minimum on a fixed-size ring (no allocation in process()).
     struct SlidingMin
     {
@@ -121,7 +145,14 @@ private:
 
     LimiterParams params;
     double inputGain = 1.0, ceiling = 1.0, ceilingSafe = 1.0, outputGain = 1.0;
-    double releaseFastCoef = 0.0, releaseSlowCoef = 0.0, sustainCoef = 0.0;
+    double releaseFastCoef = 0.0, releaseSlowCoef = 0.0, sustainCoef = 0.0, drainReleaseCoef = 0.0;
+
+    // Switching to bypass (see the class comment).
+    bool drainArmed = false;
+    bool limitedSinceReset = false;   // B has played since reset() (else there is nothing to drain)
+    int drainLeft = 0, drainExtra = 2400;
+    int glideLeft = 0, glideLength = 480;
+    double glideFrom = 1.0;
 
     std::array<TruePeakDetector, kMaxChannels> detectors {};
     std::vector<double> delayBuffer;   // channelCount * delayLength, interleaved per channel block

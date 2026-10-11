@@ -219,8 +219,11 @@ TEST_CASE ("Auto-Master aims for the reference's loudness, and says so when it c
     CHECK (l.targetLufs == -7.0);
     INFO (l.summary);
     CHECK (l.output.integratedLufs > g.output.integratedLufs + 0.5);
+    // (Short of it: either the peaks or the squash limit stopped it, or, on this -28 LUFS test mix at a
+    // -1.5 dBTP ceiling, even the maximum Drive: the quiet-mix note says so.)
     if (! l.reachedTarget)
-        CHECK (std::any_of (l.notes.begin(), l.notes.end(), [] (const auto& n) { return n.find ("NOT AS LOUD AS THE REFERENCE") != std::string::npos; }));
+        CHECK (std::any_of (l.notes.begin(), l.notes.end(), [] (const auto& n) {
+            return n.find ("NOT AS LOUD AS THE REFERENCE") != std::string::npos || n.find ("arrives very quiet") != std::string::npos; }));
     CHECK (l.output.truePeakDbtp <= l.chain.limiter.ceilingDbtp + 0.05);
 
     // Out-of-range references are clamped, and the report explains why.

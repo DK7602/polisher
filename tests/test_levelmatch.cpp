@@ -105,7 +105,7 @@ TEST_CASE ("MATCH can start from a level learned before, and holds it while the 
     m.prepare (kSr);
     run (m, -14.0, -9.0, -3.0, true, 20.0);
     CHECK (m.hasLearned());
-    CHECK (m.learnedSeconds() > 19.0);
+    CHECK (m.learnedSeconds() > 16.5);   // learning starts once the 3 s readings hold B alone (3.1 s in)
     m.setGapDb (1.5);                                   // another snapshot, learned earlier
     CHECK_THAT (m.gapDb(), WithinAbs (1.5, 1e-9));
     m.holdLearning (static_cast<int> (3.0 * kSr));
@@ -123,4 +123,59 @@ TEST_CASE ("MATCH can start from a level learned before, and holds it while the 
     fresh.setGapDb (4.0);
     run (fresh, -14.0, -14.0, -3.0, true, 0.1);
     CHECK_THAT (fresh.gapDb(), WithinAbs (4.0, 0.05));
+}
+
+TEST_CASE ("MATCH learns afresh after a big change: rough in half a second, exact from 3 s", "[levelmatch]")
+{
+    // The headline case: the song played at Drive 0 (gap 0 learned firmly), then Auto-Master raised the
+    // level 7 dB. Before relearn() MATCH slid there over ~20 s (still 1.7 dB short after 10 s of B).
+    LevelMatch m;
+    m.prepare (kSr);
+    run (m, -17.0, -17.0, -3.0, true, 40.0);
+    CHECK_THAT (m.gapDb(), WithinAbs (0.0, 0.01));
+    m.relearn();
+    // The meters' windows hold the old settings at first: momentary 0.4 s, short-term 3 s.
+    auto feed = [&] (double seconds, double since)
+    {
+        for (int i = 0; i < static_cast<int> (seconds * kSr / kBlock); ++i, since += kBlock / kSr)
+        {
+            const double mom = since < 0.4 ? -17.0 : -10.0, st = since < 3.0 ? -17.0 + 7.0 * since / 3.0 : -10.0;
+            m.update (-17.0, st, 0.5, kBlock, true, -17.0, mom);
+        }
+        return since;
+    };
+    double t = feed (0.3, 0.0);
+    CHECK_THAT (m.gapDb(), WithinAbs (0.0, 1e-9));        // not yet: the momentary window holds the old settings
+    t = feed (0.5, t);
+    CHECK_THAT (m.gapDb(), WithinAbs (7.0, 0.05));        // ~0.6 s in: matched on the momentary readings
+    CHECK_FALSE (m.hasLearned());
+    t = feed (2.2, t);
+    CHECK_THAT (m.gapDb(), WithinAbs (7.0, 0.05));        // the short-term window (still mixed) is not learned from
+    feed (1.0, t);
+    CHECK_THAT (m.gapDb(), WithinAbs (7.0, 0.05));        // the first clean short-term reading sets it
+    CHECK (m.hasLearned());
+}
+
+TEST_CASE ("MATCH is not pulled toward A by flipping A / B every few seconds", "[levelmatch]")
+{
+    // On A the output IS the original, so a short-term window that still holds A reads a 0 dB gap.
+    // Learning from those windows left B ~2 dB too loud while flipping every 1.5-3 s (measured on the
+    // plug-in: -4.75 dB instead of -6.87).
+    LevelMatch m;
+    m.prepare (kSr);
+    run (m, -17.0, -10.0, -3.0, true, 30.0);
+    CHECK_THAT (m.gapDb(), WithinAbs (7.0, 0.05));
+    for (int k = 0; k < 40; ++k)
+    {
+        const bool onB = k % 2 == 1;
+        double sinceFlip = 0.0;
+        for (int i = 0; i < static_cast<int> (2.0 * kSr / kBlock); ++i, sinceFlip += kBlock / kSr)
+        {
+            // What the meters read: the output's 3 s window fills with B only gradually after a flip.
+            const double share = onB ? std::min (1.0, sinceFlip / 3.0) : 0.0;
+            const double outE = (1.0 - share) * std::pow (10.0, -1.7) + share * std::pow (10.0, -1.0);
+            m.update (-17.0, 10.0 * std::log10 (outE), 0.5, kBlock, onB);
+        }
+    }
+    CHECK_THAT (m.gapDb(), WithinAbs (7.0, 0.05));
 }

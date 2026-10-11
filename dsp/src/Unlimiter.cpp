@@ -1,5 +1,6 @@
 #include "polisher/Unlimiter.h"
-#include "polisher/FilterDesign.h"
+
+#include <numbers>
 
 namespace polisher {
 
@@ -12,8 +13,10 @@ namespace {
     constexpr double kHoldMs = 25.0;
     constexpr double kSlowAttackMs = 50.0;
     constexpr double kRmsMs = 2.5;
-    constexpr double kSplitFadeMs = 20.0;
-    constexpr double kSplitSettleMs = 30.0;    // after a Focus change, the new band filters settle before they're heard
+    constexpr double kSplitFadeMs = 20.0;      // the plain <-> split cross-fade (only ever while parked), and the lift's band shares
+    constexpr double kSplitSettleMs = 30.0;    // after a Focus change or a split glide, the detector settles before it lifts again
+    constexpr double kSvfK = 1.4142135623730951;   // state-variable filter damping: 1 / Q, Butterworth
+    constexpr int kSplitUpdate = 16;           // the split's state and coefficients move every 16 samples
     constexpr double kBlockSilence = 1.0e-6;   // blocks below -60 dBFS RMS: silence and fades don't count
 
     // Limiter check: on limited or clipped audio the loudest fifth of the 50 ms blocks all sit within
@@ -30,13 +33,15 @@ void Unlimiter::prepare (double sampleRate, int numChannels)
     delaySize = lookahead + 1;
     const auto ringSize = static_cast<size_t> (delaySize * std::max (channelCount, 1));
     delay.assign (ringSize, 0.0);
-    delayBand.assign (ringSize, 0.0);
-    delayRest.assign (ringSize, 0.0);
+    delayLow.assign (ringSize, 0.0);
+    delayHigh.assign (ringSize, 0.0);
     aFastAtk = coeff (kFastAttackMs, sr);
     aRel = coeff (kReleaseMs, sr);
     aGain = coeff (kGainSmoothMs, sr);
     aAmount = coeff (20.0, sr);
-    aSplit = coeff (kSplitFadeMs, sr);
+    splitStep = 1.0 / std::max (1.0, kSplitFadeMs * 0.001 * sr);
+    aWeight = coeff (kSplitFadeMs, sr);
+    settleSamples = static_cast<int> (std::lround (kSplitSettleMs * 0.001 * sr));
     aSquash = coeff (500.0, sr);
     aSlowAtk = coeff (kSlowAttackMs, sr);
     holdSamples = static_cast<int> (std::lround (kHoldMs * 0.001 * sr));
@@ -57,37 +62,67 @@ void Unlimiter::updateCoefficients() noexcept
         aLift = coeff (0.25 * len, sr);
         lengthSet = len;
     }
+}
 
-    // A Focus change switches the band filters only while the band path is faded out, then waits for
-    // them to settle before fading it back in.
-    if (params.focus != scFocus && split == 0.0)
+void Unlimiter::setSplitFilters (bool clearState) noexcept
+{
+    // Trapezoidal (TPT) state-variable filter, Butterworth: g = tan (pi f / sr).
+    const double g = std::tan (std::numbers::pi * std::min (std::exp (splitLog), kParkFraction * sr) / sr);
+    svfA1 = 1.0 / (1.0 + g * (g + kSvfK));
+    svfA2 = g * svfA1;
+    svfA3 = g * svfA2;
+    if (clearState)
+        for (auto& ch : svf)
+            ch = {};
+}
+
+void Unlimiter::updateSplit() noexcept
+{
+    // The band split joins the path (or leaves it) only while parked; once fully in, it glides to the
+    // Focus frequency, and back to the park before it leaves. Kick <-> Snap glides directly (the split
+    // stays in, so nothing is cross-faded).
+    const bool want = wantsBandPath();
+    const double parkLog = std::log (kParkFraction * sr);
+    const bool parked = splitLog == parkLog;
+    if (want && (parked || split > 0.0)) splitTarget = 1.0;
+    if (! want && parked) splitTarget = 0.0;
+    const double goal = want && split >= 1.0 ? std::log (params.focus == UnlimiterFocus::snap ? kSplitSnapHz : kSplitKickHz) : parkLog;
+
+    // What the detector listens to: everything (Full), the low band (Kick) or the high band (Snap).
+    if (params.focus != heard)
     {
-        scFocus = params.focus;
-        const double hz = scFocus == UnlimiterFocus::snap ? kSplitSnapHz : kSplitKickHz;
-        const auto lp = design::butterworth (false, hz, sr), hp = design::butterworth (true, hz, sr);
-        for (int c = 0; c < kMaxChannels; ++c)
-            for (int k = 0; k < 2; ++k)
-            {
-                design::apply (lowPass[c][static_cast<size_t> (k)], lp);
-                design::apply (highPass[c][static_cast<size_t> (k)], hp);
-                lowPass[c][static_cast<size_t> (k)].reset();
-                highPass[c][static_cast<size_t> (k)].reset();
-            }
-        splitWait = scFocus == UnlimiterFocus::full ? 0 : delaySize + static_cast<int> (std::lround (kSplitSettleMs * 0.001 * sr));
+        heard = params.focus;
+        settleLeft = settleSamples;
+    }
+    if (splitLog != goal)
+    {
+        const double step = kGlidePerHz * std::exp (splitLog) * kSplitUpdate / sr;
+        const bool down = goal < splitLog;
+        splitLog = down ? std::max (goal, splitLog - step) : std::min (goal, splitLog + step);
+        setSplitFilters (false);
+        // While the band the detector listens to widens, its level climbs without a hit: no new lifts.
+        if ((heard == UnlimiterFocus::kick && ! down) || (heard == UnlimiterFocus::snap && down))
+            settleLeft = settleSamples;
     }
 }
 
 void Unlimiter::reset() noexcept
 {
     std::fill (delay.begin(), delay.end(), 0.0);
-    std::fill (delayBand.begin(), delayBand.end(), 0.0);
-    std::fill (delayRest.begin(), delayRest.end(), 0.0);
+    std::fill (delayLow.begin(), delayLow.end(), 0.0);
+    std::fill (delayHigh.begin(), delayHigh.end(), 0.0);
     writePos = 0;
-    split = 0.0;
-    scFocus = params.focus == UnlimiterFocus::full ? UnlimiterFocus::kick : UnlimiterFocus::full;   // force the filters to be set up
     updateCoefficients();
-    splitWait = 0;
-    split = ! isNeutral (params) && scFocus != UnlimiterFocus::full ? 1.0 : 0.0;   // start in the set state
+    // Start in the set state: the split in at the Focus frequency, or out and parked.
+    const bool want = wantsBandPath();
+    splitLog = std::log (! want ? kParkFraction * sr : params.focus == UnlimiterFocus::snap ? kSplitSnapHz : kSplitKickHz);
+    setSplitFilters (true);
+    split = splitTarget = want ? 1.0 : 0.0;
+    liftLow = params.focus == UnlimiterFocus::snap ? 0.0 : 1.0;
+    liftHigh = params.focus == UnlimiterFocus::kick ? 0.0 : 1.0;
+    heard = params.focus;
+    settleLeft = 0;
+    splitCountdown = 0;
     fastEnv = slowEnv = 0.0;
     holdLeft = 0;
     std::fill (rmsRing.begin(), rmsRing.end(), 0.0);
@@ -112,32 +147,47 @@ void Unlimiter::processFrame (double* frame, int numChannels) noexcept
     const int nch = std::min (numChannels, channelCount);
     if (nch <= 0) return;
     if ((writePos & 63) == 0) updateCoefficients();   // cheap enough; keeps parameter moves click-free
+    if (--splitCountdown <= 0)
+    {
+        updateSplit();
+        splitCountdown = kSplitUpdate;
+    }
 
-    // Band split (Focus Kick or Snap): the focused band and the rest, Linkwitz-Riley so they add back
-    // up flat. The detector listens to the focused band only; with Focus Full, to the whole signal.
-    const bool banded = scFocus != UnlimiterFocus::full;
+    // Band split: the Linkwitz-Riley low band and the rest of the all-pass, so they always add up to the
+    // all-pass. Always running (two state-variable filters per channel), so the detector can switch
+    // bands without a filter start-up. The detector listens to the focused band only; with Focus Full,
+    // to the whole signal.
     const int writeAt = writePos;
     double sc = 0.0, pk = 0.0, e = 0.0;
     for (int c = 0; c < nch; ++c)
     {
         const double x = frame[c];
-        double y = x;
-        if (banded)
+        auto& st = svf[static_cast<size_t> (c)];
+        double band1 = 0.0, low1 = 0.0, lo = 0.0;
         {
-            const double lo = lowPass[c][1].process (lowPass[c][0].process (x));
-            const double hi = highPass[c][1].process (highPass[c][0].process (x));
-            const bool kick = scFocus == UnlimiterFocus::kick;
-            y = kick ? lo : hi;
-            double rest = kick ? hi : lo;
-            if (! std::isfinite (y) || ! std::isfinite (rest))   // a NaN / inf input sample must not stall the filters
-            {
-                for (auto& b : lowPass[c]) b.reset();
-                for (auto& b : highPass[c]) b.reset();
-                y = rest = 0.0;
-            }
-            delayBand[static_cast<size_t> (c * delaySize + writeAt)] = y;
-            delayRest[static_cast<size_t> (c * delaySize + writeAt)] = rest;
+            auto& s = st[0];
+            const double v3 = x - s.ic2, v1 = svfA1 * s.ic1 + svfA2 * v3, v2 = s.ic2 + svfA2 * s.ic1 + svfA3 * v3;
+            s.ic1 = 2.0 * v1 - s.ic1;
+            s.ic2 = 2.0 * v2 - s.ic2;
+            band1 = v1;
+            low1 = v2;
         }
+        {
+            auto& s = st[1];
+            const double v3 = low1 - s.ic2, v1 = svfA1 * s.ic1 + svfA2 * v3, v2 = s.ic2 + svfA2 * s.ic1 + svfA3 * v3;
+            s.ic1 = 2.0 * v1 - s.ic1;
+            s.ic2 = 2.0 * v2 - s.ic2;
+            lo = v2;
+        }
+        double hi = x - 2.0 * kSvfK * band1 - lo;   // the all-pass (x - 2 k band) minus the low band
+        if (! std::isfinite (lo) || ! std::isfinite (hi))   // a NaN / inf input sample must not stall the filters
+        {
+            st = {};
+            lo = hi = 0.0;
+        }
+        delayLow[static_cast<size_t> (c * delaySize + writeAt)] = lo;
+        delayHigh[static_cast<size_t> (c * delaySize + writeAt)] = hi;
+        const double y = heard == UnlimiterFocus::kick ? lo : heard == UnlimiterFocus::snap ? hi : x;
         sc = std::max (sc, y * y);
         pk = std::max (pk, truePeak[static_cast<size_t> (c)].process (x));
         e += x * x;
@@ -167,17 +217,28 @@ void Unlimiter::processFrame (double* frame, int numChannels) noexcept
         std::fill (rmsRing.begin(), rmsRing.end(), 0.0);
     }
     slowEnv = fastEnv > slowEnv ? slowEnv + (fastEnv - slowEnv) * aSlowAtk : fastEnv;
+    if (settleLeft > 0)
+    {
+        // The detector's band just changed or is moving: its level jumps say nothing about a hit, so the
+        // followers settle on it together and no new lift starts.
+        --settleLeft;
+        slowEnv = fastEnv;
+    }
 
     const double target = isNeutral (params) ? 0.0 : std::clamp (params.amount, 0.0, 100.0) / 100.0;
     amountNow += (target - amountNow) * aAmount;
     if (amountNow < 1.0e-6 && target == 0.0) amountNow = 0.0;
 
-    // Whole-signal path or band path: glides between them over 20 ms (Amount 0 and Focus Full use the
-    // whole-signal path, which is the exact input when nothing is lifted).
-    if (splitWait > 0) --splitWait;
-    const double splitTarget = target > 0.0 && banded && params.focus == scFocus && splitWait == 0 ? 1.0 : 0.0;
-    split += (splitTarget - split) * aSplit;
-    if (std::abs (split - splitTarget) < 1.0e-6) split = splitTarget;
+    // Whole-signal path or band path: a 20 ms linear cross-fade, only ever while the split is parked
+    // (Amount 0 and Focus Full use the whole-signal path, which is the exact input when nothing is
+    // lifted). Each band's share of the lift glides too (Kick: the low band, Snap: the high band).
+    if (split != splitTarget)
+        split = splitTarget > split ? std::min (splitTarget, split + splitStep) : std::max (splitTarget, split - splitStep);
+    const double lowShare = params.focus == UnlimiterFocus::snap ? 0.0 : 1.0, highShare = params.focus == UnlimiterFocus::kick ? 0.0 : 1.0;
+    liftLow += (lowShare - liftLow) * aWeight;
+    liftHigh += (highShare - liftHigh) * aWeight;
+    if (std::abs (liftLow - lowShare) < 1.0e-6) liftLow = lowShare;
+    if (std::abs (liftHigh - highShare) < 1.0e-6) liftHigh = highShare;
 
     // Only what was lost comes back: full strength on brickwalled audio (Squash kFullSquashDb or
     // less), fading to nothing on an open mix (kOpenSquashDb or more). The reading is Auto-Master's
@@ -212,8 +273,14 @@ void Unlimiter::processFrame (double* frame, int numChannels) noexcept
         const size_t base = static_cast<size_t> (c * delaySize);
         delay[base + static_cast<size_t> (writeAt)] = frame[c];
         const double whole = delay[base + static_cast<size_t> (readPos)] * g;
-        frame[c] = split == 0.0 ? whole
-                 : (1.0 - split) * whole + split * (delayBand[base + static_cast<size_t> (readPos)] * g + delayRest[base + static_cast<size_t> (readPos)]);
+        if (split == 0.0)
+        {
+            frame[c] = whole;
+            continue;
+        }
+        const double banded = delayLow[base + static_cast<size_t> (readPos)] * (1.0 + (g - 1.0) * liftLow)
+                            + delayHigh[base + static_cast<size_t> (readPos)] * (1.0 + (g - 1.0) * liftHigh);
+        frame[c] = split == 1.0 ? banded : (1.0 - split) * whole + split * banded;
     }
     writePos = (writeAt + 1) % delaySize;
 

@@ -313,12 +313,29 @@ MixAnalysis analyseMix (const AudioClip& clip)
     std::vector<std::array<double, kEqBands>> framePower;
     std::vector<std::array<double, 2>> frameLow;   // energy at 30-60 Hz and 60-120 Hz (the low end's shape)
     std::vector<double> frameDb;
+    // The spectrum folded into BandSpectrum points per frame: power, and power x frequency.
+    using Folded = std::array<std::array<double, BandSpectrum::kPoints>, kEqBands>;
+    std::vector<std::pair<Folded, Folded>> frameFolded;
     std::vector<std::complex<double>> buf (static_cast<size_t> (N));
+    // Each bin's point within its band (log-spaced), worked out once.
+    std::vector<int> binPoint (static_cast<size_t> (N / 2), 0);
+    for (int k = 2; k < N / 2; ++k)
+    {
+        const double f = k * sr / N;
+        for (size_t b = 0; b < static_cast<size_t> (kEqBands); ++b)
+            if (f >= kEdges[b] && f < kEdges[b + 1])
+            {
+                binPoint[static_cast<size_t> (k)] = std::clamp (static_cast<int> (BandSpectrum::kPoints * std::log (f / kEdges[b]) / std::log (kEdges[b + 1] / kEdges[b])),
+                                                                0, BandSpectrum::kPoints - 1);
+                break;
+            }
+    }
     for (int start = 0; start + N <= n; start += hop)
     {
         std::array<double, kEqBands> bands {};
         std::array<int, kEqBands> counts {};
         std::array<double, 2> low {};
+        Folded foldP {}, foldF {};
         double total = 0.0;
         for (int c = 0; c < nch; ++c)
         {
@@ -336,8 +353,12 @@ MixAnalysis analyseMix (const AudioClip& clip)
                 for (int b = 0; b < kEqBands; ++b)
                     if (f >= kEdges[static_cast<size_t> (b)] && f < kEdges[static_cast<size_t> (b + 1)])
                     {
-                        bands[static_cast<size_t> (b)] += p;
-                        if (c == 0) ++counts[static_cast<size_t> (b)];
+                        const auto bi = static_cast<size_t> (b);
+                        bands[bi] += p;
+                        if (c == 0) ++counts[bi];
+                        const auto point = static_cast<size_t> (binPoint[static_cast<size_t> (k)]);
+                        foldP[bi][point] += p;
+                        foldF[bi][point] += p * f;
                         break;
                     }
             }
@@ -348,6 +369,7 @@ MixAnalysis analyseMix (const AudioClip& clip)
         framePower.push_back (bands);
         frameLow.push_back (low);
         frameDb.push_back (toDb (total));
+        frameFolded.emplace_back (foldP, foldF);
     }
     if (framePower.empty())
         return a;
@@ -356,6 +378,7 @@ MixAnalysis analyseMix (const AudioClip& clip)
     std::array<double, kEqBands> mean {};
     std::array<double, 2> lowSum {};
     int loudFrames = 0;
+    Folded sumF {};
     for (size_t f = 0; f < framePower.size(); ++f)
         if (frameDb[f] >= loudGate)
         {
@@ -363,8 +386,18 @@ MixAnalysis analyseMix (const AudioClip& clip)
                 mean[static_cast<size_t> (b)] += framePower[f][static_cast<size_t> (b)];
             lowSum[0] += frameLow[f][0];
             lowSum[1] += frameLow[f][1];
+            for (size_t b = 0; b < static_cast<size_t> (kEqBands); ++b)
+                for (size_t k = 0; k < static_cast<size_t> (BandSpectrum::kPoints); ++k)
+                {
+                    a.spectrum.power[b][k] += frameFolded[f].first[b][k];
+                    sumF[b][k] += frameFolded[f].second[b][k];
+                }
             ++loudFrames;
         }
+    for (size_t b = 0; b < static_cast<size_t> (kEqBands); ++b)
+        for (size_t k = 0; k < static_cast<size_t> (BandSpectrum::kPoints); ++k)
+            a.spectrum.hz[b][k] = a.spectrum.power[b][k] > 0.0 ? sumF[b][k] / a.spectrum.power[b][k] : 0.0;
+    a.spectrum.valid = loudFrames > 0;
     // Both halves are an octave wide, so this compares the deep sub with the low bass note by note
     // the way you hear them (an 808 that reaches lower reads higher).
     if (lowSum[0] > 0.0 && lowSum[1] > 0.0)
@@ -842,7 +875,7 @@ ReferenceProfile analyseReference (const AudioClip& song)
 // EQ band interaction
 // =================================================================================================
 
-std::array<double, kEqBands> eqBandChangeDb (const TonalEQParams& eq, double sampleRate) noexcept
+std::array<double, kEqBands> eqBandChangeDb (const TonalEQParams& eq, double sampleRate, const BandSpectrum* spectrum) noexcept
 {
     std::array<double, kEqBands> out {};
     if (! eq.enabled || sampleRate <= 0.0)
@@ -858,37 +891,56 @@ std::array<double, kEqBands> eqBandChangeDb (const TonalEQParams& eq, double sam
     }
     const bool subsonic = TonalEQ::subsonicEngaged (eq);
     const auto hp = TonalEQ::designSubsonic (sampleRate);
+    auto powerGain = [&] (double f)
+    {
+        double db = 0.0;
+        for (int j = 0; j < kEqBands; ++j)
+            if (on[static_cast<size_t> (j)])
+                db += bands[static_cast<size_t> (j)].magnitudeDb (f, sampleRate);
+        if (subsonic)
+            db += hp[0].magnitudeDb (f, sampleRate) + hp[1].magnitudeDb (f, sampleRate);
+        return std::pow (10.0, db / 10.0);
+    };
 
-    // Mean power gain per Hz over each band, for a spectrum falling 4.5 dB/oct (power per Hz ~ f^-1.5),
-    // integrated on a log grid (so each point also carries a factor f).
     constexpr int kPoints = 32;
     for (int b = 0; b < kEqBands; ++b)
     {
-        const double lo = kEdges[static_cast<size_t> (b)];
-        const double hi = std::min (kEdges[static_cast<size_t> (b + 1)], 0.5 * sampleRate);
+        const auto bi = static_cast<size_t> (b);
+        const double lo = kEdges[bi];
+        const double hi = std::min (kEdges[bi + 1], 0.5 * sampleRate);
         if (hi <= lo)
             continue;
         double sumW = 0.0, sumP = 0.0;
-        for (int k = 0; k < kPoints; ++k)
+        if (spectrum != nullptr && spectrum->valid)
         {
-            const double f = lo * std::pow (hi / lo, (k + 0.5) / kPoints);
-            double db = 0.0;
-            for (int j = 0; j < kEqBands; ++j)
-                if (on[static_cast<size_t> (j)])
-                    db += bands[static_cast<size_t> (j)].magnitudeDb (f, sampleRate);
-            if (subsonic)
-                db += hp[0].magnitudeDb (f, sampleRate) + hp[1].magnitudeDb (f, sampleRate);
-            const double w = 1.0 / std::sqrt (f);
-            sumW += w;
-            sumP += w * std::pow (10.0, db / 10.0);
+            // The mix's own spectrum: exactly how analyseMix() would read this band after the EQ.
+            for (size_t k = 0; k < static_cast<size_t> (BandSpectrum::kPoints); ++k)
+                if (const double w = spectrum->power[bi][k]; w > 0.0)
+                {
+                    sumW += w;
+                    sumP += w * powerGain (spectrum->hz[bi][k]);
+                }
         }
-        out[static_cast<size_t> (b)] = 10.0 * std::log10 (sumP / sumW);
+        if (sumW <= 0.0)
+        {
+            // A typical master's spectrum: power per Hz falling 4.5 dB/oct (~ f^-1.5), integrated on a
+            // log grid (so each point also carries a factor f).
+            for (int k = 0; k < kPoints; ++k)
+            {
+                const double f = lo * std::pow (hi / lo, (k + 0.5) / kPoints);
+                const double w = 1.0 / std::sqrt (f);
+                sumW += w;
+                sumP += w * powerGain (f);
+            }
+        }
+        out[bi] = 10.0 * std::log10 (sumP / sumW);
     }
     return out;
 }
 
 std::array<double, kEqBands> solveEqGains (const std::array<double, kEqBands>& wanted,
-                                           const std::array<double, kEqBands>& limitDb, double sampleRate) noexcept
+                                           const std::array<double, kEqBands>& limitDb, double sampleRate,
+                                           const BandSpectrum* spectrum) noexcept
 {
     constexpr double kRegularisation = 0.02;   // per dB^2 of gain: prefer the smaller of near-equal fits
     constexpr int kN = kEqBands;
@@ -898,7 +950,7 @@ std::array<double, kEqBands> solveEqGains (const std::array<double, kEqBands>& w
     {
         TonalEQParams p;
         p.gainDb = g;
-        return eqBandChangeDb (p, sampleRate);
+        return eqBandChangeDb (p, sampleRate, spectrum);
     };
     auto lowerOf = [&] (size_t b) { return wanted[b] < 0.0 ? -limitDb[b] : 0.0; };
     auto upperOf = [&] (size_t b) { return wanted[b] > 0.0 ?  limitDb[b] : 0.0; };
@@ -1060,7 +1112,12 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     const std::string tname = useRef ? "Ref " + num (r.targetLufs) : std::string (targetName (s.target));
     const std::string refName = "\xE2\x80\x9C" + ref.name + "\xE2\x80\x9D";   // in curly quotes
     r.analysis = analyseMix (heard);
-    if (stemMoved && r.analysis.usable) r.analysis.bandDb = analyseMix (input).bandDb;
+    if (stemMoved && r.analysis.usable)
+    {
+        auto beforeStem = analyseMix (input);
+        r.analysis.bandDb = beforeStem.bandDb;
+        r.analysis.spectrum = beforeStem.spectrum;
+    }
     const auto& a = r.analysis;
     // The mix as it arrives, before the Input Trim: what the report quotes.
     const double arrivesLufs = a.loudness.integratedLufs - trimDb, arrivesPeak = a.loudness.truePeakDbtp - trimDb;
@@ -1119,9 +1176,13 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     // the closer the target is to the loudness the audio arrives at, the more of them it presses
     // straight back down. So the Unlimiter is tried at the target and kept only when the hits still
     // jump out clearly further than without it. Everything after this hears the restored mix.
-    // MP3/AAC/Ogg copies of a loud master peak higher than the master itself (measured: a −9 LUFS master
-    // at −1 dBTP decodes to about 0 dBTP as MP3 and +1 as Ogg), so the loud target gets more room.
-    const double maxCeiling = tier == LoudnessTarget::loud ? -1.5 : -1.0;
+    // MP3/AAC/Ogg copies of a loud master peak higher than the master itself, and the louder the master,
+    // the more. Measured on test masters (trap-like and music-like) at -9 and -7 LUFS: with a -1.0 dBTP
+    // ceiling, Ogg q5 copies decoded at up to +0.6 (-9) and +1.1 dBTP (-7); with -1.5, at most -0.2
+    // (-9) and +0.4 (-7); with -2.0, -0.5 and +0.1. MP3 320k stayed below 0 at every ceiling. So Loud
+    // and Club both get -1.5 (louder never gets a higher ceiling); Spotify's own advice for anything
+    // louder than -14 LUFS is -2, which the report mentions.
+    const double maxCeiling = tier == LoudnessTarget::stream ? -1.0 : -1.5;
     {
         const double squash = Unlimiter::measureSquashDb (input.channels, input.sampleRate);   // as the plug-in sees it, before Stem EQ
         auto& ul = chain.unlimiter;
@@ -1178,7 +1239,12 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         const auto arriving = r.analysis.loudness;
         r.analysis = analyseMix (clip);
         r.analysis.loudness = arriving;
-        if (stemMoved) r.analysis.bandDb = analyseMix (restored).bandDb;   // tone: before Stem EQ, as above
+        if (stemMoved)   // tone: before Stem EQ, as above
+        {
+            auto beforeStem = analyseMix (restored);
+            r.analysis.bandDb = beforeStem.bandDb;
+            r.analysis.spectrum = beforeStem.spectrum;
+        }
     }
 
     // 808-led genres, where the low end is programmed rather than played.
@@ -1206,16 +1272,26 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         if (b == 0 && wanted[i] > 0.0 && a.bandDb[0] < -18.0)
             limits[i] = 1.0;                                           // don't pump up sub that isn't there
     }
-    chain.eq.gainDb = solveEqGains (wanted, limits, clip.sampleRate);
+    // Solved on this mix's own spectrum (the bands' overlap depends on where its energy sits: an 808
+    // at 45-60 Hz takes a Low End shelf differently from an evenly falling sub).
+    chain.eq.gainDb = solveEqGains (wanted, limits, clip.sampleRate, &a.spectrum);
+    const auto moved = eqBandChangeDb (chain.eq, clip.sampleRate, &a.spectrum);   // what the EQ does to each band of this mix
 
-    std::vector<std::string> flat, covered;
+    std::vector<std::string> flat, covered, held;
     for (int b = 0; b < kEqBands; ++b)
     {
         const auto i = static_cast<size_t> (b);
         const double diff = diffs[i], gain = chain.eq.gainDb[i];
         if (gain == 0.0)
         {
-            (std::abs (wanted[i]) >= 0.4 ? covered : flat).push_back (kBandNames[b]);
+            // A wished-for change the neighbours' moves deliver (at least half of it, the right way) is
+            // covered; otherwise the band was left flat because moving it would undo more than it fixes.
+            if (std::abs (wanted[i]) < 0.4)
+                flat.push_back (kBandNames[b]);
+            else if (eqBandCovered (wanted[i], moved[i]))
+                covered.push_back (kBandNames[b]);
+            else
+                held.push_back (kBandNames[b]);
             continue;
         }
         const std::string more = diff > 0 ? "less" : "more";
@@ -1243,6 +1319,17 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         reason ("eq", many ? "Covered bands" : "Covered band", "0 dB",
                 list + (many ? " need" : " needs") + " a small change too, but the neighbouring bands' moves already reach into " +
                 (many ? "them" : "it") + ", so " + (many ? "they stay" : "it stays") + " flat.");
+    }
+    if (! held.empty())
+    {
+        std::string list;
+        for (size_t k = 0; k < held.size(); ++k)
+            list += (k ? (k + 1 == held.size() ? " and " : ", ") : "") + held[k];
+        const bool many = held.size() > 1;
+        reason ("eq", many ? "Bands left flat" : "Band left flat", "0 dB",
+                list + " could use a small change too, but EQ bands overlap: moving " + (many ? "them" : "it") +
+                " would also shift the bands next to " + (many ? "them" : "it") + ", and the closest overall balance leaves " +
+                (many ? "them" : "it") + " flat.");
     }
     if (! flat.empty() && flat.size() < static_cast<size_t> (kEqBands))
     {
@@ -1869,9 +1956,14 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     reason ("max", "Drive", num (drive, true) + " dB", driveWhy);
     reason ("max", "Ceiling", num (chain.limiter.ceilingDbtp, false) + " dBTP",
             (useRef ? "Set for a master as loud as your reference (" + num (r.targetLufs) + " LUFS). " : std::string()) +
-            (tier == LoudnessTarget::loud ? "Loud masters peak higher after the MP3/AAC conversion streaming services do, so the ceiling sits lower (Spotify asks for −2 dBTP on masters this loud). This makes clipping in the streamed version much less likely."
-            : tier == LoudnessTarget::club ? "DJs mostly play MP3/AAC files, which peak higher than the master. −1 dBTP keeps that small without giving up loudness."
-                                               : "Leaves room for the MP3/AAC conversion streaming services do, so the streamed version is very unlikely to clip."));
+            (tier == LoudnessTarget::stream
+                 ? std::string ("Leaves room for the MP3/AAC conversion streaming services do, so the streamed version is very unlikely to clip.")
+                 : std::string (tier == LoudnessTarget::club ? "DJs mostly play MP3/AAC files, and streaming services convert too. "
+                                                             : "Streaming services convert your master to MP3/AAC/Ogg. ") +
+                   "Masters this loud peak higher after that conversion, so the ceiling sits at \xE2\x88\x92" "1.5 instead of the usual \xE2\x88\x92" "1: "
+                   "in our tests the converted copies then peaked within about 0.4 dB of 0 dBTP, where \xE2\x88\x92" "1 let them go up to about 1 dB over. "
+                   "Spotify's own advice for masters louder than \xE2\x88\x92" "14 LUFS is \xE2\x88\x92" "2 dBTP: set the Ceiling to \xE2\x88\x92" "2 if you "
+                   "want to follow it to the letter (it costs a little loudness)."));
     reason ("max", "Release", "120 ms adaptive", "Recovers fast after drum hits and slowly on sustained bass, so the master doesn't pump.");
 
     if ((budgetLimited || peakLimited) && s.intensity != Intensity::punchy && ! useRef)   // (with a reference: see below)

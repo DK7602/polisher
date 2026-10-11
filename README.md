@@ -148,7 +148,10 @@ on a manual run: Actions > Build & Test > Run workflow, "Also build macOS".
   reads below the sample peak.
 - **Limiter guarantee.** Sliding minimum over the look-ahead window followed by a moving average of the same
   length means the gain has fully reached its target by the time a peak leaves the delay line. Latency is
-  3 ms + 12 samples and is reported to the host.
+  3 ms + 12 samples and is reported to the host. "At or under the ceiling" is on the BS.1770 (4x) true-peak
+  meter streaming services use; an independent 16x meter can read up to ~0.7 dB higher on clipped audio.
+  Switching to bypass (A) keeps limiting what is in the delay line, the block the switch came with and
+  50 ms more (fast release), then glides to unity: an A/B flip never lets a driven, unlimited peak out.
 - **Adaptive release.** Dips below the ~400 ms average gain (transients) recover fast; the program-level
   gain moves slowly, so bass-heavy material doesn't pump.
 - **Listening aids.** Monitoring only, outside the parameter tree (the editor sets them; they reset when it

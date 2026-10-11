@@ -195,7 +195,7 @@ let amReport = null;           // last Auto-Master report (parsed), or null
 // curve drawn here is the plug-in's real response.
 const EQ_BANDS = [
   { name: "Low End", shape: "low", def: 45, q: 0.707,
-    boost: "More sub weight: the 808 and kick tail feel bigger on big speakers. Phones and laptops barely reproduce it. A subsonic filter switches in below 20 Hz, so the boost doesn't also pump up rumble you can't hear.",
+    boost: "More sub weight: the 808 and kick tail feel bigger on big speakers. Phones and laptops barely reproduce it. A subsonic filter at 15 Hz switches in with the boost, so rumble below about 12 Hz is turned down instead of up (between 12 and 20 Hz part of the boost remains).",
     cut: "Less sub rumble: a cleaner bottom and more headroom, so the Maximizer can make it louder." },
   { name: "Bass", shape: "bell", def: 100, q: 0.8,
     boost: "More body in the kick and 808: fuller and warmer. This is the low end most speakers actually play.",
@@ -1118,9 +1118,9 @@ function renderLearnBody() {
       ? "Your mix goes into the chain as it is. Auto-Master turns this down only when the master would otherwise land above your target."
       : `Turns your mix down ${fmtNum(-trim, 1)} dB before the whole chain (all 11 modules). Drive can only push up; this is how Polisher masters a mix that would otherwise land above your target. A (bypass) ignores it.`));
   body.appendChild(item("Ceiling", `${fmtNum(ceiling, 1)} dBTP`,
-    `Nothing leaves Polisher above ${fmtNum(ceiling, 1)} dBTP, including peaks that fall between samples. ` +
-    (ceiling > -0.95 ? "Above −1 dBTP, the MP3/AAC versions streaming services make are likely to clip. −1.0 is the usual choice; for loud masters (around −9 LUFS and louder) −1.5 to −2 is safer."
-                     : "That leaves room for the MP3/AAC conversion streaming services do. The louder the master, the higher its MP3/AAC copy peaks: at −9 LUFS and louder, −1.5 to −2 dBTP keeps the streamed version clean.")));
+    `Nothing leaves Polisher above ${fmtNum(ceiling, 1)} dBTP on the true-peak meter streaming services use (it counts peaks between samples too). ` +
+    (ceiling > -0.95 ? "Above −1 dBTP, the MP3/AAC versions streaming services make are likely to clip. −1.0 is the usual choice; for loud masters (around −9 LUFS and louder) −1.5 (what Auto-Master sets for Loud and Club) to −2 (Spotify's advice) is safer."
+                     : "That leaves room for the MP3/AAC conversion streaming services do. The louder the master, the higher its MP3/AAC copy peaks: at −9 LUFS and louder, use −1.5 (Auto-Master's choice for Loud and Club) or −2 (Spotify's advice), and the converted copies stay at or close to 0 dBTP instead of going a dB over.")));
   body.appendChild(item("Release", `${release} ms`,
     adaptive
       ? `Adaptive around ${release} ms: recovers quickly after single hits (drums) and moves slowly on sustained sound (808s, pads), so it doesn't pump.`
@@ -2048,7 +2048,7 @@ chkChange.addEventListener("change", () => P.resetOnChange.setValue(chkChange.ch
 P.resetOnChange.valueChangedEvent.addListener(() => (chkChange.checked = !!P.resetOnChange.getValue()));
 
 function restartMeasurement() { resetMeter(); grWindow = []; clipWindow = []; tameWindow = []; punchWindow = []; histReset(); }
-$("btn-reset").addEventListener("click", () => { restartMeasurement(); toast("Loudness measurement reset."); });
+$("btn-reset").addEventListener("click", () => { restartMeasurement(); toast("Loudness measurement reset. MATCH learns the level afresh."); });
 // After a control change only the long-term readings start over; Short-term keeps running.
 function restartIntegrated() { resetMeter("stats"); }
 
@@ -2705,7 +2705,7 @@ function renderSnapLearn(body) {
   body.appendChild(item("Not in a snapshot", null, "A / B, MATCH, MONO, PHONE and Listen, and Auto-Master's genre, intensity and target. Switching snapshots never changes how you listen. S1–S4 are not A / B: A is always your original mix, B the master."));
   body.appendChild(sep());
   body.appendChild(head("A FAIR COMPARE WITH MATCH"));
-  body.appendChild(para("l-p", "MATCH learns how loud each snapshot plays compared with your mix, over about 10 seconds of B. The first time you hear a snapshot, give it 10–15 seconds before you judge. After that MATCH remembers its level, so when you flip back it's matched at once. Right after a switch it holds the level for 3 seconds while the loudness reading catches up."));
+  body.appendChild(para("l-p", "The first time you hear a snapshot, MATCH learns how loud it plays compared with your mix: roughly after half a second of B, exactly after about 3 seconds. Play it for about 15 seconds and MATCH remembers its level, so when you flip back later it's matched at once (it holds that level for 3 seconds while the loudness reading catches up)."));
   body.appendChild(tip("TRY THIS", "Balanced vs Punchy: play your chorus, run Auto-Master on Balanced and click S1. Pick Punchy, run it again and click S2. Turn on MATCH and listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip S1 / S2 every few seconds: you hear punch and weight, not volume. Click the one you like and keep going.", true));
   body.appendChild(sep());
   body.appendChild(head("UNDO AND REDO"));

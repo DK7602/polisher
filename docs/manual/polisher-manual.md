@@ -137,7 +137,7 @@ What it takes from the reference:
 | Stereo width of the mids and highs | Widens or narrows them toward it with the Stereo Imager (the lows are never widened) |
 | Low end | Mono Below: if the reference keeps stereo in its bass, only the deep sub below 60 Hz is made mono. If its 808 reaches lower or sits higher than yours, the report tells you how to fix that in the mix |
 
-The **genre still decides** what a reference can't show: how much compression, saturation, clipping and kick punch suit the style. The ceiling follows the reference's loudness the way a target would: −1.5 dBTP for references between about −12 and −8 LUFS (like Loud −9), −1 dBTP otherwise.
+The **genre still decides** what a reference can't show: how much compression, saturation, clipping and kick punch suit the style. The ceiling follows the reference's loudness the way a target would: −1.5 dBTP for references louder than about −12 LUFS (like Loud −9 and Club −7), −1 dBTP for quieter ones.
 
 The report starts with **Matched to your reference "…"**, explains every move against it, and shows a table: **REF / MIX / MASTER** for loudness, deep sub vs bass, bass stereo and width, and the tone difference from the reference in each range. Green means the master is close to the reference, red means it is still far off. Auto-Master closes part of each gap **on purpose**: copying a reference exactly would fight your own mix.
 
@@ -157,7 +157,7 @@ Puts back the punch a limiter or clipper squashed out of a beat, loop or mix. It
 | --- | --- | --- |
 | Amount | 0–100 % (0) | How far each hit is lifted: up to 10 dB at 100 % on brickwalled audio, less on audio that measures less squashed. On a brickwalled beat, 50 % wins back about a third of the lost punch and 100 % about half (before the Maximizer). Start at 75 %. |
 | Length | 5–50 ms (15) | How long each lift is held before it lets go. Shorter if vocals or pads jump on each hit. |
-| Focus | Full, Kick, Snap | Which hits it listens for and what it lifts: every hit (the whole sound), kick and 808 (only the band below 150 Hz), or snares and hats (only the band above 1 kHz). |
+| Focus | Full, Kick, Snap | Which hits it listens for and what it lifts: every hit (the whole sound), kick and 808 (only the band below 150 Hz), or snares and hats (only the band above 1 kHz). Switching (Focus, on / off, A / B) never dips the sound; Kick and Snap narrow down to their band within about 0.2 s. |
 | Squash meter | open … wall | How flattened the incoming audio is: true peak minus the average level, plus a check that the peaks press flat against one ceiling. 12.5 dB or more = open (it rests); 8.5 dB or less = brickwalled (full strength). A loud 808 alone doesn't count as squashed. After Auto-Master it holds the reading Auto-Master took, so playback and export lift the same from the first bar. |
 | Restoring meter | 0–10 dB | The lift right now. |
 
@@ -181,7 +181,7 @@ Shapes the overall tone in seven bands. Turn a band's knob, or drag its numbered
 
 Every band keeps its true shape right up to 20 kHz, at 44.1 and 48 kHz too, so the curve on the spectrum is what you hear. Air set high is still a subtle move: at 44.1 or 48 kHz the shelf above about 16 kHz only lifts the last few kHz before the top of the file, where most people hear little. For audible sheen, keep Air between 10 and 14 kHz.
 
-**Subsonic filter.** While Low End is boosted, a gentle high-pass at 15 Hz fades in by itself, so the boost doesn't also pump up rumble below 20 Hz that no speaker plays but the Maximizer still has to make room for. It costs less than 0.5 dB at 20 Hz and nothing you can measure from 30 Hz up. With Low End at 0 dB or cut, it's out of the path.
+**Subsonic filter.** While Low End is boosted, a gentle high-pass at 15 Hz fades in by itself, so rumble and DC below about 12 Hz, which no speaker plays but the Maximizer still has to make room for, are turned down instead of up. Between 12 and 20 Hz part of the boost remains (Low End +6 dB: about +3 dB at 15 Hz and +5 dB at 18 Hz). It costs about 0.5 dB at 20 Hz and nothing you can measure from 30 Hz up. With Low End at 0 dB or cut, it's out of the path.
 
 On the spectrum, the white line is your mix, the blue curve is the EQ change and the red line is the master after the whole chain. The dotted line (for example **Trap target**) is the tone typical masters in your genre have, the balance Auto-Master's EQ aims for: where the red line sits above it, your master has more of that range than typical (see [The spectrum screen](#the-spectrum-screen)).
 
@@ -308,13 +308,13 @@ Shaves the tallest drum peaks before the Maximizer, so the limiter works less. T
 
 ### 11 Maximizer
 
-The final true-peak limiter. It makes the master loud and guarantees nothing goes over the ceiling.
+The final true-peak limiter. It makes the master loud and keeps every peak at or under the ceiling, measured the way streaming services measure true peak (ITU BS.1770, peaks between samples included).
 
 | Control | Range (default) | What it does |
 | --- | --- | --- |
 | Drive | 0–24 dB (0) | Pushes the mix into the limiter. More Drive = louder. |
 | Input Trim | −24–0 dB (0) | Turns your mix down **before the whole chain**. Drive only pushes up, so this is how Polisher masters a mix that already arrives louder than your target. Auto-Master sets it when needed; at 0 dB the mix goes in as it is. A (bypass) ignores it. |
-| Ceiling | −3 to 0 dBTP (−1) | The highest peak allowed, between samples too. −1 suits most masters; loud ones (−9 LUFS and up) are safer at −1.5 to −2, because their MP3/AAC copies peak higher. |
+| Ceiling | −3 to 0 dBTP (−1) | The highest peak allowed, between samples too (measured the way streaming services measure true peak). −1 suits most masters; loud ones (−9 LUFS and louder) are safer at −1.5 (what Auto-Master sets for Loud and Club) to −2 (Spotify's advice), because their MP3/AAC/Ogg copies peak higher. |
 | Release | 10–1000 ms (120) | How fast the limiter lets go. Shorter = louder but can distort bass. |
 | Release Mode | Adaptive (default) or Fixed | Adaptive recovers fast after drum hits and slowly on 808s and pads, so it doesn't pump. |
 | GR | meter | Gain reduction. Under about 4 dB is comfortable. |
@@ -326,7 +326,9 @@ Set Drive while watching **Short-term** in the footer. If Learn says **Diminishi
 Louder always sounds better, so compare at equal loudness: turn on **MATCH**, then flip **A / B**.
 
 - **A** plays your original mix (Polisher bypassed). **B** plays the master.
-- With MATCH on, play **B for about 10 seconds** first. Polisher learns how much louder the master is, then turns the louder side **down** to match. It never turns anything up, so B can't go past its ceiling.
+- With MATCH on, play **B for a few seconds** first. Polisher learns how much louder the master is (roughly after half a second, exactly after about 3 seconds), then turns the louder side **down** to match. It never turns anything up, so B can't go past its ceiling.
+- After **Auto-Master**, a snapshot you haven't heard yet, or opening the project, MATCH learns the level afresh the same way. After you change settings by hand, it follows within about 20 seconds of B; press **RESET** (under the Output meter) to make it learn afresh at once.
+- Quick A / B flips don't disturb it: it only learns from B played for 3 seconds or more at a stretch.
 - If your original mix peaks above 0 dBFS, both sides are turned down together so A doesn't clip your audio interface and sound worse than it is.
 - Now judge tone and punch, not volume. Ask: is B clearer, fuller, punchier? Did the kick or vocal lose anything?
 - On B the meters show the **real master**, never the matched level. On A they show your original mix.
@@ -371,7 +373,7 @@ The four small slots next to the arrows each keep a **whole sound**: every knob 
 
 The **red** slot is the one playing; a dot after it (**S1•**) means you've changed something since you stored or recalled it. Snapshots are saved with your Cubase project. They don't store A / B, MATCH, the listening aids or Auto-Master's genre / intensity / target, and recalling one never changes them.
 
-**A fair compare with MATCH.** MATCH learns how loud the master plays compared with your original over about 10 seconds of B. The first time you hear a snapshot, give it **10–15 seconds** before judging. After that, MATCH **remembers each snapshot's level**: flip back to it and it is matched at once. Right after a switch MATCH holds its level for 3 seconds while the loudness reading (which looks at the last 3 seconds) catches up. Storing new settings in a slot makes MATCH learn that slot again.
+**A fair compare with MATCH.** The first time you hear a snapshot, MATCH learns how loud it plays compared with your original: roughly after half a second of B, exactly after about 3 seconds. Play it for about **15 seconds** and MATCH **remembers that snapshot's level**: flip back to it later and it is matched at once (MATCH holds that level for 3 seconds while the loudness reading, which looks at the last 3 seconds, catches up). Storing new settings in a slot makes MATCH learn that slot again.
 
 **Try this: Balanced vs Punchy.** Run Auto-Master on **Balanced** (play your song) and click **S1**. Pick **Punchy**, run it again and click **S2**. Turn on **MATCH**, listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip **S1 / S2** every few seconds: you hear punch and weight, not volume. Keep the one you like by clicking it (the undo arrow can always take you back).
 
@@ -485,8 +487,9 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Master lands quieter than the target | Auto-Master protected the drums within the intensity's limit | Fine as it is. To go louder, choose Punchy, or tame the drum peaks in the mix |
 | Master isn't as loud as the reference | The reference had its drum peaks controlled in the mix; reaching it would crush yours | Fine as it is (streaming plays both at the same level). To get closer: a clipper on the drum bus, or Punchy |
 | Match ref says it can't read the file | Not WAV, AIFF, FLAC or MP3, or a damaged file | Export or convert the song to WAV and load that |
-| B sounds better but you're not sure why | B is louder | Turn on MATCH and play B for 10 s before comparing |
-| One snapshot sounds louder right after you switch, even with MATCH on | MATCH hasn't heard that snapshot for long yet | Play each snapshot for 10–15 s once; after that MATCH remembers its level and flips are matched at once |
+| B sounds better but you're not sure why | B is louder | Turn on MATCH and play B for a few seconds before comparing |
+| B sounds louder with MATCH on after you changed settings by hand | MATCH follows hand changes over about 20 s of B | Keep playing B, or press RESET under the Output meter: MATCH learns the level afresh in about 3 s |
+| One snapshot sounds louder right after you switch, even with MATCH on | MATCH hasn't heard that snapshot yet | Give it 3 seconds of B; play each snapshot for about 15 s once and MATCH remembers its level, so flips are matched at once |
 | Ctrl+Z undoes something in Cubase instead of in Polisher | Cubase had the keyboard | Click inside Polisher's window first, or use the undo arrow at the top |
 | The undo arrow is grey after opening the project | The undo list isn't saved with the project | Working as intended. Snapshots are saved: keep versions you may want back in S1–S4 |
 | Polisher sounds thin, mono, crackly or like a phone; a red banner is on the spectrum | A listening aid is on (Listen, Solo, MONO or PHONE) | Click BACK TO MASTER on the banner. They switch off by themselves when you close Polisher and are never in a normal export |
@@ -517,7 +520,7 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 
 **Will my export sound like what I heard?** Yes. With Tone Steady holding your song to its learned tone (Target: your song), Tone Steady does the same to each part wherever playback or the export starts; the other modules settle within the first second or two.
 
-**Why −1 dBTP for the ceiling?** Streaming services convert to MP3/AAC, which pushes peaks up, and the louder the master the more. −1 dBTP leaves enough room for most masters; Auto-Master uses −1.5 for Loud −9 (Spotify asks for −2 dBTP on masters louder than −14 LUFS). No ceiling makes clipping after conversion impossible, only unlikely.
+**Why −1 dBTP for the ceiling?** Streaming services convert to MP3/AAC/Ogg, which pushes peaks up, and the louder the master the more. −1 dBTP leaves enough room for most masters. Auto-Master uses −1.5 for Loud −9 and Club −7: on our test masters at −9 and −7 LUFS the Ogg copies then peaked within about 0.4 dB of 0 dBTP, where −1 let them reach about +1 (MP3 320 kbps copies stayed under 0 either way). Spotify advises −2 dBTP for masters louder than −14 LUFS; set the Ceiling to −2 to follow it exactly (it costs a little loudness). No ceiling makes clipping after conversion impossible, only unlikely.
 
 **Can I trust my headphones?** For tone and punch, yes, if you use MATCH and moderate volume. For loudness, trust the meters. Check on a phone and in a car too.
 
