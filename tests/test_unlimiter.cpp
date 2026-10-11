@@ -344,6 +344,65 @@ TEST_CASE ("Unlimiter Focus Kick and Snap lift only their own band", "[unlimiter
     CHECK (static_cast<double> (over3) < 0.01 * static_cast<double> (lift.size()));
 }
 
+TEST_CASE ("Unlimiter Focus switches never cut a band out (no cross-fade cancellation)", "[unlimiter]")
+{
+    // The band split adds up to an all-pass: cross-fading it with the plain signal used to cancel the
+    // split frequency half way (150 Hz -17 dB with Kick, 1 kHz -15 dB with Snap, ~11 ms in). Steady
+    // tones through every kind of switch: Amount leaving 0, Focus changes, on / off (A / B).
+    const double sr = 48000.0;
+    for (double hz : { 40.0, 150.0, 400.0, 1000.0, 3000.0 })
+    {
+        const auto tone = testsig::sine (sr, 2, hz, -12.0, 5.0);
+        Unlimiter u;
+        u.prepare (sr, 2);
+        UnlimiterParams p;
+        p.amount = 0.0;
+        p.focus = UnlimiterFocus::kick;
+        p.squashDb = Unlimiter::kFullSquashDb;
+        u.setParams (p);
+        u.reset();
+        struct Change { double at; int what; };
+        const Change changes[] = { { 0.5, 0 }, { 1.2, 1 }, { 1.9, 2 }, { 2.4, 3 }, { 2.9, 4 }, { 3.6, 5 }, { 4.3, 6 } };
+        std::vector<double> out (static_cast<size_t> (tone.numSamples()));
+        std::vector<double> frame (2);
+        size_t next = 0;
+        for (int i = 0; i < tone.numSamples(); ++i)
+        {
+            if (next < std::size (changes) && i == static_cast<int> (changes[next].at * sr))
+            {
+                switch (changes[next].what)
+                {
+                    case 0: p.amount = 100.0; break;                    // Amount leaves 0 (Focus Kick)
+                    case 1: p.focus = UnlimiterFocus::snap; break;      // Kick -> Snap
+                    case 2: p.enabled = false; break;                   // A (or the module off)
+                    case 3: p.enabled = true; break;                    // back to B
+                    case 4: p.focus = UnlimiterFocus::full; break;      // Snap -> Full
+                    case 5: p.focus = UnlimiterFocus::kick; break;      // Full -> Kick
+                    default: p.amount = 0.0; break;                     // Amount back to 0
+                }
+                u.setParams (p);
+                ++next;
+            }
+            frame[0] = frame[1] = tone.channels[0][static_cast<size_t> (i)];
+            u.processFrame (frame.data(), 2);
+            out[static_cast<size_t> (i)] = frame[0];
+        }
+        // Level over two periods (at least 5 ms), against the steady tone's.
+        const int w = std::max (static_cast<int> (2.0 * sr / hz), static_cast<int> (0.005 * sr));
+        const double steady = 0.5 * std::pow (10.0, -12.0 / 10.0);
+        double worst = 0.0, worstAt = 0.0;
+        for (int a = static_cast<int> (0.3 * sr); a + w < tone.numSamples(); a += w / 4)
+        {
+            double e = 0.0;
+            for (int i = a; i < a + w; ++i) e += out[static_cast<size_t> (i)] * out[static_cast<size_t> (i)];
+            const double db = 10.0 * std::log10 (e / w / steady);
+            if (db < worst) { worst = db; worstAt = a / sr; }
+        }
+        INFO (hz << " Hz tone: worst dip " << worst << " dB at " << worstAt << " s");
+        CHECK (worst > -1.0);
+    }
+}
+
 TEST_CASE ("Unlimiter lift arrives with the hit and lasts about Length", "[unlimiter]")
 {
     const double sr = 48000.0;

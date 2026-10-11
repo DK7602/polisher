@@ -1,6 +1,5 @@
 #pragma once
 
-#include "Biquad.h"
 #include "TruePeakDetector.h"
 
 #include <algorithm>
@@ -46,6 +45,19 @@ struct UnlimiterParams
     It cannot recreate a waveform a clipper flattened (that information is gone); it restores the
     level contrast between hits and the rest, which is what a squashed beat is missing.
 
+    The split's two bands add up to an all-pass (flat level, a phase turn around the split frequency),
+    so the plain signal and the split must never be cross-faded there: half way, the two would cancel
+    at the split frequency (a 150 Hz or 1 kHz tone dipped 15-17 dB for ~10 ms). The split joins and
+    leaves the path only while parked just under half the sample rate (kParkFraction), where its
+    all-pass is the plain signal to within a few degrees at 20 kHz, and glides between there and the
+    Focus frequency at a rate proportional to the frequency (kGlidePerHz): each frequency above the
+    Focus frequency is turned one cycle as the split passes it, slowly enough that its pitch moves
+    ~1 %, never down in the 808's range. Park to 150 Hz takes ~0.2 s, to 1 kHz ~0.03 s; Kick <-> Snap
+    glides directly. A new lift doesn't start while the band the detector listens to is widening.
+    The split is a pair of state-variable filters (they move without clicks): the low band is the
+    Linkwitz-Riley low-pass, the high band the all-pass minus it, so the two always add up to the
+    all-pass exactly, also while the frequency moves.
+
     Constant latency (kLookaheadMs, so the lift is already up when the hit arrives) in every state;
     exact delayed pass-through when off or at Amount 0, cross-faded over 20 ms. Strength comes from
     params.squashDb when Auto-Master set it (the same in playback and export), otherwise from the live
@@ -65,6 +77,8 @@ public:
     static constexpr double kFullSquashDb = 8.5;    // Squash at or below this: full strength
     static constexpr double kOpenSquashDb = 12.5;   // at or above this: an open mix, nothing to undo
     static constexpr double kSplitKickHz = 150.0, kSplitSnapHz = 1000.0;
+    static constexpr double kParkFraction = 0.499;  // where the band split joins and leaves the path (x sample rate)
+    static constexpr double kGlidePerHz = 0.03;     // split glide: d ln(f) / dt = kGlidePerHz x f (pitch moves ~1.4 % at most)
 
     /** How much of Amount a Squash reading allows (0 ... 1). */
     static double squashScale (double squashDb) noexcept
@@ -126,21 +140,30 @@ public:
 
 private:
     void updateCoefficients() noexcept;
+    void updateSplit() noexcept;
+    void setSplitFilters (bool clearState) noexcept;
+    bool wantsBandPath() const noexcept { return ! isNeutral (params) && params.focus != UnlimiterFocus::full; }
 
     UnlimiterParams params;
     double sr = 48000.0;
     int channelCount = 0;
     int lookahead = 0;
 
-    // Delay lines (lookahead), one ring per channel for the audio, the focused band and the rest
-    std::vector<double> delay, delayBand, delayRest;
+    // Delay lines (lookahead), one ring per channel for the audio and the two bands of the split
+    std::vector<double> delay, delayLow, delayHigh;
     int delaySize = 0, writePos = 0;
 
-    // Detection and the band split: Linkwitz-Riley low and high pass at the Focus frequency
-    std::array<Biquad, 2> lowPass[kMaxChannels], highPass[kMaxChannels];
-    UnlimiterFocus scFocus = UnlimiterFocus::full;
-    double split = 0.0, aSplit = 0.0;   // 0 = whole-signal path, 1 = band path (glides between them)
-    int splitWait = 0;
+    // Detection and the band split at splitLog (ln Hz), which glides between the park and the Focus
+    // frequency (see the class comment): two Butterworth state-variable filters in series per channel.
+    struct SvfState { double ic1 = 0.0, ic2 = 0.0; };
+    std::array<std::array<SvfState, 2>, kMaxChannels> svf {};
+    double svfA1 = 0.0, svfA2 = 0.0, svfA3 = 0.0;
+    double split = 0.0, splitTarget = 0.0, splitStep = 0.0;   // 0 = whole-signal path, 1 = band path (linear 20 ms fade)
+    double splitLog = 0.0;
+    double liftLow = 1.0, liftHigh = 1.0, aWeight = 0.0;      // share of the lift each band gets (Kick 1 / 0, Snap 0 / 1)
+    bool splitRunning = false;                                // the band filters run (Focus not Full, or the split still in)
+    UnlimiterFocus heard = UnlimiterFocus::full;              // what the detector listens to
+    int settleLeft = 0, settleSamples = 0, splitCountdown = 0;
     double fastEnv = 0.0, slowEnv = 0.0;
     int holdSamples = 0, holdLeft = 0;
     std::vector<double> rmsRing;

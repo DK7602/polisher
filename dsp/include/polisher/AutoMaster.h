@@ -5,6 +5,7 @@
 #include "LoudnessTargeting.h"
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -38,6 +39,17 @@ double genreVocalLevelDb (Genre) noexcept;
     (below -15 dB: an instrumental); otherwise the move back toward it, at most +/-3 dB, in 0.5 dB steps. */
 double suggestVocalMoveDb (double vocalLevelDb, Genre) noexcept;
 
+/** A mix's average power spectrum (its loud parts, like bandDb), folded into kPoints log-spaced points
+    per analysis band: each point's share of the power and its power-weighted frequency. With it,
+    eqBandChangeDb() predicts how an EQ moves THIS mix's band levels (an 808 sitting at 45-60 Hz takes
+    a Low End shelf differently from a typical spectrum's evenly falling sub). */
+struct BandSpectrum
+{
+    static constexpr int kPoints = 24;
+    std::array<std::array<double, kPoints>, kEqBands> hz {}, power {};
+    bool valid = false;
+};
+
 /** What Auto-Master measured in the audio it listened to. */
 struct MixAnalysis
 {
@@ -45,6 +57,7 @@ struct MixAnalysis
     LoudnessStats loudness;                     // of the incoming mix
     double peakToLoudnessDb = 0.0;              // true peak minus integrated (PLR)
     std::array<double, kEqBands> bandDb {};     // tilted band levels, mean of bands 2..6 = 0 (before the user's Stem EQ, as the Tonal EQ hears it)
+    BandSpectrum spectrum;                      // the spectrum bandDb was measured from (same audio)
     double bassWidthPercent = 0.0;              // how stereo the bass is below 150 Hz
     double lowJumpDb = 0.0;                     // how far the loudest bass moments rise above typical ones
     double lowCrestDb = 0.0;                    // peak vs average of the low band (kick punch)
@@ -60,18 +73,28 @@ struct MixAnalysis
 MixAnalysis analyseMix (const AudioClip& clip);
 
 /** How much the level of each analysis band changes (dB) with these EQ settings at this sample
-    rate, measured the way analyseMix() measures bands: the EQ's power gain averaged over the band
-    per Hz, for a typical master's spectrum (falling 4.5 dB/oct). Neighbouring bands overlap, so a
-    band's own move only partly lands in its own analysis band and partly spills next door. */
-std::array<double, kEqBands> eqBandChangeDb (const TonalEQParams& eq, double sampleRate) noexcept;
+    rate, measured the way analyseMix() measures bands: the EQ's power gain averaged over the band,
+    weighted by the mix's own spectrum when one is given (a band without power in it, or no spectrum:
+    a typical master's spectrum, falling 4.5 dB/oct). Neighbouring bands overlap, so a band's own move
+    only partly lands in its own analysis band and partly spills next door. */
+std::array<double, kEqBands> eqBandChangeDb (const TonalEQParams& eq, double sampleRate, const BandSpectrum* spectrum = nullptr) noexcept;
 
 /** EQ band gains (default band frequencies) whose combined effect brings each analysis band's
     change as close as possible to `wanted` (regularised least squares on the band-interaction
-    matrix, refined on the real response). Only bands with a non-zero wish move, each in the
-    direction it was asked to and by at most limitDb[b]; gains are rounded to 0.1 dB and moves
-    under 0.4 dB are dropped (and the rest re-solved without them). */
+    matrix, refined on the real response; for this spectrum when one is given). Only bands with a
+    non-zero wish move, each in the direction it was asked to and by at most limitDb[b]; gains are
+    rounded to 0.1 dB and moves under 0.4 dB are dropped (and the rest re-solved without them). */
 std::array<double, kEqBands> solveEqGains (const std::array<double, kEqBands>& wanted,
-                                           const std::array<double, kEqBands>& limitDb, double sampleRate) noexcept;
+                                           const std::array<double, kEqBands>& limitDb, double sampleRate,
+                                           const BandSpectrum* spectrum = nullptr) noexcept;
+
+/** For a band the solver left at 0 dB although wantedDb was wished for: true ("covered") when the
+    neighbouring bands' moves change it by movedDb, at least half the wish and the same way; false
+    when they don't (the report then says the band was left flat). */
+inline bool eqBandCovered (double wantedDb, double movedDb) noexcept
+{
+    return movedDb * wantedDb > 0.0 && std::abs (movedDb) >= 0.5 * std::abs (wantedDb);
+}
 
 // =================================================================================================
 // Reference matching ("Match ref")

@@ -77,10 +77,13 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     history.setExtraState ([this] { return captureExtraState(); },
                            [this] (const juce::String& extra) { restoreExtraState (extra); });
     autoMaster.onApplyBegin = [this] (const juce::String& label) { history.beginGroup (label); };
+    // Auto-Master usually moves the level by several dB: MATCH learns it afresh (matched within about half
+    // a second of B, exactly from ~3 s) instead of sliding there from the old level over ~20 s.
     autoMaster.onApplyEnd = [this]
     {
         history.endGroup();
         markStateChanged();   // its report and Tone Steady's target are saved with the project, but aren't parameters
+        matchRelearnRequest.store (std::max (1, matchRelearnRequest.load()));
     };
     snapshots.onSwitch = [this] (int leaving, int entering) { matchSwitchRequest.store (0x100 | (leaving + 1) | ((entering + 1) << 4)); };
     snapshots.onStore = [this] (int slot)
@@ -420,9 +423,13 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
         inputMeter.reset();
     }
     // MATCH remembers the original's loudest peak across playback passes (so A never clips at the
-    // start of a pass); RESET forgets it, e.g. after the mix was turned down.
+    // start of a pass); RESET forgets it, e.g. after the mix was turned down, and makes MATCH learn the
+    // level afresh (after a big change made by hand).
     if (resetPressed)
+    {
         levelMatch.resetPeak();
+        levelMatch.relearn();
+    }
     if (statsResetRequested.exchange (false))
     {
         outputMeter.resetStatistics();
@@ -607,7 +614,8 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     // before this gain, so the meters and spectrum always show the real master)...
     handleMatchRequests();
     const bool bypassed = bypassParam->load() > 0.5f;
-    levelMatch.update (inputMeter.shortTermLufs(), outputMeter.shortTermLufs(), inputPeak, numSamples, ! bypassed);
+    levelMatch.update (inputMeter.shortTermLufs(), outputMeter.shortTermLufs(), inputPeak, numSamples, ! bypassed,
+                       inputMeter.momentaryLufs(), outputMeter.momentaryLufs());
     const double sideGainDb = bypassed ? levelMatch.gainForADb() : levelMatch.gainForBDb();
     meters.matchDb.store (static_cast<float> (sideGainDb));
     meters.correlation.store (static_cast<float> (imager.correlation()));
@@ -714,23 +722,44 @@ void PolisherAudioProcessor::handleMatchRequests() noexcept
         for (size_t k = 0; k < matchMemory.size(); ++k)
             if ((forget >> k) & 1) matchMemory[k].valid = false;
         levelMatch.restartLearnedSeconds();
+        relearnedLevel.valid = false;
+    }
+    if (const int relearn = matchRelearnRequest.exchange (0); relearn != 0)
+    {
+        // After Auto-Master the snapshot that was playing is told it was left a moment later (the editor
+        // notices the change): the level learned until now is still its own.
+        relearnedLevel = { relearn == 1 && levelMatch.hasLearned() && levelMatch.learnedSeconds() >= kMatchLearnSeconds, levelMatch.gapDb() };
+        levelMatch.relearn();
     }
     const int req = matchSwitchRequest.exchange (0);
     if (req == 0)
         return;
     // The slot in place changed (a recall, or an undo / redo onto or off a slot). Keep the level MATCH
-    // learned for the slot that played, if it played long enough for the level to be its own; start a
-    // slot heard before from its level; and hold the level while the 3 s short-term readings still hold
-    // the settings from before.
+    // learned for the slot that played, if it played long enough for the level to be its own (learning
+    // starts from a clean reading of that slot, so ~10 s of it is a settled level); start a slot heard
+    // before from its level, holding it while the 3 s short-term readings still hold the settings from
+    // before; learn a slot not heard yet afresh (roughly matched after half a second, exactly from ~3 s).
     const int leaving = (req & 15) - 1, entering = ((req >> 4) & 15) - 1;
     const auto slots = static_cast<int> (matchMemory.size());
-    if (leaving >= 0 && leaving < slots && levelMatch.hasLearned() && levelMatch.learnedSeconds() >= kMatchLearnSeconds)
-        matchMemory[static_cast<size_t> (leaving)] = { true, levelMatch.gapDb() };
+    if (leaving >= 0 && leaving < slots)
+    {
+        if (levelMatch.hasLearned() && levelMatch.learnedSeconds() >= kMatchLearnSeconds)
+            matchMemory[static_cast<size_t> (leaving)] = { true, levelMatch.gapDb() };
+        else if (relearnedLevel.valid)
+            matchMemory[static_cast<size_t> (leaving)] = relearnedLevel;
+    }
+    relearnedLevel.valid = false;
     if (entering >= 0 && entering < slots)
     {
         if (matchMemory[static_cast<size_t> (entering)].valid)
+        {
             levelMatch.setGapDb (matchMemory[static_cast<size_t> (entering)].gapDb);
-        levelMatch.holdLearning (static_cast<int> (kMatchHoldSeconds * juce::jmax (8000.0, getSampleRate())));
+            levelMatch.holdLearning (static_cast<int> (kMatchHoldSeconds * juce::jmax (8000.0, getSampleRate())));
+        }
+        else
+        {
+            levelMatch.relearn();
+        }
     }
     else
     {
@@ -883,9 +912,11 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
             reference.restoreFromJson (savedReference);
             toneTarget.restoreFromJson (savedTone);
             snapshots.fromXml (savedSnapshots.get());
-            // Another project or preset: undo steps and MATCH's per-snapshot levels no longer apply.
+            // Another project or preset: undo steps and MATCH's levels (per snapshot, and the one in use)
+            // no longer apply.
             history.requestClear();
             matchForgetRequest.store ((1 << SettingsSnapshots::kSlots) - 1);
+            matchRelearnRequest.store (2);
         }
 }
 

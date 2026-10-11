@@ -241,6 +241,10 @@ private:
     std::atomic<int> matchSwitchRequest { 0 };   // 0x100 | (leaving + 1) | (entering + 1) << 4
     std::atomic<int> matchForgetRequest { 0 };   // one bit per slot
     bool referenceLoadPending = false;           // a Match ref load started from the window is still running
+    // The settings changed a lot, MATCH learns the level afresh: 1 = Auto-Master (the level learned until
+    // then still belongs to the snapshot that was playing), 2 = another project or preset.
+    std::atomic<int> matchRelearnRequest { 0 };
+    MatchMemory relearnedLevel {};   // the level before an Auto-Master relearn, for the snapshot it leaves
     static constexpr double kMatchHoldSeconds = 3.0;    // after a switch: the short-term readings' window
     static constexpr double kMatchLearnSeconds = 10.0;  // a slot's level is kept once learned this long
 
