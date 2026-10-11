@@ -450,6 +450,8 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("amHeard",    roundTo (static_cast<float> (am.getHeardSeconds()), 0.1f));
     frame->setProperty ("amLoudAt",   roundTo (static_cast<float> (am.getLoudestStartSeconds()), 0.1f));
     frame->setProperty ("amLoudLufs", roundTo (static_cast<float> (am.getLoudestLufs()), 0.1f));
+    frame->setProperty ("amLoudEnd",  roundTo (static_cast<float> (am.getLoudestEndSeconds()), 0.1f));   // -1: unknown or jumped inside
+    frame->setProperty ("amLoudJump", am.loudestPartJumped());
     frame->setProperty ("amCanFinish", am.canFinish());
     frame->setProperty ("amByItself", am.finishedByItself());
     // Tone Steady's stored target: how much of the song it was learned from (0 = following the music).

@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -87,7 +88,13 @@ struct ReferenceProfile
     double startSeconds = 0.0;                  // where its loudest part starts
     double partSeconds = 0.0;                   // how long that part is (kReferencePartSeconds, or the whole song if shorter)
     double trackLufs = -100.0;                  // integrated loudness of the whole song
-    double lufs = -100.0;                       // integrated loudness of its loudest part: what Auto-Master aims for
+    double lufs = -100.0;                       // integrated loudness of its loudest part (the loudness its displayDb is at)
+    /** Integrated loudness of its loudest kHookSeconds (found over the whole song): what Auto-Master aims
+        for, so the reference's hook is compared with the loudest kHookSeconds of your song that the master
+        is set from, like for like. -100: a profile saved before it existed (lufs stands in, see
+        referenceLoudness()). */
+    double hookLufs = -100.0;
+    double sampleRate = 0.0;                    // of the file (the display's reading depends on it); 0: unknown (older profile)
     double truePeakDbtp = -100.0;               // of the loudest part
     double peakToLoudnessDb = 0.0;              // of the loudest part
     std::array<double, kEqBands> bandDb {};     // tonal balance, measured like MixAnalysis::bandDb
@@ -101,6 +108,7 @@ struct ReferenceProfile
 };
 
 inline constexpr double kReferencePartSeconds = 30.0;   // the "loudest part": about a chorus or a drop
+inline constexpr double kHookSeconds = 12.0;            // the loudest part Auto-Master masters from (the plug-in keeps the loudest 12 s it hears)
 inline constexpr double kMaxReferenceMinutes = 15.0;    // longer files: only the first 15 minutes are read
 inline constexpr double kRefMinLufs = -16.0, kRefMaxLufs = -6.0;   // loudness targets taken from a reference stay in this range
 inline constexpr int kDisplayFftSize = 4096, kDisplayPoints = 96; // the plug-in's spectrum display (PolisherWebEditor)
@@ -119,6 +127,9 @@ public:
     /** First sample of the loudest stretch of windowSeconds (highest mean K-weighted energy; the
         earliest one when several tie). 0 when the song is shorter than that. */
     std::int64_t loudestStart (double windowSeconds) const;
+    /** Integrated loudness (BS.1770 gating) of that stretch (of the whole song when it is shorter),
+        as a loudness meter reads that stretch on its own. */
+    double loudestLufs (double windowSeconds) const;
 
 private:
     double sampleRate = 0.0;
@@ -182,8 +193,24 @@ std::vector<double> genreDisplayCurve (Genre, double sampleRate, double lufs = k
                                        int fftSize = kDisplayFftSize, int points = kDisplayPoints);
 
 /** Measures a reference song's loudest part. part = that part's audio; the rest describes the whole
-    song it came from (for the report). */
-ReferenceProfile analyseReference (const AudioClip& part, double trackSeconds, double trackLufs, double startSeconds);
+    song it came from (for the report). hookLufs: the song's loudest kHookSeconds (LoudestPartFinder::
+    loudestLufs); not finite: taken from the loudest kHookSeconds inside part. */
+ReferenceProfile analyseReference (const AudioClip& part, double trackSeconds, double trackLufs, double startSeconds,
+                                   double hookLufs = std::numeric_limits<double>::quiet_NaN());
+
+/** The loudness Auto-Master aims for with this reference (before the kRefMinLufs .. kRefMaxLufs limits):
+    its loudest kHookSeconds, or for a profile saved before that was measured, its loudest part. */
+double referenceLoudness (const ReferenceProfile&) noexcept;
+
+/** How much higher (dB) the spectrum display reads the same sound at displayRate than at fileRate: the
+    display's FFT has the same number of points at every rate, so each point's bin is wider and holds
+    more of the spectrum at a higher rate (10 log10 of the ratio). Checked against balanceDisplayCurve's
+    model of the display at both rates (the genre line's): within 0.2 dB from 500 Hz to 16 kHz (0.5 dB
+    at 300 Hz). Lower down, at 96 kHz and up, a display point holds only a few bins and any sound's
+    reading there depends on where its notes fall (the model swings about +/-2 dB around the shift, a
+    live song more), so no finer correction is worth more than the shift. Shift ReferenceProfile::displayDb by
+    this to draw it in a project at another rate. 0 when either rate is unknown. */
+double displayRateShiftDb (double fileRate, double displayRate) noexcept;
 
 /** The same for a whole song held in memory: finds its loudest part first. */
 ReferenceProfile analyseReference (const AudioClip& song);

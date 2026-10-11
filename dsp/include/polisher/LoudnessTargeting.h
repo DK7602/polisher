@@ -11,9 +11,39 @@
 #include "Unlimiter.h"
 
 #include <array>
+#include <atomic>
+#include <exception>
 #include <vector>
 
 namespace polisher {
+
+// =================================================================================================
+// Stopping a long offline analysis (Auto-Master on a background thread) when the plug-in closes
+// =================================================================================================
+
+/** Thrown by the render and measure functions below once the calling thread's cancel flag is set. */
+struct AnalysisCancelled : std::exception
+{
+    const char* what() const noexcept override { return "analysis cancelled"; }
+};
+
+/** While alive, the render and measure functions called on this thread check *flag (often enough that
+    one stops within a fraction of a second at any sample rate) and throw AnalysisCancelled once it is
+    true. Nothing changes for a thread without one. */
+class ScopedCancelFlag
+{
+public:
+    explicit ScopedCancelFlag (const std::atomic<bool>* flag) noexcept;
+    ~ScopedCancelFlag();
+    ScopedCancelFlag (const ScopedCancelFlag&) = delete;
+    ScopedCancelFlag& operator= (const ScopedCancelFlag&) = delete;
+
+private:
+    const std::atomic<bool>* previous;
+};
+
+/** Throws AnalysisCancelled when this thread's cancel flag (ScopedCancelFlag) is set. */
+void throwIfCancelled();
 
 /** Multichannel audio held in memory for offline analysis (one vector per channel). */
 struct AudioClip

@@ -288,6 +288,7 @@ double hitJumpAtTargetDb (const AudioClip& clip, double targetLufs, double ceili
 
 MixAnalysis analyseMix (const AudioClip& clip)
 {
+    throwIfCancelled();
     const ScopedFlushDenormals noDenormals;
     MixAnalysis a;
     const int nch = clip.numChannels(), n = clip.numSamples();
@@ -536,6 +537,30 @@ std::int64_t LoudestPartFinder::loudestStart (double windowSeconds) const
         if (sum > best * (1.0 + 1.0e-12)) { best = sum; bestAt = i + 1 - window; }
     }
     return static_cast<std::int64_t> (bestAt) * hopLength;
+}
+
+double LoudestPartFinder::loudestLufs (double windowSeconds) const
+{
+    const auto window = static_cast<size_t> (std::max (1L, std::lround (windowSeconds / 0.1)));
+    const size_t first = static_cast<size_t> (loudestStart (windowSeconds) / std::max (1, hopLength));
+    const size_t count = std::min (window, hopEnergy.size() - std::min (first, hopEnergy.size()));
+    // BS.1770 over the stretch: 400 ms blocks every 100 ms, -70 LUFS absolute and -10 LU relative gates.
+    std::vector<double> blocks;
+    for (size_t j = first; j + 4 <= first + count; ++j)
+    {
+        const double z = (hopEnergy[j] + hopEnergy[j + 1] + hopEnergy[j + 2] + hopEnergy[j + 3]) / 4.0;
+        if (energyToLufs (z) > -70.0) blocks.push_back (z);
+    }
+    if (blocks.empty())
+        return -100.0;
+    double sum = 0.0;
+    for (double z : blocks) sum += z;
+    const double gate = energyToLufs (sum / static_cast<double> (blocks.size())) - 10.0;
+    double gated = 0.0;
+    int n = 0;
+    for (double z : blocks)
+        if (energyToLufs (z) > gate) { gated += z; ++n; }
+    return n > 0 ? energyToLufs (gated / n) : -100.0;
 }
 
 AudioClip loudestPart (const AudioClip& song, double& startSeconds)
@@ -801,7 +826,7 @@ std::vector<double> genreDisplayCurve (Genre g, double sampleRate, double lufs, 
     return balanceDisplayCurve (genreTargetCurve (g), sampleRate, lufs, fftSize, points);
 }
 
-ReferenceProfile analyseReference (const AudioClip& part, double trackSeconds, double trackLufs, double startSeconds)
+ReferenceProfile analyseReference (const AudioClip& part, double trackSeconds, double trackLufs, double startSeconds, double hookLufs)
 {
     const ScopedFlushDenormals noDenormals;
     ReferenceProfile p;
@@ -814,6 +839,18 @@ ReferenceProfile analyseReference (const AudioClip& part, double trackSeconds, d
     p.partSeconds = static_cast<double> (part.numSamples()) / part.sampleRate;
     p.trackLufs = std::isfinite (trackLufs) ? trackLufs : a.loudness.integratedLufs;
     p.lufs = a.loudness.integratedLufs;
+    p.sampleRate = part.sampleRate;
+    if (! std::isfinite (hookLufs))
+    {
+        // Only the part is at hand: its own loudest kHookSeconds.
+        LoudestPartFinder finder;
+        finder.prepare (part.sampleRate, part.numChannels());
+        std::vector<const float*> ptrs;
+        for (const auto& ch : part.channels) ptrs.push_back (ch.data());
+        finder.process (ptrs.data(), part.numChannels(), part.numSamples());
+        hookLufs = finder.loudestLufs (kHookSeconds);
+    }
+    p.hookLufs = hookLufs > -70.0 ? hookLufs : p.lufs;
     p.truePeakDbtp = a.loudness.truePeakDbtp;
     p.peakToLoudnessDb = a.peakToLoudnessDb;
     p.bandDb = a.bandDb;
@@ -835,7 +872,17 @@ ReferenceProfile analyseReference (const AudioClip& song)
     finder.process (ptrs.data(), song.numChannels(), song.numSamples());
     double start = 0.0;
     const AudioClip part = loudestPart (song, start);
-    return analyseReference (part, finder.seconds(), finder.integratedLufs(), start);
+    return analyseReference (part, finder.seconds(), finder.integratedLufs(), start, finder.loudestLufs (kHookSeconds));
+}
+
+double referenceLoudness (const ReferenceProfile& p) noexcept
+{
+    return p.hookLufs > -99.0 ? p.hookLufs : p.lufs;
+}
+
+double displayRateShiftDb (double fileRate, double displayRate) noexcept
+{
+    return fileRate > 0.0 && displayRate > 0.0 ? 10.0 * std::log10 (displayRate / fileRate) : 0.0;
 }
 
 // =================================================================================================
@@ -1054,16 +1101,26 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     // clipping rules, the same as choosing that target by hand.
     const auto& ref = s.reference;
     const bool useRef = ref.valid;
-    r.targetLufs = useRef ? std::clamp (std::round (ref.lufs * 10.0) / 10.0, kRefMinLufs, kRefMaxLufs) : targetLufs (s.target);
+    // Its loudest kHookSeconds: the master is set from the loudest kHookSeconds of your song, so the two
+    // hooks are compared like for like (the loudest 30 s also hold some of the verse around the hook).
+    const double refLufs = useRef ? referenceLoudness (ref) : 0.0;
+    r.targetLufs = useRef ? std::clamp (std::round (refLufs * 10.0) / 10.0, kRefMinLufs, kRefMaxLufs) : targetLufs (s.target);
     const LoudnessTarget tier = ! useRef ? s.target : r.targetLufs <= -12.0 ? LoudnessTarget::stream
                               : r.targetLufs <= -8.0 ? LoudnessTarget::loud : LoudnessTarget::club;
     const std::string tname = useRef ? "Ref " + num (r.targetLufs) : std::string (targetName (s.target));
     const std::string refName = "\xE2\x80\x9C" + ref.name + "\xE2\x80\x9D";   // in curly quotes
+    const MixAnalysis plain = stemMoved ? analyseMix (input) : MixAnalysis {};
     r.analysis = analyseMix (heard);
-    if (stemMoved && r.analysis.usable) r.analysis.bandDb = analyseMix (input).bandDb;
+    if (stemMoved && r.analysis.usable) r.analysis.bandDb = plain.bandDb;
     const auto& a = r.analysis;
-    // The mix as it arrives, before the Input Trim: what the report quotes.
-    const double arrivesLufs = a.loudness.integratedLufs - trimDb, arrivesPeak = a.loudness.truePeakDbtp - trimDb;
+    // The mix as it arrives, before the Input Trim and the user's Stem EQ: what the report quotes. A Stem
+    // EQ boost (Bass +6 with Keep Loudness off) makes what the chain hears louder than that.
+    const LoudnessStats beforeStem = stemMoved ? plain.loudness : a.loudness;
+    const double arrivesLufs = beforeStem.integratedLufs - trimDb, arrivesPeak = beforeStem.truePeakDbtp - trimDb;
+    const double stemLiftDb = stemMoved ? a.loudness.integratedLufs - beforeStem.integratedLufs : 0.0;
+    const bool stemPush = stemLiftDb >= 1.0;
+    const std::string arrivesText = "Your mix arrives at " + num (arrivesLufs) + " LUFS" +
+        (stemPush ? ", and your Stem EQ moves raise it to about " + num (arrivesLufs + stemLiftDb) + " LUFS before the rest of the chain" : std::string());
     const auto rules = rulesFor (s.intensity);
     const std::string genre = genreName (s.genre);
 
@@ -1143,12 +1200,31 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                               - hitJumpAtTargetDb (input, r.targetLufs, maxCeiling);
             if (kept < kMinPunchKeptDb)
             {
-                reason ("ul", "Amount", "0 %", arrives + "But at your " + tname + " target the Maximizer would press "
-                        "the restored hits straight back down: tried at " + pct (tryAmount) + ", they'd jump out only " + num (std::max (0.0, kept)) +
-                        " dB further than without it, too little to hear, so the Unlimiter stays off. It pays off when the target is a few dB "
-                        "below the " + num (arrivesLufs) + " LUFS your audio arrives at, for example Stream \xE2\x88\x92" "14.");
+                // How the target sits against the level the audio arrives at (+ = it arrives louder).
+                const double gap = arrivesLufs - r.targetLufs;
+                const std::string tried = "tried at " + pct (tryAmount) + ", the hits would jump out only " + num (std::max (0.0, kept)) +
+                                          " dB further than without it, too little to hear, so the Unlimiter stays off.";
+                std::string why, why2;
+                if (gap >= 3.0)
+                {
+                    why = arrives + "Even with your " + tname + " target " + num (gap) + " dB below the " + num (arrivesLufs) +
+                          " LUFS it arrives at, " + tried;
+                    why2 = "the Unlimiter can win back only a little of its punch";
+                }
+                else
+                {
+                    why = arrives + "But at your " + tname + " target the Maximizer would press the restored hits straight back down: " + tried;
+                    if (gap <= -1.0)
+                        why += " Your audio arrives at " + num (arrivesLufs) + " LUFS, quieter than the target, so it has to be pushed louder still.";
+                    if (! useRef && s.target != LoudnessTarget::stream && arrivesLufs - targetLufs (LoudnessTarget::stream) >= 3.0)
+                        why += " It pays off when the target is a few dB below the " + num (arrivesLufs) + " LUFS your audio arrives at, "
+                               "for example Stream \xE2\x88\x92" "14.";
+                    why2 = std::string ("it arrives ") + (gap > 1.0 ? "only a little louder than" : gap >= -1.0 ? "about as loud as" : "quieter than") +
+                           " your target, so there is little punch left to win back";
+                }
+                reason ("ul", "Amount", "0 %", why);
                 r.notes.push_back ("SQUASHED INPUT: your audio was already limited or clipped before Polisher (Squash " + num (squash) +
-                                   " dB), and it arrives about as loud as your target, so there is little punch left to win back."
+                                   " dB), and " + why2 + "."
                                    "\nNEED: Optional. The master works as it is."
                                    "\nSTEP: If it's your own mix, turn off the limiter or clipper on Stereo Out before Polisher (or export the beat without it)."
                                    "\nSTEP: Then run Auto-Master again.");
@@ -1386,8 +1462,17 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
             const int secs = static_cast<int> (std::lround (s.songTone.seconds));
             char heardText[16];
             std::snprintf (heardText, sizeof heardText, "%d:%02d", secs / 60, secs % 60);
+            // A tone kept from an earlier, longer listen (this one was finished early) says so: the report's
+            // "Listened to" line quotes this listen.
+            const bool earlier = s.songSeconds > 0.0 && s.songTone.seconds > s.songSeconds + 1.0;
+            char thisText[16];
+            const int now = static_cast<int> (std::lround (s.songSeconds));
+            std::snprintf (thisText, sizeof thisText, "%d:%02d", now / 60, now % 60);
             reason ("ts", "Target", "Your song",
-                    std::string ("I learned your song's overall tone from the ") + heardText + " I heard. Tone Steady holds every part to it instead of the last few seconds, "
+                    (earlier ? std::string ("I keep your song's overall tone learned from ") + heardText + " of it in an earlier, longer listen (this one heard "
+                               + thisText + "). "
+                             : std::string ("I learned your song's overall tone from the ") + heardText + " I heard. ") +
+                    "Tone Steady holds every part to it instead of the last few seconds, "
                     "so what you hear from any start point is what you export. A part that comes or goes (an 808 entering after the intro) is the arrangement, "
                     "not a drift, and is left alone." + (ts.amount < 0.5 ? " It's ready for when you turn Amount up." : ""));
         }
@@ -1434,6 +1519,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         // median reduction over the moments the band is actually playing.
         auto run = [&] (const std::array<double, kDynBands>& thresholds, std::array<double, kDynBands>& p90)
         {
+            throwIfCancelled();
             DynamicsParams p = dyn;
             for (size_t k = 0; k < kDynBands; ++k)
                 p.bands[k] = { thresholds[k], use[k] ? ratio : 1.0, p.bands[k].attackMs, p.bands[k].releaseMs, 0.0 };
@@ -1612,9 +1698,18 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
             p.driveDb = drive;
             return Saturation::estimateHarmonicsDb (beforeSat.channels, p, beforeSat.sampleRate);
         };
-        // Too little low end for Bass only to reach the target even at full Drive (no 808 in what I heard):
-        // the whole mix gets the harmonics instead.
-        const bool thinLow = bassLed && harmonicsAt (Saturation::kMaxDriveDb) < harmTarget - 6.0;
+        // Too little low end for Bass only to work on (no 808 in what I heard): the whole mix gets the
+        // harmonics instead. Judged by the low end's share of the mix (sub + bass bands against the genre's
+        // usual share), not by the harmonics it makes: a quiet mix makes fewer harmonics at any Drive, but
+        // its 808 is just as much there. 6 dB under the usual share: a mix high-passed around 150 Hz
+        // (measured: 7.7 dB under; at 100 Hz, 4.6 dB under, where Bass only still reaches the target).
+        auto lowShareDb = [] (const std::array<double, kEqBands>& bands, double offset)
+        {
+            return 10.0 * std::log10 (std::pow (10.0, (bands[0] - offset) / 10.0) + std::pow (10.0, (bands[1] - offset) / 10.0));
+        };
+        const auto norm = genreTargetCurve (s.genre);
+        const double normRef = (norm[1] + norm[2] + norm[3] + norm[4] + norm[5]) / 5.0;
+        const bool thinLow = bassLed && (! a.hasLowEnd || lowShareDb (a.bandDb, 0.0) < lowShareDb (norm, normRef) - 6.0);
         if (thinLow) sat.focus = SaturationFocus::full;
         const bool bassOnly = sat.focus == SaturationFocus::bass;
         double dlo = 0.0, dhi = Saturation::kMaxDriveDb;
@@ -1806,7 +1901,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         reason ("clip", "Soft Clipper", "Off",
                 s.intensity == Intensity::gentle ? "Gentle leaves peak control to the Maximizer alone, for the most transparent sound."
                 : plr < 9.0 ? "Your mix is already dense (only " + num (plr) + " dB between peaks and average), so clipping would only add distortion."
-                : loudTarget || plr > 16.0 ? "At the Drive this target needs, no peak would reach the clip level, so the Maximizer handles the peaks alone."
+                : loudTarget || plr > 16.0 ? "At the Drive this mix gets (" + num (drive, true) + " dB), no peak reaches the clip level, so the Maximizer handles the peaks alone."
                             : "For a streaming target the Maximizer alone reaches the level cleanly, so no clipping is needed.");
     }
 
@@ -1825,7 +1920,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         wantTrimDb = found.driveDb - kTrimMarginDb;
     if (found.driveDb < 0.0 && drive == 0.0 && ! r.reachedTarget)
         driveWhy = trimDb <= kMinTrimDb
-            ? "Your mix arrives at " + num (arrivesLufs) + " LUFS, so loud that even with Input Trim at its " + num (kMinTrimDb) +
+            ? arrivesText + ", so loud that even with Input Trim at its " + num (kMinTrimDb) +
               " dB limit the master lands at " + num (out.integratedLufs) + " LUFS, above the " + tname +
               " target. Turn the mix down before Polisher."
             : "With Drive at 0 dB the master lands at " + num (out.integratedLufs) + " LUFS, " + num (out.integratedLufs - r.targetLufs) +
@@ -1860,12 +1955,14 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     }
     if (trimDb < 0.0)
         reason ("max", "Input Trim", num (trimDb, true) + " dB",
-                "Your mix arrives at " + num (arrivesLufs) + " LUFS" +
-                (arrivesLufs > r.targetLufs ? ", already louder than the " + tname + " target (" + num (r.targetLufs) + " LUFS)"
-                                            : "; with this chain's EQ and make-up gain it would land above the " + tname +
-                                              " target (" + num (r.targetLufs) + " LUFS) even at Drive 0") +
+                arrivesText +
+                (arrivesLufs + stemLiftDb > r.targetLufs ? ", already louder than the " + tname + " target (" + num (r.targetLufs) + " LUFS)"
+                                                         : "; with this chain's EQ and make-up gain it would land above the " + tname +
+                                                           " target (" + num (r.targetLufs) + " LUFS) even at Drive 0") +
                 ". Drive can only push up, so Input Trim turns the mix down " + num (-trimDb) + " dB before the whole chain: the master lands on "
-                "the target instead of overshooting it, and every module works at the level it was set for.");
+                "the target instead of overshooting it, and every module works at the level it was set for." +
+                (stemPush && ! s.stem.keepLoudness ? std::string (" Turning on Keep Loudness in Stem EQ would hold the level steady instead, so your "
+                                                                  "Stem EQ moves wouldn't need the trim.") : std::string()));
     reason ("max", "Drive", num (drive, true) + " dB", driveWhy);
     reason ("max", "Ceiling", num (chain.limiter.ceilingDbtp, false) + " dBTP",
             (useRef ? "Set for a master as loud as your reference (" + num (r.targetLufs) + " LUFS). " : std::string()) +
@@ -1874,7 +1971,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                                                : "Leaves room for the MP3/AAC conversion streaming services do, so the streamed version is very unlikely to clip."));
     reason ("max", "Release", "120 ms adaptive", "Recovers fast after drum hits and slowly on sustained bass, so the master doesn't pump.");
 
-    if ((budgetLimited || peakLimited) && s.intensity != Intensity::punchy && ! useRef)   // (with a reference: see below)
+    if ((budgetLimited || peakLimited) && ! r.reachedTarget && s.intensity != Intensity::punchy && ! useRef)   // (with a reference: see below)
         r.notes.push_back ("LOUDER, IF YOU WANT: this mix has big peaks for its loudness (" + num (plr) + " dB). " +
                            std::string (bassHeavy ? "Controlling the drum peaks in the mix (a clipper or limiter on the drum bus)"
                                                   : "Taming the biggest peaks in the mix (strums, drum hits, vocal peaks: a compressor on those tracks)") +
@@ -1894,21 +1991,21 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     // --- Match ref: honest about loudness and the low end; the master measured like the mix -------------
     if (useRef)
     {
-        if (ref.lufs > kRefMaxLufs + 0.05)
-            r.notes.push_back ("REFERENCE LOUDNESS: " + refName + " measures " + num (ref.lufs) + " LUFS in its loudest part. That's louder than Polisher "
+        if (refLufs > kRefMaxLufs + 0.05)
+            r.notes.push_back ("REFERENCE LOUDNESS: " + refName + " measures " + num (refLufs) + " LUFS in its loudest 12 seconds. That's louder than Polisher "
                                "will aim for (" + num (kRefMaxLufs) + " LUFS at most): past that, every mix loses its punch and starts to distort, "
                                "so Auto-Master aims for " + num (kRefMaxLufs) + "."
                                "\nNEED: No. Streaming services turn masters this loud down anyway, so the extra loudness wouldn't be heard there."
                                "\nSTEP: Compare with MATCH on: your master should sound as full as the reference at the same level.");
-        else if (ref.lufs < kRefMinLufs - 0.05)
-            r.notes.push_back ("REFERENCE LOUDNESS: " + refName + " measures only " + num (ref.lufs) + " LUFS in its loudest part, quieter than any "
+        else if (refLufs < kRefMinLufs - 0.05)
+            r.notes.push_back ("REFERENCE LOUDNESS: " + refName + " measures only " + num (refLufs) + " LUFS in its loudest 12 seconds, quieter than any "
                                "release Polisher aims for (" + num (kRefMinLufs) + " LUFS at least), so Auto-Master aims for " + num (kRefMinLufs) + ". "
                                "It may be a turned-down copy, a live recording or a rough mix."
                                "\nNEED: Only if this isn't the song you meant to load."
                                "\nSTEP: Load the released version of the song (a WAV, FLAC or high-quality MP3) with Match ref.");
         if (! r.reachedTarget && out.integratedLufs < r.targetLufs - kTargetToleranceLu && (peakLimited || budgetLimited))
-            r.notes.push_back ("NOT AS LOUD AS THE REFERENCE: " + refName + " measures " + num (ref.lufs) + " LUFS in its loudest part; your master stops at " +
-                               num (out.integratedLufs) + " LUFS. Getting all the way there would " +
+            r.notes.push_back ("NOT AS LOUD AS THE REFERENCE: " + refName + " measures " + num (refLufs) + " LUFS in its loudest 12 seconds; your master's "
+                               "loudest 12 seconds stop at " + num (out.integratedLufs) + " LUFS. Getting all the way there would " +
                                (peakLimited && ! budgetLimited ? "shave your drum peaks deeper than " + std::string (rules.name) + " allows"
                                                                : "squash your mix harder than " + std::string (rules.name) + " allows") +
                                ", and you'd hear the drums lose their punch. The reference most likely had its drum peaks controlled in the mix."
@@ -1945,13 +2042,15 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         head[0] = '\0';   // the plug-in's report already says how much of the song it heard and which part this is
     const bool wholeSong = s.songSeconds >= a.seconds + 2.0;
     if (useRef)
-        r.summary = std::string (head) + "Matched to your reference " + refName + " (its loudest part measures " + num (ref.lufs) +
-                    " LUFS) instead of typical " + genre + " masters: tone, loudness, stereo width and low end aim for it, part of the way. "
+        r.summary = std::string (head) + "Matched to your reference " + refName + " (its loudest 12 seconds measure " + num (refLufs) +
+                    " LUFS, compared with the loudest 12 seconds of your song) instead of typical " + genre + " masters: tone, loudness, "
+                    "stereo width and low end aim for it, part of the way. "
                     "The genre still sets what a reference can't show: compression, saturation, clipping and punch. ";
     else
         r.summary = head;
     r.summary += std::string ("Your mix measured ") + num (arrivesLufs) + " LUFS with peaks at " +
-                num (arrivesPeak) + " dBTP. Settings: " + genre + ", " + rules.name + ", " + tname +
+                num (arrivesPeak) + " dBTP" + (stemPush ? " (about " + num (arrivesLufs + stemLiftDb) + " LUFS with your Stem EQ moves)" : std::string()) +
+                ". Settings: " + genre + ", " + rules.name + ", " + tname +
                 (trimDb < 0.0 ? ". To land on the target, Input Trim turns it down " + num (-trimDb) + " dB first" : std::string()) +
                 ". The master now measures " + num (out.integratedLufs) + " LUFS with true peak " + num (out.truePeakDbtp) +
                 (wholeSong ? " dBTP in this loudest part. The whole song reads lower than its loudest part, which is normal."
@@ -2000,14 +2099,14 @@ AutoMasterResult autoMaster (const AudioClip& input, const AutoMasterSettings& s
     // and the loudness search all depend on it. At most two refinements.
     double want = 0.0, trim = 0.0;
     auto r = autoMasterAt (input, s, 0.0, want);
-    const auto arriving = r.analysis.loudness;
     for (int pass = 0; pass < 2 && r.ok && want < 0.0 && trim > kMinTrimDb; ++pass)
     {
         trim = std::max (kMinTrimDb, std::round ((trim + want) * 10.0) / 10.0);
         r = autoMasterAt (input, s, trim, want);
     }
-    r.analysis.loudness = arriving;     // the untrimmed pass's reading, as before Input Trim existed
-    r.capturedLufs = measure (input).integratedLufs;
+    // The mix as it arrives: before Input Trim and before the user's Stem EQ (the report's "your mix").
+    r.analysis.loudness = measure (input);
+    r.capturedLufs = r.analysis.loudness.integratedLufs;
     return r;
 }
 

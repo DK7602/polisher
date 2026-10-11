@@ -199,10 +199,10 @@ TEST_CASE ("Auto-Master aims for the reference's loudness, and says so when it c
     REQUIRE (quiet.reference.valid);
     const auto q = autoMaster (mix, quiet);
     REQUIRE (q.ok);
-    CHECK_THAT (q.targetLufs, WithinAbs (quiet.reference.lufs, 0.06));
+    CHECK_THAT (q.targetLufs, WithinAbs (referenceLoudness (quiet.reference), 0.06));
     INFO (q.summary);
     CHECK (q.reachedTarget);
-    CHECK_THAT (q.output.integratedLufs, WithinAbs (quiet.reference.lufs, 0.3));
+    CHECK_THAT (q.output.integratedLufs, WithinAbs (referenceLoudness (quiet.reference), 0.3));
 
     // A louder reference than the Loud -9 target: the master gets louder than the genre target would make
     // it, or the report says plainly that it stopped short of the reference.
@@ -211,7 +211,7 @@ TEST_CASE ("Auto-Master aims for the reference's loudness, and says so when it c
     // (This test signal's big kicks won't limit past about -9 LUFS, so the reading is set by hand: the
     // loudness is the only thing Auto-Master takes from it here.)
     loud.reference = named (analyseReference (mastered (song, -9.5)), "Loud Song");
-    loud.reference.lufs = -7.0;
+    loud.reference.hookLufs = -7.0;
     AutoMasterSettings plain;
     plain.intensity = Intensity::punchy;
     const auto l = autoMaster (mix, loud), g = autoMaster (mix, plain);
@@ -225,7 +225,7 @@ TEST_CASE ("Auto-Master aims for the reference's loudness, and says so when it c
 
     // Out-of-range references are clamped, and the report explains why.
     ReferenceProfile crushed = loud.reference;
-    crushed.lufs = -4.0;
+    crushed.hookLufs = -4.0;
     AutoMasterSettings c;
     c.reference = crushed;
     const auto cr = autoMaster (mix, c);
@@ -262,4 +262,103 @@ TEST_CASE ("Auto-Master sets the stereo width toward the reference's", "[referen
     const auto it = std::find_if (ww.reasons.begin(), ww.reasons.end(), [] (const auto& x) { return x.module == "img" && x.control == "Highs"; });
     REQUIRE (it != ww.reasons.end());
     CHECK (it->why.find ("Narrow Song") != std::string::npos);
+}
+
+TEST_CASE ("The reference's loudness is its loudest 12 s, compared hook with hook", "[reference][automaster]")
+{
+    // A released song: 24 s verses 3 dB under 14 s hooks. Its loudest 30 s hold the hook and some verse,
+    // so they read lower than the hook itself; the master is set from the loudest 12 s of the user's song.
+    const double sr = 48000.0;
+    auto song = concat ({ withGain (testsig::trapLike (sr, 24.0, 101), -3.0), testsig::trapLike (sr, 14.0, 111),
+                          withGain (testsig::trapLike (sr, 24.0, 102), -3.0), testsig::trapLike (sr, 14.0, 112),
+                          withGain (testsig::trapLike (sr, 8.0, 120), -9.0) });
+    song = withGain (song, -11.0 - measure (song).integratedLufs);   // hook about -9 LUFS: inside the range Auto-Master aims for
+    const auto ref = named (analyseReference (song), "Hook Song");
+    REQUIRE (ref.valid);
+    CHECK (ref.sampleRate == sr);
+
+    // The song's loudest 12 s, cut out and measured on their own.
+    LoudestPartFinder finder;
+    finder.prepare (sr, 2);
+    const float* ptrs[] = { song.channels[0].data(), song.channels[1].data() };
+    finder.process (ptrs, 2, song.numSamples());
+    const auto at = static_cast<size_t> (finder.loudestStart (kHookSeconds));
+    AudioClip hook;
+    hook.sampleRate = sr;
+    for (const auto& ch : song.channels)
+        hook.channels.emplace_back (ch.begin() + static_cast<std::ptrdiff_t> (at), ch.begin() + static_cast<std::ptrdiff_t> (at + static_cast<size_t> (kHookSeconds * sr)));
+    const double hookLufs = measure (hook).integratedLufs;
+    INFO ("hook " << hookLufs << " LUFS, profile hook " << ref.hookLufs << ", loudest 30 s " << ref.lufs);
+    CHECK_THAT (ref.hookLufs, WithinAbs (hookLufs, 0.05));
+    CHECK (ref.lufs < ref.hookLufs - 0.5);                  // the 30 s part reads lower: it holds some verse
+    CHECK (referenceLoudness (ref) == ref.hookLufs);
+
+    // Auto-Master aims for the hook, not the 30 s reading, and the report quotes it as 12 seconds.
+    AutoMasterSettings s;
+    s.reference = ref;
+    const auto mix = testsig::musicLike (sr, 12.0, -16.0);
+    const auto r = autoMaster (mix, s);
+    REQUIRE (r.ok);
+    CHECK_THAT (r.targetLufs, WithinAbs (std::round (ref.hookLufs * 10.0) / 10.0, 1.0e-9));
+    INFO (r.summary);
+    CHECK (r.summary.find ("loudest 12 seconds") != std::string::npos);
+    // Only the target is landed on and called reached: never the 30 s figure when the hook is louder.
+    if (r.reachedTarget)
+        CHECK_THAT (r.output.integratedLufs, WithinAbs (r.targetLufs, 0.3));
+    else
+        CHECK (std::any_of (r.notes.begin(), r.notes.end(), [] (const auto& n) { return n.find ("NOT AS LOUD AS THE REFERENCE") != std::string::npos; }));
+
+    // A profile saved before the hook was measured: its loudest part stands in.
+    ReferenceProfile old = ref;
+    old.hookLufs = -100.0;
+    CHECK (referenceLoudness (old) == ref.lufs);
+    AutoMasterSettings so;
+    so.reference = old;
+    CHECK_THAT (autoMaster (mix, so).targetLufs, WithinAbs (std::round (ref.lufs * 10.0) / 10.0, 1.0e-9));
+
+    // The part on its own (no whole-song finder at hand) measures its own loudest 12 s.
+    double start = 0.0;
+    const auto part = loudestPart (song, start);
+    const auto fromPart = analyseReference (part, 0.0, -20.0, start);
+    CHECK (fromPart.hookLufs >= fromPart.lufs - 0.01);
+}
+
+TEST_CASE ("The reference's curve follows the project's sample rate like the live display", "[reference]")
+{
+    // The same sound read by the display at another rate: each of its 4096 bins spans a wider band, so
+    // it reads 10 log10 (rate ratio) higher. The curve, measured at the file's rate and shifted by
+    // displayRateShiftDb, lands on the display's reading at the project's rate.
+    auto shaped = [] (double sr)
+    {
+        auto c = testsig::musicLike (sr, 20.0, -14.0, 3);
+        return withGain (c, -14.0 - measure (c).integratedLufs);
+    };
+    const auto at44 = spectrumDisplayCurve (shaped (44100.0));
+    CHECK (displayRateShiftDb (44100.0, 44100.0) == 0.0);
+    CHECK (displayRateShiftDb (0.0, 96000.0) == 0.0);                     // an older profile without its rate
+    for (const double sr : { 48000.0, 96000.0, 192000.0 })
+    {
+        const auto live = spectrumDisplayCurve (shaped (sr));
+        const double shift = displayRateShiftDb (44100.0, sr);
+        // The genre line's model of the display at both rates agrees with the constant shift.
+        const auto g44 = genreDisplayCurve (Genre::trapHipHop, 44100.0), gsr = genreDisplayCurve (Genre::trapHipHop, sr);
+        double worstModel = 0.0, worstLive = 0.0, meanLive = 0.0;
+        int n = 0;
+        for (int i = 0; i < kDisplayPoints; ++i)
+        {
+            const double f = 20.0 * std::pow (1000.0, static_cast<double> (i) / (kDisplayPoints - 1));
+            if (f < 500.0 || f > 16000.0) continue;   // lower down, at 96 kHz and up, a point holds only a few bins (see displayRateShiftDb)
+            const auto k = static_cast<size_t> (i);
+            worstModel = std::max (worstModel, std::abs ((gsr[k] - g44[k]) - shift));
+            const double d = live[k] - (at44[k] + shift);
+            worstLive = std::max (worstLive, std::abs (d));
+            meanLive += d;
+            ++n;
+        }
+        meanLive /= n;
+        INFO (sr << " Hz: shift " << shift << " dB; model off by " << worstModel << " dB at most; live mean " << meanLive << ", worst " << worstLive);
+        CHECK (worstModel < 0.35);
+        CHECK (std::abs (meanLive) < 0.7);     // unshifted it would be off by the whole shift (3.4 dB at 96 kHz)
+        CHECK (worstLive < 1.5);               // two different renders of a random-ish signal, point by point
+    }
 }

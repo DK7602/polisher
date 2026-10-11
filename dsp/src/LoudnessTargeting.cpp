@@ -8,8 +8,30 @@
 
 namespace polisher {
 
+namespace {
+    thread_local const std::atomic<bool>* cancelFlag = nullptr;
+    constexpr int kCancelCheckMask = (1 << 16) - 1;   // long loops look every 65536 frames (0.34 s at 192 kHz: a few ms of work)
+}
+
+ScopedCancelFlag::ScopedCancelFlag (const std::atomic<bool>* flag) noexcept : previous (cancelFlag)
+{
+    cancelFlag = flag;
+}
+
+ScopedCancelFlag::~ScopedCancelFlag()
+{
+    cancelFlag = previous;
+}
+
+void throwIfCancelled()
+{
+    if (cancelFlag != nullptr && cancelFlag->load (std::memory_order_relaxed))
+        throw AnalysisCancelled();
+}
+
 LoudnessStats measure (const AudioClip& clip)
 {
+    throwIfCancelled();
     const ScopedFlushDenormals noDenormals;
     LoudnessMeter meter;
     meter.prepare (clip.sampleRate, clip.numChannels());
@@ -30,6 +52,7 @@ LoudnessStats measure (const AudioClip& clip)
 
 AudioClip renderLimited (const AudioClip& clip, const LimiterParams& params)
 {
+    throwIfCancelled();
     const ScopedFlushDenormals noDenormals;
     TruePeakLimiter limiter;
     limiter.prepare (clip.sampleRate, clip.numChannels());
@@ -134,6 +157,7 @@ AudioClip renderUnlimiter (const AudioClip& clip, const UnlimiterParams& params)
 AudioClip renderSpectral (const AudioClip& input, const StemEQParams& params, const ToneSteadyParams& steady,
                           const ResonanceParams& resonance)
 {
+    throwIfCancelled();
     const ScopedFlushDenormals noDenormals;
     AudioClip out = input;
     const int nch = out.numChannels(), n = out.numSamples();
@@ -150,6 +174,7 @@ AudioClip renderSpectral (const AudioClip& input, const StemEQParams& params, co
     std::vector<double> frame (static_cast<size_t> (nch));
     for (int i = 0; i < n + lat; ++i)
     {
+        if ((i & kCancelCheckMask) == 0) throwIfCancelled();
         for (int c = 0; c < nch; ++c)
             frame[static_cast<size_t> (c)] = i < n ? input.channels[static_cast<size_t> (c)][static_cast<size_t> (i)] : 0.0;
         stem->processFrame (frame.data(), nch);
@@ -162,6 +187,7 @@ AudioClip renderSpectral (const AudioClip& input, const StemEQParams& params, co
 
 std::array<double, kStems> measureStemLevels (const AudioClip& clip)
 {
+    throwIfCancelled();
     const ScopedFlushDenormals noDenormals;
     std::array<double, kStems> out;
     out.fill (-100.0);
@@ -190,6 +216,7 @@ std::array<double, kStems> measureStemLevels (const AudioClip& clip)
 
 SpectralStats measureSpectral (const AudioClip& clip, const ToneSteadyParams& steady, const ResonanceParams& resonance)
 {
+    throwIfCancelled();
     const ScopedFlushDenormals noDenormals;
     const int nch = clip.numChannels(), n = clip.numSamples();
     if (nch == 0 || n == 0)
@@ -224,6 +251,7 @@ AudioClip withGain (const AudioClip& clip, double gainDb)
 
 AudioClip renderPreDrive (const AudioClip& input, const MasterChainParams& params)
 {
+    throwIfCancelled();
     const ScopedFlushDenormals noDenormals;
     const AudioClip trimmed = withGain (input, std::clamp (params.trimDb, kMinTrimDb, 0.0));
     AudioClip out = renderBass (renderSpectral (renderEq (renderUnlimiter (trimmed, params.unlimiter), params.eq), params.stem, params.steady, params.resonance), params.bass);
@@ -275,6 +303,7 @@ AudioClip renderPreDrive (const AudioClip& input, const MasterChainParams& param
 
 AudioClip renderMaster (const AudioClip& input, const MasterChainParams& params)
 {
+    throwIfCancelled();
     const ScopedFlushDenormals noDenormals;
     const AudioClip clip = renderPreDrive (input, params);
     const int nch = clip.numChannels();
@@ -300,6 +329,7 @@ AudioClip renderMaster (const AudioClip& input, const MasterChainParams& params)
     std::vector<double> frame (static_cast<size_t> (nch)), res (static_cast<size_t> (nch));
     for (int i = 0; i < n + latency; ++i)
     {
+        if ((i & kCancelCheckMask) == 0) throwIfCancelled();
         for (int c = 0; c < nch; ++c)
             frame[static_cast<size_t> (c)] = i < n ? clip.channels[static_cast<size_t> (c)][static_cast<size_t> (i)] * drive : 0.0;
 

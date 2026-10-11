@@ -158,6 +158,7 @@ check(/Listened to 2:30 of your song; the loudest part \(0:54–1:06, usually th
       'report says how much of the song it heard and where the loudest part was');
 check(/Whole song/.test(r.learn) && /Tone Steady learned your song's overall tone from these 2:30/.test(r.learn), 'report shows the whole song and the learned tone');
 check(await page.evaluate(() => document.querySelectorAll('#learn-body table.l-cmp').length === 2), 'comparison tables (levels and tone) are shown');
+check(/Loudness, loudest 12 s \(LUFS\)\s*−7\.3/.test(r.learn), 'the loudness row compares the reference\'s loudest 12 s (its hook) with the master\'s');
 
 await page.click('#btn-ref-clear');
 await page.waitForTimeout(300);
@@ -548,6 +549,20 @@ await page.click('#am-finish');
 check(await waitForLearn(/Listened to \d:\d\d of your song/, 5000), 'FINISH NOW uses what it heard and opens the report');
 a = await amView();
 check(/Listened to 0:\d\d of your song; the loudest part \(0:\d\d–0:\d\d/.test(a.learn), 'the report quotes the part it heard');
+
+// While it chooses the settings: an honest duration and CANCEL, which changes nothing.
+const versionBefore = await page.evaluate(() => window.__mockAm.version);
+await page.click('#btn-automaster');
+await page.waitForFunction(() => window.__mockAm.heard >= 13, null, { timeout: 5000 });
+await page.click('#am-finish');
+await page.waitForTimeout(250);
+a = await amView();
+check(a.state === 2 && a.title === 'THINKING' && /usually 5–15 seconds/.test(a.sub), `the button says how long choosing takes ("${a.sub}")`);
+check(/choosing every setting/.test(a.learn) && await page.locator('#am-cancel').count() === 1, 'Learn offers CANCEL while it chooses');
+await page.click('#am-cancel');
+await page.waitForTimeout(1200);
+a = await amView();
+check(a.state === 0 && a.title === 'AUTO-MASTER' && await page.evaluate(() => window.__mockAm.version) === versionBefore, 'CANCEL stops it and changes nothing');
 
 // Tone Steady's target: LEARN (a tone-only listen), CLEAR, and Learn says which reference it uses.
 await pick('Tone Steady'); await page.waitForTimeout(150);

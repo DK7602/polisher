@@ -6,6 +6,7 @@
 #include "polisher/FilterDesign.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <numbers>
@@ -526,4 +527,195 @@ TEST_CASE ("Auto-Master gives the 808 Bass only harmonics for trap and lands the
     REQUIRE (focus != r.reasons.end());
     INFO (focus->why);
     CHECK (focus->why.find ("very little low end") != std::string::npos);
+}
+
+// --- Re-audit fixes: what the report quotes, the Bass only fallback, texts that fit the case, mono, cancel ---
+
+namespace {
+AudioClip atLufs (const AudioClip& c, double lufs) { return withGain (c, lufs - measure (c).integratedLufs); }
+bool hasNote (const AutoMasterResult& r, const char* head)
+{
+    return std::any_of (r.notes.begin(), r.notes.end(), [&] (const auto& n) { return n.rfind (head, 0) == 0; });
+}
+const AutoMasterReason* reasonFor (const AutoMasterResult& r, const char* module, const char* control)
+{
+    const auto it = std::find_if (r.reasons.begin(), r.reasons.end(), [&] (const auto& x) { return x.module == module && x.control == control; });
+    return it == r.reasons.end() ? nullptr : &*it;
+}
+} // namespace
+
+TEST_CASE ("The report quotes the mix as it arrives, before the user's Stem EQ, and says when a Stem boost needs Input Trim", "[automaster]")
+{
+    const double sr = 48000.0;
+    const auto mix = atLufs (testsig::trapLike (sr, 12.0), -17.0);
+    const auto raw = measure (mix);
+    for (const double bass : { 6.0, 12.0 })
+    {
+        AutoMasterSettings s;
+        s.stem.gainDb[kStemBass] = bass;      // Keep Loudness off: the stage really gets louder (songs saved before it)
+        s.stem.keepLoudness = false;
+        const auto r = autoMaster (mix, s);
+        REQUIRE (r.ok);
+        INFO ("Bass +" << bass << ": " << r.summary);
+        CHECK_THAT (r.analysis.loudness.integratedLufs, WithinAbs (raw.integratedLufs, 0.01));   // Learn's MIX column
+        CHECK_THAT (r.analysis.loudness.truePeakDbtp, WithinAbs (raw.truePeakDbtp, 0.01));
+        CHECK_THAT (r.capturedLufs, WithinAbs (raw.integratedLufs, 0.01));
+        CHECK (r.summary.find ("Your mix measured \xE2\x88\x92" "17.0 LUFS") != std::string::npos);
+        CHECK (r.summary.find ("with your Stem EQ moves") != std::string::npos);
+        CHECK_FALSE (hasNote (r, "HEADS UP: your mix peaks"));   // it peaks at -3.6 dBTP as it arrives
+        CHECK (r.reachedTarget);
+    }
+    // A hot mix whose Stem boost pushes it past a Stream target: the trim says why.
+    AutoMasterSettings s;
+    s.target = LoudnessTarget::stream;
+    s.stem.gainDb[kStemBass] = 6.0;
+    const auto hot = atLufs (testsig::trapLike (sr, 12.0), -12.0);
+    const auto r = autoMaster (hot, s);
+    REQUIRE (r.ok);
+    REQUIRE (r.chain.trimDb < 0.0);
+    const auto* trim = reasonFor (r, "max", "Input Trim");
+    REQUIRE (trim != nullptr);
+    INFO (trim->why);
+    CHECK (trim->why.rfind ("Your mix arrives at \xE2\x88\x92" "12.0 LUFS, and your Stem EQ moves raise it", 0) == 0);
+    CHECK (trim->why.find ("Keep Loudness") != std::string::npos);
+    CHECK_THAT (r.output.integratedLufs, WithinAbs (-14.0, 0.3));
+}
+
+TEST_CASE ("Bass only falls back to Full by the low end's share of the mix, not by how loud the mix arrives", "[automaster][saturation]")
+{
+    const double sr = 48000.0;
+    const auto beat = testsig::trapLike (sr, 12.0);
+    AudioClip thin = beat;                    // no 808: everything below 150 Hz filtered out
+    for (auto& ch : thin.channels)
+    {
+        std::array<Biquad, 4> f {};
+        for (auto& q : f) design::apply (q, design::butterworth (true, 150.0, sr));
+        for (auto& v : ch) { double x = v; for (auto& q : f) x = q.process (x); v = static_cast<float> (x); }
+    }
+    for (const double level : { -17.0, -30.0, -36.0 })
+    {
+        AutoMasterSettings s;
+        const auto r808 = autoMaster (atLufs (beat, level), s), rThin = autoMaster (atLufs (thin, level), s);
+        INFO ("input " << level << " LUFS");
+        REQUIRE (r808.ok);
+        REQUIRE (rThin.ok);
+        CHECK (r808.chain.saturation.focus == SaturationFocus::bass);   // the 808 is there at any level
+        CHECK (rThin.chain.saturation.focus == SaturationFocus::full);
+        const auto* focus = reasonFor (r808, "sat", "Focus");
+        REQUIRE (focus != nullptr);
+        CHECK (focus->why.find ("no 808") == std::string::npos);
+    }
+}
+
+TEST_CASE ("Report texts fit the case: Unlimiter at a low target, the louder tip, a quiet mix's clipper", "[automaster]")
+{
+    const double sr = 48000.0;
+    // A brickwalled beat at -7 LUFS for Stream -14: the target already is far below it, so no "for example
+    // Stream -14", and no "about as loud as your target".
+    LimiterParams lp;
+    lp.ceilingDbtp = -0.1;
+    lp.releaseMs = 40.0;
+    lp.adaptiveRelease = false;
+    const auto loud = atLufs (testsig::trapLike (sr, 12.0), -14.0);
+    lp.driveDb = findDriveForTarget (loud, -7.0, lp).driveDb;
+    const auto walled = renderLimited (loud, lp);
+    AutoMasterSettings stream;
+    stream.target = LoudnessTarget::stream;
+    const auto r = autoMaster (walled, stream);
+    REQUIRE (r.ok);
+    const auto* ul = reasonFor (r, "ul", "Amount");
+    REQUIRE (ul != nullptr);
+    INFO (ul->why);
+    if (r.chain.unlimiter.amount == 0.0 && measure (walled).integratedLufs > -10.0)
+    {
+        CHECK (ul->why.find ("for example Stream") == std::string::npos);
+        for (const auto& n : r.notes)
+            CHECK (n.find ("about as loud as your target") == std::string::npos);
+    }
+
+    // "LOUDER, IF YOU WANT ... it will get closer to your target" only when the target was missed.
+    for (const auto intensity : { Intensity::gentle, Intensity::balanced })
+        for (const auto target : { LoudnessTarget::loud, LoudnessTarget::club })
+        {
+            AutoMasterSettings s;
+            s.intensity = intensity;
+            s.target = target;
+            const auto x = autoMaster (atLufs (testsig::trapLike (sr, 12.0, 5), -17.0), s);
+            REQUIRE (x.ok);
+            if (x.reachedTarget)
+                CHECK_FALSE (hasNote (x, "LOUDER, IF YOU WANT"));
+        }
+
+    // A very quiet mix: the target is out of reach, so the clipper text quotes the Drive it gets.
+    AutoMasterSettings s;
+    const auto quiet = autoMaster (atLufs (testsig::trapLike (sr, 12.0), -40.0), s);
+    REQUIRE (quiet.ok);
+    REQUIRE_FALSE (quiet.reachedTarget);
+    const auto* clip = reasonFor (quiet, "clip", "Soft Clipper");
+    REQUIRE (clip != nullptr);
+    INFO (clip->why);
+    CHECK (clip->why.find ("this target needs") == std::string::npos);
+    CHECK (hasNote (quiet, "HEADS UP: your mix arrives very quiet"));
+
+    // A tone kept from an earlier, longer listen (this one was finished after 15 s) says so.
+    AutoMasterSettings kept;
+    kept.songTone.valid = true;
+    kept.songTone.seconds = 45.0;
+    kept.songSeconds = 15.0;
+    const auto k = autoMaster (atLufs (testsig::trapLike (sr, 12.0), -17.0), kept);
+    REQUIRE (k.ok);
+    const auto* target = reasonFor (k, "ts", "Target");
+    REQUIRE (target != nullptr);
+    INFO (target->why);
+    CHECK (target->why.find ("0:45 of it in an earlier, longer listen (this one heard 0:15)") != std::string::npos);
+    kept.songSeconds = 45.0;
+    const auto k2 = autoMaster (atLufs (testsig::trapLike (sr, 12.0), -17.0), kept);
+    const auto* same = reasonFor (k2, "ts", "Target");
+    REQUIRE (same != nullptr);
+    CHECK (same->why.rfind ("I learned your song's overall tone from the 0:45 I heard.", 0) == 0);
+}
+
+TEST_CASE ("Auto-Master on a mono bus measures and lands one channel, as the plug-in's meters do", "[automaster]")
+{
+    const double sr = 48000.0;
+    AudioClip mono = testsig::trapLike (sr, 12.0);
+    for (size_t i = 0; i < mono.channels[0].size(); ++i)
+        mono.channels[0][i] = 0.5f * (mono.channels[0][i] + mono.channels[1][i]);
+    mono.channels.resize (1);
+    mono = atLufs (mono, -17.0);
+    const auto r = autoMaster (mono, {});
+    REQUIRE (r.ok);
+    CHECK_THAT (r.capturedLufs, WithinAbs (-17.0, 0.01));
+    const auto master = renderMaster (mono, r.chain);
+    REQUIRE (master.numChannels() == 1);
+    const auto out = measure (master);
+    INFO (r.summary);
+    CHECK_THAT (out.integratedLufs, WithinAbs (r.output.integratedLufs, 0.05));   // the report reads what a mono meter reads
+    if (r.reachedTarget)
+        CHECK_THAT (out.integratedLufs, WithinAbs (r.targetLufs, 0.3));
+    CHECK (out.truePeakDbtp <= r.chain.limiter.ceilingDbtp + 0.1);
+}
+
+TEST_CASE ("An Auto-Master analysis stops at once when it is cancelled", "[automaster]")
+{
+    const auto mix = atLufs (testsig::trapLike (96000.0, 12.0), -17.0);
+    std::atomic<bool> stop { true };
+    const auto t0 = std::chrono::steady_clock::now();
+    bool cancelled = false;
+    try
+    {
+        const ScopedCancelFlag cancellable (&stop);
+        (void) autoMaster (mix, {});
+    }
+    catch (const AnalysisCancelled&)
+    {
+        cancelled = true;
+    }
+    const double took = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+    CHECK (cancelled);
+    CHECK (took < 1.0);
+    // Without a flag (or with it down) nothing changes.
+    std::atomic<bool> down { false };
+    const ScopedCancelFlag cancellable (&down);
+    CHECK_NOTHROW (throwIfCancelled());
 }

@@ -40,15 +40,37 @@ namespace
         return juce::String (t / 60) + ":" + juce::String (t % 60).paddedLeft ('0', 2);
     }
 
-    /** One line for the top of the report: how much of the song it heard and which part set the levels. */
+    /** One line for the top of the report: how much of the song it heard and which part set the levels.
+        When playback jumped (a cycle loop, the playhead moved while playing) it says so, and names the
+        places the loudest part's audio came from instead of one made-up stretch. */
     juce::String listenedText (const polisher::SongStats& st, double windowSeconds)
     {
+        const auto dash = juce::String::fromUTF8 ("\xE2\x80\x93");
         juce::String text = "Listened to " + mmss (st.heardSeconds) + " of your song";
         if (st.heardSeconds < windowSeconds + 2.0)
-            return text + " and set the levels from it.";
-        return text + "; the loudest part (" + mmss (st.loudestStartSeconds) + juce::String::fromUTF8 ("\xE2\x80\x93")
-             + mmss (st.loudestStartSeconds + st.loudestSeconds) + (st.positionFromHost ? "" : " into what I heard")
-             + ", usually the hook or drop) set the levels.";
+            text += " and set the levels from it.";
+        else if (! st.positionFromHost)
+            text += "; the loudest part (" + mmss (st.loudestStartSeconds) + dash + mmss (st.loudestStartSeconds + st.loudestSeconds)
+                  + " into what I heard, usually the hook or drop) set the levels.";
+        else if (st.loudestSpans.size() == 1)
+            text += "; the loudest part (" + mmss (st.loudestSpans[0].start) + dash + mmss (st.loudestSpans[0].end)
+                  + ", usually the hook or drop) set the levels.";
+        else
+        {
+            text += "; the loudest " + juce::String (juce::roundToInt (st.loudestSeconds)) + " seconds it heard set the levels. Playback jumped "
+                    "inside them, so they aren't one stretch of your song: they join ";
+            const auto& sp = st.loudestSpans;
+            if (sp.size() > 3)
+                text += "pieces from " + juce::String (static_cast<int> (sp.size())) + " places on your timeline";
+            else
+                for (size_t i = 0; i < sp.size(); ++i)
+                    text += (i == 0 ? "" : i + 1 == sp.size() ? " and " : ", ") + mmss (sp[i].start) + dash + mmss (sp[i].end);
+            text += ".";
+        }
+        if (st.timelineJumps > 0)
+            text += " Playback jumped (or a cycle loop repeated) while I listened, so the whole-song figures count what I heard, "
+                    "repeats included, not the song played once through.";
+        return text;
     }
 
     const char* const kIntensityNames[] = { "Gentle", "Balanced", "Punchy" };
@@ -64,7 +86,11 @@ AutoMasterController::~AutoMasterController()
 {
     stopTimer();
     stateFlag.store (idle);
-    pool.removeAllJobs (true, 60000);
+    // An analysis still running stops at its next check (well under a second at any sample rate), so
+    // closing the project or removing the plug-in doesn't wait for it to finish.
+    if (analysisCancel != nullptr)
+        analysisCancel->store (true);
+    pool.removeAllJobs (true, 10000);
 }
 
 void AutoMasterController::prepare (double newSampleRate)
@@ -112,9 +138,17 @@ bool AutoMasterController::finish()
 
 void AutoMasterController::cancel()
 {
-    // Only listening can be cancelled; once analysis has started it finishes (it takes a moment).
     if (getState() == listening)
     {
+        stateFlag.store (idle);
+        stopTimer();
+    }
+    else if (getState() == analysing)
+    {
+        // The analysis stops at its next check and hands back nothing; any result already on its way
+        // is from a session no longer analysing, so tick() drops it.
+        if (analysisCancel != nullptr)
+            analysisCancel->store (true);
         stateFlag.store (idle);
         stopTimer();
     }
@@ -128,6 +162,11 @@ double AutoMasterController::getHeardSeconds() const noexcept
 double AutoMasterController::getLoudestStartSeconds() const noexcept
 {
     return listener.isPrepared() ? listener.loudestStartSeconds() : -1.0;
+}
+
+double AutoMasterController::getLoudestEndSeconds() const noexcept
+{
+    return listener.isPrepared() ? listener.loudestEndSeconds() : -1.0;
 }
 
 double AutoMasterController::getLoudestLufs() const noexcept
@@ -240,12 +279,18 @@ void AutoMasterController::launchAnalysis()
     pendingSettings = settings;
 
     const int thisSession = session;
-    pool.addJob ([this, clip = std::move (clip), settings, thisSession]
+    analysisCancel = std::make_shared<std::atomic<bool>> (false);
+    pool.addJob ([this, clip = std::move (clip), settings, thisSession, stop = analysisCancel]
     {
         std::unique_ptr<polisher::AutoMasterResult> result;
         try
         {
+            const polisher::ScopedCancelFlag cancellable (stop.get());
             result = std::make_unique<polisher::AutoMasterResult> (polisher::autoMaster (clip, settings));
+        }
+        catch (const polisher::AnalysisCancelled&)
+        {
+            return;   // cancelled, or the plug-in is closing: nothing to hand back
         }
         catch (...)
         {
@@ -293,9 +338,12 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         listen->setProperty ("songLufs", st.integratedLufs);
         listen->setProperty ("songLra", st.loudnessRangeLu);
         listen->setProperty ("loudStart", st.loudestStartSeconds);
-        listen->setProperty ("loudEnd", st.loudestStartSeconds + st.loudestSeconds);
+        listen->setProperty ("loudEnd", st.positionFromHost && st.loudestSpans.size() == 1 ? st.loudestSpans[0].end
+                                                                                           : st.loudestStartSeconds + st.loudestSeconds);
         listen->setProperty ("loudLufs", st.loudestLufs);
         listen->setProperty ("fromHost", st.positionFromHost);
+        listen->setProperty ("loudPieces", static_cast<int> (st.loudestSpans.size()));   // > 1: playback jumped inside the loudest part
+        listen->setProperty ("jumps", st.timelineJumps);   // > 0: the whole-song figures count what was heard, repeats included
         listen->setProperty ("byItself", autoFinished);   // the song ended (not the Finish button)
         doc->setProperty ("listen", juce::var (listen));
         doc->setProperty ("listened", listenedText (st, kWindowSeconds));

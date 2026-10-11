@@ -47,7 +47,7 @@ Leave headroom going in. A good input is about **−17 LUFS integrated with peak
 1. Click the genre name at the top and choose yours (Trap / Hip-Hop, R&B, Pop, EDM, Rock, Acoustic).
 2. Choose **Intensity**: Gentle, Balanced or Punchy. Balanced is the default.
 3. Choose **Target**: Stream −14, Loud −9 or Club −7. Loud −9 is the default.
-4. Click **Auto-Master**, then play your song from the start. It finishes by itself a few seconds after the song ends (or click it again any time after 12 seconds to use what it heard).
+4. Click **Auto-Master**, then play your song from the start. It finishes by itself 4 seconds after the song ends (or click it again any time after 12 seconds to use what it heard).
 5. Turn on **MATCH**, flip **A / B** and listen.
 6. Read Learn. Red boxes need a decision; blue boxes are tips.
 
@@ -100,11 +100,12 @@ Auto-Master sets the Tonal EQ bands together. Neighbouring bands overlap, so it 
 1. Set Genre, Intensity and Target.
 2. Click **Auto-Master**. It says **LISTENING**.
 3. Play your **whole song**, ideally from the very start. The button shows how much it has heard and where the loudest part is so far; Learn shows the same, with **FINISH NOW** and **CANCEL**.
-4. It **finishes by itself** a few seconds after the song ends (after at least 30 seconds of music, when the music stops or you stop playback). In a hurry? From **12 seconds** of music on (the bar under the button turns green), click Auto-Master again or press **FINISH NOW**: it uses what it has heard. Before 12 seconds a click stops it without changing anything.
-5. Read the report in Learn (**WHY IT SOUNDS LIKE THIS**). It starts with what it heard, for example *Listened to 2:47 of your song; the loudest part (0:54–1:06, usually the hook or drop) set the levels*, and shows the **Whole song** loudness and loudness range as your mix arrives.
-6. Don't like it? Click the **undo arrow** to put every control back as it was, Tone Steady's target too (the whole run is one undo step; the redo arrow brings it back). To compare two runs, keep each in a snapshot: see [Undo, redo and snapshots](#undo-redo-and-snapshots).
+4. It **finishes by itself** 4 seconds after the song ends: once it has heard at least 30 seconds of music, 4 seconds without music (the music stops, or you stop playback) count as the end. So a pause longer than 4 seconds after the first 30 seconds also ends it; before 30 seconds you can stop and play on. In a hurry? From **12 seconds** of music on (the bar under the button turns green), click Auto-Master again or press **FINISH NOW**: it uses what it has heard. Before 12 seconds a click stops it without changing anything.
+5. It then **chooses every setting** (the button says THINKING and counts the seconds). That runs the whole chain many times on the 12 seconds it kept, so it takes longer at higher sample rates: usually 5–15 seconds at 44.1 or 48 kHz, 10–30 seconds at 96 kHz, 20–60 seconds at 192 kHz (slower computers take longer). **CANCEL** in Learn stops it without changing anything, and closing the project doesn't wait for it.
+6. Read the report in Learn (**WHY IT SOUNDS LIKE THIS**). It starts with what it heard, for example *Listened to 2:47 of your song; the loudest part (0:54–1:06, usually the hook or drop) set the levels*, and shows the **Whole song** loudness and loudness range as your mix arrives. *Your mix measured …* is your mix as it reaches Polisher, before Input Trim and before your Stem EQ moves (with Keep Loudness off, a Stem EQ boost makes it louder inside Polisher, and the report says so).
+7. Don't like it? Click the **undo arrow** to put every control back as it was, Tone Steady's target too (the whole run is one undo step; the redo arrow brings it back). To compare two runs, keep each in a snapshot: see [Undo, redo and snapshots](#undo-redo-and-snapshots).
 
-Timeline positions come from Cubase's playhead. It listens for up to 15 minutes, and its memory stays the same however long the song is (it keeps only the loudest 12 seconds of audio and a few numbers per second).
+Timeline positions come from Cubase's playhead. If playback **jumps** while it listens (a **cycle loop** wraps, or you move the playhead), the report says so: when the loudest 12 seconds it heard join two places on your timeline it names both, and the whole-song figures then count what it heard, repeats included. For exact figures, turn Cycle off and play the song once through. It listens for up to 15 minutes, and its memory stays the same however long the song is (it keeps only the loudest 12 seconds of audio and a few numbers per second). On a **mono** bus it measures one channel, as loudness meters do.
 
 ### What to expect
 
@@ -124,8 +125,8 @@ Every warning in the report says **Do I need to fix it?** and gives numbered ste
 Instead of a genre's typical sound, Auto-Master can aim for a **reference**: a released song you want your master to sound like.
 
 1. Pick a commercial song with the sound you want (for trap: a big trap single). Use a good file of the released version: WAV, AIFF, FLAC or MP3.
-2. Click **Match ref** (at the end of the TARGET row) and choose the file. Polisher reads the whole song (up to 15 minutes) and measures its **loudest 30 seconds**, usually the chorus or drop. That takes a few seconds; your music keeps playing.
-3. The pill now shows the song's name, and the spectrum shows its tone as a **dashed yellow line** (moved to the loudness of what's playing, so you compare tone, not volume). The dotted genre line steps aside while a reference is loaded; click its legend entry to show it too (see [The spectrum screen](#the-spectrum-screen)).
+2. Click **Match ref** (at the end of the TARGET row) and choose the file. Polisher reads the whole song (up to 15 minutes) and measures its **loudest 30 seconds** (tone, width, low end), usually the chorus or drop, and the loudness of its **loudest 12 seconds**. That takes a few seconds; your music keeps playing.
+3. The pill now shows the song's name, and the spectrum shows its tone as a **dashed yellow line** (moved to the loudness of what's playing, so you compare tone, not volume, and to your project's sample rate). The dotted genre line steps aside while a reference is loaded; click its legend entry to show it too (see [The spectrum screen](#the-spectrum-screen)).
 4. Click **Auto-Master** and play **your own song**, as usual.
 
 What it takes from the reference:
@@ -133,7 +134,7 @@ What it takes from the reference:
 | From the reference | What Auto-Master does with it |
 | --- | --- |
 | Tone (the 7 EQ ranges) | Moves your tone toward it, part of the way, within the same Intensity limits as for a genre |
-| Loudness of its loudest part | Aims for it, kept between −16 and −6 LUFS. If getting there would crush your drums, it stops earlier and says so |
+| Loudness of its loudest 12 seconds | Aims for it with the loudest 12 seconds of your song (hook against hook), kept between −16 and −6 LUFS. If getting there would crush your drums, it stops earlier and says so |
 | Stereo width of the mids and highs | Widens or narrows them toward it with the Stereo Imager (the lows are never widened) |
 | Low end | Mono Below: if the reference keeps stereo in its bass, only the deep sub below 60 Hz is made mono. If its 808 reaches lower or sits higher than yours, the report tells you how to fix that in the mix |
 
@@ -479,7 +480,9 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Master is too loud or squashed even at Drive 0; input reads far above 0 dBTP | Your old chain (EQ, saturator, compressor, limiter) is still on Stereo Out before Polisher, so the mix arrives already limited and hot | Bypass every other insert on Stereo Out, keep Polisher in the last slot, and run Auto-Master again |
 | Input is hot even with nothing else on Stereo Out | The mix itself is too loud | Run Auto-Master: it turns the mix down with Input Trim when it's louder than your target. Or lower Input Trim yourself (Maximizer screen) by about as many dB as the master's Integrated reads above your target |
 | Auto-Master says "This doesn't sound like a full mix" | Polisher is on one track, not Stereo Out | Remove it from the track, load it in Stereo Out's last insert slot (F3 > Stereo Out), play the chorus and run Auto-Master again |
-| Auto-Master keeps listening | It waits for the song to end (a few seconds without music after at least 30 s of it), or plays a loop | Let the song play to its end, or click Auto-Master again (or FINISH NOW in Learn) any time after 12 s of music |
+| Auto-Master keeps listening | It waits for the song to end (4 seconds without music after at least 30 s of it), or Cycle is on and the loop keeps playing | Let the song play to its end, or click Auto-Master again (or FINISH NOW in Learn) any time after 12 s of music |
+| Auto-Master finished while you only paused | After 30 s of music, 4 seconds without music count as the song's end | Fine if it heard the hook. Otherwise run it again and keep the song playing |
+| The report says playback jumped | A cycle loop or a playhead move while it listened | Turn Cycle off on the transport bar and play the song once from start to end |
 | Auto-Master says it heard too little | Playback stopped or was mostly silence | Click Auto-Master, play the song from the start and let it play (it needs at least 12 s of music) |
 | Tone Steady's Target says "following the music" | No song tone learned yet (or CLEAR was pressed, or the song was saved before targets existed) | Press LEARN in Tone Steady (or run Auto-Master) and play the whole song |
 | Master lands quieter than the target | Auto-Master protected the drums within the intensity's limit | Fine as it is. To go louder, choose Punchy, or tame the drum peaks in the mix |

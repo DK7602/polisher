@@ -17,15 +17,17 @@
 #include <new>
 #include <random>
 
-// --- Allocation counter: every operator new while `countAllocations` is set is counted. ----------
+// --- Allocation counter: every operator new on the thread that set `countAllocations` is counted ----
+// (per thread, so a background analysis or file read running meanwhile is never counted as the audio
+// thread's). ------------------------------------------------------------------------------------------
 namespace {
-std::atomic<bool> countAllocations { false };
+thread_local bool countAllocations = false;
 std::atomic<int> allocations { 0 };
 }
 
 void* operator new (std::size_t n)
 {
-    if (countAllocations.load (std::memory_order_relaxed))
+    if (countAllocations)
         allocations.fetch_add (1, std::memory_order_relaxed);
     if (void* p = std::malloc (n == 0 ? 1 : n))
         return p;
@@ -580,6 +582,9 @@ TEST_CASE ("Plug-in: the Match ref reference is saved with the project and comes
     auto same = [] (double x, double y) { return std::abs (x - y) <= 1.0e-9 * std::max (1.0, std::abs (y)); };
     CHECK (got.name == profile.name);
     CHECK (same (got.lufs, profile.lufs));
+    CHECK (same (got.hookLufs, profile.hookLufs));
+    CHECK (got.hookLufs > -99.0);
+    CHECK (same (got.sampleRate, 48000.0));
     CHECK (same (got.trackLufs, profile.trackLufs));
     for (size_t k = 0; k < profile.bandDb.size(); ++k)
         CHECK (same (got.bandDb[k], profile.bandDb[k]));
@@ -605,6 +610,17 @@ TEST_CASE ("Plug-in: the Match ref reference is saved with the project and comes
     CHECK_FALSE (b->reference.getProfile().valid);
     CHECK (b->reference.getState() == ReferenceTrack::empty);
     CHECK (b->parameters.getRawParameterValue ("drive")->load() == 4.0f);
+
+    // A reference saved before the hook loudness and file rate were kept: Auto-Master aims for its loudest part.
+    {
+        auto v = ReferenceTrack::profileToVar (profile);
+        if (auto* o = v.getDynamicObject()) { o->removeProperty ("hookLufs"); o->removeProperty ("sampleRate"); }
+        const auto old = ReferenceTrack::profileFromVar (v);
+        REQUIRE (old.valid);
+        CHECK (old.hookLufs < -99.0);
+        CHECK (old.sampleRate == 0.0);
+        CHECK (polisher::referenceLoudness (old) == old.lufs);
+    }
 
     // A damaged or future-format reference is ignored rather than half-read.
     xml->setAttribute ("amReference", "{\"format\": 9, \"name\": \"x\"}");
@@ -657,6 +673,8 @@ TEST_CASE ("Plug-in: a reference file is read in the background and its loudest 
     CHECK (direct.startSeconds <= 20.0 + 0.1);
     CHECK (std::abs (direct.partSeconds - polisher::kReferencePartSeconds) < 0.01);
     CHECK (std::abs (direct.lufs - polisher::measure (chorus).integratedLufs) < 0.5);
+    CHECK (direct.sampleRate == sr);
+    CHECK (std::abs (direct.hookLufs - polisher::measure (chorus).integratedLufs) < 0.5);   // its loudest 12 s, all chorus
 
     // The real thing: load() returns at once, the reading happens on a background thread.
     ReferenceTrack ref;
@@ -1029,14 +1047,15 @@ struct FakePlayHead final : juce::AudioPlayHead
     block as its timer would. Returns the most operator-new calls any one block made. */
 int play (PolisherAudioProcessor& p, FakePlayHead& head, const AudioClip& clip, int block = 512)
 {
-    juce::AudioBuffer<float> buf (2, block);
+    const int nch = clip.numChannels();   // 1: a mono bus
+    juce::AudioBuffer<float> buf (nch, block);
     juce::MidiBuffer midi;
     int worst = 0;
     for (int pos = 0; pos < clip.numSamples(); pos += block)
     {
         const int n = std::min (block, clip.numSamples() - pos);
-        buf.setSize (2, n, false, false, true);
-        for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, clip.channels[(size_t) c].data() + pos, n);
+        buf.setSize (nch, n, false, false, true);
+        for (int c = 0; c < nch; ++c) buf.copyFrom (c, 0, clip.channels[(size_t) c].data() + pos, n);
         allocations = 0;
         countAllocations = true;
         p.processBlock (buf, midi);
@@ -1172,6 +1191,165 @@ TEST_CASE ("Auto-Master: Finish uses what it heard from 12 s of music on, not be
     CHECK (std::abs ((double) r["listen"]["heard"] - 13.0) < 0.05);
     CHECK_FALSE (static_cast<bool> (r["listen"]["byItself"]));
     CHECK (r["listened"].toString() == "Listened to 0:13 of your song and set the levels from it.");
+}
+
+TEST_CASE ("Auto-Master: after 30 s of music, 4 s without music end the listen; a shorter pause doesn't", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    // Silent blocks while the transport runs (the song's end, or a long gap in it).
+    {
+        auto p = makeProcessor (sr, 512, false);
+        FakePlayHead head;
+        p->setPlayHead (&head);
+        REQUIRE (p->autoMaster.start());
+        play (*p, head, testsig::musicLike (sr, 32.0, -14.0, 1));
+        play (*p, head, testsig::silence (sr, 2, 3.0));
+        CHECK (p->autoMaster.getState() == AutoMasterController::listening);   // 3 s: still listening
+        play (*p, head, testsig::musicLike (sr, 5.0, -14.0, 2));                 // the song goes on
+        play (*p, head, testsig::silence (sr, 2, 4.2));
+        CHECK (p->autoMaster.getState() == AutoMasterController::analysing);    // 4.2 s: the song ended
+        REQUIRE (waitForAutoMaster (*p));
+        CHECK (p->autoMaster.finishedByItself());
+        CHECK (std::abs ((double) reportOf (*p)["listen"]["heard"] - 37.0) < 0.05);
+    }
+    // No blocks at all for 4 s (a host that stops processing with the transport): the same.
+    {
+        auto p = makeProcessor (sr, 512, false);
+        FakePlayHead head;
+        p->setPlayHead (&head);
+        REQUIRE (p->autoMaster.start());
+        play (*p, head, testsig::musicLike (sr, 31.0, -14.0, 3));
+        juce::Thread::sleep (4200);
+        p->autoMaster.tick();
+        CHECK (p->autoMaster.getState() == AutoMasterController::analysing);
+        p->autoMaster.cancel();   // stops the analysis: nothing is applied
+        CHECK (p->autoMaster.getState() == AutoMasterController::idle);
+        juce::Thread::sleep (100);
+        p->autoMaster.tick();
+        CHECK (p->autoMaster.getReportJson().isEmpty());
+        CHECK (p->autoMaster.start());   // and a new run can start
+        p->autoMaster.cancel();
+    }
+}
+
+TEST_CASE ("Auto-Master's report says where the loudest part came from after jumps and cycle loops", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    const auto dash = juce::String::fromUTF8 ("\xE2\x80\x93");
+    {
+        // 0:40-0:50 played, then the playhead jumped to 2:00 and played on to 2:10.
+        auto p = makeProcessor (sr, 512, false);
+        FakePlayHead head;
+        head.seconds = 40.0;
+        p->setPlayHead (&head);
+        REQUIRE (p->autoMaster.start());
+        play (*p, head, testsig::musicLike (sr, 10.0, -14.0, 1));
+        head.seconds = 120.0;
+        play (*p, head, testsig::musicLike (sr, 10.0, -13.0, 2));
+        CHECK (p->autoMaster.loudestPartJumped());
+        CHECK (p->autoMaster.getLoudestEndSeconds() < 0.0);
+        REQUIRE (p->autoMaster.finish());
+        REQUIRE (waitForAutoMaster (*p));
+        const auto r = reportOf (*p);
+        const auto text = r["listened"].toString();
+        INFO (text);
+        CHECK (text.contains ("Playback jumped inside them"));
+        CHECK (text.contains (dash + "0:50 and 2:00" + dash));
+        CHECK (text.contains ("whole-song figures count what I heard"));
+        CHECK_FALSE (text.contains ("0:55"));   // never played
+        CHECK ((int) r["listen"]["jumps"] == 1);
+        CHECK ((int) r["listen"]["loudPieces"] == 2);
+    }
+    {
+        // A cycle loop 1:00-1:16, three times round.
+        auto p = makeProcessor (sr, 512, false);
+        FakePlayHead head;
+        p->setPlayHead (&head);
+        REQUIRE (p->autoMaster.start());
+        const auto loop = testsig::musicLike (sr, 16.0, -14.0, 5);
+        for (int k = 0; k < 3; ++k)
+        {
+            head.seconds = 60.0;
+            play (*p, head, loop);
+        }
+        REQUIRE (p->autoMaster.finish());
+        REQUIRE (waitForAutoMaster (*p));
+        const auto r = reportOf (*p);
+        const auto text = r["listened"].toString();
+        INFO (text);
+        CHECK ((int) r["listen"]["jumps"] == 2);
+        CHECK (text.contains ("Playback jumped"));
+        for (const char* never : { "1:17", "1:18", "1:19", "1:20", "1:21" })
+            CHECK_FALSE (text.contains (never));
+    }
+}
+
+TEST_CASE ("Auto-Master on a mono bus: the report's loudness is what the plug-in's own meters read", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    auto p = std::make_unique<PolisherAudioProcessor>();
+    set (*p, "autoreset", 0.0f);
+    juce::AudioProcessor::BusesLayout mono;
+    mono.inputBuses.add (juce::AudioChannelSet::mono());
+    mono.outputBuses.add (juce::AudioChannelSet::mono());
+    REQUIRE (p->setBusesLayout (mono));
+    p->setRateAndBufferSizeDetails (sr, 512);
+    p->prepareToPlay (sr, 512);
+
+    AudioClip song = songOf ({ testsig::musicLike (sr, 15.0, -20.0, 1), testsig::musicLike (sr, 20.0, -14.0, 2) });
+    song.channels.resize (1);
+    const double songLufs = polisher::measure (song).integratedLufs;   // one channel, as BS.1770 counts a mono bus
+    FakePlayHead head;
+    p->setPlayHead (&head);
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, song);
+    REQUIRE (p->autoMaster.finish());
+    REQUIRE (waitForAutoMaster (*p));
+    const auto r = reportOf (*p);
+    REQUIRE (static_cast<bool> (r["ok"]));
+    INFO (r["summary"].toString());
+    CHECK (std::abs ((double) r["listen"]["songLufs"] - songLufs) < 0.1);   // was 3 dB high
+    // The master the report describes: play the song again through the plug-in as set, and read its
+    // loudest 12 s the way the report does.
+    p->prepareToPlay (sr, 512);
+    AudioClip out = song;
+    {
+        juce::AudioBuffer<float> buf (1, 512);
+        juce::MidiBuffer midi;
+        for (int pos = 0; pos < song.numSamples(); pos += 512)
+        {
+            const int n = std::min (512, song.numSamples() - pos);
+            buf.setSize (1, n, false, false, true);
+            buf.copyFrom (0, 0, song.channels[0].data() + pos, n);
+            p->processBlock (buf, midi);
+            std::copy (buf.getReadPointer (0), buf.getReadPointer (0) + n, out.channels[0].begin() + pos);
+        }
+    }
+    AudioClip loud;
+    loud.sampleRate = sr;
+    const auto from = (size_t) ((double) r["listen"]["loudStart"] * sr) + (size_t) p->getLatencySamples();
+    loud.channels.emplace_back (out.channels[0].begin() + (std::ptrdiff_t) from, out.channels[0].begin() + (std::ptrdiff_t) (from + (size_t) (12.0 * sr)));
+    const double reads = polisher::measure (loud).integratedLufs;
+    INFO ("report " << (double) r["outputLufs"] << " LUFS, the plug-in's mono output " << reads);
+    CHECK (std::abs (reads - (double) r["outputLufs"]) < 0.5);
+}
+
+TEST_CASE ("Auto-Master: closing the plug-in while it analyses doesn't wait for the analysis", "[plugin][automaster]")
+{
+    const double sr = 192000.0;   // the slowest analysis: ~20 s and more
+    auto p = makeProcessor (sr, 1024, false);
+    FakePlayHead head;
+    p->setPlayHead (&head);
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, testsig::trapLike (sr, 13.0), 1024);
+    REQUIRE (p->autoMaster.finish());
+    CHECK (p->autoMaster.getState() == AutoMasterController::analysing);
+    juce::Thread::sleep (300);   // well into it
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    p.reset();
+    const double took = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
+    INFO ("closing took " << took << " s");
+    CHECK (took < 2.0);
 }
 
 TEST_CASE ("Auto-Master's listening never allocates on the audio thread", "[plugin][automaster]")

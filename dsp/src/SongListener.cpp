@@ -20,6 +20,7 @@ void SongListener::prepare (double sampleRate, double windowSeconds, double maxS
 
     hopEnergy.assign (static_cast<size_t> (maxHops), 0.0);
     hopTime.assign (static_cast<size_t> (maxHops), -1.0);
+    hopJump.assign (static_cast<size_t> (maxHops), 0);
     pool.assign (static_cast<size_t> (pieces) * static_cast<size_t> (hopLen) * 2, 0.0f);
     recent.assign (static_cast<size_t> (windowHops), 0);
     best.assign (static_cast<size_t> (windowHops), 0);
@@ -56,8 +57,11 @@ void SongListener::prepare (double sampleRate, double windowSeconds, double maxS
 void SongListener::reset() noexcept
 {
     for (auto& k : weighting) k.reset();
-    hopSum = 0.0;
+    hopSum = hopPeak = 0.0;
     hopPos = 0;
+    nextHostSeconds = -1.0;
+    jumpPending = stereoSeen = false;
+    jumpCount = 0;
     std::fill (inRecent.begin(), inRecent.end(), std::uint8_t { 0 });
     std::fill (inBest.begin(), inBest.end(), std::uint8_t { 0 });
     freeCount = 0;
@@ -68,13 +72,15 @@ void SongListener::reset() noexcept
     framePos = frameFill = sinceFrame = 0;
     for (auto& f : frameIn) std::fill (f.begin(), f.end(), 0.0);
     blockSum.fill (0.0);
-    blockEnergy = 0.0;
-    blockFrames = 0;
+    hopToneSum.fill (0.0);
+    blockEnergy = hopToneEnergy = 0.0;
+    blockFrames = hopToneFrames = 0;
     toneCount = 0;
     heard.store (0);
     silent.store (0);
     hopsDone.store (0);
     bestStart.store (-1);
+    bestJumps.store (0);
     bestLufs.store (-100.0);
 }
 
@@ -93,31 +99,49 @@ void SongListener::processAny (const Sample* left, const Sample* right, int numS
 {
     if (hopLen <= 0 || numSamples <= 0 || left == nullptr)
         return;
-    if (right == nullptr)
+    // A mono bus counts one channel (BS.1770); its pieces keep the one channel on both sides.
+    const bool mono = right == nullptr || right == left;
+    if (mono)
         right = left;
-    double peak = 0.0;
-    for (int i = 0; i < numSamples; ++i)
-        peak = std::max ({ peak, std::abs (static_cast<double> (left[i])), std::abs (static_cast<double> (right[i])) });
-    if (peak < kSilencePeak)
-    {
-        silent.store (silent.load (std::memory_order_relaxed) + numSamples, std::memory_order_release);
-        return;
-    }
-    silent.store (0, std::memory_order_release);
-    if (hopsDone.load (std::memory_order_relaxed) >= maxHops)
-        return;
+    else
+        stereoSeen = true;
 
-    int done = 0;
+    // The timeline: a block that doesn't start where the last one played up to means the playhead
+    // jumped (a cycle loop wrapped, it was moved while playing, or playback restarted elsewhere after a
+    // stop). Blocks without a position (stopped transport) leave the expectation as it was, so stopping
+    // and playing on from the same place is no jump.
+    const int h0 = hopsDone.load (std::memory_order_relaxed);
+    if (hostSeconds >= 0.0)
+    {
+        if (nextHostSeconds >= 0.0 && std::abs (hostSeconds - nextHostSeconds) > kJumpSeconds)
+        {
+            jumpPending = true;
+            // The piece being filled goes on at the new place: date it from there, so the stretch of the
+            // timeline it opens reads right (it holds hopPos samples from before the jump).
+            if (hopPos > 0 && h0 < maxHops)
+                hopTime[static_cast<size_t> (h0)] = hostSeconds - hopPos / sr;
+        }
+        nextHostSeconds = hostSeconds + numSamples / sr;
+    }
+    if (h0 >= maxHops)
+        return;   // as long as it may listen: from here on it only waits to be finished
+
     for (int i = 0; i < numSamples; ++i)
     {
         if (hopPos == 0)
             hopTime[static_cast<size_t> (hopsDone.load (std::memory_order_relaxed))] = hostSeconds >= 0.0 ? hostSeconds + i / sr : -1.0;
         const double l = static_cast<double> (left[i]), r = static_cast<double> (right[i]);
+        hopPeak = std::max ({ hopPeak, std::abs (l), std::abs (r) });
         float* piece = pool.data() + static_cast<size_t> (current) * static_cast<size_t> (hopLen) * 2;
         piece[hopPos] = static_cast<float> (l);
         piece[hopLen + hopPos] = static_cast<float> (r);
-        const double kl = weighting[0].process (l), kr = weighting[1].process (r);
-        hopSum += kl * kl + kr * kr;
+        const double kl = weighting[0].process (l);
+        hopSum += kl * kl;
+        if (! mono)
+        {
+            const double kr = weighting[1].process (r);
+            hopSum += kr * kr;
+        }
 
         const auto fp = static_cast<size_t> (framePos);
         frameIn[0][fp] = l;
@@ -130,23 +154,51 @@ void SongListener::processAny (const Sample* left, const Sample* right, int numS
             toneFrame();
         }
 
-        done = i + 1;
         if (++hopPos == hopLen)
         {
-            completeHop();
-            if (hopsDone.load (std::memory_order_relaxed) >= maxHops)
-                break;   // as long as it may listen: from here on it only waits to be finished
+            // Each full 100 ms piece is judged as a whole: music joins what was heard, silence is
+            // dropped (whatever the host's block size, so music is never cut into by tiny blocks).
+            if (hopPeak < kSilencePeak)
+                skipHop();
+            else
+            {
+                completeHop();
+                if (hopsDone.load (std::memory_order_relaxed) >= maxHops)
+                    break;
+            }
         }
     }
-    heard.store (heard.load (std::memory_order_relaxed) + done, std::memory_order_release);
+}
+
+void SongListener::skipHop() noexcept
+{
+    // A silent piece: its slot is filled again, and its loudness and tone frames are dropped. The tone
+    // frames start afresh after it, so none of them spans the gap.
+    hopSum = hopPeak = 0.0;
+    hopPos = 0;
+    hopToneSum.fill (0.0);
+    hopToneEnergy = 0.0;
+    hopToneFrames = 0;
+    frameFill = sinceFrame = 0;
+    silent.store (silent.load (std::memory_order_relaxed) + hopLen, std::memory_order_release);
 }
 
 void SongListener::completeHop() noexcept
 {
     const int h = hopsDone.load (std::memory_order_relaxed);
     hopEnergy[static_cast<size_t> (h)] = hopSum / hopLen;
-    hopSum = 0.0;
+    hopSum = hopPeak = 0.0;
     hopPos = 0;
+    const bool jumped = jumpPending && h > 0;   // before the first piece of music, a jump changes nothing
+    hopJump[static_cast<size_t> (h)] = jumped ? 1 : 0;
+    jumpCount += jumped ? 1 : 0;
+    jumpPending = false;
+    for (size_t b = 0; b < blockSum.size(); ++b) blockSum[b] += hopToneSum[b];
+    blockEnergy += hopToneEnergy;
+    blockFrames += hopToneFrames;
+    hopToneSum.fill (0.0);
+    hopToneEnergy = 0.0;
+    hopToneFrames = 0;
 
     // The piece just filled joins the last window; the oldest leaves it (back to the pool unless it
     // belongs to the loudest window).
@@ -183,18 +235,23 @@ void SongListener::completeHop() noexcept
                     if (inRecent[static_cast<size_t> (p)] == 0)
                         giveBack (p);
                 }
+            int jumps = 0;
             for (size_t j = 0; j < W; ++j)
             {
                 const int p = recent[(static_cast<size_t> (recentHead) + j) % W];
                 best[j] = p;
                 inBest[static_cast<size_t> (p)] = 1;
+                if (j > 0) jumps += hopJump[static_cast<size_t> (h) + 1 - W + j];
             }
             bestSum = sum;
             bestLufs.store (energyToLufs (std::max (sum / windowHops, 1.0e-30)), std::memory_order_relaxed);
+            bestJumps.store (jumps, std::memory_order_relaxed);
             bestStart.store (h + 1 - windowHops, std::memory_order_release);
         }
     }
     current = takeFree();
+    heard.store (heard.load (std::memory_order_relaxed) + hopLen, std::memory_order_release);
+    silent.store (0, std::memory_order_release);
     hopsDone.store (h + 1, std::memory_order_release);
     if ((h + 1) % kToneBlockHops == 0)
         closeToneBlock();
@@ -248,9 +305,9 @@ void SongListener::toneFrame() noexcept
     if (totalDb <= -80.0)
         return;
     for (size_t b = 0; b < e.size(); ++b)
-        blockSum[b] += std::max (10.0 * std::log10 (e[b] + 1.0e-20) - totalDb, -90.0);
-    blockEnergy += total;
-    ++blockFrames;
+        hopToneSum[b] += std::max (10.0 * std::log10 (e[b] + 1.0e-20) - totalDb, -90.0);
+    hopToneEnergy += total;
+    ++hopToneFrames;   // joins the song's tone when its 100 ms piece turns out to be music
 }
 
 void SongListener::closeToneBlock() noexcept
@@ -282,6 +339,15 @@ double SongListener::loudestStartSeconds() const noexcept
     return t >= 0.0 ? t : b * kHopSeconds;
 }
 
+double SongListener::loudestEndSeconds() const noexcept
+{
+    const int b = bestStart.load (std::memory_order_acquire);
+    if (b < 0 || bestJumps.load (std::memory_order_relaxed) > 0)
+        return -1.0;
+    const double t0 = hopTime[static_cast<size_t> (b)], t1 = hopTime[static_cast<size_t> (b + windowHops - 1)];
+    return t0 >= 0.0 && t1 >= 0.0 ? t1 + kHopSeconds : -1.0;
+}
+
 bool SongListener::loudestFromHost() const noexcept
 {
     const int b = bestStart.load (std::memory_order_acquire);
@@ -292,17 +358,18 @@ AudioClip SongListener::loudestWindow() const
 {
     AudioClip clip;
     clip.sampleRate = sr;
-    clip.channels.assign (2, {});
+    const bool mono = ! stereoSeen && hopsDone.load() + hopPos > 0;   // every block heard was mono
+    clip.channels.assign (mono ? 1 : 2, {});
     if (hopLen <= 0)
         return clip;
     std::vector<int> list;
-    int tail = 0;   // samples of a piece still being filled
+    int tail = 0;   // samples of a piece still being filled (kept when they are music so far)
     if (bestStart.load() >= 0)
         list = best;
     else
     {
         for (int j = 0; j < recentCount; ++j) list.push_back (recent[static_cast<size_t> ((recentHead + j) % windowHops)]);
-        tail = hopPos;
+        tail = hopPeak >= kSilencePeak ? hopPos : 0;
     }
     const auto len = static_cast<size_t> (hopLen);
     for (auto& ch : clip.channels) ch.reserve (list.size() * len + static_cast<size_t> (tail));
@@ -310,7 +377,7 @@ AudioClip SongListener::loudestWindow() const
     {
         const float* p = pool.data() + static_cast<size_t> (piece) * len * 2;
         clip.channels[0].insert (clip.channels[0].end(), p, p + n);
-        clip.channels[1].insert (clip.channels[1].end(), p + len, p + len + n);
+        if (! mono) clip.channels[1].insert (clip.channels[1].end(), p + len, p + len + n);
     };
     for (int p : list) append (p, len);
     if (tail > 0) append (current, static_cast<size_t> (tail));
@@ -368,12 +435,29 @@ SongStats SongListener::stats() const
         }
     }
 
+    // Where the loudest window's pieces sit on the timeline: a new stretch at every jump.
+    auto spans = [&] (int first, int count)
+    {
+        std::vector<TimeSpan> out;
+        for (int j = first; j < first + count; ++j)
+        {
+            const double t = hopTime[static_cast<size_t> (j)];
+            if (t < 0.0)
+                return std::vector<TimeSpan> {};   // a stretch without positions: none at all
+            if (out.empty() || (j > first && hopJump[static_cast<size_t> (j)] != 0))
+                out.push_back ({ t, t + kHopSeconds });
+            else
+                out.back().end = t + kHopSeconds;
+        }
+        return out;
+    };
     if (hasWindow())
     {
         s.loudestLufs = loudestLufs();
         s.loudestStartSeconds = loudestStartSeconds();
         s.positionFromHost = loudestFromHost();
         s.loudestSeconds = windowSeconds();
+        s.loudestSpans = spans (bestStart.load(), windowHops);
     }
     else
     {
@@ -381,7 +465,12 @@ SongStats SongListener::stats() const
         s.loudestStartSeconds = H > 0 && hopTime[0] >= 0.0 ? hopTime[0] : 0.0;
         s.positionFromHost = H > 0 && hopTime[0] >= 0.0;
         s.loudestSeconds = s.heardSeconds;
+        s.loudestSpans = spans (0, H);
     }
+    if (s.loudestSpans.empty())
+        s.positionFromHost = false;
+    s.timelineJumps = jumpCount;
+    s.channels = stereoSeen ? 2 : 1;
     return s;
 }
 
@@ -422,7 +511,7 @@ ToneTarget SongListener::toneTarget() const
 std::size_t SongListener::memoryBytes() const noexcept
 {
     auto bytes = [] (const auto& v) { return v.capacity() * sizeof (v[0]); };
-    return bytes (hopEnergy) + bytes (hopTime) + bytes (pool) + bytes (recent) + bytes (best) + bytes (freeList)
+    return bytes (hopEnergy) + bytes (hopTime) + bytes (hopJump) + bytes (pool) + bytes (recent) + bytes (best) + bytes (freeList)
          + bytes (inRecent) + bytes (inBest) + bytes (window) + bytes (bandW) + bytes (bandCf) + bytes (bandLo)
          + bytes (bandHi) + bytes (frameIn[0]) + bytes (frameIn[1]) + bytes (work) + bytes (twiddle) + bytes (bitrev)
          + bytes (binPow) + bytes (toneBlocks) + bytes (toneLevel) + sizeof (*this);

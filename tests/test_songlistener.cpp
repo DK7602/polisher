@@ -7,6 +7,8 @@
 #include "polisher/StemEQ.h"
 
 #include <cmath>
+#include <functional>
+#include <memory>
 #include <numbers>
 #include <random>
 
@@ -389,4 +391,128 @@ TEST_CASE ("Auto-Master holds the song to its own tone when it listened to the s
     // Without a listen of the song (a state from before, or nothing learned): following the music, as before.
     const auto plain = autoMaster (slice (song, 20.0, 32.0), AutoMasterSettings {});
     CHECK_FALSE (plain.chain.steady.target.valid);
+}
+
+TEST_CASE ("Song listener: tiny and changing block sizes hear exactly the same music", "[songlistener]")
+{
+    // Silence is judged per 100 ms piece, not per host block: a 1-sample block near a zero crossing
+    // inside music is still music. A song with a stop in the middle (4 s of silence) and a quiet
+    // breakdown, streamed at 1, 4, 16, 64 and 4096 samples and at random sizes.
+    const double sr = 48000.0;
+    AudioClip song;
+    append (song, testsig::musicLike (sr, 20.0, -16.0, 1));
+    append (song, testsig::silence (sr, 2, 4.0));
+    append (song, testsig::musicLike (sr, 6.0, -38.0, 2));   // quiet, but music (peaks above -50 dBFS)
+    append (song, testsig::musicLike (sr, 20.0, -12.0, 3));
+    auto run = [&] (std::function<int()> nextBlock)
+    {
+        auto l = std::make_unique<SongListener>();
+        l->prepare (sr, 12.0, 600.0);
+        for (int pos = 0; pos < song.numSamples();)
+        {
+            const int len = std::min (nextBlock(), song.numSamples() - pos);
+            l->process (song.channels[0].data() + pos, song.channels[1].data() + pos, len, pos / sr);
+            pos += len;
+        }
+        return l;
+    };
+    const auto ref = run ([] { return 4096; });
+    CHECK (std::abs (ref->heardSeconds() - 46.0) < 1.0e-6);
+    const auto refTone = ref->toneTarget();
+    REQUIRE (refTone.valid);
+    const auto refWindow = ref->loudestWindow();
+    std::mt19937 rng (3);
+    std::uniform_int_distribution<int> any (1, 700);
+    for (const int block : { 1, 4, 16, 64, 0 })
+    {
+        const auto l = block > 0 ? run ([block] { return block; }) : run ([&] { return any (rng); });
+        INFO ("block " << block << " (0: random 1-700)");
+        CHECK (l->heardSamples() == ref->heardSamples());
+        const auto tone = l->toneTarget();
+        REQUIRE (tone.valid);
+        double worst = 0.0;
+        for (size_t b = 0; b < tone.bandDb.size(); ++b) worst = std::max (worst, std::abs ((double) tone.bandDb[b] - refTone.bandDb[b]));
+        CHECK (worst < 1.0e-3);
+        CHECK (l->loudestWindow().channels == refWindow.channels);
+        CHECK (std::abs (l->stats().integratedLufs - ref->stats().integratedLufs) < 1.0e-9);
+    }
+}
+
+TEST_CASE ("Song listener on a mono bus measures one channel and keeps a mono window", "[songlistener]")
+{
+    const double sr = 44100.0;
+    AudioClip mono = testsig::musicLike (sr, 30.0, -14.0, 4);
+    mono.channels.resize (1);
+    SongListener l;
+    l.prepare (sr, 12.0, 600.0);
+    for (int pos = 0; pos < mono.numSamples(); pos += 512)
+        l.process (mono.channels[0].data() + pos, static_cast<const float*> (nullptr), std::min (512, mono.numSamples() - pos), pos / sr);
+    const auto st = l.stats();
+    CHECK (st.channels == 1);
+    CHECK (std::abs (st.integratedLufs - measure (mono).integratedLufs) < 0.05);   // not 3 dB louder
+    const auto w = l.loudestWindow();
+    REQUIRE (w.numChannels() == 1);
+    CHECK (std::abs (l.loudestLufs() - measure (w).integratedLufs) < 0.3);
+    // The same pointer twice is a mono bus too (what some hosts hand over).
+    SongListener same;
+    same.prepare (sr, 12.0, 600.0);
+    same.process (mono.channels[0].data(), mono.channels[0].data(), mono.numSamples(), 0.0);
+    CHECK (std::abs (same.stats().integratedLufs - st.integratedLufs) < 1.0e-9);
+}
+
+TEST_CASE ("Song listener notes jumps on the timeline and where the loudest part's audio came from", "[songlistener]")
+{
+    const double sr = 48000.0;
+    const auto dash = [] (const TimeSpan& t) { return std::make_pair (t.start, t.end); };
+    {
+        // Played 0:40-0:50, then the playhead jumped to 2:00 and played to 2:10 (the audit's case: the
+        // report used to say 0:43-0:55, which was never played).
+        SongListener l;
+        l.prepare (sr, 12.0, 600.0);
+        listen (l, testsig::musicLike (sr, 10.0, -14.0, 1), 40.0);
+        listen (l, testsig::musicLike (sr, 10.0, -13.0, 2), 120.0);
+        const auto st = l.stats();
+        CHECK (st.timelineJumps == 1);
+        REQUIRE (st.loudestSpans.size() == 2);
+        const auto [a0, a1] = dash (st.loudestSpans[0]);
+        const auto [b0, b1] = dash (st.loudestSpans[1]);
+        INFO ("spans " << a0 << "-" << a1 << ", " << b0 << "-" << b1);
+        CHECK (a0 >= 40.0 - 1.0e-6);
+        CHECK (std::abs (a1 - 50.0) < 0.11);
+        CHECK (std::abs (b0 - 120.0) < 0.11);
+        CHECK (b1 <= 130.0 + 1.0e-6);
+        CHECK (std::abs ((a1 - a0) + (b1 - b0) - 12.0) < 0.15);
+        CHECK (l.loudestJumped());
+        CHECK (l.loudestEndSeconds() < 0.0);
+    }
+    {
+        // A cycle loop 1:00-1:16 played three times.
+        SongListener l;
+        l.prepare (sr, 12.0, 600.0);
+        const auto loop = testsig::musicLike (sr, 16.0, -14.0, 5);
+        for (int k = 0; k < 3; ++k) listen (l, loop, 60.0, 5u + static_cast<unsigned> (k));
+        const auto st = l.stats();
+        CHECK (st.timelineJumps == 2);
+        for (const auto& sp : st.loudestSpans)
+        {
+            INFO ("span " << sp.start << "-" << sp.end);
+            CHECK (sp.start >= 60.0 - 1.0e-6);   // only what was played: inside the loop
+            CHECK (sp.end <= 76.0 + 0.11);
+        }
+    }
+    {
+        // Played straight through, with a stop (no position while stopped) and play on from the same
+        // place: no jump, one span, and the end is known.
+        SongListener l;
+        l.prepare (sr, 12.0, 600.0);
+        listen (l, testsig::musicLike (sr, 8.0, -14.0, 7), 30.0);
+        const auto quiet = testsig::silence (sr, 2, 2.0);
+        listen (l, quiet, -1.0);   // stopped: the host gives no position
+        listen (l, testsig::musicLike (sr, 8.0, -14.0, 8), 38.0);
+        const auto st = l.stats();
+        CHECK (st.timelineJumps == 0);
+        REQUIRE (st.loudestSpans.size() == 1);
+        CHECK (std::abs (st.loudestSpans[0].end - st.loudestSpans[0].start - 12.0) < 0.15);
+        CHECK (std::abs (l.loudestEndSeconds() - st.loudestSpans[0].end) < 1.0e-9);
+    }
 }

@@ -12,16 +12,32 @@
 
 namespace polisher {
 
+/** A stretch of the DAW's timeline (seconds). */
+struct TimeSpan
+{
+    double start = 0.0, end = 0.0;
+};
+
 /** What a whole-song listen measured (for Auto-Master's report). */
 struct SongStats
 {
     double heardSeconds = 0.0;          // music heard (silence and stops skipped)
-    double integratedLufs = -100.0;     // the whole song as it arrived (BS.1770 gating)
-    double loudnessRangeLu = 0.0;       // EBU Tech 3342
+    double integratedLufs = -100.0;     // what it heard as it arrived (BS.1770 gating): the whole song when it was played once through
+    double loudnessRangeLu = 0.0;       // EBU Tech 3342, of the same
     double loudestLufs = -100.0;        // the loudest window (mean K-weighted energy over it)
     double loudestStartSeconds = 0.0;   // where it starts: on the DAW's timeline when known, else into what was heard
-    double loudestSeconds = 0.0;        // its length
-    bool positionFromHost = false;      // true: loudestStartSeconds is a timeline position
+    double loudestSeconds = 0.0;        // its length (music heard)
+    bool positionFromHost = false;      // true: loudestStartSeconds and loudestSpans are timeline positions
+    /** Where the loudest window's audio sits on the timeline, in playing order: one span when it was
+        played straight through; more when playback jumped or a cycle loop wrapped inside it (its audio
+        then joins those places). Empty without timeline positions. Silence skipped inside a span leaves
+        it a little longer than loudestSeconds. */
+    std::vector<TimeSpan> loudestSpans;
+    /** Jumps on the timeline while it listened (a cycle loop wrapping, the playhead moved during
+        playback, or playback restarted somewhere else after a stop). With any, integratedLufs and
+        loudnessRangeLu describe what was heard (repeats included), not the song played once through. */
+    int timelineJumps = 0;
+    int channels = 2;                   // 1: a mono bus (the loudness above counts one channel, as BS.1770 does)
 };
 
 /** Listens to a whole song as it plays, keeping only what Auto-Master needs, in memory that does not
@@ -35,8 +51,11 @@ struct SongStats
 
     The audio is kept in 100 ms pieces from a fixed pool (2 x window + 2 pieces): the last window's
     pieces and the loudest window's pieces; when the last window becomes the loudest, only the list of
-    pieces changes hands, nothing is copied. Blocks quieter than kSilencePeak (stopped transport,
-    gaps) are skipped, so what is heard is music only.
+    pieces changes hands, nothing is copied. Each 100 ms piece whose peak stays below kSilencePeak
+    (stopped transport, gaps) is skipped as a whole, whatever the host's block size, so what is heard
+    is music only. A mono bus (no right channel) is measured as one channel, as BS.1770 does, and the
+    loudest window comes back mono. Jumps on the DAW's timeline (cycle loops, the playhead moved while
+    playing) are noted, so the report can say where the loudest window really came from.
 
     prepare() allocates; process() never allocates or locks (audio thread). The progress readings are
     safe from any thread while process() runs; the results (loudestWindow, stats, toneTarget) only
@@ -46,14 +65,16 @@ class SongListener
 public:
     static constexpr double kHopSeconds = 0.1;
     static constexpr int kToneBlockHops = 10;           // 1 s of music per tone reading
-    static constexpr double kSilencePeak = 0.003;       // about -50 dBFS: a block below it is not music
+    static constexpr double kSilencePeak = 0.003;       // about -50 dBFS: a 100 ms piece below it is not music
     static constexpr int kMinToneBlocks = 8;            // a tone needs at least 8 s of music at the song's level
+    static constexpr double kJumpSeconds = 0.05;        // a block this far from where the last one ended: the playhead jumped
 
     void prepare (double sampleRate, double windowSeconds, double maxSeconds);
     void reset() noexcept;
 
-    /** Audio thread: one block of the incoming mix (right = left for mono). hostSeconds is the DAW's
-        timeline position of the block's first sample (negative: unknown). */
+    /** Audio thread: one block of the incoming mix (right nullptr, or the same pointer as left: a mono
+        bus). hostSeconds is the DAW's timeline position of the block's first sample (negative: unknown,
+        or the transport is stopped). */
     void process (const float* left, const float* right, int numSamples, double hostSeconds) noexcept;
     void process (const double* left, const double* right, int numSamples, double hostSeconds) noexcept;
 
@@ -73,10 +94,16 @@ public:
     double loudestLufs() const noexcept;
     /** Where it starts (see SongStats::loudestStartSeconds); -1 before there is one. */
     double loudestStartSeconds() const noexcept;
+    /** Where it ends on the timeline; -1 before there is one, without timeline positions, or when
+        playback jumped inside it (then it is no single stretch of the song). */
+    double loudestEndSeconds() const noexcept;
+    /** Playback jumped inside the loudest window so far (its audio joins two or more places). */
+    bool loudestJumped() const noexcept            { return hasWindow() && bestJumps.load (std::memory_order_relaxed) > 0; }
     bool loudestFromHost() const noexcept;
 
     // --- Results (only while process() cannot run) ------------------------------------------------
-    /** The loudest window heard (all the music, when less than a window was heard), stereo. */
+    /** The loudest window heard (all the music, when less than a window was heard): stereo, or mono
+        when every block heard was mono. */
     AudioClip loudestWindow() const;
     SongStats stats() const;
     /** The song's tone as Tone Steady measures it, as the mix arrives: per band, the median over the
@@ -91,6 +118,7 @@ private:
     template <typename Sample>
     void processAny (const Sample* left, const Sample* right, int numSamples, double hostSeconds) noexcept;
     void completeHop() noexcept;
+    void skipHop() noexcept;
     void toneFrame() noexcept;
     void closeToneBlock() noexcept;
     int takeFree() noexcept { return freeList[static_cast<size_t> (--freeCount)]; }
@@ -99,11 +127,15 @@ private:
     double sr = 0.0;
     int hopLen = 0, windowHops = 0, maxHops = 0, pieces = 0;
 
-    // Loudness: K-weighted energy (sum over both channels of the mean square) per 100 ms of music.
+    // Loudness: K-weighted energy (sum over the channels of the mean square) per 100 ms of music.
     std::array<KWeighting, 2> weighting {};
     std::vector<double> hopEnergy, hopTime;              // [maxHops]; hopTime < 0: timeline position unknown
-    double hopSum = 0.0;
+    std::vector<std::uint8_t> hopJump;                   // [maxHops]; 1: the timeline jumped since the hop before (or inside this one)
+    double hopSum = 0.0, hopPeak = 0.0;                  // of the piece being filled (judged music or silence when it is full)
     int hopPos = 0;
+    double nextHostSeconds = -1.0;                       // where the next block starts if playback runs on (-1: unknown)
+    bool jumpPending = false, stereoSeen = false;
+    int jumpCount = 0;
 
     // Audio of the last window and of the loudest one, in 100 ms pieces from a fixed pool.
     std::vector<float> pool;                             // pieces x (left hopLen, right hopLen)
@@ -120,16 +152,16 @@ private:
     std::vector<std::complex<double>> work, twiddle;
     std::vector<int> bitrev;
     std::vector<double> binPow;                          // |L|^2 + |R|^2 per bin of the latest frame
-    std::array<double, kToneBands> blockSum {};
-    double blockEnergy = 0.0;
-    int blockFrames = 0;
+    std::array<double, kToneBands> blockSum {}, hopToneSum {};   // hopTone*: frames of the piece being filled, kept if it is music
+    double blockEnergy = 0.0, hopToneEnergy = 0.0;
+    int blockFrames = 0, hopToneFrames = 0;
     std::vector<float> toneBlocks;                       // [block][band] mean relative dB
     std::vector<float> toneLevel;                        // [block] mean frame level (dB)
     int toneCount = 0, maxBlocks = 0;
 
     // Progress, published by the audio thread.
     std::atomic<std::int64_t> heard { 0 }, silent { 0 };
-    std::atomic<int> hopsDone { 0 }, bestStart { -1 };
+    std::atomic<int> hopsDone { 0 }, bestStart { -1 }, bestJumps { 0 };
     std::atomic<double> bestLufs { -100.0 };
 };
 

@@ -109,7 +109,7 @@ const M = {
   inShort: -100, inIntegrated: -100, sr: 48000, tame: 0, punch: 0, bassWidth: 0,
   amState: 0, amProgress: 0, amHearing: false, amReport: 0, matchDb: 0, corr: 1,
   // Whole-song listen (mode 0 Auto-Master, 1 learn Tone Steady's target only) and the stored target (s of song, 0 = none).
-  amMode: 0, amHeard: 0, amLoudAt: -1, amLoudLufs: -100, amCanFinish: false, amByItself: false, tsTarget: 0, tsLearnFail: 0,
+  amMode: 0, amHeard: 0, amLoudAt: -1, amLoudEnd: -1, amLoudJump: false, amLoudLufs: -100, amCanFinish: false, amByItself: false, tsTarget: 0, tsLearnFail: 0,
   undo: "", redo: "", snaps: [{}, {}, {}, {}], snapActive: -1, snapModified: false,
   dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], stemKeep: 0, rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
   ulBoost: 0, ulSquash: 0, refVersion: 0, refState: 0,
@@ -1561,24 +1561,56 @@ function renderRtLearn(body) {
     body.appendChild(tip("TRY THIS", "Amount 50 %, Sensitivity 50 %, Focus Full. Then try Focus Harshness on a bright mix: hats and vocals get smoother without losing air.", true));
 }
 
+// AutoMasterController: after kAutoFinishSeconds of music, kSongEndSilenceSeconds without music end the listen.
+const AM_AUTO_FINISH = 30, AM_END_SILENCE = 4;
+// How long choosing the settings takes, said honestly: it runs the whole chain many times on the 12 s it
+// kept, so it scales with the sample rate (measured on a desktop CPU: about 6 s at 44.1 / 48 kHz, 12 s at
+// 96 kHz, 24 s at 192 kHz; slower computers take longer). Shows the time so far once it has started.
+let amThinkSince = 0;
+function amThinkTime() {
+  const sr = M.sr > 0 ? M.sr : 48000;
+  const est = sr <= 50000 ? "usually 5–15 seconds" : sr <= 100000 ? "usually 10–30 seconds" : "usually 20–60 seconds";
+  const secs = amThinkSince ? Math.floor((performance.now() - amThinkSince) / 1000) : 0;
+  return secs >= 1 ? `${est}; ${secs} s so far` : est;
+}
 // While Auto-Master listens (or Tone Steady learns): what it has heard, the loudest part so far, FINISH NOW.
 function renderListenLearn(body) {
   const tone = M.amMode === 1, heard = M.amHeard || 0;
   body.appendChild(head(tone ? "LEARNING YOUR SONG'S TONE" : "LISTENING TO YOUR SONG"));
   if (M.amState === 2) {
-    body.appendChild(para("l-p", `Heard ${fmtTime(heard)} of your song. Now choosing every setting for its loudest part (a few seconds)…`));
+    body.appendChild(para("l-p", `Heard ${fmtTime(heard)} of your song. Now choosing every setting for its loudest part (${amThinkTime()})…`));
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.id = "am-cancel";
+    stop.className = "pill pill-blue stem-apply";
+    stop.textContent = "CANCEL";
+    stop.addEventListener("click", () => {
+      amCancel(); amRequested = false;
+      M.amState = 0; learnView = "module";
+      updateAmButton(); renderLearn();
+      toast("Auto-Master stopped. Nothing was changed.");
+    });
+    const row = document.createElement("div");
+    row.className = "l-actions";
+    row.append(stop);
+    body.appendChild(row);
     return;
   }
   body.appendChild(para("l-p", !heard && !M.amHearing ? "Press play in your DAW, ideally from the very start of the song."
-    : M.amHearing ? "Keep the song playing." : "Paused. Press play to go on, or finish with what it has heard."));
+    : M.amHearing ? "Keep the song playing."
+    : heard >= AM_AUTO_FINISH ? `No music for a moment. After ${AM_AUTO_FINISH} seconds of music, ${AM_END_SILENCE} seconds without music count as the end of the song, and it finishes by itself. To keep listening, press play again right away.`
+    : "Paused. Press play to go on, or finish with what it has heard."));
   body.appendChild(para("l-p", (tone ? "Polisher listens to the whole song and learns its overall tone for Tone Steady. Nothing else changes."
                                      : "Auto-Master listens to the whole song, finds its loudest part by itself and sets every module for it. It also learns your song's tone for Tone Steady.")
-    + " It finishes by itself a few seconds after the song ends. Or press FINISH NOW any time after 12 seconds."));
+    + ` It finishes by itself ${AM_END_SILENCE} seconds after the song ends (once it has heard ${AM_AUTO_FINISH} seconds of music). Or press FINISH NOW any time after 12 seconds.`));
   body.appendChild(sep());
   body.appendChild(item("Heard", fmtTime(heard), "of music so far. Silence and stops are skipped."));
   if (!tone)
-    body.appendChild(item("Loudest part so far", M.amLoudAt >= 0 ? `${fmtTime(M.amLoudAt)}–${fmtTime(M.amLoudAt + 12)}` : "–",
-      M.amLoudAt >= 0 ? `${fmtNum(M.amLoudLufs)} LUFS. Auto-Master sets the levels from this part (usually the hook or drop).` : "Found once 12 seconds of music are in."));
+    body.appendChild(item("Loudest part so far", M.amLoudAt < 0 ? "–" : M.amLoudJump ? `from ${fmtTime(M.amLoudAt)}`
+                                                  : `${fmtTime(M.amLoudAt)}–${fmtTime(M.amLoudEnd > M.amLoudAt ? M.amLoudEnd : M.amLoudAt + 12)}`,
+      M.amLoudAt < 0 ? "Found once 12 seconds of music are in."
+      : `${fmtNum(M.amLoudLufs)} LUFS. Auto-Master sets the levels from this part (usually the hook or drop).`
+        + (M.amLoudJump ? " Playback jumped inside it (a cycle loop, or the playhead moved), so it joins two places on your timeline." : "")));
   const row = document.createElement("div");
   row.className = "l-actions";
   const finish = document.createElement("button");
@@ -1653,7 +1685,8 @@ function watchListening(wasAm, wasTarget, wasFail) {
     if (learnOn && learnView === "module" && selected === "ts") renderLearn();
   }
   if (learnOn && learnView === "listen") {
-    const key = [M.amState, Math.floor(M.amHeard || 0), M.amCanFinish, M.amHearing, M.amLoudAt].join("|");
+    const key = [M.amState, Math.floor(M.amHeard || 0), M.amCanFinish, M.amHearing, M.amLoudAt, M.amLoudEnd, M.amLoudJump,
+                 M.amState === 2 && amThinkSince ? Math.floor((performance.now() - amThinkSince) / 1000) : 0].join("|");
     if (key !== lastListenDraw) { lastListenDraw = key; renderLearn(); }
   }
 }
@@ -2140,7 +2173,7 @@ function amListenText() {
   const heard = M.amHeard || 0;
   if (!heard) return M.amHearing ? "Listening…" : "Press play · from the start of your song";
   if (!M.amCanFinish) return `${fmtTime(heard)} heard · keep playing · click to stop`;
-  if (!M.amHearing) return `Paused at ${fmtTime(heard)} · play on, or click to finish`;
+  if (!M.amHearing) return heard >= AM_AUTO_FINISH ? `No music · finishing unless you play on` : `Paused at ${fmtTime(heard)} · play on, or click to finish`;
   const loud = M.amMode !== 1 && M.amLoudAt >= 0 ? ` · loudest at ${fmtTime(M.amLoudAt)}` : "";
   return `${fmtTime(heard)} heard${loud} · click to finish`;
 }
@@ -2156,7 +2189,7 @@ function updateAmButton() {
     sub.textContent = amListenText();
   } else if (M.amState === 2) {
     title.textContent = "THINKING";
-    sub.textContent = "Choosing every setting (a few seconds)…";
+    sub.textContent = `Choosing every setting (${amThinkTime()})…`;
   } else {
     title.textContent = "AUTO-MASTER";
     sub.textContent = amReport && amReport.ok ? "Done · click to run again" : "Click, then play your whole song";
@@ -2322,6 +2355,12 @@ async function fetchReference() {
   drawRefCurve();
   renderLearn();
 }
+// What Auto-Master aims for with a reference: its loudest 12 s (compared with the loudest 12 s of your song).
+// References saved before that was measured only have their loudest 30 s.
+const refTargetLufs = (p) => (p && isFinite(p.hookLufs) && p.hookLufs > -99 ? p.hookLufs : p ? p.lufs : NaN);
+// The display reads the same sound higher at a higher sample rate (its 4096 bins get wider), so a reference
+// measured at its file's rate is moved by the difference (the engine's displayRateShiftDb).
+const refRateShift = (p) => (p && p.sampleRate > 0 && M.sr > 0 ? 10 * Math.log10(M.sr / p.sampleRate) : 0);
 function refreshRefPill() {
   const btn = $("btn-ref"), p = refInfo.profile;
   const loading = M.refState === 1 || refInfo.state === 1;
@@ -2329,7 +2368,7 @@ function refreshRefPill() {
   btn.className = "pill ref-pill " + (p && !loading ? "pill-red" : "pill-blue");
   btn.setAttribute("aria-pressed", String(!!p));
   btn.title = loading ? "Reading the reference song…"
-    : p ? `Matching “${p.name}” (${fmtNum(p.lufs)} LUFS in its loudest part). Click to load a different song; × goes back to the genre targets.`
+    : p ? `Matching “${p.name}” (${fmtNum(refTargetLufs(p))} LUFS in its loudest 12 seconds). Click to load a different song; × goes back to the genre targets.`
         : "Match a reference: load a released song you want your master to sound like";
   $("btn-ref-clear").hidden = !p || loading;
   $("row-target").classList.toggle("ref-active", !!p);
@@ -2341,7 +2380,7 @@ function drawRefCurve() {
   $("legend-ref").hidden = !has;
   if (!has) { path.setAttribute("d", ""); return; }
   if (M.shortTerm > -50) {
-    const want = M.shortTerm - p.lufs;
+    const want = M.shortTerm - p.lufs + refRateShift(p);
     refOffset = refOffset === null ? want : refOffset + 0.05 * (want - refOffset);   // ~1 s glide
   }
   const off = refOffset === null ? 0 : refOffset;
@@ -2447,7 +2486,7 @@ const histGrY = (gr) => clamp(-gr / HIST_GR_DEPTH, 0, 1) * H * HIST_GR_SPAN;
 // What Auto-Master aims for: the Target pill, or a loaded reference's loudness (kept within -16..-6 LUFS
 // by Auto-Master, see kRefMinLufs / kRefMaxLufs).
 function histTargetLufs() {
-  if (refInfo.profile && isFinite(refInfo.profile.lufs)) return { lufs: clamp(refInfo.profile.lufs, -16, -6), ref: true };
+  if (refInfo.profile && isFinite(refTargetLufs(refInfo.profile))) return { lufs: clamp(refTargetLufs(refInfo.profile), -16, -6), ref: true };
   return { lufs: [-14, -9, -7][comboIndex(P.amTarget)], ref: false };
 }
 function buildHistoryGrid() {
@@ -2614,7 +2653,10 @@ function refCompare(r) {
   const closeness = (v, refV, near, far) => (Math.abs(v - refV) <= near ? "near" : Math.abs(v - refV) >= far ? "far" : "");
   const side = (db) => (db <= -40 ? "mono" : fmtNum(db));
   add([["", ""], ["REF", ""], ["MIX", ""], ["MASTER", ""]], true);
-  add([["Loudness (LUFS)"], [fmtNum(ref.lufs), "ref"], [fmtNum(r.inputLufs)], [fmtNum(r.outputLufs), closeness(r.outputLufs, ref.lufs, 1, 2.5)]]);
+  // Loudest 12 s against loudest 12 s: the reference's hook, your mix as it arrives (before Input Trim and
+  // Stem EQ), and the master.
+  const refLoud = refTargetLufs(ref);
+  add([["Loudness, loudest 12 s (LUFS)"], [fmtNum(refLoud), "ref"], [fmtNum(r.inputLufs)], [fmtNum(r.outputLufs), closeness(r.outputLufs, refLoud, 1, 2.5)]]);
   add([["Deep sub vs bass (dB)"], [signed(ref.subVsBass), "ref"], [signed(mix.subVsBass)], [signed(mas.subVsBass), closeness(mas.subVsBass, ref.subVsBass, 1.5, 3)]]);
   add([["Bass stereo"], [`${Math.round(ref.bassWidth)} %`, "ref"], [`${Math.round(mix.bassWidth)} %`], [`${Math.round(mas.bassWidth)} %`, ""]]);
   add([["Mids width (dB)"], [side(ref.midSide), "ref"], [side(mix.midSide)], [side(mas.midSide), closeness(mas.midSide, ref.midSide, 1.5, 4)]]);
@@ -2675,7 +2717,8 @@ function renderRefLearn(body) {
     body.appendChild(howToUseRef());
     return;
   }
-  body.appendChild(para("l-p", `Matching “${p.name}”. Polisher measured its loudest ${Math.round(p.partSeconds)} s (from ${mmss(p.startSeconds)}): ${fmtNum(p.lufs)} LUFS, the whole song ${fmtNum(p.trackLufs)} LUFS. Only these measurements are saved with your project, not the song.`));
+  const hookNote = isFinite(p.hookLufs) && p.hookLufs > -99 ? ` Its loudest 12 seconds measure ${fmtNum(p.hookLufs)} LUFS: that's what Auto-Master aims for, compared with the loudest 12 seconds of your song.` : "";
+  body.appendChild(para("l-p", `Matching “${p.name}”. Polisher measured its loudest ${Math.round(p.partSeconds)} s (from ${mmss(p.startSeconds)}): ${fmtNum(p.lufs)} LUFS, the whole song ${fmtNum(p.trackLufs)} LUFS.${hookNote} Only these measurements are saved with your project, not the song.`));
   body.appendChild(item("What Auto-Master takes from it", null,
     "The tone (all seven EQ bands), the loudness (kept between −16 and −6 LUFS), the stereo width of the mids and highs, and the low end: how stereo the bass is and how deep the 808 reaches. Your genre still decides compression, saturation, clipping and punch, which a reference can't show."));
   const r = amReport;
@@ -2741,11 +2784,20 @@ function renderReport(body) {
   if (r.listened) body.appendChild(para("l-p l-listened", r.listened));
   body.appendChild(para("l-p", r.summary));
   const L = r.listen;
+  const jumped = !!(L && L.jumps > 0);
   if (L && L.heard > 0 && L.songLufs > -70)
-    body.appendChild(item("Whole song", `${fmtNum(L.songLufs)} LUFS`,
-      `Your whole song as it arrives (loudness range ${fmtNum(L.songLra)} LU). Its loudest part measures ${fmtNum(L.loudLufs)} LUFS: the master is set for that part, so the rest of the song sits under it as you mixed it.`
+    body.appendChild(item(jumped ? "What it heard" : "Whole song", `${fmtNum(L.songLufs)} LUFS`,
+      (jumped ? `Everything it heard as it arrived, repeats included (loudness range ${fmtNum(L.songLra)} LU): playback jumped or looped while it listened, so this isn't your song played once through.`
+              : `Your whole song as it arrives (loudness range ${fmtNum(L.songLra)} LU).`)
+      + ` Its loudest part measures ${fmtNum(L.loudLufs)} LUFS: the master is set for that part, so the rest of the song sits under it as you mixed it.`
       + (!r.toneTarget ? "" : Math.abs(r.toneTarget - L.heard) < 1 ? ` Tone Steady learned your song's overall tone from these ${fmtTime(r.toneTarget)}.`
                                                                    : ` Tone Steady keeps the overall tone it learned from ${fmtTime(r.toneTarget)} of your song.`)));
+  if (jumped)
+    body.appendChild(tip("PLAYBACK JUMPED WHILE IT LISTENED", L.loudPieces > 1
+        ? "The loudest 12 seconds it heard join two or more places on your timeline (a cycle loop, or the playhead moved), so the levels were set from audio that isn't one stretch of your song."
+        : "A cycle loop or a jump of the playhead happened while it listened, so the whole-song figures count what it heard, not your song played once through.", !(L.loudPieces > 1),
+      { need: L.loudPieces > 1 ? "Only if the joined parts weren't your loudest part (the hook or drop). Otherwise the settings fit." : "No: the loudest part was one stretch of your song, so the settings fit. Only the whole-song figures are off.",
+        steps: ["Turn off Cycle on Cubase's transport bar (the loop button), so the song plays straight through.", "Click Auto-Master and play the song from the start to the end."] }));
   if (L && L.heard > 0 && L.heard < 30)
     body.appendChild(tip("PLAY THE WHOLE SONG NEXT TIME", `Auto-Master heard ${fmtTime(L.heard)} of your song, so it set the levels from that part.`, true,
       { need: "No, if that was the loudest part (the hook or drop). Otherwise the louder part will be limited harder than planned.",
@@ -3034,6 +3086,8 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   const srChanged = frame.sr && frame.sr !== M.sr;
   const wasAm = M.amState, wasTarget = M.tsTarget, wasFail = M.tsLearnFail;
   Object.assign(M, frame);
+  if (M.amState === 2 && wasAm !== 2) amThinkSince = performance.now();   // the analysis started: time it
+  else if (M.amState !== 2) amThinkSince = 0;
   watchListening(wasAm, wasTarget, wasFail);
   if (srChanged) { drawEq(); fetchGenreCurve(); }
   refreshHistory();
@@ -3043,7 +3097,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
     amSeenVersion = M.amReport;
     fetchReport(!first);
   }
-  if (wasAm !== M.amState || M.amState === 1) updateAmButton();
+  if (wasAm !== M.amState || M.amState === 1 || M.amState === 2) updateAmButton();
   if (M.refVersion !== refSeenVersion) { refSeenVersion = M.refVersion; fetchReference(); }
   else if (M.refState === 1) refreshRefPill();
   if (P.levelMatch.getValue()) refreshMatch();

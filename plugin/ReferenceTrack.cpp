@@ -148,6 +148,8 @@ juce::var ReferenceTrack::profileToVar (const polisher::ReferenceProfile& p)
     o->setProperty ("partSeconds", p.partSeconds);
     o->setProperty ("trackLufs", p.trackLufs);
     o->setProperty ("lufs", p.lufs);
+    o->setProperty ("hookLufs", p.hookLufs);         // its loudest 12 s: what Auto-Master aims for (absent in older saves)
+    o->setProperty ("sampleRate", p.sampleRate);     // the file's: the spectrum curve is shifted for the project's rate
     o->setProperty ("truePeak", p.truePeakDbtp);
     o->setProperty ("plr", p.peakToLoudnessDb);
     o->setProperty ("bandDb", arrayToVar (p.bandDb));
@@ -173,6 +175,8 @@ polisher::ReferenceProfile ReferenceTrack::profileFromVar (const juce::var& v)
     p.partSeconds = number (v, "partSeconds", 0.0);
     p.trackLufs = number (v, "trackLufs", lufs);
     p.lufs = lufs;
+    p.hookLufs = number (v, "hookLufs", -100.0);     // older saves: -100, so referenceLoudness() uses lufs
+    p.sampleRate = number (v, "sampleRate", 0.0);    // older saves: unknown, the curve isn't shifted
     p.truePeakDbtp = number (v, "truePeak", -100.0);
     p.peakToLoudnessDb = number (v, "plr", 0.0);
     for (int b = 0; b < polisher::kEqBands; ++b)
@@ -245,7 +249,9 @@ polisher::ReferenceProfile ReferenceTrack::analyseFile (const juce::File& file, 
         for (int c = 0; c < 2; ++c)
             std::copy (buffer.getReadPointer (c), buffer.getReadPointer (c) + n, part.channels[static_cast<size_t> (c)].begin() + done);
     }
-    auto p = polisher::analyseReference (part, finder.seconds(), finder.integratedLufs(), static_cast<double> (start) / sr);
+    // Its loudest kHookSeconds over the whole song: Auto-Master compares it with the loudest 12 s of your song.
+    auto p = polisher::analyseReference (part, finder.seconds(), finder.integratedLufs(), static_cast<double> (start) / sr,
+                                         finder.loudestLufs (polisher::kHookSeconds));
     if (! p.valid)
     {
         error = "There isn't enough music in " + quoted (file) + " to measure (at least a few seconds of sound).";

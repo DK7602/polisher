@@ -66,7 +66,7 @@
     return +(-29 + lo + hi + (f > 40 && f < 110 ? 6 : 0) + tilt * Math.log2(f / 1000) + 1.5 * Math.sin(i / 9)).toFixed(1);
   });
   const refSongs = [
-    { name: "Mock Reference (Trap)", trackSeconds: 184, startSeconds: 61.5, partSeconds: 30, trackLufs: -8.4, lufs: -7.6, truePeak: -0.4, plr: 7.2,
+    { name: "Mock Reference (Trap)", trackSeconds: 184, startSeconds: 61.5, partSeconds: 30, trackLufs: -8.4, lufs: -7.6, hookLufs: -7.3, sampleRate: 44100, truePeak: -0.4, plr: 7.2,
       bandDb: [-3.2, 3.1, 0.4, -0.2, -0.6, -2.0, -5.6], bassWidth: 4, midSide: -10.5, highSide: -5.8, correlation: 0.55, subVsBass: 2.4, displayDb: refCurve(0.4) },
     { name: "Second Reference", trackSeconds: 201, startSeconds: 88, partSeconds: 30, trackLufs: -9.9, lufs: -9.1, truePeak: -1.0, plr: 8.4,
       bandDb: [-5.5, 2.0, 0.8, 0.1, -0.9, -2.9, -7.4], bassWidth: 2, midSide: -13.0, highSide: -8.0, correlation: 0.7, subVsBass: -1.2, displayDb: refCurve(-0.6) },
@@ -234,6 +234,7 @@
   }
 
   function amFinish() {
+    if (am.state !== 2) return;   // cancelled while it was choosing
     beginGroup(`Auto-Master (${combos.amGenre.choices[Math.round(combos.amGenre.value * 5)]}, ${combos.amIntensity.choices[Math.round(combos.amIntensity.value * 2)]})`);
     const values = { eqGain1: 0, eqGain2: 0, eqGain3: -1.4, eqGain4: 0, eqGain5: 0, eqGain6: 0.8, eqGain7: 1.6,
                      bassMono: 100, bassTame: 40, bassPunch: 25, satMode: 1, satFocus: 1, satDrive: 11.4, satMix: 50,
@@ -329,7 +330,7 @@
           else Object.assign(am, { state: 1, heard: 0, byItself: false, mode: (payload.params || [])[0] === "tone" ? 1 : 0 });
         }
         if (payload.name === "finishAutoMaster") { result = am.state === 1 && am.heard >= 12; if (result) amDecide(false); }
-        if (payload.name === "cancelAutoMaster" && am.state === 1) am.state = 0;
+        if (payload.name === "cancelAutoMaster" && (am.state === 1 || am.state === 2)) am.state = 0;
         if (payload.name === "clearToneTarget" && am.toneTarget) { beginGroup("Tone Steady: follow the music"); am.toneTarget = 0; endGroup(); }
         if (payload.name === "getAutoMasterReport") result = am.report;
         if (payload.name === "setMonitor") {
@@ -403,7 +404,8 @@
       bassWidth: 42, corr: +(0.55 - (sliders.imgMid.value + sliders.imgHigh.value - 200) / 400).toFixed(2), matchDb: +(-(11 * (1 - Math.exp(-drive / 11)))).toFixed(1),
       amState: am.state, amProgress: am.state === 1 ? +Math.min(1, am.heard / 12).toFixed(2) : 0, amHearing: true, amReport: am.version,
       amMode: am.mode, amHeard: am.heard, amCanFinish: am.state === 1 && am.heard >= 12, amByItself: am.byItself,
-      amLoudAt: am.heard < 12 ? -1 : Math.min(LOUD_AT, am.heard - 12), amLoudLufs: am.heard >= LOUD_AT + 12 ? -17.6 : -21.2,
+      amLoudAt: am.heard < 12 ? -1 : Math.min(LOUD_AT, am.heard - 12), amLoudEnd: am.heard < 12 ? -1 : Math.min(LOUD_AT, am.heard - 12) + 12,
+      amLoudJump: false, amLoudLufs: am.heard >= LOUD_AT + 12 ? -17.6 : -21.2,
       tsTarget: am.toneTarget, tsLearnFail: am.toneFail,
       undo: undoLabel(), redo: redoLabel(), ...snapStatus(),
       refVersion: ref.version, refState: ref.state,

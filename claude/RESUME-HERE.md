@@ -7,6 +7,27 @@ latest green Actions run.
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
 
+## 2026-10-11 Auto-Master re-audit fixes (worktree agent; report /tmp/.../reaudit_automaster.md)
+- Reference loudness hook vs hook: ReferenceProfile::hookLufs = loudest kHookSeconds (12 s) over the whole song
+  (LoudestPartFinder::loudestLufs, BS.1770-gated from 100 ms hops), saved as "hookLufs" (+ "sampleRate");
+  referenceLoudness() = hookLufs, or lufs (30 s) for older saves. Target, notes, summary, Learn REF row use it.
+- Report's "your mix" = raw input (before Input Trim AND Stem EQ); Input Trim reason names a Stem EQ boost
+  (+ Keep Loudness hint); r.analysis.loudness / inputLufs = raw.
+- Bass only -> Full fallback by low-end share (bands 0-1 vs genre norm, 6 dB under) instead of harmonics at max
+  Drive (was level-dependent: -30 LUFS 808 mix got Full).
+- Reference curve: UI shifts displayDb by 10 log10(project rate / file rate) (engine displayRateShiftDb; checked
+  vs balanceDisplayCurve within 0.2 dB above 500 Hz; below ~300 Hz at 96k+ the display has too few bins).
+- SongListener: silence judged per 100 ms piece (tiny blocks heard exactly as 4096); mono bus = one channel
+  (capture passes nullptr), mono window; timeline jumps detected (block start vs last block end, 50 ms):
+  SongStats::loudestSpans / timelineJumps, report names the joined places and says whole-song figures include
+  repeats; live amLoudEnd / amLoudJump frame props.
+- Analysis cancellable: ScopedCancelFlag / AnalysisCancelled (LoudnessTargeting), checked in render/measure
+  loops; controller cancel() also stops an analysis; destructor no longer waits up to 60 s. Not sped up
+  (decimating at 96k+ would change the landing; measured ~6 / 12-16 / 24-31 s at 44.1 / 96 / 192 kHz):
+  UI says "usually 5-15 / 10-30 / 20-60 seconds" and counts, with CANCEL. Pause texts say 4 s after 30 s ends it.
+- Texts: Unlimiter reason/note fit the target gap; LOUDER IF YOU WANT only when the target was missed; clipper
+  off quotes the Drive it gets; kept tone says "earlier, longer listen". Plug-in alloc counter is per thread.
+
 ## 2026-10-10 Match ref (reference-track matching), built by a worktree agent
 The footer's "Match ref" pill is real: it opens a file chooser (WAV/AIFF/FLAC/MP3, JUCE_USE_MP3AUDIOFORMAT=1);
 plugin/ReferenceTrack reads the song on its own thread in two passes (whole song <= 15 min through

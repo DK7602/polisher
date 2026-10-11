@@ -63,8 +63,8 @@ public:
         if (stateFlag.load() == listening && listener.getSampleRate() == sampleRate.load (std::memory_order_relaxed))
         {
             const int nch = buffer.getNumChannels(), n = buffer.getNumSamples();
-            if (nch > 0 && n > 0)
-                listener.process (buffer.getReadPointer (0), buffer.getReadPointer (std::min (1, nch - 1)), n, hostSeconds);
+            if (nch > 0 && n > 0)   // a mono bus: no right channel, so it is measured as one channel
+                listener.process (buffer.getReadPointer (0), nch > 1 ? buffer.getReadPointer (1) : nullptr, n, hostSeconds);
         }
         captureBusy.store (false, std::memory_order_release);
     }
@@ -73,6 +73,7 @@ public:
     bool start (Mode mode = fullMaster);
     /** "Use what you've heard": stops listening and decides from it. False before kMinListenSeconds. */
     bool finish();
+    /** Stops listening, or stops an analysis that is running (nothing is changed either way). */
     void cancel();
 
     /** What the timer does 15 times a second while listening or analysing (tests call it directly). */
@@ -102,6 +103,8 @@ public:
     double getHeardSeconds() const noexcept;   // music heard so far (this or the last listen)
     bool canFinish() const noexcept            { return getState() == listening && getHeardSeconds() >= kMinListenSeconds; }
     double getLoudestStartSeconds() const noexcept;   // where the loudest part so far starts (-1: none yet)
+    double getLoudestEndSeconds() const noexcept;     // where it ends on the timeline (-1: none yet, no positions, or playback jumped inside it)
+    bool loudestPartJumped() const noexcept           { return listener.isPrepared() && listener.loudestJumped(); }
     double getLoudestLufs() const noexcept;           // its loudness (-100: none yet)
     /** Whether the last listen ended by itself because the song ended (or the listen limit). */
     bool finishedByItself() const noexcept     { return autoFinished; }
@@ -134,6 +137,7 @@ private:
     int session = 0;                              // message thread
     int toneLearnFailures = 0;                    // message thread
     polisher::SongStats pendingStats;             // the listen behind the analysis running now
+    std::shared_ptr<std::atomic<bool>> analysisCancel;   // the running analysis's stop flag (message thread)
 
     juce::CriticalSection resultLock;
     std::unique_ptr<polisher::AutoMasterResult> pendingResult;
