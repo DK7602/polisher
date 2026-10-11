@@ -89,12 +89,14 @@ public:
         std::atomic<float> correlation { 1.0f };      // output L/R correlation (+1 mono ... -1 out of phase)
         std::array<std::atomic<float>, polisher::kDynBands> dynGr {};   // deepest Dynamics gain reduction per band since read (dB, <= 0)
         std::atomic<float> satResidual { 0.0f }, satSignal { 0.0f };   // Saturation energies since read (harmonics, signal)
-        std::array<std::atomic<float>, polisher::kStems> stemEnergy {};   // loudness-weighted energy the Stem EQ model credited to each stem since read
+        std::array<std::atomic<float>, polisher::kStems> stemEnergy {};   // K-weighted energy the Stem EQ model credited to each stem since read
         std::atomic<float> stemKeep { 0.0f };              // broadband gain Stem EQ Keep loudness applies now (dB)
         std::atomic<float> rtCut { 0.0f }, rtHz { 0.0f };   // deepest Resonance Tamer cut since read (dB, <= 0) and where
         std::atomic<float> ulBoost { 0.0f };               // largest Unlimiter lift since read (dB, >= 0)
         std::atomic<float> ulSquash { 0.0f };              // how squashed the incoming audio is (dB, 0 = not measured yet)
         std::atomic<float> tsDb { 0.0f }, tsHz { 0.0f };    // largest Tone Steady correction since read (dB, signed) and where
+        std::atomic<float> tsDistance { -1.0f };           // how far the music sits from Tone Steady's stored tone (dB, -1: not known)
+        std::atomic<bool> tsFar { false };                 // ... far for long: probably another song's tone
         std::atomic<int> listenPlaying { 0 };              // listen mode being heard (polisher::listen::Mode; 0 while it prepares)
         std::atomic<float> listenGainDb { 0.0f };          // gain it is played with (dB, + = turned up to be heard)
         std::atomic<float> listenUnderDb { -100.0f };      // how far it sits under the master, as it is in the master (dB)
@@ -136,6 +138,18 @@ public:
 
     /** The reference song for Match ref (its measurements only), saved with the state. */
     ReferenceTrack reference;
+    /** Match ref from the window: read and measure a song / forget it. Both mark the project as changed
+        (the reference is saved with it, not a parameter). Message thread. */
+    void loadReference (const juce::File& file);
+    void clearReference();
+    /** Message thread, regularly (the editor's timer): when a load started here has ended, marks the
+        project changed again (the host may have saved while it was still being measured). */
+    void pollReference();
+
+    /** Tells the host the project changed although no parameter did (a snapshot stored, a reference
+        loaded or cleared, Tone Steady's target learned or cleared), so it asks to save it. A VST3 host
+        marks a project changed only for parameter edits or this call. Message thread. */
+    void markStateChanged();
 
     /** Tone Steady's stored target (the song's own tone, learned by Auto-Master), saved with the state. */
     ToneTargetStore toneTarget;
@@ -214,7 +228,7 @@ private:
     polisher::ToneTarget songTone, stageTone;
     int songToneVersion = -1;
     polisher::TonalEQParams stageToneEq;
-    double stageToneRate = 0.0;
+    double stageToneRate = 0.0, stageToneTrimDb = 0.0;
     double currentMatchGain = 1.0;
 
     // MATCH per snapshot: the gap learned while a slot played unchanged, so flipping back to it is
@@ -228,6 +242,11 @@ private:
     std::array<MatchMemory, SettingsSnapshots::kSlots> matchMemory {};
     std::atomic<int> matchSwitchRequest { 0 };   // 0x100 | (leaving + 1) | (entering + 1) << 4
     std::atomic<int> matchForgetRequest { 0 };   // one bit per slot
+    bool referenceLoadPending = false;           // a Match ref load started from the window is still running
+    // The settings changed a lot, MATCH learns the level afresh: 1 = Auto-Master (the level learned until
+    // then still belongs to the snapshot that was playing), 2 = another project or preset.
+    std::atomic<int> matchRelearnRequest { 0 };
+    MatchMemory relearnedLevel {};   // the level before an Auto-Master relearn, for the snapshot it leaves
     static constexpr double kMatchHoldSeconds = 3.0;    // after a switch: the short-term readings' window
     static constexpr double kMatchLearnSeconds = 10.0;  // a slot's level is kept once learned this long
 
@@ -240,6 +259,7 @@ private:
     polisher::ListenMix listenMix;
     polisher::MonitorOutput monitorOut;
     polisher::MonitorDelay monForm, monOut;
+    polisher::MonitorDelay monClipDelay;   // the Soft Clipper's clean gain, carried on past the limiter's look-ahead
     std::array<std::vector<double>, 2> monPre, monSig, monAux;
     std::vector<double> monLimGain, monClipGain;
     int monCapacity = 0;

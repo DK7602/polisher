@@ -70,8 +70,9 @@ double Saturation::estimateHarmonicsDb (const std::vector<std::vector<float>>& c
     return ratio > 1.0e-10 ? 10.0 * std::log10 (ratio) : -100.0;
 }
 
-void Saturation::prepare (double sampleRate, int numChannels)
+void Saturation::prepare (double newSampleRate, int numChannels)
 {
+    sampleRate = newSampleRate;
     channelCount = std::clamp (numChannels, 1, kMaxChannels);
     channelState.assign (static_cast<size_t> (channelCount), Channel {});
     const auto lp = design::butterworth (false, kBassSplitHz, sampleRate);
@@ -79,46 +80,47 @@ void Saturation::prepare (double sampleRate, int numChannels)
     for (auto& ch : channelState)
     {
         ch.dry.assign (kLatency + 1, 0.0);
-        for (auto& f : ch.split) design::apply (f, lp);
-        design::apply (ch.bassHp, hp);
+        for (auto& st : ch.slot)
+        {
+            for (auto& f : st.split) design::apply (f, lp);
+            design::apply (st.bassHp, hp);
+        }
     }
     glideCoeff = 1.0 - std::exp (-1.0 / (0.030 * sampleRate));
     mixCoeff = 1.0 - std::exp (-4.0 / (0.020 * sampleRate));   // settles within ~20 ms
     hpCoeff = std::exp (-2.0 * std::numbers::pi * 1.0 / sampleRate);
+    dcGlideCoeff = 1.0 - std::exp (-1.0 / (kDcGlideSeconds * sampleRate));
     dcWindow = static_cast<int> (0.05 * sampleRate);   // two cycles of the lowest 808 note
     bassBendScale = std::pow (10.0, -kBassDriveDb / 20.0);
-    focusStep = 1.0 / (kFocusFadeSeconds * sampleRate);
+    blendStep = 1.0 / (kFocusFadeSeconds * sampleRate);
     reset();
 }
 
-void Saturation::startPath (bool bass, int warmSamples) noexcept
+void Saturation::startSlot (int index, SaturationFocus focus, SaturationMode mode, int warmSamples) noexcept
 {
-    auto& path = bass ? bassPath : fullPath;
-    path.active = true;
-    path.warm = warmSamples;
+    stopSlot (index);   // from a clean state
+    auto& slot = slots[static_cast<size_t> (index)];
+    slot.active = true;
+    slot.warm = warmSamples;
+    slot.focus = focus;
+    slot.mode = mode;
 }
 
-void Saturation::stopPath (bool bass) noexcept
+void Saturation::stopSlot (int index) noexcept
 {
-    auto& path = bass ? bassPath : fullPath;
-    path.active = false;
-    path.warm = 0;
+    auto& slot = slots[static_cast<size_t> (index)];
+    slot.active = false;
+    slot.warm = 0;
+    slot.dcCount = 0;
+    slot.dcHz = 1.0;
     for (auto& ch : channelState)   // start clean next time
     {
-        if (bass)
-        {
-            for (auto& st : ch.bassStages) st.reset();
-            for (auto& f : ch.split) f.reset();
-            ch.bassHp.reset();
-        }
-        else
-        {
-            for (auto& st : ch.stages) st.reset();
-            ch.hpX = ch.hpY = ch.dcSum = 0.0;
-        }
+        auto& st = ch.slot[static_cast<size_t> (index)];
+        for (auto& stage : st.stages) stage.reset();
+        for (auto& f : st.split) f.reset();
+        st.bassHp.reset();
+        st.hpX = st.hpY = st.dcSum = 0.0;
     }
-    if (! bass)
-        dcCount = 0;
 }
 
 void Saturation::reset() noexcept
@@ -128,78 +130,154 @@ void Saturation::reset() noexcept
         std::fill (ch.dry.begin(), ch.dry.end(), 0.0);
         ch.dryPos = 0;
     }
-    stopPath (false);
-    stopPath (true);
-    dcCount = 0;
+    stopSlot (0);
+    stopSlot (1);
+    heard = 0;
+    blend = 0.0;
     bendTarget = std::pow (10.0, (kHeadroomDb - std::clamp (params.driveDb, 0.0, kMaxDriveDb)) / 20.0);
     bend = bendTarget;
-    // Start fully in the requested state (offline renders and a fresh prepare): no fade-in.
+    // Start fully in the requested state (offline renders and a fresh prepare): no fade-in, no warm-up.
+    // Nothing has been heard, so the tube's DC can't be measured: its filter starts fast and glides down.
     running = ! isNeutral (params);
     mix = effectiveMix (params);
-    focus = params.focus == SaturationFocus::bass ? 1.0 : 0.0;
     if (running)
-        startPath (focus > 0.5, 0);
+    {
+        startSlot (0, params.focus, params.mode, 0);
+        slots[0].dcHz = kDcStartHz;
+    }
     resEnergy = sigEnergy = 0.0;
+}
+
+double Saturation::slotWet (const Slot& slot, SlotState& st, double x, double dcWeight, bool measuringDc, bool seedDc, double dcCoeff) const noexcept
+{
+    double a, b, u[4];
+    if (slot.focus == SaturationFocus::bass)
+    {
+        // Bass only: the curve hears the low end alone; the high-pass keeps the harmonics above the
+        // 808's fundamental (and removes the tube curve's DC within a few ms).
+        const double low = st.split[1].process (st.split[0].process (x));
+        const double bassBend = bend * bassBendScale;
+        st.stages[0].upsample (low, a, b);
+        st.stages[1].upsample (a, u[0], u[1]);
+        st.stages[1].upsample (b, u[2], u[3]);
+        for (double& v : u) v = shape (v, slot.mode, bassBend) - v;
+        const double ra = st.stages[1].downsample (u[0], u[1]);
+        const double rb = st.stages[1].downsample (u[2], u[3]);
+        return st.bassHp.process (st.stages[0].downsample (ra, rb));
+    }
+
+    // Full: up 4x, keep only what the curve adds (the clean signal never goes through the filters),
+    // down 4x, remove DC.
+    st.stages[0].upsample (x, a, b);
+    st.stages[1].upsample (a, u[0], u[1]);
+    st.stages[1].upsample (b, u[2], u[3]);
+    for (double& v : u) v = shape (v, slot.mode, bend) - v;
+    const double ra = st.stages[1].downsample (u[0], u[1]);
+    const double rb = st.stages[1].downsample (u[2], u[3]);
+    const double res = st.stages[0].downsample (ra, rb);
+    // Only the tube curve is asymmetric and makes DC; a 1 Hz high-pass removes it without shifting the
+    // bass part of the residual against the dry signal.
+    if (measuringDc) st.dcSum += dcWeight * res;
+    if (seedDc)
+    {
+        st.hpX = st.dcSum / (0.5 * slot.dcCount);   // the Hann weights sum to half the window
+        st.hpY = 0.0;
+        st.dcSum = 0.0;
+    }
+    if (slot.mode == SaturationMode::tube)
+        st.hpY = dcCoeff * (st.hpY + res - st.hpX);
+    else
+        st.hpY = res;
+    st.hpX = res;
+    return st.hpY;
 }
 
 void Saturation::processFrame (double* frame, int numChannels) noexcept
 {
     const int nch = std::min (numChannels, channelCount);
     const double mixTarget = effectiveMix (params);
-    const double focusTarget = params.focus == SaturationFocus::bass ? 1.0 : 0.0;
     bendTarget = std::pow (10.0, (kHeadroomDb - std::clamp (params.driveDb, 0.0, kMaxDriveDb)) / 20.0);
+    auto& cur = slots[static_cast<size_t> (heard)];
+    auto& other = slots[static_cast<size_t> (1 - heard)];
 
-    // Let the filters fill, then (Full, tube) measure the curve's DC for dcWindow, before a path is heard.
+    // Let the filters fill, then (Full, tube) measure the curve's DC for dcWindow, before a slot is heard.
     const int warmSamples = 2 * kLatency + dcWindow;
-    const bool idle = mix < 1.0e-6 && mixTarget == 0.0 && fullPath.warm == 0 && bassPath.warm == 0;
+    const bool idle = mix < 1.0e-6 && mixTarget == 0.0 && cur.warm == 0 && other.warm == 0;
     if (idle)
     {
         if (mix != 0.0 || running)
         {
             mix = 0.0;
             running = false;
-            stopPath (false);
-            stopPath (true);
+            stopSlot (0);
+            stopSlot (1);
+            blend = 0.0;   // nothing is heard: the next start begins in the set Focus and Mode
         }
-        focus = focusTarget;   // nothing is heard: the next start begins in the right Focus
     }
     else
     {
+        const bool curWanted = cur.is (params.focus, params.mode), otherWanted = other.is (params.focus, params.mode);
         if (! running)
         {
             running = true;
-            focus = focusTarget;
-            startPath (focus > 0.5, warmSamples);
+            startSlot (heard, params.focus, params.mode, warmSamples);
             bend = bendTarget;
         }
-        else if (! (focusTarget > 0.5 ? bassPath : fullPath).active)
-            startPath (focusTarget > 0.5, warmSamples);   // Focus changed: warm the other path up next to this one
+        else if (! curWanted && ! otherWanted && blend == 0.0)
+            startSlot (1 - heard, params.focus, params.mode, warmSamples);   // Focus or Mode changed: warm the new one up next to this one
+        // (A change during a cross-fade lets it finish; the next one starts from there.)
 
-        // Mix waits while a path that is heard warms up (only at the start); the Focus cross-fade waits
-        // for the path it goes to.
-        const bool heardWarming = (focus < 1.0 && fullPath.warm > 0) || (focus > 0.0 && bassPath.warm > 0);
-        for (auto* path : { &fullPath, &bassPath })
-            if (path->warm > 0)
-                --path->warm;
+        // Mix waits while a slot that is heard warms up (only at the start); the cross-fade waits for the
+        // slot it goes to.
+        const bool heardWarming = (blend < 1.0 && cur.warm > 0) || (blend > 0.0 && other.warm > 0);
+        for (auto& slot : slots)
+            if (slot.warm > 0)
+                --slot.warm;
         if (! heardWarming)
             mix += (mixTarget - mix) * mixCoeff;
-        if (focus != focusTarget && (focusTarget > 0.5 ? bassPath : fullPath).warm == 0)
-            focus = focusTarget > focus ? std::min (focusTarget, focus + focusStep) : std::max (focusTarget, focus - focusStep);
-        if (focus == focusTarget && (focusTarget > 0.5 ? fullPath : bassPath).active)
-            stopPath (focusTarget < 0.5);   // faded out (or switched back before it was heard)
+        if (other.active && other.warm == 0)
+        {
+            const double goal = cur.is (params.focus, params.mode) ? 0.0 : 1.0;
+            blend = goal > blend ? std::min (goal, blend + blendStep) : std::max (goal, blend - blendStep);
+        }
+        if (blend >= 1.0)
+        {
+            stopSlot (heard);   // faded over: the other one is the heard one now
+            heard = 1 - heard;
+            blend = 0.0;
+        }
+        else if (blend <= 0.0 && other.active && cur.is (params.focus, params.mode))
+            stopSlot (1 - heard);   // faded back (or switched back before it was heard)
         bend += (bendTarget - bend) * glideCoeff;
     }
 
     // The 1 Hz DC filter would need ~0.5 s to settle from cold and let the DC out as a slow thump;
     // instead it starts from the DC measured during the warm-up, as if it had been running all along.
-    const bool runFull = ! idle && fullPath.active, runBass = ! idle && bassPath.active;
-    const bool measuringDc = runFull && fullPath.warm > 0 && fullPath.warm <= dcWindow;
-    const bool seedDc = runFull && fullPath.warm == 0 && dcCount > 0;
-    // A Hann-weighted mean, so the bass itself (whatever its period) hardly leaks into the DC estimate.
-    const double dcWeight = measuringDc ? std::pow (std::sin (std::numbers::pi * (dcCount + 0.5) / dcWindow), 2.0) : 0.0;
-    const double bassBend = bend * bassBendScale;
-    // The Focus cross-fade follows a raised cosine: it starts and ends gently, so the waveform never kinks.
-    const double bassWeight = focus > 0.0 && focus < 1.0 ? 0.5 - 0.5 * std::cos (std::numbers::pi * focus) : focus;
+    // Started by reset() there is no warm-up: it starts at kDcStartHz and glides down to 1 Hz.
+    const Slot& a = slots[static_cast<size_t> (heard)];
+    const Slot& b = slots[static_cast<size_t> (1 - heard)];
+    std::array<bool, 2> measuringDc {}, seedDc {};
+    std::array<double, 2> dcWeight {}, dcCoeff {};
+    for (size_t k = 0; k < 2; ++k)
+    {
+        auto& slot = slots[k];
+        if (! slot.active || idle)
+            continue;
+        measuringDc[k] = slot.focus == SaturationFocus::full && slot.warm > 0 && slot.warm <= dcWindow;
+        seedDc[k] = slot.focus == SaturationFocus::full && slot.warm == 0 && slot.dcCount > 0;
+        // A Hann-weighted mean, so the bass itself (whatever its period) hardly leaks into the DC estimate.
+        dcWeight[k] = measuringDc[k] ? std::pow (std::sin (std::numbers::pi * (slot.dcCount + 0.5) / dcWindow), 2.0) : 0.0;
+        if (slot.dcHz > 1.0)
+        {
+            slot.dcHz += (1.0 - slot.dcHz) * dcGlideCoeff;
+            if (slot.dcHz < 1.0001)
+                slot.dcHz = 1.0;
+        }
+        dcCoeff[k] = slot.dcHz > 1.0 ? std::exp (-2.0 * std::numbers::pi * slot.dcHz / sampleRate) : hpCoeff;
+    }
+    // The cross-fade follows a raised cosine: it starts and ends gently, so the waveform never kinks.
+    const double weight = blend > 0.0 && blend < 1.0 ? 0.5 - 0.5 * std::cos (std::numbers::pi * blend) : blend;
+    const auto h = static_cast<size_t> (heard), o = static_cast<size_t> (1 - heard);
 
     for (int c = 0; c < nch; ++c)
     {
@@ -218,61 +296,20 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
             continue;
         }
 
-        if (runFull)
+        double wet = slotWet (a, ch.slot[h], x, dcWeight[h], measuringDc[h], seedDc[h], dcCoeff[h]);
+        if (b.active)
         {
-            // Up 4x, keep only what the curve adds (the clean signal never goes through the filters),
-            // down 4x, remove DC.
-            double a, b, u[4];
-            ch.stages[0].upsample (x, a, b);
-            ch.stages[1].upsample (a, u[0], u[1]);
-            ch.stages[1].upsample (b, u[2], u[3]);
-            for (double& v : u) v = curve (v) - v;
-            const double ra = ch.stages[1].downsample (u[0], u[1]);
-            const double rb = ch.stages[1].downsample (u[2], u[3]);
-            const double res = ch.stages[0].downsample (ra, rb);
-            // Only the tube curve is asymmetric and makes DC; a 1 Hz high-pass removes it without
-            // shifting the bass part of the residual against the dry signal.
-            if (measuringDc) ch.dcSum += dcWeight * res;
-            if (seedDc)
-            {
-                ch.hpX = ch.dcSum / (0.5 * dcCount);   // the Hann weights sum to half the window
-                ch.hpY = 0.0;
-                ch.dcSum = 0.0;
-            }
-            if (params.mode == SaturationMode::tube)
-            {
-                ch.hpY = hpCoeff * (ch.hpY + res - ch.hpX);
-                ch.hpX = res;
-            }
-            else
-            {
-                ch.hpY = res;
-                ch.hpX = 0.0;
-            }
-        }
-
-        double wet = ch.hpY;
-        if (runBass)
-        {
-            // Bass only: the same, on the low end alone; the high-pass keeps the harmonics above the
-            // 808's fundamental (and removes the tube curve's DC within a few ms).
-            const double low = ch.split[1].process (ch.split[0].process (x));
-            double a, b, u[4];
-            ch.bassStages[0].upsample (low, a, b);
-            ch.bassStages[1].upsample (a, u[0], u[1]);
-            ch.bassStages[1].upsample (b, u[2], u[3]);
-            for (double& v : u) v = shape (v, params.mode, bassBend) - v;
-            const double ra = ch.bassStages[1].downsample (u[0], u[1]);
-            const double rb = ch.bassStages[1].downsample (u[2], u[3]);
-            const double bassWet = ch.bassHp.process (ch.bassStages[0].downsample (ra, rb));
-            wet = focus >= 1.0 ? bassWet : (1.0 - bassWeight) * ch.hpY + bassWeight * bassWet;
+            const double next = slotWet (b, ch.slot[o], x, dcWeight[o], measuringDc[o], seedDc[o], dcCoeff[o]);
+            if (weight > 0.0)
+                wet = weight >= 1.0 ? next : (1.0 - weight) * wet + weight * next;
         }
 
         resEnergy += mix * mix * wet * wet;   // what is actually added at this Mix
         sigEnergy += dry * dry;
         frame[c] = dry + mix * wet;
     }
-    dcCount = measuringDc ? dcCount + 1 : 0;
+    for (size_t k = 0; k < 2; ++k)
+        slots[k].dcCount = measuringDc[k] ? slots[k].dcCount + 1 : 0;
 }
 
 } // namespace polisher

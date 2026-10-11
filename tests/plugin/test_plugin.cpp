@@ -5,6 +5,7 @@
 
 #include "PluginProcessor.h"
 #include "../Signals.h"
+#include "../SwitchLevel.h"
 
 #include <catch2/catch_session.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -226,6 +227,28 @@ TEST_CASE ("Plug-in: changing sample rate starts clean (same as a fresh plug-in)
     const auto clean = renderFixed (*fresh, mix44, 512);
     INFO ("largest difference " << maxAbsDiff (reused, clean));
     CHECK (maxAbsDiff (reused, clean) < 1.0e-5);
+
+    // One thing is kept on purpose (the test mix above reads open, so it can't show it): the Unlimiter's
+    // last Squash reading, so after a rate change (or at an export's start) a squashed beat is lifted from
+    // the first bar instead of after the ~1 s the meter needs.
+    polisher::LimiterParams lp; lp.driveDb = 14.0; lp.ceilingDbtp = -0.3; lp.releaseMs = 30.0; lp.adaptiveRelease = false;
+    auto u = makeProcessor (96000.0, 512, false);
+    set (*u, "ulAmount", 100.0f);
+    renderFixed (*u, polisher::renderLimited (testsig::musicLike (96000.0, 3.0, -6.0, 4), lp), 512);
+    const float squash96 = u->meters.ulSquash.load();
+    u->setRateAndBufferSizeDetails (44100.0, 512);
+    u->prepareToPlay (44100.0, 512);
+    const auto beat44 = polisher::renderLimited (testsig::musicLike (44100.0, 0.2, -6.0, 4), lp);
+    renderFixed (*u, beat44, 512);
+    auto first = makeProcessor (44100.0, 512, false);
+    set (*first, "ulAmount", 100.0f);
+    renderFixed (*first, beat44, 512);
+    INFO ("Squash at 96 kHz " << squash96 << " dB, right after the change to 44.1 kHz " << u->meters.ulSquash.load()
+          << " dB, a fresh instance " << first->meters.ulSquash.load() << " dB");
+    CHECK (squash96 > 0.0f);
+    CHECK (squash96 < (float) polisher::Unlimiter::kOpenSquashDb);
+    CHECK (std::abs (u->meters.ulSquash.load() - squash96) < 0.01f);
+    CHECK (first->meters.ulSquash.load() == 0.0f);
 }
 
 TEST_CASE ("Plug-in: processing never allocates memory on the audio thread", "[plugin]")
@@ -282,6 +305,11 @@ TEST_CASE ("Plug-in: saved state brings back every setting", "[plugin]")
         REQUIRE ((ra != nullptr && rb != nullptr));
         INFO (ra->paramID << ": " << ra->getCurrentValueAsText() << " vs " << rb->getCurrentValueAsText());
         CHECK (ra->paramID == rb->paramID);
+        if (ra->paramID == "levelMatch")
+        {
+            CHECK (rb->getValue() == 0.0f);   // a listening aid: a project always opens with MATCH off
+            continue;
+        }
         CHECK (std::abs (ra->convertFrom0to1 (ra->getValue()) - rb->convertFrom0to1 (rb->getValue()))
                <= 1.0e-4f * std::max (1.0f, std::abs (ra->convertFrom0to1 (ra->getValue()))));
     }
@@ -1424,6 +1452,19 @@ TEST_CASE ("Tone Steady: Learn listens to the song for its tone only; the target
     REQUIRE (b->toneTarget.isSet());
     CHECK (b->toneTarget.get().bandDb == learned.bandDb);
     CHECK (std::abs (b->toneTarget.get().seconds - learned.seconds) < 1.0e-9);
+    REQUIRE (learned.hasLevel());   // and the song's level, which quiet passages are judged against
+    CHECK (std::abs (b->toneTarget.get().levelDb - learned.levelDb) < 1.0e-9);
+    {
+        // A target saved before the level existed loads without one (judged against the last ~10 s, as before).
+        auto v = juce::JSON::parse (a->toneTarget.toJson());
+        REQUIRE (v.getDynamicObject() != nullptr);
+        v.getDynamicObject()->removeProperty ("level");
+        ToneTargetStore older;
+        older.restoreFromJson (juce::JSON::toString (v));
+        REQUIRE (older.isSet());
+        CHECK_FALSE (older.get().hasLevel());
+        CHECK (older.get().bandDb == learned.bandDb);
+    }
 
     // The restored song plays exactly like one given the same target, and not like following the music.
     auto direct = makeProcessor (sr, 512, false);
@@ -1467,6 +1508,118 @@ TEST_CASE ("Tone Steady: Learn listens to the song for its tone only; the target
     CHECK_FALSE (b->autoMaster.finish());                  // under 12 s: keeps listening
     b->autoMaster.cancel();
     CHECK (b->toneTarget.get().bandDb == learned.bandDb);
+}
+
+namespace {
+/** The tone the song listener learns from a whole clip (as LEARN would). */
+polisher::ToneTarget learnToneOf (const AudioClip& clip)
+{
+    polisher::SongListener l;
+    l.prepare (clip.sampleRate, 12.0, 600.0);
+    for (int pos = 0; pos < clip.numSamples(); pos += 1000)
+    {
+        const int n = std::min (1000, clip.numSamples() - pos);
+        l.process (clip.channels[0].data() + pos, clip.channels[1].data() + pos, n, pos / clip.sampleRate);
+    }
+    return l.toneTarget();
+}
+
+AudioClip sliceOf (const AudioClip& clip, double from, double to)
+{
+    AudioClip out;
+    out.sampleRate = clip.sampleRate;
+    for (const auto& ch : clip.channels)
+        out.channels.emplace_back (ch.begin() + (std::ptrdiff_t) (from * clip.sampleRate), ch.begin() + (std::ptrdiff_t) (to * clip.sampleRate));
+    return out;
+}
+} // namespace
+
+TEST_CASE ("Auto-Master: a short listen keeps a stored tone only when it is this song's", "[plugin][automaster]")
+{
+    // A preset, a copied Polisher or an older project can carry another song's tone. A quick Auto-Master
+    // run (under 30 s) used to keep any stored tone learned from more music: song B was then held to A's.
+    const double sr = 48000.0;
+    const auto song = testsig::trapLike (sr, 45.0);
+    const auto own = learnToneOf (song), foreign = learnToneOf (testsig::musicLike (sr, 60.0, -18.0, 9));
+    REQUIRE (own.valid);
+    REQUIRE (foreign.valid);
+    auto quickRun = [&] (const polisher::ToneTarget& stored)
+    {
+        auto p = makeProcessor (sr, 512, false);
+        p->toneTarget.set (stored);
+        FakePlayHead head;
+        p->setPlayHead (&head);
+        REQUIRE (p->autoMaster.start());
+        play (*p, head, sliceOf (song, 20.0, 35.0));   // 15 s of the hook, then FINISH NOW
+        REQUIRE (p->autoMaster.finish());
+        REQUIRE (waitForAutoMaster (*p));
+        REQUIRE (static_cast<bool> (reportOf (*p)["ok"]));
+        return std::pair { p->toneTarget.get(), p->autoMaster.getReportJson() };
+    };
+    // Another song's tone: replaced by the tone of what it heard (and Learn's short-learn tip applies).
+    const auto [replaced, report1] = quickRun (foreign);
+    REQUIRE (replaced.valid);
+    CHECK (std::abs (replaced.seconds - 15.0) < 0.1);
+    CHECK (replaced.bandDb != foreign.bandDb);
+    CHECK_FALSE (report1.contains ("learned earlier"));
+    // This song's own tone, learned from all of it: kept, and the report says it was learned earlier.
+    const auto [kept, report2] = quickRun (own);
+    REQUIRE (kept.valid);
+    CHECK (kept.bandDb == own.bandDb);
+    CHECK (std::abs (kept.seconds - own.seconds) < 1.0e-9);
+    CHECK (report2.contains ("learned earlier from 0:45"));
+}
+
+TEST_CASE ("Tone Steady: the plug-in says when the music sits far from the stored tone", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    const auto song = testsig::trapLike (sr, 40.0);
+    auto run = [&] (const polisher::ToneTarget& stored)
+    {
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "tsAmount", 40.0f);
+        p->toneTarget.set (stored);
+        renderFixed (*p, song, 512);
+        return std::pair { p->meters.tsFar.load(), p->meters.tsDistance.load() };
+    };
+    const auto [ownFar, ownDist] = run (learnToneOf (song));
+    const auto [otherFar, otherDist] = run (learnToneOf (testsig::musicLike (sr, 60.0, -18.0, 9)));
+    INFO ("live distance: own tone " << ownDist << " dB, another song's " << otherDist << " dB");
+    CHECK_FALSE (ownFar);
+    CHECK (otherFar);
+    CHECK (ownDist >= 0.0f);
+    CHECK (otherDist > (float) polisher::StemEQ::kTargetFarDb);
+    // No stored tone: nothing to be far from.
+    const auto [noneFar, noneDist] = run ({});
+    CHECK_FALSE (noneFar);
+    CHECK (noneDist < 0.0f);
+}
+
+TEST_CASE ("Tone Steady with a stored tone never allocates while the EQ and Input Trim move", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 1024, true);
+    set (*p, "tsAmount", 60.0f);
+    p->toneTarget.set (learnToneOf (testsig::trapLike (sr, 20.0)));
+    const auto mix = testsig::trapLike (sr, 4.0, 5);
+    renderFixed (*p, testsig::musicLike (sr, 1.0, -6.0), 1024);   // warm up (picks the target up)
+    juce::AudioBuffer<float> buf (2, 1024);
+    juce::MidiBuffer midi;
+    int worst = 0, k = 0;
+    for (int pos = 0; pos + 1024 <= mix.numSamples(); pos += 1024, ++k)
+    {
+        // The stage's copy of the target is recomputed whenever the EQ, the trim or the rate changes.
+        set (*p, "eqGain" + juce::String (1 + k % 5), (float) ((k % 9) - 4));
+        set (*p, "inTrim", (float) -(k % 7));
+        if (k % 5 == 0) p->toneTarget.set (learnToneOf (testsig::trapLike (sr, 12.0, (unsigned) k)));   // LEARN again (message thread)
+        for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, mix.channels[(size_t) c].data() + pos, 1024);
+        allocations = 0;
+        countAllocations = true;
+        p->processBlock (buf, midi);
+        countAllocations = false;
+        worst = std::max (worst, allocations.load());
+    }
+    CHECK (worst == 0);
 }
 
 TEST_CASE ("Snapshots store and recall Tone Steady's target; a snapshot from before targets leaves it", "[plugin][snapshots]")
@@ -1621,6 +1774,7 @@ void randomSettings (PolisherAudioProcessor& p, unsigned seed)
 }
 
 juce::String utf8 (const char* s) { return juce::String::fromUTF8 (s); }
+const juce::String ARROW = juce::String::fromUTF8 (" \xE2\x86\x92 "), MINUS = juce::String::fromUTF8 ("\xE2\x88\x92");
 
 } // namespace
 
@@ -1635,7 +1789,8 @@ TEST_CASE ("Undo: one gesture is one step; host automation and listening control
     // A knob drag from press to release, through many values: one step, named by what it did.
     gesture (*p, "drive", { 0.5f, 1.0f, 2.0f, 3.0f });
     CHECK (h.size() == 1);
-    CHECK (h.undoLabel() == "Drive +3.0 dB");
+    const auto driveLabel = "Drive 0.0" + ARROW + "3.0 dB";   // from -> to, the unit once
+    CHECK (h.undoLabel() == driveLabel);
 
     // The DAW's automation (no gesture) and A/B, MATCH, Auto-Master's choices add nothing.
     set (*p, "ceiling", -2.0f);
@@ -1648,14 +1803,14 @@ TEST_CASE ("Undo: one gesture is one step; host automation and listening control
 
     // Undo puts back the exact value; what the host changed stays as it is.
     const float driveBefore = p->parameters.getParameter ("drive")->convertTo0to1 (0.0f);
-    CHECK (h.undo() == "Drive +3.0 dB");
+    CHECK (h.undo() == driveLabel);
     CHECK (p->parameters.getParameter ("drive")->getValue() == driveBefore);
     CHECK (plainOf (*p, "ceiling") == -2.0f);
     CHECK (plainOf (*p, "eqGain3") == 4.0f);
     CHECK (plainOf (*p, "bypass") == 1.0f);
     CHECK_FALSE (h.canUndo());
-    CHECK (h.redoLabel() == "Drive +3.0 dB");
-    CHECK (h.redo() == "Drive +3.0 dB");
+    CHECK (h.redoLabel() == driveLabel);
+    CHECK (h.redo() == driveLabel);
     CHECK (plainOf (*p, "drive") == 3.0f);
     CHECK_FALSE (h.canRedo());
 
@@ -1665,9 +1820,17 @@ TEST_CASE ("Undo: one gesture is one step; host automation and listening control
     gesture (*p, "satMode", 1.0f);
     CHECK (h.undoLabel() == "Saturation Mode: Tube");
     gesture (*p, "bassPunch", 25.0f);
-    CHECK (h.undoLabel() == "Bass Punch 0 %" + utf8 (" \xE2\x86\x92 ") + "25 %");
+    CHECK (h.undoLabel() == "Bass Punch 0" + ARROW + "25 %");
     gesture (*p, "ceiling", -2.5f);
-    CHECK (h.undoLabel() == "Ceiling " + utf8 ("\xE2\x88\x92") + "0.5 dB");
+    CHECK (h.undoLabel() == "Ceiling " + MINUS + "2.00" + ARROW + MINUS + "2.50 dBTP");   // what it was and what it is now
+    gesture (*p, "clipLevel", -1.5f);
+    CHECK (h.undoLabel() == "Clip Level 0.0" + ARROW + MINUS + "1.5 dB");                 // named like its knob
+    gesture (*p, "dynThr2", -34.0f);
+    CHECK (h.undoLabel() == "Dynamics LO-MID Threshold " + MINUS + "20.0" + ARROW + MINUS + "34.0 dB");   // the window's band names
+    gesture (*p, "dynX3", 8000.0f);
+    CHECK (h.undoLabel() == "Dynamics Split HI-MID / HIGH 6.00" + ARROW + "8.00 kHz");
+    gesture (*p, "bassMono", 100.0f);
+    CHECK (h.undoLabel() == "Bass Mono Below Off" + ARROW + "100 Hz");
 
     // Overlapping gestures (dragging an EQ point moves its gain and frequency) are one step.
     auto* g = p->parameters.getParameter ("eqGain2");
@@ -1689,7 +1852,7 @@ TEST_CASE ("Undo: one gesture is one step; host automation and listening control
     CHECK (h.canRedo());
     gesture (*p, "imgHigh", 120.0f);
     CHECK_FALSE (h.canRedo());
-    CHECK (h.undoLabel() == "Imager High Width 100 %" + utf8 (" \xE2\x86\x92 ") + "120 %");
+    CHECK (h.undoLabel() == "Imager High Width 100" + ARROW + "120 %");
 
     // A gesture that ends where it started is not a step.
     const int m = h.size();
@@ -1708,7 +1871,7 @@ TEST_CASE ("Undo: quick repeats on one control merge; the history keeps the last
     gesture (*p, "drive", 2.0f);
     gesture (*p, "drive", 2.5f);
     CHECK (h.size() == 1);
-    CHECK (h.undoLabel() == "Drive +2.5 dB");
+    CHECK (h.undoLabel() == "Drive 0.0" + ARROW + "2.5 dB");
     gesture (*p, "drive", 0.0f);              // wheeled back to where it was: no step left
     CHECK (h.size() == 0);
     gesture (*p, "drive", 1.0f);
@@ -1719,7 +1882,7 @@ TEST_CASE ("Undo: quick repeats on one control merge; the history keeps the last
     CHECK (plainOf (*p, "drive") == 1.0f);
     gesture (*p, "drive", 3.0f);              // after an undo: never merged into an older step
     CHECK (h.size() == 3);
-    CHECK (h.undoLabel() == "Drive +2.0 dB");
+    CHECK (h.undoLabel() == "Drive 1.0" + ARROW + "3.0 dB");
 
     // The cap: 130 more steps keep only the last 100; undoing all of them stops at step 30.
     h.setMergeWindowMs (0.0);
@@ -1770,7 +1933,7 @@ TEST_CASE ("Undo: an Auto-Master run is one step that undoes everything it set; 
     CHECK (h.undo() == "Auto-Master (Trap / Hip-Hop, Balanced)");
     CHECK (allValues (*p) == before);
     CHECK (p->autoMaster.getReportJson() == reportBefore);
-    CHECK (h.undoLabel() == "Drive +2.0 dB");    // the manual step is still there
+    CHECK (h.undoLabel() == "Drive 0.0" + ARROW + "2.0 dB");    // the manual step is still there
     // Redo: Auto-Master's settings and report again.
     CHECK (h.redo() == "Auto-Master (Trap / Hip-Hop, Balanced)");
     CHECK (allValues (*p) == after);
@@ -1781,7 +1944,7 @@ TEST_CASE ("Undo: an Auto-Master run is one step that undoes everything it set; 
     gesture (*p, "satDrive", sat + 2.0f);
     gesture (*p, "imgHigh", 90.0f);
     CHECK (h.undo().startsWith ("Imager High Width"));
-    CHECK (h.undo() == "Saturation Drive +2.0 dB");
+    CHECK (h.undo() == "Saturation Drive " + juce::String (sat, 1) + ARROW + juce::String (sat + 2.0f, 1) + " dB");
     CHECK (allValues (*p) == after);              // exactly Auto-Master's settings
     CHECK (h.undoLabel() == "Auto-Master (Trap / Hip-Hop, Balanced)");
     h.redo();
@@ -1914,15 +2077,30 @@ TEST_CASE ("Snapshots are saved with the project; a project from before snapshot
     CHECK_FALSE (b->snapshots.recall (0));
 }
 
-TEST_CASE ("Snapshots: a recall glides like a knob move (no click)", "[plugin][snapshots]")
+TEST_CASE ("Snapshots: a recall glides like a knob move (no click, no hole)", "[plugin][snapshots]")
 {
     const double sr = 48000.0;
-    // A low tone: any jump in the output would stand far above its own sample-to-sample steps.
+    // A low tone: a click would bend the waveform far more sharply than the tone itself does. The
+    // sharpness is read against the tone's own size around it (step / local peak), so the level change a
+    // recall makes on purpose (S2 compresses, drives and lifts the lows) is not taken for a click.
     const auto tone = testsig::sine (sr, 2, 110.0, -12.0, 9.0);
+    const int period = (int) std::lround (sr / 110.0);
+    auto sharpness = [&] (const AudioClip& c, int from)
+    {
+        double worst = 0.0;
+        for (const auto& ch : c.channels)
+            for (int i = std::max (from, period); i + period < (int) ch.size(); ++i)
+            {
+                double peak = 0.0;
+                for (int j = i - period; j <= i + period; j += 4) peak = std::max (peak, (double) std::abs (ch[(size_t) j]));
+                worst = std::max (worst, std::abs ((double) ch[(size_t) i] - ch[(size_t) i - 1]) / (peak + 1.0e-9));
+            }
+        return worst;
+    };
     auto steady = [&] (bool busy)
     {
         auto p = makeProcessor (sr, 512, busy);
-        return maxStepOf (renderFixed (*p, tone, 512), (int) (0.5 * sr));
+        return sharpness (renderFixed (*p, tone, 512), (int) (0.5 * sr));
     };
     const double calm = std::max (steady (false), steady (true));
 
@@ -1943,9 +2121,23 @@ TEST_CASE ("Snapshots: a recall glides like a knob move (no click)", "[plugin][s
         for (int c = 0; c < 2; ++c)
             std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + 512, out.channels[(size_t) c].begin() + pos);
     }
-    const double flipping = maxStepOf (out, (int) (0.5 * sr));
-    INFO ("largest sample step: flipping S1/S2 " << flipping << ", steady " << calm);
+    const double flipping = sharpness (out, (int) (0.5 * sr));
+    INFO ("sharpest step (re the tone's size): flipping S1/S2 " << flipping << ", steady " << calm);
     CHECK (flipping < 1.5 * calm);
+
+    // No hole either: through each recall the tone's short-time level never drops far below the lower of
+    // the two settings (Mono Below, the Imager and the Dynamics used to cut it by ~18 dB for ~50 ms). (It can
+    // rise for a moment going to S2: Drive and the EQ arrive before the compressor's attack.)
+    std::vector<double> mid (out.channels[0].size());
+    for (size_t i = 0; i < mid.size(); ++i) mid[i] = 0.5 * ((double) out.channels[0][i] + out.channels[1][i]);
+    for (int k = 1; 120 * 512 * k + (int) (1.1 * sr) <= (int) mid.size(); ++k)
+    {
+        const int at = 120 * 512 * k;
+        const std::vector<double> part (mid.begin() + at - (int) (0.4 * sr), mid.begin() + at + (int) (1.1 * sr));
+        const auto r = switchlevel::measure (part, sr, 110.0, (int) (0.4 * sr));
+        INFO ("recall " << k << (k % 2 == 1 ? " (S2 -> S1)" : " (S1 -> S2)") << ": dip " << r.dipDb << " dB, rise +" << r.bumpDb << " dB");
+        CHECK (r.dipDb > -3.0);
+    }
 }
 
 TEST_CASE ("Snapshots: MATCH remembers the level of each snapshot it heard, so flipping back is matched at once", "[plugin][snapshots]")
@@ -1977,13 +2169,15 @@ TEST_CASE ("Snapshots: MATCH remembers the level of each snapshot it heard, so f
     const double s1 = play (25.0);                // MATCH learns S1 (about 0 dB)
     REQUIRE (p->snapshots.recall (1));
     const double held = play (0.05);
-    const double heldLater = play (2.8);          // first visit: the old level is held while the readings catch up
-    const double s2 = play (30.0);                // ...then MATCH learns S2 (about -6 dB)
-    INFO ("S1 " << s1 << " dB, S2 " << s2 << " dB, held " << held << " / " << heldLater);
+    const double rough = play (0.95);             // first visit: learned afresh, roughly from half a second...
+    const double exact = play (3.0);              // ...exactly once the 3 s readings hold S2 alone
+    const double s2 = play (30.0);                // ...and it keeps settling (about -6 dB)
+    INFO ("S1 " << s1 << " dB, S2 " << s2 << " dB, held " << held << ", after 1 s " << rough << ", after 4 s " << exact);
     CHECK (std::abs (s1) < 0.5);
     CHECK (s2 < -5.0);
     CHECK (std::abs (held - s1) < 0.05);
-    CHECK (std::abs (heldLater - s1) < 0.05);
+    CHECK (std::abs (rough - s2) < 1.0);          // it used to stay at S1's level for 3 s, then take ~20 s to get here
+    CHECK (std::abs (exact - s2) < 0.3);
 
     // Flipping back: each snapshot's own level at once (without the memory, S1 would play ~6 dB down
     // and take ~20 s to come back).
@@ -2002,6 +2196,571 @@ TEST_CASE ("Snapshots: MATCH remembers the level of each snapshot it heard, so f
     play (0.05);
     REQUIRE (p->snapshots.recall (0));
     CHECK (std::abs (play (0.05) - s2) < 0.3);   // no memory for the new S1: S2's level is held
+}
+
+// --- Re-audit fixes: MATCH on project load, Clip Level in Listen, project-changed, empty blocks, ----
+// --- mono buses, PHONE safety, snapshots missing a control --------------------------------------------
+
+TEST_CASE ("Plug-in: a project always opens with MATCH off, so a saved MATCH never turns the master down", "[plugin]")
+{
+    const double sr = 48000.0;
+    auto a = makeProcessor (sr, 512, true);
+    set (*a, "levelMatch", 1.0f);
+    juce::MemoryBlock state;
+    a->getStateInformation (state);
+    auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+    REQUIRE (xml != nullptr);
+    bool savedOn = false;
+    for (auto* child : xml->getChildIterator())
+        savedOn = savedOn || (child->getStringAttribute ("id") == "levelMatch" && child->getDoubleAttribute ("value") > 0.5);
+    REQUIRE (savedOn);   // the host saves it like any parameter...
+
+    auto b = makeProcessor (sr, 512, false);
+    b->setStateInformation (state.getData(), (int) state.getSize());
+    CHECK (plainOf (*b, "levelMatch") == 0.0f);   // ...but the project opens with it off
+    CHECK (plainOf (*b, "drive") == plainOf (*a, "drive"));
+
+    // With the window never opened, playback is the real master (MATCH would turn it down ~9 dB).
+    b->prepareToPlay (sr, 512);
+    auto ref = makeProcessor (sr, 512, true);
+    const auto mix = testsig::musicLike (sr, 6.0, -6.0);
+    const auto played = renderFixed (*b, mix, 512), master = renderFixed (*ref, mix, 512);
+    CHECK (maxAbsDiff (played, master) < 1.0e-6);
+}
+
+TEST_CASE ("Listen and Solo include the Soft Clipper's level (Clip Level -6), at 44.1, 48 and 96 kHz", "[plugin][monitoring]")
+{
+    namespace L = polisher::listen;
+    for (double sr : { 44100.0, 48000.0, 96000.0 })
+    {
+        INFO ("sample rate " << sr);
+        const int settle = (int) (0.4 * sr);
+        // Clip Level -6: the clipper adds 6 dB of makeup. A quiet mix never reaches its clip point or the
+        // limiter, so the master is exactly the makeup times what came before the clipper.
+        // (Oversampling 1x: below its clip point the clipper is then exactly a delay times its makeup.)
+        const auto clip6 = [] (PolisherAudioProcessor& p) { set (p, "clipOn", 1.0f); set (p, "clipLevel", -6.0f); set (p, "clipSoftness", 0.0f); set (p, "clipOversampling", 0.0f); };
+        const auto mix = testsig::musicLike (sr, 2.0, -26.0);
+
+        // Saturation: what it adds plays at its level in the master.
+        const Setup satOn = [&] (auto& p) { clip6 (p); set (p, "satDrive", 12.0f); };
+        const auto m1 = masterOf (mix, satOn), m0 = masterOf (mix, clip6), l1 = heard (mix, L::satAdded, satOn);
+        CHECK (peakFrom (m1, 0) < 0.85);   // nothing clipped or limited
+        const double satErr = worstError (l1, -1.0, m1, settle, [&] (int c, int i) { return -(double) m0.channels[(size_t) c][(size_t) i]; });
+        INFO ("Saturation listen - (master - dry master): " << satErr << ", added peak " << peakFrom (l1, settle));
+        CHECK (satErr < 1.0e-5);
+        CHECK (peakFrom (l1, settle) > 1.0e-4);
+
+        // Dynamics: the four solos add up to the master.
+        const Setup dynOn = [&] (auto& p) { clip6 (p); set (p, "dynRatio1", 4.0f); set (p, "dynThr1", -44.0f); set (p, "dynRatio3", 2.0f); set (p, "dynThr3", -48.0f); set (p, "dynGain3", 2.0f); };
+        const auto md = masterOf (mix, dynOn);
+        AudioClip sum = testsig::silence (sr, 2, 2.0);
+        for (int k = 0; k < 4; ++k)
+        {
+            const auto s = heard (mix, L::dynSolo + k, dynOn);
+            for (size_t c = 0; c < 2; ++c)
+                for (size_t i = 0; i < s.channels[c].size(); ++i) sum.channels[c][i] += s.channels[c][i];
+        }
+        const double solos = worstError (sum, -1.0, md, settle, [] (int, int) { return 0.0; });
+        INFO ("sum of the four solos - master: " << solos);
+        CHECK (solos < 1.0e-5);
+
+        // Resonance Tamer: master + what it cut = the mix, delayed, at the clipper's makeup.
+        const auto ring = [&] { auto in = testsig::musicLike (sr, 2.5, -30.0, 5);
+                                for (auto& ch : in.channels)
+                                    for (size_t i = 0; i < ch.size(); ++i) ch[i] += (float) (0.02 * std::sin (2.0 * std::numbers::pi * 2400.0 * (double) i / sr));
+                                return in; }();
+        const Setup rtOn = [&] (auto& p) { clip6 (p); set (p, "rtAmount", 100.0f); };
+        auto probe = plainProcessor (sr, rtOn);
+        const int latency = probe->getLatencySamples();
+        const double makeup = std::pow (10.0, 6.0 / 20.0);
+        const auto mr = masterOf (ring, rtOn), lr = heard (ring, L::tamerRemoved, rtOn);
+        const double rtErr = worstError (lr, 1.0, mr, settle, [&] (int c, int i) { return i >= latency ? makeup * ring.channels[(size_t) c][(size_t) (i - latency)] : 0.0; });
+        INFO ("tamer listen + master - makeup x delayed mix: " << rtErr);
+        CHECK (rtErr < 1.0e-5);
+        CHECK (peakFrom (lr, settle) > 1.0e-4);
+    }
+
+    // The banner's "how far under the music" reading doesn't change with the clipper's makeup.
+    const double sr = 48000.0;
+    const auto mix = testsig::musicLike (sr, 3.0, -26.0);
+    auto under = [&] (float clipLevel)
+    {
+        auto p = plainProcessor (sr, [clipLevel] (auto& q) { set (q, "clipOn", 1.0f); set (q, "clipLevel", clipLevel); set (q, "clipSoftness", 0.0f); set (q, "satDrive", 12.0f); });
+        p->setListenMode (L::satAdded);
+        renderFixed (*p, mix, 512);
+        return (double) p->meters.listenUnderDb.load();
+    };
+    const double at0 = under (0.0f), at6 = under (-6.0f);
+    INFO ("under the master: Clip Level 0 " << at0 << " dB, -6 " << at6 << " dB");
+    CHECK (at0 < -10.0);
+    CHECK (std::abs (at6 - at0) < 0.3);
+}
+
+namespace {
+struct ChangeCounter final : juce::AudioProcessorListener
+{
+    int nonParameter = 0;
+    void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override {}
+    void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails& d) override { if (d.nonParameterStateChanged) ++nonParameter; }
+};
+}
+
+TEST_CASE ("Plug-in: storing a snapshot or loading / clearing a reference marks the project changed; opening one does not", "[plugin][snapshots][reference]")
+{
+    auto p = makeProcessor (48000.0, 512, false);
+    ChangeCounter changes;
+    p->addListener (&changes);
+
+    p->snapshots.store (0);
+    CHECK (changes.nonParameter == 1);   // the slots are saved with the project, but they aren't parameters
+    p->clearReference();
+    CHECK (changes.nonParameter == 2);
+
+    // A reference load: marked when it starts, and again when it has been read (even if it failed).
+    const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("PolisherDirtyTest");
+    dir.createDirectory();
+    const auto junk = dir.getChildFile ("not a song.wav");
+    junk.replaceWithText ("not audio");
+    p->loadReference (junk);
+    CHECK (changes.nonParameter == 3);
+    for (int i = 0; i < 600 && p->reference.getState() == ReferenceTrack::loading; ++i)
+        juce::Thread::sleep (20);
+    p->pollReference();
+    CHECK (changes.nonParameter == 4);
+    p->pollReference();
+    CHECK (changes.nonParameter == 4);   // once per load
+    dir.deleteRecursively();
+
+    // Opening a project (or the host restoring one) is not a change.
+    juce::MemoryBlock state;
+    p->getStateInformation (state);
+    p->setStateInformation (state.getData(), (int) state.getSize());
+    CHECK (changes.nonParameter == 4);
+    p->removeListener (&changes);
+}
+
+TEST_CASE ("Plug-in: a host call with no samples changes nothing (Drive still ramps)", "[plugin]")
+{
+    const double sr = 48000.0;
+    const auto tone = testsig::sine (sr, 2, 100.0, -20.0, 1.0);
+    auto run = [&] (bool emptyCalls)
+    {
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "ceiling", 0.0f);
+        AudioClip out = tone;
+        juce::AudioBuffer<float> buf (2, 512), none (2, 0);
+        juce::MidiBuffer midi;
+        for (int pos = 0, k = 0; pos + 512 <= tone.numSamples(); pos += 512, ++k)
+        {
+            if (k == 40) set (*p, "drive", 12.0f);     // a 12 dB jump: ramped over the next block
+            if (k == 60) set (*p, "inTrim", -6.0f);
+            if (k == 70) set (*p, "levelMatch", 1.0f);
+            if (emptyCalls) p->processBlock (none, midi);
+            for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, tone.channels[(size_t) c].data() + pos, 512);
+            p->processBlock (buf, midi);
+            for (int c = 0; c < 2; ++c) std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + 512, out.channels[(size_t) c].begin() + pos);
+        }
+        return out;
+    };
+    CHECK (maxAbsDiff (run (true), run (false)) == 0.0);
+}
+
+TEST_CASE ("Plug-in: a mono track (1 in / 1 out) plays the same master, with every listening aid", "[plugin][monitoring]")
+{
+    namespace L = polisher::listen;
+    const double sr = 48000.0;
+    auto mono = std::make_unique<PolisherAudioProcessor>();
+    juce::AudioProcessor::BusesLayout layout;
+    layout.inputBuses.add (juce::AudioChannelSet::mono());
+    layout.outputBuses.add (juce::AudioChannelSet::mono());
+    REQUIRE (mono->setBusesLayout (layout));
+    // Every module working, except the two that only act on stereo (on a mono track they rest; on
+    // stereo their all-passes would shift the phase of the identical channels).
+    const auto settings = [] (PolisherAudioProcessor& p) { busySettings (p); set (p, "imgHigh", 100.0f); set (p, "bassMono", 0.0f); };
+    set (*mono, "autoreset", 0.0f);
+    settings (*mono);
+    mono->setRateAndBufferSizeDetails (sr, 512);
+    mono->prepareToPlay (sr, 512);
+    auto stereo = makeProcessor (sr, 512, false);
+    settings (*stereo);
+    stereo->prepareToPlay (sr, 512);
+    CHECK (mono->getLatencySamples() == stereo->getLatencySamples());
+
+    // The same mix in both channels of a stereo track: the mono track's master is its left channel.
+    auto mix = testsig::musicLike (sr, 4.0, -8.0);
+    mix.channels[1] = mix.channels[0];
+    const auto st = renderFixed (*stereo, mix, 512);
+    juce::AudioBuffer<float> buf (1, 512);
+    juce::MidiBuffer midi;
+    std::vector<float> out ((size_t) mix.numSamples(), 0.0f);
+    double err = 0.0, ref = 0.0;
+    for (int pos = 0, k = 0; pos + 512 <= mix.numSamples(); pos += 512, ++k)
+    {
+        buf.copyFrom (0, 0, mix.channels[0].data() + pos, 512);
+        mono->processBlock (buf, midi);
+        for (int i = 0; i < 512; ++i)
+        {
+            err = std::max (err, std::abs ((double) buf.getSample (0, i) - st.channels[0][(size_t) (pos + i)]));
+            ref = std::max (ref, (double) std::abs (st.channels[0][(size_t) (pos + i)]));
+        }
+    }
+    INFO ("mono track vs the stereo track's left channel: largest difference " << err << " (peak " << ref << ")");
+    CHECK (err < 1.0e-4);
+
+    // Every listen mode, MONO and PHONE: finite, never over 0 dBFS.
+    double worst = 0.0;
+    bool finite = true;
+    for (int pos = 0, k = 0; pos + 512 <= mix.numSamples(); pos += 512, ++k)
+    {
+        mono->setListenMode ((k / 12) % L::count);
+        mono->setMonoCheck (k % 5 < 2);
+        mono->setPhoneCheck (k % 7 < 3);
+        buf.copyFrom (0, 0, mix.channels[0].data() + pos, 512);
+        mono->processBlock (buf, midi);
+        for (int i = 0; i < 512; ++i)
+        {
+            finite = finite && std::isfinite (buf.getSample (0, i));
+            worst = std::max (worst, (double) std::abs (buf.getSample (0, i)));
+        }
+    }
+    CHECK (finite);
+    CHECK (worst <= 1.0);
+}
+
+TEST_CASE ("PHONE on a loud, bright master: never over 0 dBFS, no click on or off, and off is the master again", "[plugin][monitoring]")
+{
+    const double sr = 48000.0;
+    auto mix = testsig::musicLike (sr, 4.0, -8.0);
+    for (auto& ch : mix.channels)   // a bright lead the phone's 2 kHz bump pushes past 0 dBFS
+        for (size_t i = 0; i < ch.size(); ++i) ch[i] += (float) (0.4 * std::sin (2.0 * std::numbers::pi * 2000.0 * (double) i / sr));
+    const Setup loud = [] (auto& p) { set (p, "drive", 8.0f); };   // ceiling 0 dBTP: the master sits at 0 dBFS
+    auto master = masterOf (mix, loud);
+    auto p = plainProcessor (sr, loud);
+    AudioClip out = mix;
+    juce::AudioBuffer<float> buf (2, 512);
+    juce::MidiBuffer midi;
+    const int onBlock = 40, offBlock = 250;
+    for (int pos = 0, k = 0; pos + 512 <= mix.numSamples(); pos += 512, ++k)
+    {
+        p->setPhoneCheck (k >= onBlock && k < offBlock);
+        for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, mix.channels[(size_t) c].data() + pos, 512);
+        p->processBlock (buf, midi);
+        for (int c = 0; c < 2; ++c) std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + 512, out.channels[(size_t) c].begin() + pos);
+    }
+    const int n = mix.numSamples() / 512 * 512;
+    for (auto* clip : { &out, &master })
+        for (auto& ch : clip->channels) ch.resize ((size_t) n);
+    CHECK (peakFrom (out, 0) <= 1.0);
+    // Switching PHONE on and off steps no further than the master does on its own (plus PHONE's own level).
+    const double steady = maxStepOf (master, p->getLatencySamples() + 512), worst = maxStepOf (out, p->getLatencySamples() + 512);
+    INFO ("largest step " << worst << ", the master's own " << steady);
+    CHECK (worst < 2.0 * steady);
+    // 0.1 s after PHONE goes off, it is the master again, exactly (the safety stage has let go).
+    const int from = offBlock * 512 + (int) (0.1 * sr);
+    double err = 0.0;
+    for (size_t c = 0; c < 2; ++c)
+        for (int i = from; i < n; ++i) err = std::max (err, std::abs ((double) out.channels[c][(size_t) i] - master.channels[c][(size_t) i]));
+    CHECK (err == 0.0);
+}
+
+TEST_CASE ("Snapshots: a slot stored before a control existed puts that control at its default on recall", "[plugin][snapshots]")
+{
+    auto a = makeProcessor (48000.0, 512, false);
+    a->snapshots.store (0);
+    juce::MemoryBlock state;
+    a->getStateInformation (state);
+    auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+    REQUIRE (xml != nullptr);
+    auto* slot = xml->getChildByName (SettingsSnapshots::kTag)->getChildByName ("SLOT");
+    REQUIRE (slot != nullptr);
+    // As if S1 had been stored by a version without Saturation Focus and Stem EQ Keep Loudness.
+    for (const char* gone : { "satFocus", "stemKeep" })
+        for (auto* v : slot->getChildWithTagNameIterator ("V"))
+            if (v->getStringAttribute ("id") == gone) { slot->removeChildElement (v, true); break; }
+    juce::MemoryBlock old;
+    juce::AudioProcessor::copyXmlToBinary (*xml, old);
+
+    auto b = makeProcessor (48000.0, 512, false);
+    b->setStateInformation (old.getData(), (int) old.getSize());
+    gesture (*b, "satFocus", 1.0f);               // Bass only now
+    gesture (*b, "stemKeep", 1.0f);
+    auto stNow = b->snapshots.getStatus();
+    CHECK (stNow.modified);                       // not what S1 holds
+    REQUIRE (b->snapshots.recall (0));
+    CHECK (plainOf (*b, "satFocus") == 0.0f);     // Full: what that version played
+    CHECK (plainOf (*b, "stemKeep") == 0.0f);     // a song from before Keep Loudness plays without it
+    stNow = b->snapshots.getStatus();
+    CHECK ((stNow.active == 0 && ! stNow.modified));
+    gesture (*b, "satFocus", 1.0f);
+    stNow = b->snapshots.getStatus();
+    CHECK ((stNow.active == 0 && stNow.modified));   // moving it away from S1's value shows as a change
+}
+
+namespace {
+/** A trap-like mix at -17 LUFS (the user's mixes arrive about there), looped block by block. */
+struct MatchPlayer
+{
+    explicit MatchPlayer (PolisherAudioProcessor& proc) : p (proc)
+    {
+        const double lufs = polisher::measure (mix).integratedLufs;
+        mix = polisher::withGain (mix, -17.0 - lufs);
+    }
+    double play (double seconds)
+    {
+        for (int i = 0; i < (int) (seconds * 48000.0 / 512); ++i)
+        {
+            for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, mix.channels[(size_t) c].data() + at, 512);
+            at = (at + 1024 < mix.numSamples()) ? at + 512 : 0;
+            p.processBlock (buf, midi);
+        }
+        return (double) p.meters.matchDb.load();   // B's MATCH gain (dB)
+    }
+    PolisherAudioProcessor& p;
+    AudioClip mix = testsig::trapLike (48000.0, 20.0);
+    juce::AudioBuffer<float> buf { 2, 512 };
+    juce::MidiBuffer midi;
+    int at = 0;
+};
+}
+
+TEST_CASE ("MATCH learns the level afresh after Auto-Master, a project load and RESET", "[plugin][match]")
+{
+    // The song played at Drive 0 (MATCH learned 0 dB firmly), then the level went up ~7 dB. MATCH used
+    // to slide there from 0 dB over ~20 s: B played 7 dB louder for the first 3 s and still 1.7 dB louder
+    // after 10 s (the first A/B after Auto-Master).
+    const double sr = 48000.0;
+    juce::MemoryBlock louder;
+    {
+        auto q = makeProcessor (sr, 512, false);
+        set (*q, "ceiling", -1.0f);
+        set (*q, "drive", 8.0f);
+        q->getStateInformation (louder);
+    }
+    for (int how = 0; how < 3; ++how)
+    {
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "ceiling", -1.0f);
+        set (*p, "levelMatch", 1.0f);
+        MatchPlayer m (*p);
+        CHECK (std::abs (m.play (40.0)) < 0.05);
+        if (how == 0)
+        {
+            p->autoMaster.onApplyBegin ("Auto-Master (test)");   // what an Auto-Master run does around its settings
+            set (*p, "drive", 8.0f);
+            p->autoMaster.onApplyEnd();
+        }
+        else if (how == 1)
+        {
+            p->setStateInformation (louder.getData(), (int) louder.getSize());   // a project (or preset) opened
+            set (*p, "levelMatch", 1.0f);
+        }
+        else
+        {
+            set (*p, "drive", 8.0f);    // by hand...
+            p->requestMeterReset();     // ...then RESET
+        }
+        const double at1 = m.play (1.0), at4 = m.play (3.0), settled = m.play (40.0);
+        INFO ((how == 0 ? "Auto-Master" : how == 1 ? "project load" : "RESET") << ": MATCH after 1 s " << at1 << " dB, after 4 s " << at4
+              << " dB, settled " << settled << " dB");
+        CHECK (settled < -5.0);
+        CHECK (std::abs (at1 - settled) < 1.0);
+        CHECK (std::abs (at4 - settled) < 0.3);
+    }
+}
+
+TEST_CASE ("MATCH keeps a settled level for a snapshot heard for ~13 s, and quick A / B flips don't pull it toward A", "[plugin][match][snapshots]")
+{
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, false);
+    set (*p, "ceiling", -1.0f);
+    p->snapshots.store (0);                   // S1: Drive 0
+    set (*p, "drive", 6.0f);
+    p->snapshots.store (1);                   // S2: Drive +6
+    set (*p, "levelMatch", 1.0f);
+    MatchPlayer m (*p);
+    REQUIRE (p->snapshots.recall (0));
+    m.play (20.0);
+    REQUIRE (p->snapshots.recall (1));
+    m.play (13.1);                            // first visit of S2: ~13 s (3 s of them while the readings catch up)
+    REQUIRE (p->snapshots.recall (0));
+    m.play (5.0);
+    REQUIRE (p->snapshots.recall (1));
+    const double fromMemory = m.play (0.05);
+    const double truth = m.play (40.0);
+    INFO ("S2 from memory " << fromMemory << " dB, after 40 s " << truth << " dB");
+    CHECK (std::abs (fromMemory - truth) < 0.25);   // it stored -4.96 for -6.00 before (learning from the old level)
+
+    // Flipping A / B every 1.5 s for a minute: on A the readings hold the original, which reads as a
+    // 0 dB gap; learning from them left B about 2 dB too loud.
+    for (int k = 0; k < 40; ++k)
+    {
+        set (*p, "bypass", k % 2 == 0 ? 1.0f : 0.0f);
+        m.play (1.5);
+    }
+    set (*p, "bypass", 0.0f);
+    const double afterFlips = m.play (0.02);
+    INFO ("after a minute of A / B flips " << afterFlips << " dB");
+    CHECK (std::abs (afterFlips - truth) < 0.25);
+
+    // Auto-Master while a snapshot plays: MATCH learns the new level afresh, and the snapshot keeps the
+    // level it had (the editor notices a moment later that the settings left it).
+    set (*p, "drive", 3.0f);
+    p->snapshots.store (2);                   // S3: Drive +3, played once
+    const double s3 = m.play (20.0);
+    p->autoMaster.onApplyBegin ("Auto-Master (test)");
+    set (*p, "drive", 9.0f);
+    p->autoMaster.onApplyEnd();
+    m.play (0.05);
+    p->snapshots.getStatus();                 // the editor's poll: S3 was left
+    const double master = m.play (5.0);
+    REQUIRE (p->snapshots.recall (2));
+    const double backToS3 = m.play (0.05);
+    INFO ("S3 " << s3 << " dB, after Auto-Master " << master << " dB, back to S3 " << backToS3 << " dB");
+    CHECK (master < s3 - 3.0);
+    CHECK (std::abs (backToS3 - s3) < 0.25);
+}
+
+TEST_CASE ("Plug-in: switching B -> A never lets a peak out above A's own peak or the ceiling", "[plugin]")
+{
+    // The limiter used to pass what was still in its delay line (driven for B) unlimited at the switch,
+    // and the Drive ramp of that block too: Drive +12 on a mix peaking at -10.9 dBFS put -0.56 dBFS out,
+    // 10 dB over A and over B's ceiling: a click on every A/B flip.
+    for (double sr : { 44100.0, 48000.0 })
+        for (int block : { 64, 512, 4096 })
+            for (bool busy : { false, true })
+            {
+                auto mix = testsig::trapLike (sr, 4.0);
+                mix = polisher::withGain (mix, -17.0 - polisher::measure (mix).integratedLufs);
+                double aPeak = 0.0;
+                for (const auto& ch : mix.channels)
+                    for (float v : ch) aPeak = std::max (aPeak, (double) std::abs (v));
+                const double limitDb = std::max (20.0 * std::log10 (aPeak), -1.0);
+                double worst = -100.0;
+                for (int k = 0; k < 3; ++k)
+                {
+                    auto p = makeProcessor (sr, block, busy);
+                    set (*p, "drive", 12.0f);
+                    set (*p, "ceiling", -1.0f);
+                    const int at = (int) ((2.0 + 0.137 * k) * sr) / block * block;
+                    juce::AudioBuffer<float> buf (2, block);
+                    juce::MidiBuffer midi;
+                    for (int pos = 0; pos + block <= mix.numSamples(); pos += block)
+                    {
+                        if (pos == at) set (*p, "bypass", 1.0f);
+                        for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, mix.channels[(size_t) c].data() + pos, block);
+                        p->processBlock (buf, midi);
+                        if (pos >= at && pos < at + (int) (0.3 * sr))
+                            worst = std::max (worst, 20.0 * std::log10 (std::max ((double) buf.getMagnitude (0, block), 1.0e-9)));
+                    }
+                }
+                INFO (sr << " Hz, block " << block << (busy ? ", busy chain" : ", Drive only") << ": loudest sample after B -> A " << worst
+                      << " dBFS, A peaks at " << 20.0 * std::log10 (aPeak) << " dBFS");
+                CHECK (worst <= limitDb + 0.05);
+            }
+}
+
+TEST_CASE ("Plug-in: on a mono track (mono in, mono out) the whole chain runs and holds the ceiling", "[plugin]")
+{
+    const double sr = 48000.0;
+    auto p = std::make_unique<PolisherAudioProcessor>();
+    set (*p, "autoreset", 0.0f);
+    busySettings (*p);
+    juce::AudioProcessor::BusesLayout mono;
+    mono.inputBuses.add (juce::AudioChannelSet::mono());
+    mono.outputBuses.add (juce::AudioChannelSet::mono());
+    REQUIRE (p->setBusesLayout (mono));
+    p->setRateAndBufferSizeDetails (sr, 512);
+    p->prepareToPlay (sr, 512);
+    REQUIRE (p->getTotalNumOutputChannels() == 1);
+    CHECK (p->getLatencySamples() == makeProcessor (sr, 512, true)->getLatencySamples());
+
+    const auto stereo = testsig::musicLike (sr, 6.0, 0.0);
+    AudioClip out;
+    out.sampleRate = sr;
+    out.channels.resize (1);
+    juce::AudioBuffer<float> buf (1, 512);
+    juce::MidiBuffer midi;
+    bool finite = true;
+    for (int pos = 0; pos + 512 <= stereo.numSamples(); pos += 512)
+    {
+        buf.copyFrom (0, 0, stereo.channels[0].data() + pos, 512);
+        p->processBlock (buf, midi);
+        for (int i = 0; i < 512; ++i)
+        {
+            finite = finite && std::isfinite (buf.getSample (0, i));
+            if (pos >= (int) (0.5 * sr)) out.channels[0].push_back (buf.getSample (0, i));
+        }
+    }
+    CHECK (finite);
+    const double tp = testsig::truePeakOf (out);
+    INFO ("mono master: true peak " << tp << " dBTP");
+    CHECK (tp <= -0.95);
+    CHECK (polisher::measure (out).integratedLufs > -20.0);   // the master, not silence
+}
+
+TEST_CASE ("Plug-in: the reported tail covers what really rings on after the input stops", "[plugin]")
+{
+    // Deep EQ boosts at the bottom of their range ring longest; the tail must cover them, the delay
+    // and the release (a host that stops calling a silent plug-in would cut them off).
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, true);
+    set (*p, "eqGain1", 9.0f); set (*p, "eqFreq1", 20.0f);   // Low End +9 at 20 Hz
+    set (*p, "eqGain2", 9.0f); set (*p, "eqFreq2", 50.0f);   // Bass +9 at 50 Hz
+    set (*p, "release", 1000.0f);
+    p->prepareToPlay (sr, 512);
+    AudioClip clip = testsig::musicLike (sr, 3.0, -12.0);
+    const int stop = clip.numSamples();
+    for (auto& ch : clip.channels) ch.resize ((size_t) (stop + (int) (2.0 * sr)), 0.0f);
+    const auto out = renderFixed (*p, clip, 512);
+    int last = stop;
+    for (int i = stop; i < out.numSamples(); ++i)
+        for (size_t c = 0; c < 2; ++c)
+            if (std::abs (out.channels[c][(size_t) i]) > 1.0e-3) last = i;   // -60 dBFS
+    const double rings = (last - stop) / sr;
+    INFO ("output rings on " << rings << " s after the input stops; reported tail " << p->getTailLengthSeconds() << " s");
+    CHECK (rings <= p->getTailLengthSeconds());
+}
+
+TEST_CASE ("Plug-in: flipping A / B with Mono Below, Dynamics, the Imager and Saturation working leaves no hole", "[plugin][switching]")
+{
+    // The flip the user makes most. These modules used to blend their plain and all-passed paths there, which
+    // cut a hole at each crossover (a 1 kHz tone -12 dB for 35 ms, 5-6 kHz -14 to -16 dB for 40 ms; 60-250 Hz
+    // -6 dB). Now (park and glide, see dsp ParkGlide) a centre tone at each of their crossover frequencies
+    // keeps its short-time level through B -> A and A -> B. (The maximum sample step never showed this.)
+    const double sr = 48000.0;
+    for (double hz : { 60.0, 120.0, 250.0, 1000.0, 5000.0, 6000.0 })
+    {
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "bassMono", 120.0f);
+        for (int b = 1; b <= 4; ++b) { set (*p, "dynRatio" + juce::String (b), 2.0f); set (*p, "dynThr" + juce::String (b), -30.0f); }
+        set (*p, "imgHigh", 130.0f);
+        set (*p, "satDrive", 6.0f); set (*p, "satMix", 50.0f);
+        p->prepareToPlay (sr, 512);
+        const auto tone = testsig::sine (sr, 2, hz, -12.0, 4.0);
+        const int toA = (int) (1.0 * sr) / 512 * 512, toB = (int) (2.5 * sr) / 512 * 512;
+        AudioClip out = tone;
+        juce::AudioBuffer<float> buf (2, 512);
+        juce::MidiBuffer midi;
+        for (int pos = 0; pos + 512 <= tone.numSamples(); pos += 512)
+        {
+            if (pos == toA) set (*p, "bypass", 1.0f);
+            if (pos == toB) set (*p, "bypass", 0.0f);
+            for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, tone.channels[(size_t) c].data() + pos, 512);
+            p->processBlock (buf, midi);
+            for (int c = 0; c < 2; ++c)
+                std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + 512, out.channels[(size_t) c].begin() + pos);
+        }
+        std::vector<double> mid ((size_t) tone.numSamples() / 512 * 512);
+        for (size_t i = 0; i < mid.size(); ++i) mid[i] = 0.5 * ((double) out.channels[0][i] + out.channels[1][i]);
+        const std::vector<double> first (mid.begin(), mid.begin() + (long) (2.4 * sr)), second (mid.begin() + (long) (1.6 * sr), mid.end());
+        const auto bToA = switchlevel::measure (first, sr, hz, toA);
+        const auto aToB = switchlevel::measure (second, sr, hz, toB - (int) (1.6 * sr));
+        INFO (hz << " Hz centre tone: B -> A dip " << bToA.dipDb << " dB, swell +" << bToA.bumpDb << " dB; A -> B dip " << aToB.dipDb << " dB, swell +" << aToB.bumpDb << " dB");
+        CHECK (bToA.dipDb > -1.5);
+        CHECK (aToB.dipDb > -1.5);
+        CHECK (bToA.bumpDb < 1.5);
+        CHECK (aToB.bumpDb < 1.5);
+    }
 }
 
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:

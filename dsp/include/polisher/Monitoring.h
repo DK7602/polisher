@@ -184,14 +184,20 @@ private:
 /** The MONO and PHONE checks at the very end (after MATCH), plus the safety stage of all monitoring.
 
     - MONO: (L + R) / 2 on both channels. A part that disappears here cancels on mono speakers.
-    - PHONE: a phone speaker, roughly: mono, 2nd-order high-pass at kPhoneLowHz (an 808's 50 Hz
-      fundamental is ~31 dB down, its upper harmonics come through), 2nd-order low-pass at kPhoneHighHz,
-      a small resonant bump at kPhoneBumpHz, and a fixed kPhoneMakeupDb so a balanced mix keeps its
-      loudness (a pink spectrum measures the same LUFS through it). Fixed, not automatic: a mix whose
-      weight is all sub-bass does get quieter on PHONE, as it does on a real phone.
+    - PHONE: a phone speaker, roughly: mono, 4th-order Butterworth high-pass at kPhoneLowHz (little below
+      300 Hz: 200 Hz ~13 dB down, 100 Hz ~37 dB, an 808's 50 Hz fundamental ~61 dB, so only its upper
+      harmonics come through, as on a real phone), 2nd-order low-pass at kPhoneHighHz, a small resonant
+      bump at kPhoneBumpHz, and a fixed kPhoneMakeupDb so a balanced mix keeps its loudness (a pink
+      spectrum measures the same LUFS through it). Fixed, not automatic: a mix whose weight is all
+      sub-bass does get quieter on PHONE, as it does on a real phone.
     - Each switch cross-fades over 15 ms. Safety: while any monitoring is on, nothing leaves above
-      0 dBFS (an instant-attack peak limiter with a 50 ms release; it never touches a normal master,
-      which stays at its ceiling).
+      0 dBFS. It rides the level rather than limiting each peak: an instant drop when a peak would pass
+      0 dBFS (no look-ahead, so nothing can get through), then it holds that level while peaks stay within
+      ~1 dB of the top (and kSafetyHoldSeconds after) and lets go over kSafetyReleaseSeconds, so a loud
+      bright master on PHONE is turned down a few dB as a whole instead of being limited (distorted) peak
+      by peak. It never touches a normal master (which stays at its ceiling). Once every listening aid is
+      off it lets go within the 15 ms fade, and it keeps running (isActive) until it is back at exactly
+      0 dB, so the next check starts level.
     prepare() allocates nothing; process() never does. */
 class MonitorOutput
 {
@@ -203,14 +209,21 @@ public:
     static constexpr double kPhoneBumpQ = 1.0;
     static constexpr double kPhoneMakeupDb = 1.5;
     static constexpr double kFadeSeconds = 0.015;
-    static constexpr double kSafetyReleaseSeconds = 0.05;
+    static constexpr double kSafetyHoldSeconds = 0.06;
+    static constexpr double kSafetyHoldLevel = 0.89;       // peaks within ~1 dB of 0 dBFS keep the level held
+    static constexpr double kSafetyReleaseSeconds = 0.5;
+    static constexpr double kSafetyLetGoSeconds = 0.004;   // time constant once nothing is wanted any more
 
     void prepare (double sampleRate) noexcept;
-    void reset() noexcept;   // both checks off at once, filters cleared
+    void reset() noexcept;   // both checks off at once, filters cleared, safety back at 0 dB
     void setMono (bool on) noexcept { monoWanted = on; }
     void setPhone (bool on) noexcept { phoneWanted = on; }
-    /** True while a check is on or fading. */
-    bool isActive() const noexcept { return monoWanted || phoneWanted || monoMix > 0.0 || phoneMix > 0.0; }
+    /** Whether a Listen / Solo is wanted (the safety stage lets go fast once nothing at all is). */
+    void setListenWanted (bool on) noexcept { listenWanted = on; }
+    /** True while a check is on or fading, or the safety stage is still letting go. */
+    bool isActive() const noexcept { return monoWanted || phoneWanted || monoMix > 0.0 || phoneMix > 0.0 || safetyGain < 1.0; }
+    /** The safety stage's gain now (1 = untouched). */
+    double safetyGainNow() const noexcept { return safetyGain; }
 
     /** Applies the checks in place, then (when `safety`) the 0 dBFS safety stage. */
     template <typename Sample>
@@ -218,7 +231,8 @@ public:
     {
         const int nch = std::clamp (numChannels, 1, 2);
         if (phoneWanted && phoneMix <= 0.0)
-            for (auto* f : { &phoneHp, &phoneLp, &phoneBump }) f->reset();   // starts clean; the fade hides its start
+            for (auto* f : { &phoneHp, &phoneHp2, &phoneLp, &phoneBump }) f->reset();   // starts clean; the fade hides its start
+        const bool wanted = monoWanted || phoneWanted || listenWanted;
         for (int i = 0; i < numSamples; ++i)
         {
             double l = static_cast<double> (ch[0][i]), r = static_cast<double> (ch[nch - 1][i]);
@@ -233,21 +247,41 @@ public:
             }
             if (phoneMix > 0.0)
             {
-                const double p = phoneBump.process (phoneLp.process (phoneHp.process (mono))) * phoneMakeup;
+                const double p = phoneBump.process (phoneLp.process (phoneHp2.process (phoneHp.process (mono)))) * phoneMakeup;
                 const double g = smooth (phoneMix);
                 l += (p - l) * g;
                 r += (p - r) * g;
             }
             if (safety)
             {
-                const double pk = std::max (std::abs (l), std::abs (r));
-                safetyGain = 1.0 - (1.0 - safetyGain) * safetyRelease;
-                if (pk * safetyGain > 1.0) safetyGain = 1.0 / pk;
+                const double pk = std::max (std::abs (l), std::abs (r)), level = pk * safetyGain;
+                if (level > 1.0)
+                {
+                    safetyGain = 1.0 / pk;            // instant: nothing passes 0 dBFS
+                    safetyHold = wanted ? holdSamples : 0;
+                }
+                else if (! wanted)
+                {
+                    safetyHold = 0;                   // every aid is off: let go within the fade back to the master
+                    if (safetyGain < 1.0)
+                        safetyGain = 1.0 - (1.0 - safetyGain) * safetyLetGo;
+                }
+                else if (level > kSafetyHoldLevel)
+                    safetyHold = holdSamples;         // peaks still near the top: keep the level (no ripple on each wave)
+                else if (safetyHold > 0)
+                    --safetyHold;
+                else if (safetyGain < 1.0)
+                    safetyGain = 1.0 - (1.0 - safetyGain) * safetyRelease;
+                if (safetyGain > 1.0 - 1.0e-7)
+                    safetyGain = 1.0;
                 l = std::clamp (l * safetyGain, -1.0, 1.0);
                 r = std::clamp (r * safetyGain, -1.0, 1.0);
             }
             else
+            {
                 safetyGain = 1.0;
+                safetyHold = 0;
+            }
             ch[0][i] = static_cast<Sample> (l);
             if (nch > 1) ch[1][i] = static_cast<Sample> (r);
         }
@@ -259,11 +293,12 @@ public:
 private:
     static double smooth (double x) noexcept { return x * x * (3.0 - 2.0 * x); }
 
-    double sr = 48000.0, fadeStep = 1.0, safetyRelease = 0.0, safetyGain = 1.0;
+    double sr = 48000.0, fadeStep = 1.0, safetyRelease = 0.0, safetyLetGo = 0.0, safetyGain = 1.0;
+    int holdSamples = 0, safetyHold = 0;
     double phoneMakeup = 1.0;
-    bool monoWanted = false, phoneWanted = false;
+    bool monoWanted = false, phoneWanted = false, listenWanted = false;
     double monoMix = 0.0, phoneMix = 0.0;
-    Biquad phoneHp, phoneLp, phoneBump;
+    Biquad phoneHp, phoneHp2, phoneLp, phoneBump;   // the high-pass is two sections: 4th-order Butterworth
 };
 
 } // namespace polisher

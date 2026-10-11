@@ -34,6 +34,7 @@ void SongListener::prepare (double sampleRate, double windowSeconds, double maxS
     window.assign (static_cast<size_t> (N), 0.0);
     for (int i = 0; i < N; ++i) window[static_cast<size_t> (i)] = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * i / N);
     StemEQ::makeBands (sr, N, bandCf, bandW, bandLo, bandHi);
+    for (int b = 0; b < kToneBands; ++b) bandK[static_cast<size_t> (b)] = StemEQ::kWeightAt (bandCf[static_cast<size_t> (b)]);
     for (auto& f : frameIn) f.assign (static_cast<size_t> (N), 0.0);
     work.assign (static_cast<size_t> (N), {});
     binPow.assign (static_cast<size_t> (N / 2 + 1), 0.0);
@@ -289,7 +290,7 @@ void SongListener::toneFrame() noexcept
 
     const int bins = half + 1;
     std::array<double, kToneBands> e {};
-    double total = 0.0;
+    double total = 0.0, loud = 0.0;
     for (int band = 0; band < kToneBands; ++band)
     {
         const double* w = bandW.data() + band * bins;
@@ -298,6 +299,7 @@ void SongListener::toneFrame() noexcept
             sum += w[k] * binPow[static_cast<size_t> (k)];
         e[static_cast<size_t> (band)] = sum;
         total += sum;
+        loud += sum * bandK[static_cast<size_t> (band)];
     }
     // As Tone Steady reads a frame: each band relative to the whole frame, -90 dB at most below it;
     // near-silent frames teach nothing.
@@ -306,8 +308,8 @@ void SongListener::toneFrame() noexcept
         return;
     for (size_t b = 0; b < e.size(); ++b)
         hopToneSum[b] += std::max (10.0 * std::log10 (e[b] + 1.0e-20) - totalDb, -90.0);
-    hopToneEnergy += total;
-    ++hopToneFrames;   // joins the song's tone when its 100 ms piece turns out to be music
+    hopToneEnergy += loud;   // the level as a loudness meter weighs it (an 808 doesn't make a section "loud")
+    ++hopToneFrames;         // joins the song's tone when its 100 ms piece turns out to be music
 }
 
 void SongListener::closeToneBlock() noexcept
@@ -480,7 +482,8 @@ ToneTarget SongListener::toneTarget() const
     if (toneCount < kMinToneBlocks)
         return t;
     // Only the music at the song's level: quiet intros, breakdowns and fades (more than 15 dB under
-    // its power-mean level) don't describe its tone, and Tone Steady leaves them alone anyway.
+    // its power-mean loudness, K-weighted) don't describe its tone, and Tone Steady leaves them alone
+    // anyway.
     double sum = 0.0;
     for (int i = 0; i < toneCount; ++i) sum += std::pow (10.0, toneLevel[static_cast<size_t> (i)] / 10.0);
     const double songDb = 10.0 * std::log10 (sum / toneCount);
@@ -505,6 +508,9 @@ ToneTarget SongListener::toneTarget() const
     }
     t.valid = true;
     t.seconds = heardSeconds();
+    // The song's level as the stage reads a frame, per fftSize^2 (the same at every rate): Tone Steady
+    // judges quiet passages against it instead of the last ~10 s.
+    t.levelDb = songDb - 20.0 * std::log10 (static_cast<double> (fftSize));
     return t;
 }
 
@@ -517,9 +523,11 @@ std::size_t SongListener::memoryBytes() const noexcept
          + bytes (binPow) + bytes (toneBlocks) + bytes (toneLevel) + sizeof (*this);
 }
 
-ToneTarget toneTargetAtStage (const ToneTarget& song, const TonalEQParams& eq, double sampleRate) noexcept
+ToneTarget toneTargetAtStage (const ToneTarget& song, const TonalEQParams& eq, double sampleRate, double inputTrimDb) noexcept
 {
     ToneTarget t = song;
+    if (t.valid && t.hasLevel())
+        t.levelDb += inputTrimDb;
     if (! song.valid || ! eq.enabled || sampleRate <= 0.0)
         return t;
     std::array<BiquadCoefficients, kEqBands> bands {};
@@ -535,6 +543,7 @@ ToneTarget toneTargetAtStage (const ToneTarget& song, const TonalEQParams& eq, d
     if (! any && ! subsonic)
         return t;
     const auto hp = TonalEQ::designSubsonic (sampleRate);
+    double before = 0.0, after = 0.0;   // the song's energy, by its own tone, without and with the EQ
     for (int band = 0; band < kToneBands; ++band)
     {
         const double f = StemEQ::bandCentreHz (band, sampleRate);
@@ -542,8 +551,13 @@ ToneTarget toneTargetAtStage (const ToneTarget& song, const TonalEQParams& eq, d
         for (size_t j = 0; j < bands.size(); ++j)
             if (on[j]) db += bands[j].magnitudeDb (f, sampleRate);
         if (subsonic) db += hp[0].magnitudeDb (f, sampleRate) + hp[1].magnitudeDb (f, sampleRate);
-        t.bandDb[static_cast<size_t> (band)] = static_cast<float> (song.bandDb[static_cast<size_t> (band)] + db);
+        const double was = song.bandDb[static_cast<size_t> (band)];
+        t.bandDb[static_cast<size_t> (band)] = static_cast<float> (was + db);
+        before += std::pow (10.0, was / 10.0);
+        after += std::pow (10.0, (was + db) / 10.0);
     }
+    if (t.hasLevel() && before > 0.0 && after > 0.0)
+        t.levelDb += 10.0 * std::log10 (after / before);
     return t;
 }
 

@@ -47,7 +47,7 @@ void BassControl::prepare (double newSampleRate, int numChannels)
     channelCount = std::clamp (numChannels, 1, kMaxChannels);
     const double sr = sampleRate;
 
-    mixCoeff = perSample (0.02, sr);
+    fadeStep = 1.0 / (ParkGlide::kFadeSeconds * sr);
     glideCoeff = perUpdate (0.02, sr);
     tameAttack = perSample (0.010, sr);
     tameRelease = perSample (0.080, sr);
@@ -82,7 +82,7 @@ void BassControl::prepare (double newSampleRate, int numChannels)
 
 void BassControl::reset() noexcept
 {
-    for (auto* group : { &detectLp, &widthLpM, &widthLpS, &monoHp, &clickHp, &clickLp, &airHp })
+    for (auto* group : { &detectLp, &widthLpM, &widthLpS, &monoHp, &monoLp, &clickHp, &clickLp, &airHp })
         for (auto& f : *group)
             f.reset();
     for (auto& f : tameFilter) f.reset();
@@ -97,10 +97,13 @@ void BassControl::reset() noexcept
     widthPercent = 0.0;
     tameGainDb = punchGainDb = 0.0;
     tameRunning = punchRunning = false;
-    monoMix = monoTarget;          // jump straight to the current Mono Below setting
+    monoMix = monoFade = monoFadeGoal = monoCut = monoCutGoal = monoTarget;   // jump straight to the current Mono Below setting
+    monoCutWeight = monoCut;
     monoLogFreq = monoTargetLogFreq;
-    monoRunning = monoMix > 0.0;
+    monoRunning = monoEngaged = monoMix > 0.0;
+    monoSegment.stop();
     monoAp.reset();
+    monoApSide.reset();
     setMonoFilters();
     maxTame = maxPunch = 0.0;
     updateCountdown = 0;
@@ -118,37 +121,65 @@ void BassControl::setParams (const BassParams& p) noexcept
 void BassControl::setMonoFilters() noexcept
 {
     const double f = std::exp (monoLogFreq);
-    const auto hp = butterworth (true, f, sampleRate);
+    const auto hp = ParkGlide::butterworth (true, f, sampleRate), lp = ParkGlide::butterworth (false, f, sampleRate);
     apply (monoHp[0], hp);
     apply (monoHp[1], hp);
-    apply (monoAp, allpass (f, sampleRate));
+    apply (monoLp[0], lp);
+    apply (monoLp[1], lp);
+    const auto ap = ParkGlide::allpass (f, sampleRate);
+    apply (monoAp, ap);
+    apply (monoApSide, ap);
 }
 
 void BassControl::update() noexcept
 {
     const double sr = sampleRate;
 
-    // --- Mono Below: frequency glide (jumps while fully blended out) ---------------------------
-    if (monoTarget > 0.0 || monoMix > 0.0)
+    // --- Mono Below: park and glide (see ParkGlide) -----------------------------------------------
+    // On: blend in with the all-pass parked just under Nyquist (mid and side alike), glide down to the
+    // set frequency, then take the side's bass out. Off: the other way round. Once there, a frequency
+    // move glides as before (20 ms).
+    const bool monoWanted = monoTarget > 0.0;
+    if (monoWanted || monoRunning)
     {
+        const double park = ParkGlide::parkLog (sr);
         if (! monoRunning)
         {
-            for (auto& f : monoHp) f.reset();
+            for (auto* group : { &monoHp, &monoLp })
+                for (auto& f : *group) f.reset();
             monoAp.reset();
-            monoLogFreq = monoTargetLogFreq;
+            monoApSide.reset();
+            monoSegment.stop();
+            monoLogFreq = park;
             monoRunning = true;
+            monoEngaged = false;
             setMonoFilters();
         }
-        const double d = monoTargetLogFreq - monoLogFreq;
-        if (d != 0.0)
+        if (! monoWanted)
+            monoEngaged = false;
+        const bool down = monoWanted && monoFade >= 1.0;
+        const bool holding = ! monoWanted && monoCut > 0.0;   // the side's bass comes back first
+        const double goal = down ? monoTargetLogFreq : park;
+        const double d = goal - monoLogFreq;
+        if (! holding && d != 0.0)
         {
-            monoLogFreq = std::abs (d) < 1.0e-5 ? monoTargetLogFreq : monoLogFreq + d * glideCoeff;
-            setMonoFilters();
+            if (monoEngaged)
+            {
+                monoLogFreq = std::abs (d) < 1.0e-5 ? goal : monoLogFreq + d * glideCoeff;
+                setMonoFilters();
+            }
+            else
+                monoSegment.start (monoLogFreq, ParkGlide::step (monoLogFreq, goal, kUpdateInterval / sr, sr), kUpdateInterval);
         }
-    }
-    else
-    {
-        monoRunning = false;
+        if (down && monoLogFreq == monoTargetLogFreq)
+            monoEngaged = true;
+        monoCutGoal = monoEngaged ? 1.0 : 0.0;
+        monoFadeGoal = monoWanted || monoCut > 0.0 || monoLogFreq != park ? 1.0 : 0.0;
+        if (! monoWanted && monoFade <= 0.0 && monoCut <= 0.0)
+        {
+            monoRunning = false;   // blended out: exact pass-through again
+            monoMix = 0.0;
+        }
     }
 
     // Keep the detector filters out of denormals in silence.
@@ -204,7 +235,10 @@ void BassControl::update() noexcept
     }
     {
         const double d = tameTarget - tameGainDb;
-        tameGainDb = std::abs (d) < 0.01 ? tameTarget : tameGainDb + d * (d < 0.0 ? gainAttack : gainRelease);
+        // Snap only onto 0 dB (so it can rest as an exact pass-through). Snapping onto any target within
+        // 0.01 dB made the release faster the more updates a second there are: at 96 kHz a leaping 808
+        // note was let go ~0.5 dB sooner than at 48 kHz.
+        tameGainDb = tameTarget == 0.0 && std::abs (d) < 0.01 ? 0.0 : tameGainDb + d * (d < 0.0 ? gainAttack : gainRelease);
         if (tameGainDb != 0.0)
         {
             tameRunning = true;

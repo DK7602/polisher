@@ -2,8 +2,11 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "Signals.h"
+#include "SwitchLevel.h"
 #include "polisher/BassControl.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <numbers>
 #include <utility>
@@ -365,5 +368,150 @@ TEST_CASE ("Bass Control never clicks when switched and stays stable", "[bass]")
         const double maxStep = 2.0 * (0.5 + 0.36) * 2.0 * std::numbers::pi * 65.0 / sr * 1.6;   // with up to +4 dB punch
         INFO ("sr " << sr << " worst step " << worst << " limit " << maxStep);
         CHECK (worst < maxStep);
+    }
+}
+
+namespace {
+
+/** A tone (or anything) through Bass Control in 64-sample blocks, the settings changing from `from` to
+    `to` at sample `at` (no change when at < 0). Starts from reset() in `from`. */
+std::array<std::vector<double>, 2> switchBass (std::array<std::vector<double>, 2> x, double sr, const BassParams& from, const BassParams& to, int at, BassControl* keep = nullptr)
+{
+    BassControl local;
+    BassControl& b = keep != nullptr ? *keep : local;
+    b.prepare (sr, 2);
+    b.setParams (from);
+    b.reset();
+    const int n = static_cast<int> (x[0].size());
+    for (int s = 0; s < n; s += 64)
+    {
+        if (s == at) b.setParams (to);
+        double* ch[2] = { x[0].data() + s, x[1].data() + s };
+        b.process (ch, 2, std::min (64, n - s));
+    }
+    return x;
+}
+
+std::array<std::vector<double>, 2> stereoTone (double sr, double seconds, double hz, double left, double right)
+{
+    std::array<std::vector<double>, 2> x;
+    const int n = static_cast<int> (seconds * sr);
+    for (auto& ch : x) ch.resize (static_cast<size_t> (n));
+    for (int i = 0; i < n; ++i)
+    {
+        const double v = std::sin (2.0 * std::numbers::pi * hz * i / sr);
+        x[0][static_cast<size_t> (i)] = left * v;
+        x[1][static_cast<size_t> (i)] = right * v;
+    }
+    return x;
+}
+
+} // namespace
+
+TEST_CASE ("Mono Below switches on and off without a hole in the centre, and the stereo stays put", "[bass][switching]")
+{
+    // Blending the plain centre with the all-passed one at the Mono Below frequency used to cancel it: a
+    // 120 Hz centre tone fell 18 dB for ~50 ms on every switch (A / B, a snapshot, undo, Auto-Master).
+    // Now (park and glide) the short-time level of a centre tone below, at and above the frequency stays
+    // within 1 dB through the switch, at every rate; once through, it is exactly the steady setting.
+    for (double sr : { 44100.0, 48000.0, 96000.0, 192000.0 })
+        for (double monoHz : { 40.0, 120.0, 250.0 })
+        {
+            BassParams on;
+            on.monoHz = monoHz;
+            for (double hz : { std::max (30.0, 0.5 * monoHz), monoHz, 2.0 * monoHz })
+            {
+                const int n = static_cast<int> (2.0 * sr), at = static_cast<int> (0.5 * sr) / 64 * 64;
+                const auto tone = stereoTone (sr, 2.0, hz, 0.5, 0.5);
+                const auto steadyOn = switchBass (tone, sr, on, on, -1);
+                for (bool switchOn : { true, false })
+                {
+                    BassControl b;
+                    const auto out = switchBass (tone, sr, switchOn ? BassParams {} : on, switchOn ? on : BassParams {}, at, &b);
+                    const auto r = switchlevel::measure (out[0], sr, hz, at);
+                    INFO ("sr " << sr << ", Mono Below " << monoHz << " Hz switched " << (switchOn ? "on" : "off") << ", " << hz << " Hz tone: dip "
+                          << r.dipDb << " dB, swell +" << r.bumpDb << " dB");
+                    CHECK (r.dipDb > -1.0);
+                    CHECK (r.bumpDb < 1.0);
+                    if (hz <= 1000.0)   // and no click: no sample-to-sample step beyond the tone's own
+                        CHECK (switchlevel::stepRatio (out[0], at) < 1.2);
+                    // Through: switched on, it is the steady setting (to rounding); switched off, an exact pass-through.
+                    double diff = 0.0;
+                    for (int i = static_cast<int> (1.5 * sr); i < n; ++i)
+                        diff = std::max (diff, std::abs (out[0][static_cast<size_t> (i)] - (switchOn ? steadyOn[0] : tone[0])[static_cast<size_t> (i)]));
+                    if (switchOn)
+                        CHECK (diff < 1.0e-7);
+                    else
+                    {
+                        CHECK (diff == 0.0);
+                        CHECK_FALSE (b.isActive());
+                    }
+                }
+            }
+        }
+
+    // A sound panned hard left stays on the left while Mono Below switches: no more on the right at any
+    // moment than once it is on (mid and side go through the same all-pass while the filters glide).
+    for (double hz : { 400.0, 1000.0, 4000.0 })
+    {
+        const double sr = 48000.0;
+        const int at = static_cast<int> (0.5 * sr) / 64 * 64, w = switchlevel::windowFor (hz, sr);
+        BassParams on;
+        on.monoHz = 120.0;
+        const auto steady = switchBass (stereoTone (sr, 2.0, hz, 0.5, 0.0), sr, on, on, -1);
+        const int last = static_cast<int> (steady[0].size()) - w;
+        const double steadyRight = switchlevel::levelDb (steady[1], last, w) - switchlevel::levelDb (steady[0], last, w);
+        for (bool switchOn : { true, false })
+        {
+            const auto out = switchBass (stereoTone (sr, 2.0, hz, 0.5, 0.0), sr, switchOn ? BassParams {} : on, switchOn ? on : BassParams {}, at);
+            double worst = -300.0;
+            for (int s = at; s + w <= static_cast<int> (out[0].size()); s += w)
+                worst = std::max (worst, switchlevel::levelDb (out[1], s, w) - switchlevel::levelDb (out[0], s, w));
+            INFO (hz << " Hz hard left, Mono Below 120 switched " << (switchOn ? "on" : "off") << ": right " << worst << " dB re left (steady on: " << steadyRight << " dB)");
+            CHECK (worst < std::max (steadyRight, -120.0) + 1.0);
+            CHECK (worst < -45.0);
+        }
+    }
+}
+
+TEST_CASE ("Punch and Sub Tame do the same at every sample rate", "[bass]")
+{
+    // Their detectors and timings are set in seconds and Hz; nothing may depend on the sample rate.
+    BassParams punch, tame;
+    punch.punch = 1.0;
+    tame.tame = 1.0;
+    std::vector<double> firstNote, laterNote;
+    for (double sr : { 48000.0, 44100.0, 96000.0, 192000.0 })
+    {
+        INFO ("sr " << sr);
+        // Punch: every kick gets its boost; clean 808 notes get none.
+        const auto hits = perChunk (kicks (sr, 4.0), punch, 0.5);
+        double weakest = 99.0;
+        for (size_t k = 2; k < hits.size(); ++k)
+            weakest = std::min (weakest, hits[k].first);
+        double on808 = 0.0;
+        for (auto [boost, cut] : perChunk (monoClip (sr, 4.0, [] (double t) { return note808At (std::fmod (t, 0.5), 0.5, 45.0, -6.0, 0.6); }), punch, 0.5))
+            on808 = std::max (on808, boost);
+        INFO ("kicks: weakest boost +" << weakest << " dB; clean 808: up to +" << on808 << " dB");
+        CHECK (weakest > 3.5);
+        CHECK (on808 < 0.5);
+
+        // Sub Tame: a note that leaps 10 dB out of a steady line is cut by the same amount at every rate,
+        // and the steady line before it is left alone.
+        const auto leap = monoClip (sr, 5.0, [] (double t) { return std::pow (10.0, (t < 4.0 ? -18.0 : -8.0) / 20.0) * std::sin (2.0 * std::numbers::pi * 60.0 * t); });
+        const auto cuts = perChunk (leap, tame, 0.5);
+        double steadyCut = 0.0;
+        for (size_t k = 2; k < 8; ++k)
+            steadyCut = std::min (steadyCut, cuts[k].second);
+        firstNote.push_back (cuts[8].second);   // the chunk where the note leaps
+        const auto out = renderBass (leap, tame);
+        laterNote.push_back (toneDb (out, 0, 60.0, 4.1, 4.4) - toneDb (leap, 0, 60.0, 4.1, 4.4));   // (once the cut is in)
+        INFO ("Sub Tame: deepest cut on the leap " << firstNote.back() << " dB (48 kHz " << firstNote.front() << "), its level "
+              << laterNote.back() << " dB (48 kHz " << laterNote.front() << "); on the steady line " << steadyCut << " dB");
+        CHECK (firstNote.back() < -4.0);
+        CHECK (laterNote.back() < -3.0);
+        CHECK (std::abs (firstNote.back() - firstNote.front()) < 0.25);
+        CHECK (std::abs (laterNote.back() - laterNote.front()) < 0.25);
+        CHECK (steadyCut > -0.5);
     }
 }

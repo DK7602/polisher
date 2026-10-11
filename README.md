@@ -26,12 +26,12 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | Tonal EQ: 7 musical bands, drag points on the spectrum, click-free glides, bit-exact when flat, live Learn | Done (v0.4) |
 | Bass Control: Mono Below, Sub Tame (dynamic 808 leveller), Punch, bass-width meter, live Learn | Done (v0.5) |
 | Auto-Master: listens 12 s, analyses tone vs genre, bass width, 808 jumps, kick punch and loudness; sets every module; explains each choice; undo | Done (v0.6) |
-| Level-matched A/B (MATCH): the master plays at the original's loudness; off during export and when the window closes | Done (v0.7) |
+| Level-matched A/B (MATCH): the master plays at the original's loudness; off during a normal export, when the window closes and when a project opens | Done (v0.7) |
 | Stereo Imager: width for lows / mids / highs (side only, LR4 crossovers), correlation meter, Learn | Done (v0.8) |
 | Auto-Master recognises a single instrument (one band far above any genre balance), changes nothing and says to put Polisher on the master | Done (v0.8.1) |
 | MATCH never boosts (the louder side is turned down) and gives a clipping original headroom, so A doesn't distort the interface | Done (v0.8.2) |
 | Dynamics: 4-band compressor (LR4 splits, zero latency, per-band threshold / ratio / attack / release / gain, program-dependent release, per-band reduction meters, Learn) | Done (v0.9) |
-| Saturation: tape / tube / clip, 4x oversampled (aliasing 119 dB down), Drive, Mix, harmonics meter, exact pass-through at Drive 0, Learn | Done (v0.9) |
+| Saturation: tape / tube / clip, 4x oversampled (aliasing 74–119 dB below full scale: 119 dB on a single tone, about 74 dB with hot highs at full Drive), Drive, Mix, harmonics meter, exact pass-through at Drive 0, Learn | Done (v0.9) |
 | Auto-Master sets Dynamics (per-band glue, thresholds found by running the compressor on your mix), Stereo Imager (opens narrow highs, never the lows, mono-safe) and Saturation (mode by genre, Drive found by measuring the harmonics against a target) | Done (v0.10) |
 | Stem EQ: per-stem level for vocals / drums / bass / other from a small built-in model (64 bands, ~40 ms latency, plain C++ inference), exact pass-through at 0 dB; Auto-Master suggests a vocal move | Done (v0.11) |
 | Tone Steady (keeps the tonal balance steady through the song) and Resonance Tamer (cuts ringing peaks), inside the Stem EQ's spectral stage (no extra latency); set by Auto-Master | Done (v0.12) |
@@ -48,7 +48,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | Undo / redo and snapshots: a linear history of the last 100 changes kept in the plug-in (one knob gesture = one step, quick repeats merged; Auto-Master, Stem EQ Apply and a recall are one step each and carry the report; host automation and A/B, MATCH, listening aids never recorded; not saved), arrows with "Undo: Drive +2.0 dB" labels and Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y; snapshots S1–S4 of every setting plus its report, saved with the project, click-free recall, "changed since" mark, MATCH remembers each snapshot's level for fair flips | Done (after v0.15.0) |
 | Listening aids (monitoring only, never saved, never in an offline export, off when the window closes, red banner while on): Listen buttons that play only what Saturation adds / the Soft Clipper, Resonance Tamer, Maximizer and a Dynamics band take off (sample-aligned, at their level in the master, quiet ones turned up with the amount shown), Dynamics band solos, MONO and PHONE (mono, ~300 Hz–8 kHz) checks next to MATCH; click-free switching | Done (after v0.15.0) |
 | Whole-song Auto-Master: press it and play the song; it keeps listening (up to 15 min, fixed memory: the loudest 12 s of audio in 100 ms pieces that change hands without copying, plus 100 ms loudness and 1 s tone readings; allocation-free on the audio thread) and finishes by itself when the song ends (4 s without music after 30 s of it), or on FINISH from 12 s on; decides from the loudest 12 s; report: "Listened to 2:47 of your song; the loudest part (0:54–1:06) set the levels", whole-song LUFS / LRA | Done (after v0.15.0) |
-| Tone Steady stored target: the song's own tone (median of 1 s readings per band, learned by Auto-Master or Tone Steady's LEARN, saved with the project, follows the Tonal EQ); held to it, preview and export match from any start point (measured: 9e-7 vs 2e-3 following the music); an 808 entering after an intro isn't cut; CLEAR / old songs: follows the music as before | Done (after v0.15.0) |
+| Tone Steady stored target: the song's own tone (median of 1 s readings per band, learned by Auto-Master or Tone Steady's LEARN, saved with the project, follows the Tonal EQ); held to it, preview and export match from any start point (measured: 9e-7 vs 2e-3 following the music; quiet passages judged against the song's stored level); an 808 entering after an intro isn't cut, and sections without it aren't touched; a part entering above the bass is cut at most half the Range; a short Auto-Master listen keeps a stored tone only when it matches; "another song?" warning when the music sits far from it; CLEAR / old songs: follows the music as before | Done (after v0.15.0) |
 | Spectrum genre line and loudness history: a dotted "Trap target" (etc.) line on the spectrum is the balance Auto-Master's EQ aims for (computed by the engine from the genre's band norms: a smooth curve that measures exactly those norms, drawn as the display would draw a steady master with it, moved to the loudness playing; hidden while a reference is loaded, legend click shows it); HISTORY view: the master's and the mix's short-term loudness over the last 2 minutes of playback with the target line and the Maximizer's gain reduction (orange past 6 dB), pauses when the transport stops, RESET clears it; Learn reads both | Done (after v0.15.0) |
 
 ## Validation
@@ -148,7 +148,10 @@ on a manual run: Actions > Build & Test > Run workflow, "Also build macOS".
   reads below the sample peak.
 - **Limiter guarantee.** Sliding minimum over the look-ahead window followed by a moving average of the same
   length means the gain has fully reached its target by the time a peak leaves the delay line. Latency is
-  3 ms + 12 samples and is reported to the host.
+  3 ms + 12 samples and is reported to the host. "At or under the ceiling" is on the BS.1770 (4x) true-peak
+  meter streaming services use; an independent 16x meter can read up to ~0.7 dB higher on clipped audio.
+  Switching to bypass (A) keeps limiting what is in the delay line, the block the switch came with and
+  50 ms more (fast release), then glides to unity: an A/B flip never lets a driven, unlimited peak out.
 - **Adaptive release.** Dips below the ~400 ms average gain (transients) recover fast; the program-level
   gain moves slowly, so bass-heavy material doesn't pump.
 - **Listening aids.** Monitoring only, outside the parameter tree (the editor sets them; they reset when it

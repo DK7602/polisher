@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <numbers>
+#include <random>
 
 using namespace polisher;
 using Catch::Matchers::WithinAbs;
@@ -151,6 +152,119 @@ TEST_CASE ("Auto-Master sets EQ bands together, accounting for their overlap", "
     TonalEQParams solved;
     solved.gainDb = solveEqGains (plus2, limits, 44100.0);
     CHECK_THAT (eqBandChangeDb (solved, 44100.0)[4], WithinAbs (2.0, 0.3));
+}
+
+TEST_CASE ("Auto-Master's EQ lands the band changes it plans on the mix itself", "[automaster]")
+{
+    // The band-overlap model assumed a spectrum falling 4.5 dB/oct: on an 808-heavy mix it predicted
+    // +2.0 dB for Low End +3 where the band really moved +1.3 (on musicLike +0.9). With the mix's own
+    // spectrum the prediction is what analyseMix() then measures.
+    for (double sr : { 44100.0, 48000.0 })
+        for (const auto& clip : { testsig::trapLike (sr, 12.0), testsig::musicLike (sr, 12.0, -6.0, 3) })
+        {
+            const auto before = analyseMix (clip);
+            REQUIRE (before.spectrum.valid);
+            std::array<double, kEqBands> limits {};
+            limits.fill (6.0);
+            for (const auto& want : { std::array<double, kEqBands> { 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
+                                      std::array<double, kEqBands> { 0.0, 1.5, -1.5, 0.0, 0.0, 2.0, 2.5 },
+                                      std::array<double, kEqBands> { -2.5, 1.0, 0.0, -1.0, 0.0, 0.0, 3.0 } })
+            {
+                TonalEQParams eq;
+                eq.gainDb = solveEqGains (want, limits, sr, &before.spectrum);
+                const auto planned = eqBandChangeDb (eq, sr, &before.spectrum);
+                const auto after = analyseMix (renderEq (clip, eq));
+                // analyseMix reports levels relative to the mean of bands 1-5: compare the same way.
+                auto rel = [] (const std::array<double, kEqBands>& x, size_t b) { return x[b] - (x[1] + x[2] + x[3] + x[4] + x[5]) / 5.0; };
+                double worst = 0.0;
+                for (size_t b = 0; b < static_cast<size_t> (kEqBands); ++b)
+                    worst = std::max (worst, std::abs ((after.bandDb[b] - before.bandDb[b]) - rel (planned, b)));
+                INFO (sr << " Hz, wish " << want[0] << " / " << want[5] << ": worst gap between planned and measured band change " << worst << " dB");
+                CHECK (worst < 0.25);
+                if (want[0] > 0.0)
+                {
+                    // The Low End wish itself: the typical-spectrum model landed 45-65 % of it. (Not all of it
+                    // now either where the shelf barely reaches the mix's sub: the solver prefers the smaller
+                    // of near-equal fits, so a band that needs +6 dB for +2 gets a little less.)
+                    TonalEQParams typical;
+                    typical.gainDb = solveEqGains (want, limits, sr);
+                    const double oldLow = analyseMix (renderEq (clip, typical)).bandDb[0] - before.bandDb[0];
+                    const double newLow = after.bandDb[0] - before.bandDb[0];
+                    INFO ("Low End +2 wished: lands " << newLow << " dB (typical-spectrum model: " << oldLow << " dB)");
+                    CHECK (newLow > 1.4);
+                    CHECK (std::abs (newLow - want[0]) < std::abs (oldLow - want[0]) - 0.2);
+                }
+            }
+        }
+}
+
+TEST_CASE ("Auto-Master calls a flat band 'covered' only when its neighbours really move it", "[automaster]")
+{
+    // A band the solver leaves at 0 dB is "covered" when the neighbours' moves give at least half of its
+    // wished-for change, the right way; otherwise the report says it was left flat. 1,600 random wishes
+    // (the audit found 2-4 per 400 labelled covered that moved the wrong way or not at all).
+    const auto mix = analyseMix (testsig::trapLike (48000.0, 8.0));
+    std::mt19937 rng (5);
+    std::uniform_real_distribution<double> u (-1.0, 1.0);
+    int covered = 0, held = 0;
+    for (int t = 0; t < 1600; ++t)
+    {
+        std::array<double, kEqBands> wanted {}, lim {};
+        const double eqMax = t % 3 == 0 ? 1.5 : t % 3 == 1 ? 3.0 : 4.0;
+        for (size_t b = 0; b < static_cast<size_t> (kEqBands); ++b)
+        {
+            double w = u (rng) * eqMax * 1.3;
+            if (std::abs (u (rng)) < 0.35 || std::abs (w) < 0.3) w = 0.0;
+            wanted[b] = std::clamp (w, -eqMax, eqMax);
+            lim[b] = eqMax;
+        }
+        TonalEQParams eq;
+        eq.gainDb = solveEqGains (wanted, lim, 48000.0, t % 2 == 0 ? &mix.spectrum : nullptr);
+        const auto moved = eqBandChangeDb (eq, 48000.0, t % 2 == 0 ? &mix.spectrum : nullptr);
+        for (size_t b = 0; b < static_cast<size_t> (kEqBands); ++b)
+            if (eq.gainDb[b] == 0.0 && std::abs (wanted[b]) >= 0.4)
+            {
+                if (eqBandCovered (wanted[b], moved[b]))
+                {
+                    ++covered;
+                    CHECK (moved[b] * wanted[b] > 0.0);
+                }
+                else
+                {
+                    ++held;
+                }
+            }
+    }
+    INFO ("covered " << covered << ", left flat " << held);
+    CHECK (covered > 0);
+    CHECK (held > 0);
+
+    // ...and the report uses the same rule: every band it calls covered moved toward its target.
+    for (auto genre : { Genre::trapHipHop, Genre::pop, Genre::acoustic })
+        for (const auto& clip : { testsig::trapLike (48000.0, 12.0), lowPassed (testsig::musicLike (48000.0, 12.0, -14.0), 3000.0) })
+        {
+            AutoMasterSettings s;
+            s.genre = genre;
+            const auto r = autoMaster (clip, s);
+            REQUIRE (r.ok);
+            const auto moved = eqBandChangeDb (r.chain.eq, 48000.0, &r.analysis.spectrum);
+            const auto target = genreTargetCurve (genre);
+            const double tRef = (target[1] + target[2] + target[3] + target[4] + target[5]) / 5.0;
+            for (const auto& x : r.reasons)
+                if (x.module == "eq" && x.control.rfind ("Covered", 0) == 0)
+                    for (int b = 0; b < kEqBands; ++b)
+                    {
+                        static const char* const names[kEqBands] = { "Low End", "Bass", "Low Mid", "Mid", "Upper Mid", "Presence", "Air" };
+                        if (x.why.find (names[b]) != 0 && x.why.find (std::string (", ") + names[b]) == std::string::npos
+                            && x.why.find (std::string (" and ") + names[b]) == std::string::npos)
+                            continue;
+                        const auto i = static_cast<size_t> (b);
+                        const double diff = (target[i] - tRef) - r.analysis.bandDb[i];
+                        INFO (genreName (genre) << ": " << x.why << " (" << names[b] << " moved " << moved[i] << " dB, mix vs target " << diff << ")");
+                        CHECK (moved[i] * diff > 0.0);
+                        CHECK (std::abs (moved[i]) >= 0.2);
+                    }
+        }
 }
 
 TEST_CASE ("Auto-Master brightens a dull mix and calms a harsh one", "[automaster]")
@@ -667,7 +781,7 @@ TEST_CASE ("Report texts fit the case: Unlimiter at a low target, the louder tip
     const auto* target = reasonFor (k, "ts", "Target");
     REQUIRE (target != nullptr);
     INFO (target->why);
-    CHECK (target->why.find ("0:45 of it in an earlier, longer listen (this one heard 0:15)") != std::string::npos);
+    CHECK (target->why.find ("learned earlier from 0:45 of your song in a longer listen (this one heard 0:15") != std::string::npos);
     kept.songSeconds = 45.0;
     const auto k2 = autoMaster (atLufs (testsig::trapLike (sr, 12.0), -17.0), kept);
     const auto* same = reasonFor (k2, "ts", "Target");

@@ -259,7 +259,7 @@ m = await mon();
 check(m.listen === 0 && !m.banner, 'S again un-solos');
 await page.click('#btn-listen'); await page.waitForTimeout(150);
 m = await mon();
-check(m.listen === 9 + 2 && /HIGH MID band/.test(m.text), `Dynamics LISTEN plays what the picked band loses (mode ${m.listen}, "${m.text}")`);
+check(m.listen === 9 + 2 && /HI-MID band/.test(m.text), `Dynamics LISTEN plays what the picked band loses (mode ${m.listen}, "${m.text}")`);
 await page.evaluate(() => document.querySelectorAll('.band-pick .band-btn')[0].click()); await page.waitForTimeout(150);
 m = await mon();
 check(m.listen === 9, 'picking another band moves the removed-listen to it');
@@ -378,7 +378,7 @@ const typeInto = async (label, text) => {
   await page.keyboard.press('Enter');
   await page.waitForTimeout(200);
 };
-const fmt = (v) => `${v < 0 ? '−' : '+'}${Math.abs(v).toFixed(1)} dB`;
+const fmt = (v) => `${v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)}`;   // a dB value as the undo labels write it
 
 await pick('Maximizer'); await page.waitForTimeout(150);
 h = await hist();
@@ -386,13 +386,13 @@ const pos0 = h.pos, drive0 = h.drive;
 await typeInto('Drive', '8');
 h = await hist();
 check(h.pos === pos0 + 1 && h.steps === h.pos && h.drive === 8, `a typed value is one undo step (${h.pos - pos0} new, Drive ${h.drive})`);
-check(h.undoTitle === `Undo: Drive ${fmt(8 - drive0)} (Ctrl+Z)` && !h.undoOff, `the undo arrow says what it will undo ("${h.undoTitle}")`);
+check(h.undoTitle === `Undo: Drive ${fmt(drive0)} → 8.0 dB (Ctrl+Z)` && !h.undoOff, `the undo arrow says what it will undo ("${h.undoTitle}")`);
 check(h.redoOff && h.redoTitle === 'Nothing to redo', `redo is off until something is undone ("${h.redoTitle}")`);
 
 await page.keyboard.press('Control+z'); await page.waitForTimeout(200);
 h = await hist();
 check(h.drive === drive0 && !h.redoOff, `Ctrl+Z undoes it (Drive ${h.drive})`);
-check(h.redoTitle === `Redo: Drive ${fmt(8 - drive0)} (Ctrl+Shift+Z or Ctrl+Y)`, `the redo arrow says what it will redo ("${h.redoTitle}")`);
+check(h.redoTitle === `Redo: Drive ${fmt(drive0)} → 8.0 dB (Ctrl+Shift+Z or Ctrl+Y)`, `the redo arrow says what it will redo ("${h.redoTitle}")`);
 check(/^Undone: Drive/.test(h.toast), `undo says what it undid ("${h.toast}")`);
 await page.keyboard.press('Control+Shift+Z'); await page.waitForTimeout(200);
 check((await hist()).drive === 8, 'Ctrl+Shift+Z redoes it');
@@ -613,8 +613,150 @@ check((await tsView()).target === 0, 'CLEAR forgets the tone');
 await page.evaluate(() => document.querySelectorAll('#snaps .snap')[3].click()); await page.waitForTimeout(250);
 tv = await tsView();
 check(tv.target === learnedTarget, `recalling the snapshot brings Tone Steady's target back ("${tv.val}")`);
+// The music sits far from the stored tone (a preset from another song): the cell and Learn say so, with a plan.
+await page.evaluate(async () => { window.__mockAm.toneFar = true; (await import('./juce/index.js')).getSliderState('tsAmount').setNormalisedValue(0.4); });
+await page.waitForTimeout(300);
+tv = await tsView();
+check(/^another song\? · \d:\d\d$/.test(tv.val), `the Target cell asks whether the tone is another song's ("${tv.val}")`);
+check(/far from the tone Tone Steady is holding it to/.test(tv.learn) && /Do I need to fix it\?/.test(tv.learn) && /Press LEARN in this panel/.test(tv.learn),
+      'Learn warns about a tone from another song, with a plan');
+await page.evaluate(() => { window.__mockAm.toneFar = false; });
+await page.waitForTimeout(300);
+tv = await tsView();
+check(/^your song · \d:\d\d$/.test(tv.val) && !/far from the tone/.test(tv.learn), `the warning goes when the music matches again ("${tv.val}")`);
+
+// ---------------------------------------------------------------------------------------------
+// Re-audit fixes.
+// Space / Enter after a mouse click never press that button again (Space is Cubase's play key); with the
+// keyboard (Tab) they still press buttons, and a value box still takes Enter.
+await pick('Maximizer'); await page.waitForTimeout(150);
+const pressed = (id) => page.evaluate((i) => document.getElementById(i).getAttribute('aria-pressed'), id);
+await page.click('#btn-match'); await page.waitForTimeout(150);
+const matchOn = await pressed('btn-match');
+await page.keyboard.press('Space'); await page.waitForTimeout(150);
+await page.keyboard.press('Enter'); await page.waitForTimeout(150);
+check(matchOn === 'true' && (await pressed('btn-match')) === 'true', `Space / Enter after clicking MATCH leave it on (${matchOn} -> ${await pressed('btn-match')})`);
+check(await page.evaluate(() => document.activeElement === document.body), 'a clicked button does not keep the keyboard');
+await page.click('#btn-match'); await page.waitForTimeout(150);
+await page.click('#btn-automaster'); await page.waitForTimeout(150);
+await page.keyboard.press('Space'); await page.waitForTimeout(150);
+a = await amView();
+check(a.state === 1 && a.title === 'LISTENING', `Space after clicking Auto-Master keeps it listening ("${a.title}", state ${a.state})`);
+await page.evaluate(() => { window.__mockAm.state = 0; });   // (stop the mock's listen)
+await page.waitForTimeout(250);
+const recalls = () => page.evaluate(() => window.__mockSnaps.recalls || 0);
+const r0 = await recalls();
+await page.click('#snaps .snap[data-slot="1"]'); await page.waitForTimeout(200);   // recall S2 with the mouse
+const r1 = await recalls();
+await page.keyboard.press('Space'); await page.keyboard.press('Enter'); await page.waitForTimeout(250);
+check(r1 === r0 + 1 && (await recalls()) === r1, `Space / Enter after clicking a snapshot don't recall it again (${r0} -> ${r1} -> ${await recalls()})`);
+await page.click('#btn-a'); await page.waitForTimeout(100);
+await page.keyboard.press('Space'); await page.waitForTimeout(150);
+check((await pressed('btn-a')) === 'true', 'Space after clicking A stays on A');
+await page.click('#btn-b'); await page.waitForTimeout(100);
+// Keyboard users: Tab onto a button, then Space presses it.
+await page.focus('#btn-match');
+await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab');
+const tabbed = await page.evaluate(() => document.activeElement && document.activeElement.id);
+await page.keyboard.press('Space'); await page.waitForTimeout(150);
+check(tabbed === 'btn-match' && (await pressed('btn-match')) === 'true', `with Tab, Space presses the focused button (${tabbed})`);
+await page.keyboard.press('Enter'); await page.waitForTimeout(150);
+check((await pressed('btn-match')) === 'false', 'with Tab, Enter presses it too');
+await page.mouse.click(5, 5); await page.waitForTimeout(100);
+await typeInto('Drive', '6');
+check((await hist()).drive === 6, 'a value box still takes Enter');
+check(await page.evaluate(() => ![...document.querySelectorAll('[title]')].some((e) => /never in your export/i.test(e.title))),
+      'no tooltip claims "never in your export" (a Realtime Export plays what you hear)');
+
+// EQ point: double-click (back to flat at its own frequency) is one undo step.
+await pick('Tonal EQ'); await page.waitForTimeout(200);
+const node = page.locator('.eq-node').nth(2);
+const nb = await node.boundingBox();
+await page.mouse.move(nb.x + nb.width / 2, nb.y + nb.height / 2);
+await page.mouse.down();
+for (let i = 1; i <= 6; i++) await page.mouse.move(nb.x + nb.width / 2 + 4 * i, nb.y + nb.height / 2 - 5 * i);
+await page.mouse.up();
+await page.waitForTimeout(1200);   // (past the merge window of quick repeats)
+h = await hist();
+const nb2 = await node.boundingBox();
+await page.mouse.dblclick(nb2.x + nb2.width / 2, nb2.y + nb2.height / 2);
+await page.waitForTimeout(250);
+h2 = await hist();
+const eqBack = await page.evaluate(async () => { const j = await import('./juce/index.js'); return [j.getSliderState('eqGain3').getScaledValue(), j.getSliderState('eqFreq3').getScaledValue()]; });
+check(h2.pos === h.pos + 1 && /^Undo: EQ Low Mid \(2 controls\)/.test(h2.undoTitle) && eqBack[0] === 0 && Math.abs(eqBack[1] - 350) < 0.5,
+      `double-clicking an EQ point resets it as one undo step (${h2.pos - h.pos} new, "${h2.undoTitle}", ${eqBack.join(' / ')})`);
+
+// A drag whose pointer capture is lost (the window lost the mouse) still closes its undo step.
+await pick('Maximizer'); await page.waitForTimeout(150);
+await page.waitForTimeout(1100);
+h = await hist();
+const kb = await cellOf('Release').locator('.knob').boundingBox();
+await page.mouse.move(kb.x + kb.width / 2, kb.y + kb.height / 2);
+await page.mouse.down();
+for (let i = 1; i <= 4; i++) await page.mouse.move(kb.x + kb.width / 2, kb.y + kb.height / 2 - 6 * i);
+await cellOf('Release').locator('.knob').dispatchEvent('lostpointercapture');
+await page.waitForTimeout(100);
+const openAfterLoss = await page.evaluate(() => window.__mockHistory.open.size);
+h2 = await hist();
+await page.mouse.up();
+check(openAfterLoss === 0 && h2.pos === h.pos + 1 && /^Undo: Release /.test(h2.undoTitle), `lost pointer capture closes the drag as one step (open ${openAfterLoss}, "${h2.undoTitle}")`);
+
+// Integrated restarts (the "Restart loudness after you change a control" setting, on) after undo / redo, a
+// snapshot recall, Tone Steady's CLEAR and LEARN, and an Auto-Master run, not only after a knob move.
+const statsResets = () => page.evaluate(() => window.__mockResets.stats);
+const restarts = async (what, action, wait = 1000) => {
+  const before = await statsResets();
+  await action();
+  await page.waitForTimeout(wait);
+  check((await statsResets()) > before, `Integrated restarts after ${what}`);
+};
+await restarts('undo', () => page.click('#btn-undo'));
+await restarts('redo', () => page.click('#btn-redo'));
+await restarts('a snapshot recall', () => page.evaluate(() => document.querySelectorAll('#snaps .snap')[0].click()));
+await pick('Tone Steady'); await page.waitForTimeout(150);
+await restarts('LEARN of the song\'s tone', async () => {
+  await page.click('#ts-learn');
+  await page.waitForFunction(() => window.__mockAm.heard >= 12, null, { timeout: 5000 });
+  await page.waitForTimeout(150);
+  await page.click('#am-finish');
+});
+await restarts('CLEAR', () => page.click('#ts-clear'));
+await restarts('an Auto-Master run', async () => {
+  const v = await page.evaluate(() => window.__mockAm.version);
+  await page.click('#btn-automaster');
+  await page.waitForFunction(() => window.__mockAm.heard >= 12, null, { timeout: 5000 });
+  await page.waitForTimeout(150);
+  await page.click('#am-finish');
+  await page.waitForFunction((x) => window.__mockAm.version > x && window.__mockAm.state === 0, v, { timeout: 5000 });
+}, 1300);
 
 check(errors.length === 0, `no script errors (${errors.join(' | ')})`);
 await browser.close();
+
+// The listening banner at the window sizes Polisher opens at (1280 x 720) and its smallest (1120 x 630):
+// the longest description (a Dynamics band on PHONE) is shown whole, "— not the master" included.
+const browser2 = await chromium.launch();
+for (const [w, hgt] of [[1280, 720], [1120, 630]]) {
+  const pg = await browser2.newPage({ viewport: { width: w, height: hgt } });
+  pg.on('pageerror', (e) => errors.push(String(e)));
+  await pg.goto(url);
+  await pg.waitForTimeout(800);
+  await pg.evaluate(() => [...document.querySelectorAll('.row-btn')].find((x) => x.querySelector('.row-name').textContent === 'Dynamics').click());
+  await pg.waitForTimeout(150);
+  await pg.evaluate(() => document.querySelectorAll('.band-pick .band-btn')[2].click());
+  await pg.click('#btn-listen'); await pg.waitForTimeout(150);
+  await pg.click('#btn-phone'); await pg.waitForTimeout(400);
+  const b = await pg.evaluate(() => {
+    const t = document.getElementById('monitor-text'), ban = document.getElementById('monitor-banner').getBoundingClientRect();
+    const scr = document.getElementById('spectrum').getBoundingClientRect();
+    return { text: t.textContent, hidden: t.scrollHeight - t.clientHeight, cut: t.scrollWidth - t.clientWidth, inside: ban.right <= scr.right && ban.bottom <= scr.bottom,
+             px: parseFloat(getComputedStyle(t).fontSize) * document.getElementById('stage').getBoundingClientRect().width / 1600 };
+  });
+  check(/not the master$/.test(b.text) && b.hidden <= 1 && b.cut <= 1 && b.inside, `${w} x ${hgt}: the banner shows its whole text ("${b.text}", hidden ${b.hidden} px)`);
+  check(b.px >= 9, `${w} x ${hgt}: banner text is ${b.px.toFixed(1)} px`);
+  await pg.close();
+}
+await browser2.close();
+check(errors.length === 0, `no script errors at the small window sizes (${errors.join(' | ')})`);
 if (failures.length) { console.log(`\n${failures.length} UI check(s) failed`); process.exit(1); }
 console.log('\nAll UI checks passed');

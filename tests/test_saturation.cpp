@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "Signals.h"
+#include "polisher/FilterDesign.h"
 #include "polisher/Saturation.h"
 
 #include <algorithm>
@@ -62,10 +63,18 @@ SaturationParams with (SaturationMode m, double drive, double mix = 100.0, Satur
 SaturationParams bassOnly (SaturationMode m, double drive, double mix = 100.0) { return with (m, drive, mix, SaturationFocus::bass); }
 
 /** Saturation exactly as it was before Focus (v0.15.0), kept as the reference that Full must still match
-    bit for bit. Same curves (Saturation::shape), same filters, same order of operations. */
+    bit for bit. Same curves (Saturation::shape), same filters, same order of operations.
+    One later change is copied in on purpose (2026-10 re-audit): started by reset() (no warm-up, so no DC
+    measured), the tube DC filter starts at Saturation::kDcStartHz and glides down to 1 Hz, so a render
+    that starts mid-song lets out no thump. That only touches the first ~0.5 s after reset() in Tube; once
+    it lands on 1 Hz the filter is the v0.15.0 one again. So "bit for bit" here means: the steady-state
+    algorithm is unchanged. (Mode changes are no longer instant: they cross-fade like Focus, tested on
+    their own below.) */
 class LegacySaturation
 {
 public:
+    static inline bool copiedDcStart = true;   // false: exactly v0.15.0 (the DC filter starts cold at 1 Hz after reset())
+
     void prepare (double sampleRate, int numChannels)
     {
         channelCount = numChannels;
@@ -75,6 +84,8 @@ public:
         mixCoeff = 1.0 - std::exp (-4.0 / (0.020 * sampleRate));
         hpCoeff = std::exp (-2.0 * std::numbers::pi * 1.0 / sampleRate);
         dcWindow = static_cast<int> (0.05 * sampleRate);
+        rate = sampleRate;
+        dcGlideCoeff = 1.0 - std::exp (-1.0 / (Saturation::kDcGlideSeconds * sampleRate));
         reset();
     }
     void setParams (const SaturationParams& p) { params = p; }
@@ -93,6 +104,7 @@ public:
         running = ! Saturation::isNeutral (params);
         mix = Saturation::effectiveMix (params);
         warmup = 0;
+        dcHz = running && copiedDcStart ? Saturation::kDcStartHz : 1.0;   // (the copied-in reset() start, see above)
     }
     void processFrame (double* frame, int nch)
     {
@@ -110,6 +122,7 @@ public:
                     for (auto& st : ch.stages) st.reset();
                     ch.hpX = ch.hpY = ch.dcSum = 0.0;
                 }
+                dcHz = 1.0;
             }
         }
         else
@@ -127,6 +140,12 @@ public:
         const bool measuringDc = ! idle && warmup > 0 && warmup <= dcWindow;
         const bool seedDc = ! idle && warmup == 0 && dcCount > 0;
         const double dcWeight = measuringDc ? std::pow (std::sin (std::numbers::pi * (dcCount + 0.5) / dcWindow), 2.0) : 0.0;
+        if (! idle && dcHz > 1.0)
+        {
+            dcHz += (1.0 - dcHz) * dcGlideCoeff;
+            if (dcHz < 1.0001) dcHz = 1.0;
+        }
+        const double dcCoeff = dcHz > 1.0 ? std::exp (-2.0 * std::numbers::pi * dcHz / rate) : hpCoeff;
         for (int c = 0; c < nch; ++c)
         {
             auto& ch = channelState[static_cast<size_t> (c)];
@@ -146,7 +165,7 @@ public:
             const double res = ch.stages[0].downsample (ra, rb);
             if (measuringDc) ch.dcSum += dcWeight * res;
             if (seedDc) { ch.hpX = ch.dcSum / (0.5 * dcCount); ch.hpY = 0.0; ch.dcSum = 0.0; }
-            if (params.mode == SaturationMode::tube) { ch.hpY = hpCoeff * (ch.hpY + res - ch.hpX); ch.hpX = res; }
+            if (params.mode == SaturationMode::tube) { ch.hpY = dcCoeff * (ch.hpY + res - ch.hpX); ch.hpX = res; }
             else { ch.hpY = res; ch.hpX = 0.0; }
             frame[c] = dry + mix * ch.hpY;
         }
@@ -165,6 +184,7 @@ private:
     int channelCount = 2;
     std::vector<Channel> channelState;
     double bend = 4.0, bendTarget = 4.0, glideCoeff = 0.0, mix = 0.0, mixCoeff = 0.0, hpCoeff = 0.0;
+    double rate = 48000.0, dcHz = 1.0, dcGlideCoeff = 0.0;
     int warmup = 0, dcWindow = 1200, dcCount = 0;
     bool running = false;
 };
@@ -472,8 +492,10 @@ TEST_CASE ("Tube saturation engages without a low thump", "[saturation]")
 
 TEST_CASE ("Saturation Full is bit for bit what it was before Focus", "[saturation][focus]")
 {
-    // The v0.15.0 algorithm (LegacySaturation above) against Full through Drive sweeps, on / off, Mix
-    // moves and mode changes, from reset() and from a cold start, at three rates: identical samples.
+    // The v0.15.0 algorithm (LegacySaturation above) against Full through Drive sweeps, on / off and Mix
+    // moves in every Mode (scenario 3: Tube playing from reset(), through the DC filter's start), from
+    // reset() and from a cold start, at three rates: identical samples. (Mode changes cross-fade now:
+    // tested below.)
     for (double sr : { 44100.0, 48000.0, 96000.0 })
         for (int sig = 0; sig < 3; ++sig)
         {
@@ -483,8 +505,9 @@ TEST_CASE ("Saturation Full is bit for bit what it was before Focus", "[saturati
                 const auto paramsAt = [&] (int i)
                 {
                     const double t = i / sr;
-                    const auto m = static_cast<SaturationMode> (scenario == 3 ? static_cast<int> (t * 3.0) % 3 : scenario % 3);
-                    const double d = scenario == 0 ? 9.0 : scenario == 1 ? 18.0 * std::fmod (t, 1.0) : (std::fmod (t, 0.6) < 0.3 ? 12.0 : 0.0);
+                    const auto m = scenario == 3 ? SaturationMode::tube : static_cast<SaturationMode> (scenario % 3);
+                    const double d = scenario == 0 ? 9.0 : scenario == 1 ? 18.0 * std::fmod (t, 1.0) : scenario == 3 ? 12.0 + 6.0 * std::sin (t * 5.0)
+                                   : (std::fmod (t, 0.6) < 0.3 ? 12.0 : 0.0);
                     auto p = with (m, d, scenario == 2 ? 50.0 + 50.0 * std::sin (t * 7.0) : 60.0);
                     p.enabled = ! (scenario == 1 && t > 1.2 && t < 1.5);
                     return p;
@@ -659,6 +682,133 @@ TEST_CASE ("Saturation Focus switches without clicks or thumps, at constant late
     // Latency: the same in both settings and while switching (a quiet signal passes delayed, unchanged).
     const auto quiet = testsig::musicLike (sr, 1.0, -50.0);
     const auto moved = render<Saturation> (quiet, [&] (int i) { return (i / 4800) % 2 ? bassOnly (SaturationMode::tube, 18.0) : with (SaturationMode::tube, 18.0); }, true);
+    double err = 0.0, sig = 0.0;
+    for (size_t i = 4800; i < quiet.channels[0].size(); ++i)
+    {
+        const double d = moved.channels[0][i] - quiet.channels[0][i - static_cast<size_t> (Saturation::kLatency)];
+        err += d * d;
+        sig += static_cast<double> (quiet.channels[0][i]) * quiet.channels[0][i];
+    }
+    CHECK (10.0 * std::log10 (err / sig) < -50.0);
+}
+
+TEST_CASE ("Saturation Tube started mid-song (reset) lets out no thump, and changes nothing later", "[saturation]")
+{
+    // An export or a playback start in the middle of a song begins with reset(): there is no warm-up, so the
+    // tube curve's DC can't be measured first. The 1 Hz DC filter then started cold and let the DC out as a
+    // slow offset (-43 dBFS at Drive +12, -39 at +18, peaking ~0.1 s in). It now starts at 40 Hz and glides
+    // down to 1 Hz: below 10 Hz the render that starts 4 s in stays within -50 dBFS of the continuous one.
+    const double sr = 48000.0;
+    const auto song = testsig::trapLike (sr, 8.0);
+    const int start = static_cast<int> (4.0 * sr) / 256 * 256;
+    AudioClip part = song;
+    for (auto& ch : part.channels) ch.erase (ch.begin(), ch.begin() + start);
+    const auto subsonic = [&] (std::vector<double> x)   // 4th-order low-pass at 10 Hz
+    {
+        polisher::Biquad a, b;
+        polisher::design::apply (a, polisher::design::butterworth (false, 10.0, sr));
+        b = a;
+        for (double& v : x) v = b.process (a.process (v));
+        return x;
+    };
+    for (double drive : { 12.0, 18.0 })
+    {
+        const auto p = with (SaturationMode::tube, drive, 50.0);
+        const auto whole = render<Saturation> (song, [&] (int) { return p; }, true);
+        const auto late = render<Saturation> (part, [&] (int) { return p; }, true);
+        std::vector<double> d (late.channels[0].size());
+        for (size_t i = 0; i < d.size(); ++i)
+            d[i] = static_cast<double> (late.channels[0][i]) - whole.channels[0][i + static_cast<size_t> (start)];
+        double peak = 0.0;
+        for (double v : subsonic (d)) peak = std::max (peak, std::abs (v));
+        INFO ("Drive +" << drive << ": below 10 Hz the late start differs by " << 20.0 * std::log10 (peak + 1e-15) << " dBFS");
+        CHECK (20.0 * std::log10 (peak + 1e-15) < -50.0);
+
+        // Played from the start, it is the v0.15.0 sound (the copy without the new start) once the filter
+        // has landed on 1 Hz: the glide only shapes the first moments.
+        LegacySaturation::copiedDcStart = false;
+        const auto v015 = render<LegacySaturation> (song, [&] (int) { return p; }, true);
+        LegacySaturation::copiedDcStart = true;
+        double diff = 0.0;
+        for (size_t i = static_cast<size_t> (2.0 * sr); i < static_cast<size_t> (song.numSamples()); ++i)
+            diff = std::max (diff, std::abs (static_cast<double> (whole.channels[0][i]) - v015.channels[0][i]));
+        INFO ("after 2 s, against v0.15.0: " << diff);
+        CHECK (diff < 1.0e-6);
+    }
+}
+
+TEST_CASE ("Saturation Mode changes cross-fade: no click, no thump, constant latency", "[saturation][mode]")
+{
+    // Changing Mode while playing (a click, a snapshot, undo, Auto-Master) used to swap the curve from one
+    // sample to the next, and switching to Tube let the DC out as an offset. Now the new Mode warms up
+    // next to the one playing (its DC measured meanwhile) and cross-fades in over 30 ms, like Focus.
+    const double sr = 48000.0;
+    const auto sharpest = [] (const AudioClip& c, int from)
+    {
+        const auto& x = c.channels[0];
+        double worst = 0.0;
+        for (size_t i = static_cast<size_t> (std::max (2, from)); i < x.size(); ++i)
+            worst = std::max (worst, std::abs (static_cast<double> (x[i]) - 2.0 * x[i - 1] + x[i - 2]));
+        return worst;
+    };
+    for (auto focus : { SaturationFocus::full, SaturationFocus::bass })
+    {
+        const auto note = testsig::sine (sr, 2, 50.0, -3.0, 2.0);
+        double steady = 0.0;
+        for (int m = 0; m < 3; ++m)
+            steady = std::max (steady, sharpest (render<Saturation> (note, [&] (int) { return with (static_cast<SaturationMode> (m), 18.0, 100.0, focus); }, true), 4800));
+        const auto cycling = render<Saturation> (note, [&] (int i) { return with (static_cast<SaturationMode> ((i / static_cast<int> (0.2 * sr)) % 3), 18.0, 100.0, focus); }, true);
+        INFO ("focus " << static_cast<int> (focus) << ": sharpest bend while Mode cycles " << sharpest (cycling, 4800) << ", steady " << steady);
+        CHECK (sharpest (cycling, 4800) < 1.1 * steady);
+
+        // Each change lands on the new Mode's sound within 0.15 s (Tape -> Clip: no DC filter in either).
+        const auto toClip = render<Saturation> (note, [&] (int i) { return with (i < static_cast<int> (0.5 * sr) ? SaturationMode::tape : SaturationMode::clip, 18.0, 100.0, focus); }, true);
+        const auto clip = render<Saturation> (note, [&] (int) { return with (SaturationMode::clip, 18.0, 100.0, focus); }, true);
+        double err = 0.0, sig = 0.0;
+        for (size_t i = static_cast<size_t> (0.65 * sr); i < static_cast<size_t> (0.7 * sr); ++i)
+        {
+            const double d = toClip.channels[0][i] - clip.channels[0][i];
+            err += d * d;
+            sig += static_cast<double> (clip.channels[0][i]) * clip.channels[0][i];
+        }
+        INFO ("0.15 s after Tape -> Clip: " << 10.0 * std::log10 (err / sig + 1e-30) << " dB from steady Clip");
+        CHECK (10.0 * std::log10 (err / sig + 1e-30) < -60.0);
+    }
+
+    // A loud 60 Hz note, Drive +12 / +18: changing to Tube (from Tape or Clip) lets out no DC once the change
+    // is through (averaged over whole cycles, which removes the note and all its harmonics). It used to
+    // leave -25 to -36 dBFS.
+    const int period = 800, n = static_cast<int> (sr * 2.0), at = n / 4;
+    for (auto from : { SaturationMode::tape, SaturationMode::clip })
+        for (double drive : { 12.0, 18.0 })
+        {
+            Saturation sat;
+            sat.prepare (sr, 2);
+            sat.setParams (with (from, drive));
+            sat.reset();
+            std::vector<double> out (static_cast<size_t> (n));
+            for (int i = 0; i < n; ++i)
+            {
+                if (i == at) sat.setParams (with (SaturationMode::tube, drive));
+                const double x = 0.9 * std::sin (2.0 * std::numbers::pi * 60.0 * i / sr);
+                double frame[2] = { x, x };
+                sat.processFrame (frame, 2);
+                out[static_cast<size_t> (i)] = frame[0];
+            }
+            double sum = 0.0, worst = 0.0;
+            for (int i = 0; i < n; ++i)
+            {
+                sum += out[static_cast<size_t> (i)];
+                if (i >= period) sum -= out[static_cast<size_t> (i - period)];
+                if (i >= at + static_cast<int> (0.1 * sr)) worst = std::max (worst, std::abs (sum / period));
+            }
+            INFO ("Mode " << static_cast<int> (from) << " -> Tube at Drive +" << drive << ": DC " << 20.0 * std::log10 (worst + 1e-12) << " dBFS");
+            CHECK (20.0 * std::log10 (worst + 1e-12) < -40.0);
+        }
+
+    // Latency: the same while the Mode changes (a quiet signal passes delayed, unchanged).
+    const auto quiet = testsig::musicLike (sr, 1.0, -50.0);
+    const auto moved = render<Saturation> (quiet, [&] (int i) { return with (static_cast<SaturationMode> ((i / 4800) % 3), 18.0); }, true);
     double err = 0.0, sig = 0.0;
     for (size_t i = 4800; i < quiet.channels[0].size(); ++i)
     {

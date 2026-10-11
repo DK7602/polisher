@@ -334,6 +334,41 @@ TEST_CASE ("Dynamics solo: the four bands add up to the output; removed + compre
 
 TEST_CASE ("Resonance Tamer listen hook: what it cut, lined up with the output; silent when it rests", "[monitoring][spectral]")
 {
+    // Output + what was cut = the input, delayed, at every rate (the FFT size changes with the rate).
+    for (double rate : { 44100.0, 88200.0, 96000.0, 176400.0, 192000.0 })
+    {
+        const auto mix = ringingMix (rate, 2.0, 2400.0);
+        StemEQ s;
+        s.prepare (rate, 2);
+        ResonanceParams rt; rt.amount = 100.0;
+        s.setResonance (rt);
+        s.reset();
+        s.setTamerDelta (true);
+        AudioClip c = mix;
+        std::array<std::vector<double>, 2> cut;
+        for (auto& d : cut) d.assign (static_cast<size_t> (c.numSamples()), 0.0);
+        for (int pos = 0; pos < c.numSamples(); pos += 333)
+        {
+            const int n = std::min (333, c.numSamples() - pos);
+            float* ch[2] = { c.channels[0].data() + pos, c.channels[1].data() + pos };
+            double* dl[2] = { cut[0].data() + pos, cut[1].data() + pos };
+            s.process (ch, 2, n, dl);
+        }
+        const auto lat = static_cast<size_t> (s.latencySamples());
+        double err = 0.0, ref = 0.0, cutEnergy = 0.0;
+        for (size_t ch = 0; ch < 2; ++ch)
+            for (size_t i = lat + 2 * static_cast<size_t> (StemEQ::fftSizeFor (rate)); i < c.channels[ch].size(); ++i)
+            {
+                const double x = mix.channels[ch][i - lat];
+                err = std::max (err, std::abs ((double) c.channels[ch][i] + cut[ch][i] - x));
+                ref = std::max (ref, std::abs (x));
+                cutEnergy += cut[ch][i] * cut[ch][i];
+            }
+        UNSCOPED_INFO (rate << " Hz: output + cut vs input, largest difference " << err);
+        CHECK (err < 1.0e-6 * std::max (1.0, ref));
+        CHECK (cutEnergy > 0.0);
+    }
+
     const double sr = 48000.0;
     const auto in = ringingMix (sr, 4.0, 2400.0);
     auto runTamer = [&] (double amount, std::array<std::vector<double>, 2>& delta)
@@ -447,4 +482,82 @@ TEST_CASE ("Clipper and limiter hooks: their clean gain and applied gain describ
         CHECK (err < 1.0e-6);
         CHECK (minGain < 0.9);   // it was limiting
     }
+}
+
+TEST_CASE ("Monitoring safety rides the level: no peak-by-peak limiting on a loud PHONE check", "[monitoring]")
+{
+    const double sr = 48000.0;
+    // A bright, loud master (a steady 2 kHz note at -1.5 dBFS, a little 600 Hz under it): PHONE's bump
+    // takes it past 0 dBFS, so the safety stage has to turn it down.
+    auto loud = testsig::sine (sr, 2, 2000.0, -1.5, 1.5);
+    const auto low = testsig::sine (sr, 2, 600.0, -20.0, 1.5);
+    for (size_t c = 0; c < 2; ++c)
+        for (size_t i = 0; i < loud.channels[c].size(); ++i) loud.channels[c][i] += low.channels[c][i];
+    MonitorOutput unsafeOut, safeOut;
+    unsafeOut.prepare (sr);
+    safeOut.prepare (sr);
+    unsafeOut.setPhone (true);
+    safeOut.setPhone (true);
+    const auto unsafe = runOutput (unsafeOut, loud, 512, [] (int) {}, false);
+    const auto safe = runOutput (safeOut, loud, 512, [] (int) {}, true);
+    double unsafePeak = 0.0, safePeak = 0.0;
+    for (size_t i = 0; i < safe.channels[0].size(); ++i)
+    {
+        unsafePeak = std::max (unsafePeak, (double) std::abs (unsafe.channels[0][i]));
+        safePeak = std::max (safePeak, (double) std::abs (safe.channels[0][i]));
+    }
+    INFO ("PHONE alone peaks at " << 20.0 * std::log10 (unsafePeak) << " dBFS");
+    REQUIRE (unsafePeak > 1.2);   // the safety stage really has work to do
+    CHECK (safePeak <= 1.0);
+    // Once it has found the level, it holds it: the output is the PHONE sound times one steady gain
+    // (an instant-attack limiter with a short release dips on every wave of the note: distortion).
+    double gMin = 10.0, gMax = 0.0;
+    for (size_t i = static_cast<size_t> (0.1 * sr); i < safe.channels[0].size(); ++i)
+        if (std::abs (unsafe.channels[0][i]) > 0.3)
+        {
+            const double g = safe.channels[0][i] / unsafe.channels[0][i];
+            gMin = std::min (gMin, g);
+            gMax = std::max (gMax, g);
+        }
+    INFO ("safety gain " << 20.0 * std::log10 (gMin) << " .. " << 20.0 * std::log10 (gMax) << " dB");
+    CHECK (gMax / gMin < 1.0 + 1.0e-5);
+    CHECK (std::abs (20.0 * std::log10 (gMin) + 20.0 * std::log10 (unsafePeak)) < 0.05);   // turned down just enough
+}
+
+TEST_CASE ("Monitoring safety lets go when the checks are switched off, and the next check starts level", "[monitoring]")
+{
+    const double sr = 48000.0;
+    auto hot = testsig::sine (sr, 2, 2000.0, -1.0, 2.0);
+    const auto quiet = testsig::sine (sr, 2, 1000.0, -12.0, 2.0);
+    const int offAt = static_cast<int> (0.5 * sr) / 480 * 480, onAt = static_cast<int> (1.2 * sr) / 480 * 480;
+    // Hot PHONE until 0.5 s, then the plain master (quiet), then PHONE again on the quiet master.
+    for (size_t c = 0; c < 2; ++c)
+        for (size_t i = static_cast<size_t> (offAt); i < hot.channels[c].size(); ++i) hot.channels[c][i] = quiet.channels[c][i];
+    MonitorOutput m;
+    m.prepare (sr);
+    bool activeBeforeOn = true;
+    double gainBeforeOn = 0.0;
+    const auto out = runOutput (m, hot, 480, [&] (int k)
+    {
+        if (k * 480 == onAt) { activeBeforeOn = m.isActive(); gainBeforeOn = m.safetyGainNow(); }
+        m.setPhone (k * 480 < offAt || k * 480 >= onAt);
+    });
+    // Off: back to the master exactly within 0.1 s (the 15 ms fade, the safety letting go with it).
+    double err = 0.0;
+    for (size_t i = static_cast<size_t> (offAt + 0.1 * sr); i < static_cast<size_t> (onAt); ++i)
+        for (size_t c = 0; c < 2; ++c) err = std::max (err, std::abs ((double) out.channels[c][i] - hot.channels[c][i]));
+    CHECK (err == 0.0);
+    CHECK_FALSE (activeBeforeOn);       // nothing left running between the checks
+    CHECK (gainBeforeOn == 1.0);
+    // The next PHONE check starts at full level: the same as a fresh PHONE on the quiet master.
+    MonitorOutput fresh;
+    fresh.prepare (sr);
+    AudioClip tail = hot;
+    for (auto& ch : tail.channels) ch.erase (ch.begin(), ch.begin() + onAt);
+    fresh.setPhone (true);
+    const auto ref = runOutput (fresh, tail, 480, [] (int) {});
+    double e2 = 0.0;
+    for (size_t i = 0; i < ref.channels[0].size(); ++i)
+        e2 = std::max (e2, std::abs ((double) out.channels[0][i + static_cast<size_t> (onAt)] - ref.channels[0][i]));
+    CHECK (e2 < 1.0e-6);
 }

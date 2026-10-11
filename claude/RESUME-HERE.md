@@ -41,6 +41,22 @@ masterAnalysis for Learn's REF / MIX / MASTER table. Genre still sets dynamics, 
 Spectrum: dashed yellow curve, shifted by (short-term now - ref LUFS). NOT YET HEARD by the user: ask them to load
 a trap reference and A/B with MATCH. Tests: tests/test_reference.cpp, plug-in tests [reference], UI smoke.
 
+## IN PROGRESS (2026-10-10 evening): nine features done, re-audit fixes running
+User asked: build the nine "next level" features in order, then re-audit every module. All nine are merged and
+pushed (858c1ff): Match ref, Listen/Solo + MONO/PHONE, Stem EQ Keep Loudness, snapshots S1-S4 + multi-step undo,
+Saturation Bass only, genre target line + loudness history, Tone Steady stored target, whole-song Auto-Master
+listen. Tests at 858c1ff: engine 175 cases, plug-in 36, UI smoke all pass; CI green up to f61fe63.
+Re-audit (5 measured, read-only audits) reports are saved in claude/reaudit-2026-10-10/*.md (front = Unlimiter/
+EQ/Maximizer/MATCH; spectral; back = Bass/Imager/Dynamics/Saturation; automaster; plugin-ui). Five fix agents
+were started in local worktrees (one per report; automaster A3 belongs to the spectral fix). IF THEIR WORK IS
+LOST (fresh container), re-run one fix agent per report: fix every A defect, B text, C test gap; merge each,
+run polisher_tests + polisher_plugin_tests + UI smoke, push. Then: version bump (0.16.0), manual + README +
+this file, CI check, tell the user what to test in Cubase (nothing of the nine features has been heard yet).
+Top findings: Tone Steady target cuts mids/highs in sections without the 808 (HIGH, fix prototype in report);
+MATCH slow re-learn + MATCH restored ON from saved projects; B->A bypass burst; switching dips (Mono Below/
+Imager/Dynamics, park-and-glide fix); Space key re-presses buttons; reference loudness 30 s vs 12 s; report
+quotes post-Stem-EQ input level; snapshot/reference changes don't mark the project dirty.
+
 ## 2026-10-10 module-by-module audit (v0.15.0)
 User asked for a module-by-module audit + "next level" suggestions (+ type-in values: done, d054c5c).
 Five read-only audit agents measured every module (scratch programs under /tmp/claude-0/audit-*, gone with the

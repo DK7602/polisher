@@ -110,6 +110,8 @@ const M = {
   amState: 0, amProgress: 0, amHearing: false, amReport: 0, matchDb: 0, corr: 1,
   // Whole-song listen (mode 0 Auto-Master, 1 learn Tone Steady's target only) and the stored target (s of song, 0 = none).
   amMode: 0, amHeard: 0, amLoudAt: -1, amLoudEnd: -1, amLoudJump: false, amLoudLufs: -100, amCanFinish: false, amByItself: false, tsTarget: 0, tsLearnFail: 0,
+  // How far the music playing sits from that stored tone (dB, -1 unknown), and whether far for long (another song's?).
+  tsFar: false, tsDist: -1,
   undo: "", redo: "", snaps: [{}, {}, {}, {}], snapActive: -1, snapModified: false,
   dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], stemKeep: 0, rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
   ulBoost: 0, ulSquash: 0, refVersion: 0, refState: 0,
@@ -150,7 +152,7 @@ const modules = [
     controls: [["Vocals / Drums / Bass / Other", "Turns that part of the mix up or down (±12 dB). Other is everything else: synths, keys, guitars, pads, effects."],
                ["How it works", "A small AI model listens to the mix and works out, moment by moment and frequency by frequency, how much of the sound is vocals, drums, bass or other. Your four levels are mixed by those shares into one EQ that updates about 180 times a second."],
                ["Keep Loudness", "On: your moves change the balance, not how loud the mix is. When you turn a part up, Stem EQ turns the whole mix down by the same loudness (and the other way round), so A/B is a fair compare and the Maximizer isn't pushed harder. Off: a move also makes the mix louder or quieter."],
-               ["Trade-offs", "Adds about 40 ms of delay at any sample rate (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly. Moves up to about ±6 dB stay clean."]] },
+               ["Trade-offs", "Adds about 40 ms of delay at any sample rate (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly. Moves up to about ±6 dB stay clean. At 96 kHz or higher, set your audio buffer to 256 samples or more: Stem EQ (with Tone Steady and the Resonance Tamer) does its work in short bursts, and very small buffers there can crackle."]] },
   { id: "ts", name: "Tone Steady", live: true, soon: "",
     what: "Keeps your tone steady as the song plays: when a section drifts muddier, harsher or thinner than the rest of the song, it nudges those frequencies back.",
     cells: [], controls: [] },
@@ -195,7 +197,7 @@ let amReport = null;           // last Auto-Master report (parsed), or null
 // curve drawn here is the plug-in's real response.
 const EQ_BANDS = [
   { name: "Low End", shape: "low", def: 45, q: 0.707,
-    boost: "More sub weight: the 808 and kick tail feel bigger on big speakers. Phones and laptops barely reproduce it. A subsonic filter switches in below 20 Hz, so the boost doesn't also pump up rumble you can't hear.",
+    boost: "More sub weight: the 808 and kick tail feel bigger on big speakers. Phones and laptops barely reproduce it. A subsonic filter at 15 Hz switches in with the boost, so rumble below about 12 Hz is turned down instead of up (between 12 and 20 Hz part of the boost remains).",
     cut: "Less sub rumble: a cleaner bottom and more headroom, so the Maximizer can make it louder." },
   { name: "Bass", shape: "bell", def: 100, q: 0.8,
     boost: "More body in the kick and 808: fuller and warmer. This is the low end most speakers actually play.",
@@ -387,6 +389,7 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   const end = () => { if (dragStart) { dragStart = null; state.sliderDragEnded(); } };
   knob.addEventListener("pointerup", end);
   knob.addEventListener("pointercancel", end);
+  knob.addEventListener("lostpointercapture", end);   // e.g. the window lost the mouse mid-drag: the undo step still closes
   knob.addEventListener("dblclick", () => { state.sliderDragStarted(); setNorm(scaledToNorm(state, def)); state.sliderDragEnded(); });
   knob.addEventListener("wheel", (e) => {
     e.preventDefault();
@@ -721,7 +724,7 @@ const stemMoves = () => [0, 1, 2, 3].filter((k) => Math.abs(stemGainAt(k)) >= 0.
 function stemHearsCell() {
   const cell = document.createElement("div");
   cell.className = "cell";
-  cell.innerHTML = `<span class="cell-label">Model Hears</span><span class="cell-sub mono">share of what you hear</span>
+  cell.innerHTML = `<span class="cell-label">Model Hears</span><span class="cell-sub mono">loudness share \u00b7 mix in</span>
     <div class="stemhear">${STEMS.map((n, k) => `<div class="sh-row"><span class="sh-name mono">${n[0]}</span>
       <div class="sh-bar screen"><div class="sh-fill" id="sh-fill-${k}"></div></div><span class="sh-val mono" id="sh-val-${k}"></span></div>`).join("")}</div>`;
   return cell;
@@ -801,6 +804,7 @@ function tsTargetCell() {
     if (!M.tsTarget) return;
     try { await tsClearTarget(); } catch (e) { /* the next frame shows the state either way */ }
     M.tsTarget = 0;
+    userEdited();
     refresh(); renderLearn();
     toast("Tone Steady follows the music again (the last ~10 seconds).");
   });
@@ -811,7 +815,7 @@ function tsTargetCell() {
     learn.setAttribute("aria-pressed", String(learning));
     clear.className = "pill pill-blue" + (M.tsTarget ? "" : " is-disabled");
     clear.disabled = !M.tsTarget;
-    val.textContent = M.tsTarget ? `your song \u00b7 ${fmtTime(M.tsTarget)}` : "following the music";
+    val.textContent = !M.tsTarget ? "following the music" : M.tsFar ? `another song? \u00b7 ${fmtTime(M.tsTarget)}` : `your song \u00b7 ${fmtTime(M.tsTarget)}`;
   }
   cell.refresh = refresh;
   refresh();
@@ -908,8 +912,13 @@ const nodeEls = EQ_BANDS.map((band, b) => {
   };
   n.addEventListener("pointerup", end);
   n.addEventListener("pointercancel", end);
+  n.addEventListener("lostpointercapture", end);   // e.g. the window lost the mouse mid-drag: the undo step still closes
+  // Double-click: back to flat at the band's own frequency, as one undo step (both gestures overlap).
   n.addEventListener("dblclick", () => {
-    for (const [s, v] of [[P.eqGain[b], 0], [P.eqFreq[b], band.def]]) { s.sliderDragStarted(); s.setNormalisedValue(scaledToNorm(s, v)); s.sliderDragEnded(); }
+    const reset = [[P.eqGain[b], 0], [P.eqFreq[b], band.def]];
+    for (const [s] of reset) s.sliderDragStarted();
+    for (const [s, v] of reset) s.setNormalisedValue(scaledToNorm(s, v));
+    for (const [s] of reset) s.sliderDragEnded();
     eqCells[b].refresh(); onParamsChanged(); userEdited();
   });
   n.addEventListener("wheel", (e) => {
@@ -1097,11 +1106,11 @@ function renderLearnBody() {
     body.appendChild(para("l-p", "Press play in your DAW. As the music runs I'll describe what the Maximizer is doing to it."));
   } else {
     const st = M.shortTerm > -99 ? `${fmtNum(M.shortTerm)} LUFS` : "—";
-    const it = M.integrated > -99 ? `${fmtNum(M.integrated)} LUFS integrated` : "Integrated is still measuring";
+    const it = M.integrated > -99 ? `Its Integrated loudness (since the meter last restarted) is ${fmtNum(M.integrated)} LUFS.` : "Its Integrated loudness is still being measured.";
     const gain = louderBy();
     const vsMix = gain === null ? "" : `, ${gain >= 0 ? "+" : MINUS}${Math.abs(gain).toFixed(1)} dB ${gain >= 0 ? "louder" : "quieter"} than your mix`;
     const grText = peakGr < -0.2 ? `The limiter is taking up to ${fmtNum(-peakGr)} dB off the loudest moments.` : "The limiter is barely touching it: the peaks already fit under the ceiling.";
-    body.appendChild(para("l-p", `Your master is running at ${st} short-term${vsMix} (${it}). ${grText}`));
+    body.appendChild(para("l-p", `Your master is running at ${st} short-term${vsMix}. ${it} ${grText}`));
   }
 
   body.appendChild(sep());
@@ -1118,9 +1127,9 @@ function renderLearnBody() {
       ? "Your mix goes into the chain as it is. Auto-Master turns this down only when the master would otherwise land above your target."
       : `Turns your mix down ${fmtNum(-trim, 1)} dB before the whole chain (all 11 modules). Drive can only push up; this is how Polisher masters a mix that would otherwise land above your target. A (bypass) ignores it.`));
   body.appendChild(item("Ceiling", `${fmtNum(ceiling, 1)} dBTP`,
-    `Nothing leaves Polisher above ${fmtNum(ceiling, 1)} dBTP, including peaks that fall between samples. ` +
-    (ceiling > -0.95 ? "Above −1 dBTP, the MP3/AAC versions streaming services make are likely to clip. −1.0 is the usual choice; for loud masters (around −9 LUFS and louder) −1.5 to −2 is safer."
-                     : "That leaves room for the MP3/AAC conversion streaming services do. The louder the master, the higher its MP3/AAC copy peaks: at −9 LUFS and louder, −1.5 to −2 dBTP keeps the streamed version clean.")));
+    `Nothing leaves Polisher above ${fmtNum(ceiling, 1)} dBTP on the true-peak meter streaming services use (it counts peaks between samples too). ` +
+    (ceiling > -0.95 ? "Above −1 dBTP, the MP3/AAC versions streaming services make are likely to clip. −1.0 is the usual choice; for loud masters (around −9 LUFS and louder) −1.5 (what Auto-Master sets for Loud and Club) to −2 (Spotify's advice) is safer."
+                     : "That leaves room for the MP3/AAC conversion streaming services do. The louder the master, the higher its MP3/AAC copy peaks: at −9 LUFS and louder, use −1.5 (Auto-Master's choice for Loud and Club) or −2 (Spotify's advice), and the converted copies stay at or close to 0 dBTP instead of going a dB over.")));
   body.appendChild(item("Release", `${release} ms`,
     adaptive
       ? `Adaptive around ${release} ms: recovers quickly after single hits (drums) and moves slowly on sustained sound (808s, pads), so it doesn't pump.`
@@ -1418,7 +1427,8 @@ function renderStemLearn(body) {
   const playing = performance.now() - lastAudioTime < 1500;
   const moves = stemMoves(), share = M.stemShare || [0, 0, 0, 0];
   const keep = !!P.stemKeep.getValue(), keepDb = Math.abs(M.stemKeep || 0) < 0.05 ? 0 : M.stemKeep || 0;
-  const heard = "of what you hear, " + STEMS.map((n, k) => `${n.toLowerCase()} ${share[k]} %`).join(", ");
+  const parts = STEMS.map((n, k) => `${n.toLowerCase()} ${share[k]} %`);
+  const heard = `the loudness coming in as ${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;   // "... as vocals 38 %, ... and other 21 %"
   body.appendChild(head("WHAT'S HAPPENING"));
   body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
     : !on ? "Stem EQ is off, so every part of the mix passes untouched."
@@ -1447,7 +1457,7 @@ function renderStemLearn(body) {
     : keepDb < 0 ? `On: your moves would make the mix louder, so Stem EQ turns all of it down ${fmtNum(-keepDb, 1)} dB. The balance changes; the loudness stays where it was.`
     : keepDb > 0 ? `On: your moves would make the mix quieter, so Stem EQ turns all of it up ${fmtNum(keepDb, 1)} dB. The balance changes; the loudness stays where it was.`
     : "On: your moves hardly change the loudness, so there is nothing to make up right now."));
-  body.appendChild(item("Model Hears", "", "How the model divides what you hear right now, averaged over about a second. Each frequency counts by how loud it sounds, so a big 808 shows as part of the sound rather than nearly all of it. A part it barely hears won't move much when you turn it up or down."));
+  body.appendChild(item("Model Hears", "", "How the model divides the mix coming in (before your moves), averaged over about a second: each part's share of the loudness, the way a loudness meter weighs it. So the share tells you what a move does: with Keep Loudness off, turning up a part with a 70 % share by 6 dB makes the mix about 5 dB louder, a part with a 10 % share about 1 dB. In trap the 808 is often most of the loudness, even when it doesn't sound like most of the mix."));
   const big = moves.filter((k) => Math.abs(stemGainAt(k)) > 6.05);
   if (on && !bypassed && stemGainAt(2) > 5.95 && keep)
     body.appendChild(tip("HEADS UP", `Bass is up 6 dB or more. Keep Loudness holds the level by turning the whole mix down${keepDb < -0.05 ? ` (${fmtNum(-keepDb, 1)} dB right now)` : ""}, so the 808 gets louder and everything above the bass sits lower. The Maximizer doesn't have to work harder. At the same loudness, more 808 always means less of the rest, with or without this switch.`, false,
@@ -1517,14 +1527,18 @@ function renderTsLearn(body) {
   body.appendChild(sep());
   body.appendChild(head("WHAT EACH CONTROL IS DOING"));
   body.appendChild(item("Amount", `${Math.round(amount)} %`, amount < 0.5 ? "Off." : `Corrects about ${Math.round(amount)} % of each drift, beyond a 1 dB dead zone (3 dB in the highs, where hats and cymbals come and go), so small natural changes are left alone.`));
-  body.appendChild(item("Range", `${MINUS}${range.toFixed(1)} / +${(range / 2).toFixed(1)} dB`, `Cuts go at most ${range.toFixed(1)} dB, boosts at most ${(range / 2).toFixed(1)} dB: the most it can move any part of the spectrum. A section meant to sound different (a drop with more bass) can be pulled by up to this much, so lower Range if a big moment sounds smaller.`));
+  body.appendChild(item("Range", `${MINUS}${range.toFixed(1)} / +${(range / 2).toFixed(1)} dB`, `Cuts go at most ${range.toFixed(1)} dB${M.tsTarget ? ` (above the bass ${(range / 2).toFixed(1)} dB, while it holds your song's tone)` : ""}, boosts at most ${(range / 2).toFixed(1)} dB: the most it can move any part of the spectrum. A section meant to sound different (a drop with more bass) can be pulled by up to this much, so lower Range if a big moment sounds smaller.`));
   body.appendChild(item("Speed", speed, speed === "Slow" ? "Reacts over about a second: the gentlest, best for most masters."
     : speed === "Medium" ? "Reacts within about half a second: catches a phrase that gets muddier or a hook that gets harsher." : "Reacts within a few notes (0.15 s): strongest, can make the mix feel controlled."));
   if (M.tsTarget)
-    body.appendChild(item("Target", `your song · ${fmtTime(M.tsTarget)}`, `Tone Steady now holds your song to its own overall tone, learned when it listened to ${fmtTime(M.tsTarget)} of your song. So what you hear is what you export, from any start point. Parts that come and go are left alone: an 808 that enters after the intro isn't cut, and a part that isn't playing isn't faked back. It follows your Tonal EQ moves, and it's saved with your project. CLEAR goes back to following the music.`));
+    body.appendChild(item("Target", `your song · ${fmtTime(M.tsTarget)}`, `Tone Steady now holds your song to its own overall tone, learned when it listened to ${fmtTime(M.tsTarget)} of music. So what you hear is what you export, from any start point. Parts that come and go in the low end are left alone: an 808 that enters after the intro isn't cut, and the intro without it isn't lifted. A part that isn't playing isn't faked back. A part that comes in above the bass (a lead in the chorus) is treated like a drift: it's pulled down, by at most half the Range, for as long as it plays. It follows your Tonal EQ moves. It's saved with your project, and also in presets and copies of Polisher, so on a new song press LEARN again. CLEAR goes back to following the music.`));
   else
     body.appendChild(item("Target", "following the music", "Your song's own balance over the last ~10 seconds, so the Tonal EQ sets the tone and Tone Steady only keeps it. Quiet breakdowns are left alone. When a bass or 808 comes in (the low end jumps more than 4 dB against the rest), it re-learns the balance within about a second instead of cutting the new low end. Because it follows the music, what you hear can depend a little on where playback starts. LEARN holds it to your whole song's tone instead."));
-  if (on && !bypassed && amount >= 0.5 && M.tsTarget && M.tsTarget < 30)
+  if (on && !bypassed && amount >= 0.5 && M.tsTarget && M.tsFar)
+    body.appendChild(tip("HEADS UP", `Your song sits far from the tone Tone Steady is holding it to (about ${fmtNum(Math.max(0, M.tsDist || 0))} dB off, for 20 seconds or more of music). That happens when the tone was learned on another song: presets, copies of Polisher and older projects carry it along. Held to another song's tone, parts of your mix get cut or lifted by up to the Range.`, false,
+      { need: "Yes, if this tone came from another song (a preset, a copied Polisher, another project). If you learned it on this song, a section that sounds very different (a beat switch) can show this too: then you can leave it.",
+        steps: ["Press LEARN in this panel.", "Play your whole song from the start. It finishes by itself when the song ends.", "Or press CLEAR to follow the music instead."] }));
+  else if (on && !bypassed && amount >= 0.5 && M.tsTarget && M.tsTarget < 30)
     body.appendChild(tip("HEADS UP", `Tone Steady learned your song's tone from only ${fmtTime(M.tsTarget)} of music, so it may not describe the whole song.`, false,
       { need: "Only if your song's sections sound quite different from each other.", steps: ["Press LEARN in this panel.", "Play the whole song from the start. It finishes by itself when the song ends."] }));
   else if (on && !bypassed && amount > 70 && speed === "Fast")
@@ -1667,16 +1681,17 @@ function watchLouderPart() {
 
 // The whole-song listen as the plug-in reports it: says when the song's end finished it, announces a learned
 // tone, keeps the LISTENING view in Learn current.
-function watchListening(wasAm, wasTarget, wasFail) {
+function watchListening(wasAm, wasTarget, wasFail, wasFar) {
   if (wasAm === 1 && M.amState === 2 && !amFinishClicked && M.amByItself)
     toast(`The song ended: Auto-Master heard ${fmtTime(M.amHeard)} and is choosing every setting…`);
   if (wasAm !== 0 && M.amState === 0) amFinishClicked = false;
-  if (M.tsTarget !== wasTarget || M.tsLearnFail !== wasFail) {
+  if (M.tsTarget !== wasTarget || M.tsLearnFail !== wasFail || !!M.tsFar !== !!wasFar) {
     if (toneRequested && M.amState === 0) {
       toneRequested = false;
       if (M.tsLearnFail !== wasFail)
         toast("Tone Steady heard too little music at your song's level to learn its tone. Play more of the song, then press LEARN again.");
       else if (M.tsTarget) {
+        userEdited();
         toast(`Tone Steady learned your song's tone from ${fmtTime(M.tsTarget)} of music.`);
         if (learnView === "listen") learnView = "module";
       }
@@ -1794,8 +1809,8 @@ function listenWhat(m) {
   if (m === 2) return "what the Soft Clipper shaves off";
   if (m === 3) return "what Resonance Tamer cuts";
   if (m === 4) return "what the Maximizer takes off";
-  if (isSoloMode(m)) return `only the ${DYN_BANDS[m - 5].name.toUpperCase()} band of Dynamics`;
-  if (m >= 9 && m <= 12) return `what Dynamics takes off the ${DYN_BANDS[m - 9].name.toUpperCase()} band`;
+  if (isSoloMode(m)) return `only the ${DYN_BANDS[m - 5].short} band of Dynamics`;
+  if (m >= 9 && m <= 12) return `what Dynamics takes off the ${DYN_BANDS[m - 9].short} band`;
   return "";
 }
 function setMonitor(listen, mono = MON.mono, phone = MON.phone) {
@@ -1811,7 +1826,7 @@ function refreshListenButton() {
   b.className = "pill listen " + (on ? "pill-red on" : "pill-blue");
   b.setAttribute("aria-pressed", String(on));
   $("btn-listen-text").textContent = "LISTEN";
-  b.title = `Listen: hear only ${listenWhat(mode)} (a listening aid: never in your export)`;
+  b.title = `Listen: hear only ${listenWhat(mode)}. A listening aid: a normal export never contains it (switch it off before a Realtime Export)`;
 }
 $("btn-listen").addEventListener("click", () => {
   const mode = listenModeFor(selected), on = MON.listen !== mode;
@@ -1905,7 +1920,7 @@ function addMonitorLearn(body) {
     frag.appendChild(head("WHAT YOU'RE HEARING"));
     if (MON.listen) frag.appendChild(listenTip(MON.listen));
     if (MON.phone)
-      frag.appendChild(tip("PHONE CHECK", "A phone speaker, roughly: mono, almost nothing below 300 Hz or above 8 kHz, at about your master's loudness.", true,
+      frag.appendChild(tip("PHONE CHECK", "A phone speaker, roughly: mono, thin below 300 Hz (200 Hz is about 13 dB down, and almost nothing under 150 Hz comes through, so no 808 sub), soft above 8 kHz, at about your master's loudness. A loud, bright master is turned down a few dB here so the check can't clip.", true,
         { need: "Only if the 808 disappears. You'll hear its upper harmonics, not its sub; that's normal, and it's what Saturation (Tube is the fullest) and an 808's own distortion are for.",
           steps: ["Turn Saturation's Drive up a little, or add 1–2 dB of Bass on the Tonal EQ.", "Best fix, in the mix: a little distortion or saturation on the 808 track itself.", "Press PHONE again to go back."] }));
     else if (MON.mono)
@@ -1918,8 +1933,8 @@ function addMonitorLearn(body) {
   const mode = listenModeFor(selected);
   if (mode && MON.listen !== mode && !(selected === "dyn" && isSoloMode(MON.listen)))
     body.appendChild(tip("HEAR WHAT IT DOES", selected === "dyn"
-      ? "S next to a band plays only that band. LISTEN (headphones, top right of this panel) plays only what the picked band's compression takes off. Listening aids only: never in your export."
-      : `LISTEN (headphones, top right of this panel) plays only ${listenWhat(mode)}, so you can learn its sound. Quiet changes are turned up so you can hear them. A listening aid: never in your export.`, true));
+      ? "S next to a band plays only that band. LISTEN (headphones, top right of this panel) plays only what the picked band's compression takes off. Listening aids only: a normal export never contains them (switch them off before a Realtime Export)."
+      : `LISTEN (headphones, top right of this panel) plays only ${listenWhat(mode)}, so you can learn its sound. Quiet changes are turned up so you can hear them. A listening aid: a normal export never contains it (switch it off before a Realtime Export).`, true));
 }
 
 function refreshAB() {
@@ -2081,7 +2096,7 @@ chkChange.addEventListener("change", () => P.resetOnChange.setValue(chkChange.ch
 P.resetOnChange.valueChangedEvent.addListener(() => (chkChange.checked = !!P.resetOnChange.getValue()));
 
 function restartMeasurement() { resetMeter(); grWindow = []; clipWindow = []; tameWindow = []; punchWindow = []; histReset(); }
-$("btn-reset").addEventListener("click", () => { restartMeasurement(); toast("Loudness measurement reset."); });
+$("btn-reset").addEventListener("click", () => { restartMeasurement(); toast("Loudness measurement reset. MATCH learns the level afresh."); });
 // After a control change only the long-term readings start over; Short-term keeps running.
 function restartIntegrated() { resetMeter("stats"); }
 
@@ -2219,9 +2234,32 @@ async function stepHistory(redo) {
   try { r = await (redo ? histRedo() : histUndo()); } catch (e) { r = null; }
   if (r && typeof r === "object") { M.undo = r.undo || ""; M.redo = r.redo || ""; }
   refreshHistory();
-  if (r && r.done) toast(`${redo ? "Redone" : "Undone"}: ${r.done}`);
+  if (r && r.done) { toast(`${redo ? "Redone" : "Undone"}: ${r.done}`); userEdited(); }   // the sound changed: Integrated starts over
   refreshAllCells();
 }
+// Space and Enter. In Cubase, Space is play / stop: after clicking a button (Auto-Master, MATCH, a snapshot...)
+// pressing Space to start the song must not press that button again (it would cancel Auto-Master's listen,
+// turn MATCH off, recall the snapshot again). So a button clicked with the mouse doesn't keep the keyboard,
+// and Space / Enter only press buttons for someone moving around with Tab. A box you type a value into,
+// Enter on a focused knob (type a value) and the arrow keys work as always.
+let keyboardNav = false;   // Tab was pressed since the last mouse click
+document.addEventListener("pointerdown", () => { keyboardNav = false; }, true);
+document.addEventListener("click", (e) => {
+  if (e.detail === 0 || keyboardNav) return;   // a click made with Space / Enter keeps its focus ring
+  const el = document.activeElement;
+  if (el && el !== document.body && el.matches && el.matches("button, input[type=checkbox]")) el.blur();
+}, true);
+const isTyping = (t) => !!(t && t.closest && t.closest("input:not([type=checkbox]), textarea, [contenteditable]"));
+function swallowKey(e) {
+  if (e.key === "Tab") { if (e.type === "keydown") keyboardNav = true; return; }
+  if (e.key !== " " && e.key !== "Spacebar" && e.key !== "Enter") return;
+  if (isTyping(e.target) || keyboardNav) return;
+  if (e.key === "Enter" && e.target && e.target.closest && e.target.closest("[role=slider]")) return;   // Enter on a knob: type a value
+  e.preventDefault();
+  e.stopPropagation();
+}
+for (const type of ["keydown", "keypress", "keyup"]) document.addEventListener(type, swallowKey, true);
+
 $("btn-undo").addEventListener("click", () => stepHistory(false));
 $("btn-redo").addEventListener("click", () => stepHistory(true));
 // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (Cmd on a Mac) while Polisher's window has the keyboard. A box you are
@@ -2289,6 +2327,7 @@ document.querySelectorAll("#snaps .snap").forEach((b) => b.addEventListener("cli
   M.snapActive = k; M.snapModified = false;
   refreshSnapshots();
   refreshAllCells();
+  userEdited();
   toast(`Snapshot ${k + 1}: its settings glide in. The undo arrow goes back.`);
 }));
 $("btn-store").addEventListener("click", () => {
@@ -2305,6 +2344,7 @@ async function fetchReport(openIt) {
   if (openIt && amRequested && amReport && amReport.time !== amOpenedTime) {
     amOpenedTime = amReport.time;
     amRequested = false;
+    if (amReport.ok) userEdited();   // Auto-Master changed the sound: Integrated starts over
     learnView = "report";
     toast(amReport.ok ? "Auto-Master set every module. Learn explains each choice."
       : amReport.notAFullMix ? "That sounds like one track, not a full mix. Nothing was changed. See Learn."
@@ -2741,15 +2781,15 @@ function renderSnapLearn(body) {
   link.addEventListener("click", () => { learnView = "module"; renderLearn(); });
   body.appendChild(link);
   body.appendChild(head("SNAPSHOTS S1–S4"));
-  body.appendChild(para("l-p", "Each slot keeps a whole sound: every knob and switch in every module, plus the Auto-Master report that explains it. They're saved with your Cubase project."));
+  body.appendChild(para("l-p", "Each slot keeps a whole sound: every knob and switch in every module, plus the Auto-Master report that explains it and the song's tone Tone Steady learned (if it learned one). They're saved with your Cubase project."));
   body.appendChild(item("Empty slot", null, "Click it to keep the settings you hear now."));
-  body.appendChild(item("Stored slot", null, "Click it to switch to those settings. They glide in like a knob move, so there's no click, and the undo arrow takes you back."));
+  body.appendChild(item("Stored slot", null, "Click it to switch to those settings. Knobs glide there and switches fade over, so nothing clicks or drops out, and the undo arrow takes you back."));
   body.appendChild(item("Red slot", null, "The one playing. A dot (S1•) means you've changed something since. To keep the change, click STORE, then the slot (or Shift-click the slot)."));
   body.appendChild(item("Not in a snapshot", null, "A / B, MATCH, MONO, PHONE and Listen, and Auto-Master's genre, intensity and target. Switching snapshots never changes how you listen. S1–S4 are not A / B: A is always your original mix, B the master."));
   body.appendChild(sep());
   body.appendChild(head("A FAIR COMPARE WITH MATCH"));
-  body.appendChild(para("l-p", "MATCH learns how loud each snapshot plays compared with your mix, over about 10 seconds of B. The first time you hear a snapshot, give it 10–15 seconds before you judge. After that MATCH remembers its level, so when you flip back it's matched at once. Right after a switch it holds the level for 3 seconds while the loudness reading catches up."));
-  body.appendChild(tip("TRY THIS", "Balanced vs Punchy: play your chorus, run Auto-Master on Balanced and click S1. Pick Punchy, run it again and click S2. Turn on MATCH and listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip S1 / S2 every few seconds: you hear punch and weight, not volume. Click the one you like and keep going.", true));
+  body.appendChild(para("l-p", "The first time you hear a snapshot, MATCH learns how loud it plays compared with your mix: roughly after half a second of B, exactly after about 3 seconds. Play it for about 15 seconds and MATCH remembers its level, so when you flip back later it's matched at once (it holds that level for 3 seconds while the loudness reading catches up)."));
+  body.appendChild(tip("TRY THIS", "Balanced vs Punchy: pick Balanced, click Auto-Master and play your whole song from the start (it finishes by itself), then click S1. Pick Punchy, run Auto-Master the same way and click S2. Turn on MATCH, play your chorus and listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip S1 / S2 every few seconds: you hear punch and weight, not volume. Click the one you like and keep going.", true));
   body.appendChild(sep());
   body.appendChild(head("UNDO AND REDO"));
   body.appendChild(para("l-p", `The arrows at the top step back and forward through your changes, one at a time: a knob move, a switch, a typed value, an Auto-Master run, Apply, a snapshot. Point at an arrow to see what it will undo. ${IS_MAC ? "⌘Z undoes, ⇧⌘Z redoes" : "Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes"} (click inside Polisher first, or Cubase takes the keys). The last 100 steps are kept while Polisher's window is closed, but not when you close the project. Automation from Cubase is never in the list.`));
@@ -3084,11 +3124,11 @@ function updateLiveReadouts() {
 // Meter events from the plug-in (30 per second).
 window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   const srChanged = frame.sr && frame.sr !== M.sr;
-  const wasAm = M.amState, wasTarget = M.tsTarget, wasFail = M.tsLearnFail;
+  const wasAm = M.amState, wasTarget = M.tsTarget, wasFail = M.tsLearnFail, wasFar = M.tsFar;
   Object.assign(M, frame);
   if (M.amState === 2 && wasAm !== 2) amThinkSince = performance.now();   // the analysis started: time it
   else if (M.amState !== 2) amThinkSince = 0;
-  watchListening(wasAm, wasTarget, wasFail);
+  watchListening(wasAm, wasTarget, wasFail, wasFar);
   if (srChanged) { drawEq(); fetchGenreCurve(); }
   refreshHistory();
   refreshSnapshots();

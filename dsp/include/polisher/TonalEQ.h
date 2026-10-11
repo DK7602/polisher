@@ -55,8 +55,9 @@ struct BiquadCoefficients
       frequency and keeps its analog shape up to 20 kHz instead of cramping toward Nyquist at
       44.1 / 48 kHz. Frequencies are kept below 0.45 x the sample rate.
     - Subsonic filter: while Low End is boosted, a fixed 4th-order Butterworth high-pass at 15 Hz
-      fades in (same glide), so the shelf doesn't also boost inaudible rumble below 20 Hz that only
-      eats headroom. It costs < 0.5 dB at 20 Hz and nothing measurable above 30 Hz.
+      fades in (same glide), so the shelf turns rumble and DC below about 12 Hz down instead of up
+      (they only eat headroom). Between 12 and 20 Hz part of the boost remains (Low End +6 dB: about
+      +3 dB at 15 Hz, +5 dB at 18 Hz). It costs about 0.5 dB at 20 Hz and nothing measurable above 30 Hz.
     - Gain and frequency changes glide (about 20 ms, log-frequency), with the coefficients updated
       every 16 samples, so moving a knob or dragging a band never clicks.
     - A band at 0 dB is skipped once it has settled, so a flat or disabled EQ is an exact, bit-for-bit
