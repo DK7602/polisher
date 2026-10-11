@@ -1,6 +1,6 @@
 # Polisher User Manual
 
-Version 0.15.0 · October 2026
+Version 0.16.0 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
@@ -8,7 +8,7 @@ Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d7
 
 Polisher is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds eleven modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.15.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.16.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 

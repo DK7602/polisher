@@ -41,21 +41,29 @@ masterAnalysis for Learn's REF / MIX / MASTER table. Genre still sets dynamics, 
 Spectrum: dashed yellow curve, shifted by (short-term now - ref LUFS). NOT YET HEARD by the user: ask them to load
 a trap reference and A/B with MATCH. Tests: tests/test_reference.cpp, plug-in tests [reference], UI smoke.
 
-## IN PROGRESS (2026-10-10 evening): nine features done, re-audit fixes running
-User asked: build the nine "next level" features in order, then re-audit every module. All nine are merged and
-pushed (858c1ff): Match ref, Listen/Solo + MONO/PHONE, Stem EQ Keep Loudness, snapshots S1-S4 + multi-step undo,
-Saturation Bass only, genre target line + loudness history, Tone Steady stored target, whole-song Auto-Master
-listen. Tests at 858c1ff: engine 175 cases, plug-in 36, UI smoke all pass; CI green up to f61fe63.
-Re-audit (5 measured, read-only audits) reports are saved in claude/reaudit-2026-10-10/*.md (front = Unlimiter/
-EQ/Maximizer/MATCH; spectral; back = Bass/Imager/Dynamics/Saturation; automaster; plugin-ui). Five fix agents
-were started in local worktrees (one per report; automaster A3 belongs to the spectral fix). IF THEIR WORK IS
-LOST (fresh container), re-run one fix agent per report: fix every A defect, B text, C test gap; merge each,
-run polisher_tests + polisher_plugin_tests + UI smoke, push. Then: version bump (0.16.0), manual + README +
-this file, CI check, tell the user what to test in Cubase (nothing of the nine features has been heard yet).
-Top findings: Tone Steady target cuts mids/highs in sections without the 808 (HIGH, fix prototype in report);
-MATCH slow re-learn + MATCH restored ON from saved projects; B->A bypass burst; switching dips (Mono Below/
-Imager/Dynamics, park-and-glide fix); Space key re-presses buttons; reference loudness 30 s vs 12 s; report
-quotes post-Stem-EQ input level; snapshot/reference changes don't mark the project dirty.
+## v0.16.0 (2026-10-11): nine features + re-audit fixes
+User asked: build the nine "next level" features in order, then re-audit every module. All done:
+Match ref, Listen/Solo + MONO/PHONE, Stem EQ Keep Loudness, snapshots S1-S4 + multi-step undo, Saturation
+Bass only, genre target line + loudness history, Tone Steady stored target, whole-song Auto-Master listen.
+Re-audit (5 measured audits, reports in claude/reaudit-2026-10-10/*.md) -> every A defect, B text and C test
+gap fixed by five worktree agents and merged. Key behaviour to remember:
+- MATCH: relearns after Auto-Master / new snapshot / project load / RESET (rough at 0.5 s, exact ~3 s); learns
+  only from readings that hold B alone; always OFF when a project opens.
+- B->A: the limiter keeps limiting its delay line through the switch (no burst). Club ceiling now -1.5 (= Loud).
+- Mono Below / Imager / Dynamics switch by "park and glide" (dsp/include/polisher/ParkGlide.h): ~0.15 s
+  (up to 0.5 s near 30-40 Hz) instead of a 20 ms hole. Saturation Mode changes cross-fade like Focus.
+- Unlimiter Focus Kick/Snap band split joins parked near Nyquist and glides in (~0.2 s).
+- Auto-Master EQ model uses the clip's own spectrum; "covered band" only when true. Tone analysed on the raw
+  input (before Stem EQ); report's arriving level/peak from the raw input.
+- Tone Steady target: offset from bands above 160 Hz (middle half), cuts above 160 Hz capped at Range/2, song
+  level stored with the tone (quiet-passage gate), short listen keeps a stored tone only within 3 dB, warning
+  "another song?" when the music sits >4 dB off for 10 s. Model Hears = LUFS-weighted shares.
+- Reference: hookLufs (loudest 12 s) + file sampleRate stored; old profiles fall back to the 30 s reading.
+- Song listener: silence per 100 ms piece, jump/cycle detection with honest report text, mono bus, cancellable
+  analysis (UI says 5-15 / 10-30 / 20-60 s by rate).
+- UI: Space/Enter never re-press a mouse-clicked button; min window 1120x630; PHONE high-pass 4th order 300 Hz;
+  project marked changed on snapshot store / reference load+clear / Auto-Master; undo labels "from -> to".
+Not yet heard by the user in Cubase: everything above. Shared Claude Docs manual copy is NOT updated.
 
 ## 2026-10-10 module-by-module audit (v0.15.0)
 User asked for a module-by-module audit + "next level" suggestions (+ type-in values: done, d054c5c).
