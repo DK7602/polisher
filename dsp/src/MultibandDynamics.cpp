@@ -13,6 +13,9 @@ namespace {
     constexpr std::array<double, kDynBands> kImpactFastMs { 4.0, 1.5, 0.8, 0.5 };
     constexpr std::array<double, kDynBands> kImpactSlowMs { 60.0, 35.0, 20.0, 12.0 };
     constexpr std::array<double, kDynBands> kImpactReleaseMs { 120.0, 80.0, 60.0, 50.0 };
+    // Sustain followers per band (ms): the fast and the slow release (attack: Impact's fast one).
+    constexpr std::array<double, kDynBands> kTailFastMs { 40.0, 25.0, 15.0, 12.0 };
+    constexpr std::array<double, kDynBands> kTailSlowMs { 400.0, 250.0, 180.0, 150.0 };
 }
 
 bool MultibandDynamics::isNeutral (const DynamicsParams& p) noexcept
@@ -20,7 +23,8 @@ bool MultibandDynamics::isNeutral (const DynamicsParams& p) noexcept
     if (! p.enabled)
         return true;
     for (const auto& b : p.bands)
-        if (b.ratio > 1.0 || std::abs (b.gainDb) >= kDynGainNeutralDb || std::abs (b.impact) >= kImpactNeutral)
+        if (b.ratio > 1.0 || std::abs (b.gainDb) >= kDynGainNeutralDb || std::abs (b.impact) >= kImpactNeutral
+            || std::abs (b.sustain) >= kImpactNeutral)
             return false;
     return true;
 }
@@ -31,13 +35,16 @@ void MultibandDynamics::prepare (double sr, int numChannels)
     channelCount = std::clamp (numChannels, 1, 2);
     fadeStep = 1.0 / (ParkGlide::kFadeSeconds * sampleRate);
     makeupCoeff = perSample (0.02, sampleRate);
-    impactSmoothCoeff = perSample (0.0005, sampleRate);
-    impactKeepCoeff = perSample (2.0, sampleRate);   // 0.5 ms: no zipper, keeps the hit's front
+    impactSmoothCoeff = perSample (0.0005, sampleRate);   // 0.5 ms: no zipper, keeps the hit's front
+    impactKeepCoeff = perSample (2.0, sampleRate);        // loudness keeping, ~2 s
+    sustainSmoothCoeff = perSample (0.003, sampleRate);   // 3 ms: tails move smoothly
     averageCoeff = perSample (0.4, sampleRate);
     glideCoeff = 1.0 - std::exp (-static_cast<double> (kUpdateInterval) / (0.02 * sampleRate));
     for (size_t k = 0; k < kDynBands; ++k)
     {
         det[k].rmsCoeff = perSample (kRmsWindowMs[k] / 1000.0, sampleRate);
+        det[k].tailFastReleaseCoeff = perSample (kTailFastMs[k] / 1000.0, sampleRate);
+        det[k].tailSlowReleaseCoeff = perSample (kTailSlowMs[k] / 1000.0, sampleRate);
         det[k].impactRmsCoeff = perSample (kImpactRmsMs[k] / 1000.0, sampleRate);
         det[k].impactWarmSamples = static_cast<int> (3.0 * (kImpactSlowMs[k] + kImpactRmsMs[k]) / 1000.0 * sampleRate);
         det[k].fastAttackCoeff = perSample (kImpactFastMs[k] / 1000.0, sampleRate);
@@ -100,6 +107,7 @@ void MultibandDynamics::resetDetectors() noexcept
         d.grDb = d.grAverage = 0.0;
         d.fastPow = d.slowPow = d.impactDb = 0.0;
         d.powIn = d.powOut = d.impactKeepDb = 0.0;
+        d.tailFastPow = d.tailSlowPow = d.sustainDb = 0.0;
         d.impactWarm = d.impactWarmSamples;
         d.impactPow = {};
     }
@@ -124,7 +132,8 @@ void MultibandDynamics::reset() noexcept
     {
         const double g = params.bands[k].gainDb;
         det[k].makeupDb = det[k].targetMakeupDb = running && std::abs (g) >= kDynGainNeutralDb ? std::clamp (g, -24.0, 24.0) : 0.0;
-        det[k].maxGr = det[k].maxImpact = 0.0;
+        det[k].maxGr = det[k].maxImpact = det[k].maxSustain = 0.0;
+        det[k].sustainAmount = running && std::abs (params.bands[k].sustain) >= kImpactNeutral ? std::clamp (params.bands[k].sustain, -100.0, 100.0) / 100.0 : 0.0;
         det[k].impactAmount = running && std::abs (params.bands[k].impact) >= kImpactNeutral ? std::clamp (params.bands[k].impact, -100.0, 100.0) / 100.0 : 0.0;
     }
     countdown = 0;
@@ -278,6 +287,7 @@ void MultibandDynamics::update() noexcept
         flush (d.impactDb);
         flush (d.impactKeepDb);
         flush (d.powIn);
+        flush (d.sustainDb);
         flush (d.powOut);
         if (std::abs (d.makeupDb - d.targetMakeupDb) < 1.0e-9) d.makeupDb = d.targetMakeupDb;
     }
@@ -288,6 +298,7 @@ void MultibandDynamics::update() noexcept
         const auto& b = params.bands[k];
         d.targetMakeupDb = params.enabled && std::abs (b.gainDb) >= kDynGainNeutralDb ? std::clamp (b.gainDb, -24.0, 24.0) : 0.0;
         d.impactAmount = params.enabled && std::abs (b.impact) >= kImpactNeutral ? std::clamp (b.impact, -100.0, 100.0) / 100.0 : 0.0;
+        d.sustainAmount = params.enabled && std::abs (b.sustain) >= kImpactNeutral ? std::clamp (b.sustain, -100.0, 100.0) / 100.0 : 0.0;
         if (b.attackMs != d.setAttackMs)
         {
             d.setAttackMs = b.attackMs;

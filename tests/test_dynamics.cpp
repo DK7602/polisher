@@ -268,13 +268,13 @@ TEST_CASE ("Dynamics switches on and off without a hole at its crossovers", "[dy
     glue.crossoverHz[0] = 40.0;
     for (auto& b : glue.bands) { b.ratio = 2.0; b.thresholdDb = 0.0; }
     DynamicsParams impact;
-    for (auto& b : impact.bands) b.impact = 50.0;
+    for (auto& b : impact.bands) { b.impact = 50.0; b.sustain = 50.0; }
     DynamicsParams glueOff = glue;
     glueOff.enabled = false;
     struct Switch { const char* what; DynamicsParams off, on; };
     for (double sr : { 44100.0, 48000.0, 96000.0, 192000.0 })
         for (const auto& sw : { Switch { "neutral -> Air +0.1 dB", DynamicsParams {}, air }, Switch { "module switch, low split 40 Hz", glueOff, glue },
-                                Switch { "neutral -> Impact +50 % on every band", DynamicsParams {}, impact } })
+                                Switch { "neutral -> Impact and Sustain +50 % on every band", DynamicsParams {}, impact } })
             for (double hz : { 40.0, 120.0, 1000.0, 6000.0, 12000.0 })
             {
                 const auto tone = tones (sr, 2.0, { { hz, -6.0 } });
@@ -309,8 +309,10 @@ TEST_CASE ("Dynamics switches on and off without a hole at its crossovers", "[dy
                     double diff = 0.0;
                     for (int i = static_cast<int> (1.5 * sr); i < n; ++i)
                         diff = std::max (diff, std::abs (out[static_cast<size_t> (i)] - (switchOn ? steadyOn : plain)[static_cast<size_t> (i)]));
+                    // (The output is float. Impact / Sustain keep the band's loudness over ~2 s, so one second
+                    // after switching on they are still within 1e-4, about -80 dB, of the steady render.)
                     if (switchOn)
-                        CHECK (diff < 1.0e-6);   // (the output is float)
+                        CHECK (diff < (sw.off.bands[0].impact == 0.0 && sw.on.bands[0].impact != 0.0 ? 1.0e-4 : 1.0e-6));
                     else
                     {
                         CHECK (diff == 0.0);
@@ -385,12 +387,17 @@ double hitPeakDb (const AudioClip& c)
 }
 } // namespace
 
-TEST_CASE ("Impact leaves a steady sound alone", "[dynamics][impact]")
+TEST_CASE ("Impact and Sustain leave a steady sound alone", "[dynamics][impact]")
 {
-    DynamicsParams p;
-    for (auto& b : p.bands) b.impact = 100.0;
+    for (int which = 0; which < 3; ++which)
     for (double sr : { 44100.0, 48000.0, 96000.0 })
     {
+        DynamicsParams p;
+        for (auto& b : p.bands)
+        {
+            b.impact = which != 1 ? 100.0 : 0.0;
+            b.sustain = which == 0 ? 0.0 : which == 1 ? 100.0 : -100.0;
+        }
         // (The tone starting is a hit: loudness keeping settles over a few seconds after it.)
         auto c = tones (sr, 12.0, { { 60.0, -10.0 }, { 2000.0, -16.0 }, { 9000.0, -22.0 } });
         MultibandDynamics d;
@@ -399,7 +406,7 @@ TEST_CASE ("Impact leaves a steady sound alone", "[dynamics][impact]")
         d.reset();
         CHECK (d.isActive());
         run (d, c);
-        INFO ("sr " << sr);
+        INFO ("sr " << sr << ", case " << which);
         CHECK_THAT (toneDb (c, 60.0, 10.0, 12.0), WithinAbs (-10.0, 0.1));
         CHECK_THAT (toneDb (c, 2000.0, 10.0, 12.0), WithinAbs (-16.0, 0.1));
         CHECK_THAT (toneDb (c, 9000.0, 10.0, 12.0), WithinAbs (-22.0, 0.1));
@@ -466,4 +473,96 @@ TEST_CASE ("Impact under 0.5 % counts as off", "[dynamics][impact]")
     CHECK (MultibandDynamics::isNeutral (p));
     p.bands[1].impact = -0.6;
     CHECK_FALSE (MultibandDynamics::isNeutral (p));
+    p.bands[1].impact = 0.0;
+    p.bands[1].sustain = 0.4;
+    CHECK (MultibandDynamics::isNeutral (p));
+    p.bands[1].sustain = 0.6;
+    CHECK_FALSE (MultibandDynamics::isNeutral (p));
+}
+
+namespace {
+// 808-like notes: 50 Hz, 3 ms rise, 300 ms decay, one a second.
+AudioClip eights (double sr, double seconds)
+{
+    AudioClip c = testsig::silence (sr, 2, seconds);
+    const int period = static_cast<int> (sr);
+    for (int i = 0; i < c.numSamples(); ++i)
+    {
+        const double t = static_cast<double> (i % period) / sr;
+        const double v = 0.5 * std::min (1.0, t / 0.003) * std::exp (-t / 0.3) * std::sin (2.0 * std::numbers::pi * 50.0 * t);
+        c.channels[0][static_cast<size_t> (i)] = c.channels[1][static_cast<size_t> (i)] = static_cast<float> (v);
+    }
+    return c;
+}
+
+/** Tail (0.35 - 0.8 s after each note starts) vs hit (first 60 ms), energy ratio in dB, notes after 4 s. */
+double tailVsHitDb (const AudioClip& c)
+{
+    const int period = static_cast<int> (c.sampleRate);
+    double hit = 0.0, tail = 0.0;
+    for (int start = 4 * period; start + period <= c.numSamples(); start += period)
+        for (int i = 0; i < period; ++i)
+        {
+            const double t = static_cast<double> (i) / c.sampleRate, v = c.channels[0][static_cast<size_t> (start + i)];
+            if (t < 0.06) hit += v * v;
+            else if (t >= 0.35 && t < 0.8) tail += v * v;
+        }
+    return 10.0 * std::log10 (tail / hit);
+}
+} // namespace
+
+TEST_CASE ("Sustain makes tails longer or shorter at the same loudness", "[dynamics][impact]")
+{
+    const double sr = 48000.0;
+    const auto in = eights (sr, 12.0);
+    auto render = [&] (double sustainLow)
+    {
+        DynamicsParams p;
+        p.bands[0].sustain = sustainLow;
+        AudioClip c = in;
+        MultibandDynamics d;
+        d.prepare (sr, 2);
+        d.setParams (p);
+        d.reset();
+        run (d, c);
+        return c;
+    };
+    const auto longer = render (100.0), shorter = render (-100.0), half = render (50.0);
+    const double base = tailVsHitDb (in), lo = tailVsHitDb (longer), sh = tailVsHitDb (shorter), hf = tailVsHitDb (half);
+    INFO ("tail vs hit: in " << base << ", +100 % " << lo << ", +50 % " << hf << ", -100 % " << sh);
+    CHECK (lo > base + 2.0);
+    CHECK (hf > base + 1.0);
+    CHECK (hf < lo);
+    CHECK (sh < base - 2.0);
+    // The front of each note is not Sustain's: the first 15 ms keep their peak (give or take the loudness keeping).
+    auto frontPeakDb = [] (const AudioClip& c)
+    {
+        const int period = static_cast<int> (c.sampleRate), win = static_cast<int> (0.015 * c.sampleRate);
+        double sum = 0.0;
+        int count = 0;
+        for (int start = 4 * period; start + period <= c.numSamples(); start += period)
+        {
+            double pk = 0.0;
+            for (int i = start; i < start + win; ++i) pk = std::max (pk, std::abs (static_cast<double> (c.channels[0][static_cast<size_t> (i)])));
+            sum += 20.0 * std::log10 (pk);
+            ++count;
+        }
+        return sum / count;
+    };
+    INFO ("front peak: in " << frontPeakDb (in) << ", +100 % " << frontPeakDb (longer) << ", -100 % " << frontPeakDb (shorter));
+    CHECK (frontPeakDb (longer) < frontPeakDb (in) + 0.3);    // + never makes hits spikier
+    CHECK (frontPeakDb (shorter) > frontPeakDb (in) - 0.3);   // - never softens them
+    auto lufsAfter = [] (const AudioClip& c)
+    {
+        AudioClip tail = c;
+        const auto skip = static_cast<size_t> (4.0 * c.sampleRate);
+        for (auto& ch : tail.channels) ch.erase (ch.begin(), ch.begin() + static_cast<std::ptrdiff_t> (skip));
+        return measure (tail).integratedLufs;
+    };
+    const double inL = lufsAfter (in);
+    INFO ("LUFS: in " << inL << ", +100 % " << lufsAfter (longer) << ", -100 % " << lufsAfter (shorter));
+    // Within 1 LU on this sparse 808-only line (loudness keeping balances power; the gaps between notes are
+    // gated out of LUFS, which shifts the reading a little); denser music lands closer.
+    CHECK (std::abs (lufsAfter (longer) - inL) < 1.0);
+    CHECK (std::abs (lufsAfter (shorter) - inL) < 1.0);
 }

@@ -20,6 +20,7 @@ struct DynBandParams
     double releaseMs = 150.0;
     double gainDb = 0.0;        // makeup / band level after compression
     double impact = 0.0;        // -100 ... +100 %: hits in this band punch harder (+) or softer (-); 0 = off
+    double sustain = 0.0;       // -100 ... +100 %: tails in this band ring longer (+) or shorter (-); 0 = off
 };
 
 struct DynamicsParams
@@ -44,6 +45,14 @@ inline constexpr double kImpactScale = 1.0;
 inline constexpr double kImpactMaxDb = 9.0;
 inline constexpr double kImpactNeutral = 0.5;   // |Impact| under this (%) counts as off
 inline constexpr double kImpactDeadDb = 1.5;    // rises smaller than this (a steady tone's ripple) are left alone
+
+/** Sustain (the other half of transient shaping): two followers with the same quick attack, one
+    letting go fast, one slow; while a sound dies away the slow one stays above, and the gap is how
+    far the tail has fallen. The band moves by Sustain x kSustainScale x that gap (past the dead
+    band), at most kImpactMaxDb: + lifts tails (longer, fuller 808s), - pulls them down (tighter).
+    The same loudness keeping as Impact applies to both together. */
+inline constexpr double kSustainScale = 0.5;
+inline constexpr double kSustainEndDb = 36.0;   // a tail this far down is over: Sustain fades out from 24 dB down
 
 /** Crossover ranges (Hz) for the three split points. */
 inline constexpr std::array<std::array<double, 2>, kDynBands - 1> kDynCrossoverRange { { { 40.0, 300.0 }, { 300.0, 3000.0 }, { 3000.0, 12000.0 } } };
@@ -231,20 +240,45 @@ public:
                 }
                 d.impactDb += (impactTarget - d.impactDb) * impactSmoothCoeff;
                 if (std::abs (d.impactDb) < 1.0e-9) d.impactDb = 0.0;
+
+                // Sustain: how far the sound has fallen from where it just was.
+                d.tailFastPow += (p - d.tailFastPow) * (p > d.tailFastPow ? d.fastAttackCoeff : d.tailFastReleaseCoeff);
+                d.tailSlowPow += (p - d.tailSlowPow) * (p > d.tailSlowPow ? d.fastAttackCoeff : d.tailSlowReleaseCoeff);
+                if (d.tailFastPow < 1.0e-30) d.tailFastPow = 0.0;
+                if (d.tailSlowPow < 1.0e-30) d.tailSlowPow = 0.0;
+                if (warming) d.tailSlowPow = d.tailFastPow;
+                // Only while a sound dies away: a new hit (the power rising past the fast follower) drops the
+                // move at once (0.5 ms), so the front of the next note is never shaped; and a tail that has
+                // fallen more than ~30 dB is over (no lifting the noise floor between notes).
+                const bool rising = p > d.tailFastPow;
+                double sustainTarget = 0.0;
+                if (d.sustainAmount != 0.0 && ! warming && ! rising && d.tailSlowPow > 1.0e-12)
+                {
+                    const double drop = 10.0 * std::log10 (d.tailSlowPow / (std::max (d.tailFastPow, p) + 1.0e-30));
+                    const double fall = std::max (0.0, drop - kImpactDeadDb);
+                    const double fade = std::clamp ((kSustainEndDb - drop) / 12.0, 0.0, 1.0);
+                    sustainTarget = std::clamp (d.sustainAmount * kSustainScale * fall * fade, -kImpactMaxDb, kImpactMaxDb);
+                }
+                const bool easing = std::abs (sustainTarget) < std::abs (d.sustainDb);
+                d.sustainDb += (sustainTarget - d.sustainDb) * (easing ? impactSmoothCoeff : sustainSmoothCoeff);
+                if (std::abs (d.sustainDb) < 1.0e-9) d.sustainDb = 0.0;
+                if (std::abs (d.sustainDb * compWeight) > std::abs (d.maxSustain)) d.maxSustain = d.sustainDb * compWeight;
+                const double shapeDb = d.impactDb + d.sustainDb;
+                const bool shaping = d.impactAmount != 0.0 || d.sustainAmount != 0.0;
                 // Keep the band's loudness: its power with and without the Impact moves, averaged over ~2 s;
                 // the band is turned down (or up) by the difference, slowly, like a makeup gain.
-                if (! warming && (d.impactAmount != 0.0 || d.impactKeepDb != 0.0))
+                if (! warming && (shaping || d.impactKeepDb != 0.0))
                 {
                     d.powIn += (p - d.powIn) * impactKeepCoeff;
-                    d.powOut += (p * std::pow (10.0, d.impactDb / 10.0) - d.powOut) * impactKeepCoeff;
-                    const double keep = d.impactAmount != 0.0 && d.powIn > 1.0e-12 && d.powOut > 1.0e-12
+                    d.powOut += (p * std::pow (10.0, shapeDb / 10.0) - d.powOut) * impactKeepCoeff;
+                    const double keep = shaping && d.powIn > 1.0e-12 && d.powOut > 1.0e-12
                                       ? std::clamp (-10.0 * std::log10 (d.powOut / d.powIn), -kImpactMaxDb, kImpactMaxDb) : 0.0;
                     d.impactKeepDb += (keep - d.impactKeepDb) * impactKeepCoeff;
-                    if (d.impactAmount == 0.0 && std::abs (d.impactKeepDb) < 1.0e-6) d.impactKeepDb = d.powIn = d.powOut = 0.0;
+                    if (! shaping && std::abs (d.impactKeepDb) < 1.0e-6) d.impactKeepDb = d.powIn = d.powOut = 0.0;
                 }
                 if (std::abs (d.impactDb * compWeight) > std::abs (d.maxImpact)) d.maxImpact = d.impactDb * compWeight;
 
-                bandDb[k] = d.grDb + d.makeupDb + d.impactDb + d.impactKeepDb;
+                bandDb[k] = d.grDb + d.makeupDb + shapeDb + d.impactKeepDb;
                 gain[k] = std::pow (10.0, bandDb[k] * compWeight / 20.0);
             }
             double dryGain = 1.0;
@@ -312,6 +346,15 @@ public:
         return v;
     }
 
+    /** Largest Sustain move in a band since the last call (dB, signed: + tails lifted, - pulled down). */
+    double takeMaxSustainDb (int bandIndex) noexcept
+    {
+        auto& d = det[static_cast<size_t> (bandIndex)];
+        const double v = d.maxSustain;
+        d.maxSustain = 0.0;
+        return v;
+    }
+
     /** Deepest gain reduction in a band since the last call (dB, <= 0). */
     double takeMaxGrDb (int bandIndex) noexcept
     {
@@ -351,6 +394,8 @@ private:
         int impactWarm = 0, impactWarmSamples = 0;               // samples until the followers have settled
         double fastAttackCoeff = 0.0, slowAttackCoeff = 0.0, impactReleaseCoeff = 0.0, impactRmsCoeff = 0.0;
         std::array<double, 2> impactPow {};
+        double tailFastPow = 0.0, tailSlowPow = 0.0, sustainDb = 0.0, maxSustain = 0.0, sustainAmount = 0.0;
+        double tailFastReleaseCoeff = 0.0, tailSlowReleaseCoeff = 0.0;
         double rmsCoeff = 0.0, attackCoeff = 0.0, releaseCoeff = 0.0, fastReleaseCoeff = 0.0;
         double setAttackMs = -1.0, setReleaseMs = -1.0;
     };
@@ -394,7 +439,7 @@ private:
     bool auxRunning = false;                                          // the detectors hear Channel::a
     std::array<ParkGlide::Segment, kDynBands - 1> segment {};         // the switching glide, a sample at a time
     bool gliding = false;
-    double glideCoeff = 0.0, makeupCoeff = 0.0, averageCoeff = 0.0, impactSmoothCoeff = 0.0, impactKeepCoeff = 0.0;
+    double glideCoeff = 0.0, makeupCoeff = 0.0, averageCoeff = 0.0, impactSmoothCoeff = 0.0, impactKeepCoeff = 0.0, sustainSmoothCoeff = 0.0;
     std::array<double, kDynBands - 1> logFreq {}, targetLogFreq {}, auxLogFreq {};
     std::array<Channel, 2> chan {};
     std::array<Detector, kDynBands> det {};

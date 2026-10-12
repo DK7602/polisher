@@ -833,6 +833,10 @@ void PolisherAudioProcessor::publishMeters()
         auto& imSlot = meters.dynImpact[static_cast<size_t> (b)];
         if (std::abs (im) > std::abs (imSlot.load()))
             imSlot.store (im);
+        const float su = static_cast<float> (dynamics.takeMaxSustainDb (b));
+        auto& suSlot = meters.dynSustain[static_cast<size_t> (b)];
+        if (std::abs (su) > std::abs (suSlot.load()))
+            suSlot.store (su);
     }
     const float lift = static_cast<float> (unlimiter.takeMaxBoostDb());
     if (lift > meters.ulBoost.load())

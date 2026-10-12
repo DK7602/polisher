@@ -88,6 +88,7 @@ public:
         std::atomic<float> matchDb { 0.0f };          // MATCH gain for the side playing now, A or B (dB, <= 0)
         std::atomic<float> correlation { 1.0f };      // output L/R correlation (+1 mono ... -1 out of phase)
         std::array<std::atomic<float>, polisher::kDynBands> dynImpact {};   // largest Impact move per band since read (dB, signed)
+        std::array<std::atomic<float>, polisher::kDynBands> dynSustain {};  // largest Sustain move per band since read (dB, signed)
         std::array<std::atomic<float>, polisher::kDynBands> dynGr {};   // deepest Dynamics gain reduction per band since read (dB, <= 0)
         std::atomic<float> satResidual { 0.0f }, satSignal { 0.0f };   // Saturation energies since read (harmonics, signal)
         std::array<std::atomic<float>, polisher::kStems> stemEnergy {};   // K-weighted energy the Stem EQ model credited to each stem since read

@@ -407,7 +407,8 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
             set (ModuleParams::band ("dynAtk", b), static_cast<float> (d.attackMs));
             set (ModuleParams::band ("dynRel", b), static_cast<float> (d.releaseMs));
             set (ModuleParams::band ("dynGain", b), static_cast<float> (d.gainDb));
-            set (ModuleParams::band ("dynImpact", b), static_cast<float> (d.impact));   // 0: Auto-Master plans without Impact
+            set (ModuleParams::band ("dynImpact", b), static_cast<float> (d.impact));     // 0: Auto-Master plans without Impact
+            set (ModuleParams::band ("dynSustain", b), static_cast<float> (d.sustain));   // or Sustain
         }
         set ("imgOn", 1.0f);
         set ("imgLow", static_cast<float> (c.imager.lowWidth));

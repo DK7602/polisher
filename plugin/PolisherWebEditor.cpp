@@ -484,6 +484,14 @@ void PolisherWebEditor::timerCallback()
         dynImpact.add (roundTo (impactHold[b], 0.1f));
     }
     frame->setProperty ("dynImpact",  dynImpact);
+    juce::Array<juce::var> dynSustain;
+    for (size_t b = 0; b < sustainHold.size(); ++b)
+    {
+        const float d = m.dynSustain[b].exchange (0.0f);
+        sustainHold[b] = std::abs (d) > std::abs (sustainHold[b]) ? d : sustainHold[b] * 0.8f + d * 0.2f;
+        dynSustain.add (roundTo (sustainHold[b], 0.1f));
+    }
+    frame->setProperty ("dynSustain", dynSustain);
     // Average energies over ~0.3 s (never dB values, or the quiet gaps between hits drag it down).
     satResHold = satResHold * 0.9 + m.satResidual.exchange (0.0f);
     satSigHold = satSigHold * 0.9 + m.satSignal.exchange (0.0f);

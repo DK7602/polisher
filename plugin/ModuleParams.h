@@ -27,7 +27,7 @@ namespace ModuleParams
         for (auto* id : stemIds) ids.add (id);
         for (const char* id : { "tsAmount", "tsRange", "rtAmount", "rtSens", "rtRelease", "ulAmount", "ulLength", "inTrim" }) ids.add (id);
         for (int x = 0; x < polisher::kDynBands - 1; ++x) ids.add (band ("dynX", x));
-        for (const char* p : { "dynThr", "dynRatio", "dynAtk", "dynRel", "dynGain", "dynImpact" })
+        for (const char* p : { "dynThr", "dynRatio", "dynAtk", "dynRel", "dynGain", "dynImpact", "dynSustain" })
             for (int b = 0; b < polisher::kDynBands; ++b) ids.add (band (p, b));
         ids.add ("satDrive");
         ids.add ("satMix");
@@ -130,6 +130,11 @@ namespace ModuleParams
                                                                NormalisableRange<float> (-100.0f, 100.0f, 1.0f), 0.0f,
                                                                AudioParameterFloatAttributes().withLabel ("%")
                                                                    .withStringFromValueFunction ([] (float v, int) { return (v > 0.5f ? "+" : "") + String (roundToInt (v)) + " %"; })));
+            // Sustain (version hint 9): 0 = off, as a state saved before it existed loads.
+            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { band ("dynSustain", b), 9 }, "Dynamics Sustain" + n,
+                                                               NormalisableRange<float> (-100.0f, 100.0f, 1.0f), 0.0f,
+                                                               AudioParameterFloatAttributes().withLabel ("%")
+                                                                   .withStringFromValueFunction ([] (float v, int) { return (v > 0.5f ? "+" : "") + String (roundToInt (v)) + " %"; })));
         }
 
         // Saturation (after the Stereo Imager, before Drive). Drive 0 = untouched.
@@ -173,6 +178,7 @@ namespace ModuleParams
                 rel[i] = get (band ("dynRel", b));
                 gain[i] = get (band ("dynGain", b));
                 impact[i] = get (band ("dynImpact", b));
+                sustain[i] = get (band ("dynSustain", b));
             }
             satOn = get ("satOn");
             satMode = get ("satMode");
@@ -233,7 +239,7 @@ namespace ModuleParams
             p.adaptiveRelease = dynAdaptive->load() > 0.5f;
             for (size_t x = 0; x < dynX.size(); ++x) p.crossoverHz[x] = dynX[x]->load();
             for (size_t b = 0; b < thr.size(); ++b)
-                p.bands[b] = { thr[b]->load(), ratio[b]->load(), atk[b]->load(), rel[b]->load(), gain[b]->load(), impact[b]->load() };
+                p.bands[b] = { thr[b]->load(), ratio[b]->load(), atk[b]->load(), rel[b]->load(), gain[b]->load(), impact[b]->load(), sustain[b]->load() };
             return p;
         }
 
@@ -269,7 +275,7 @@ namespace ModuleParams
         std::atomic<float>* dynOn = nullptr;
         std::atomic<float>* dynAdaptive = nullptr;
         std::array<std::atomic<float>*, polisher::kDynBands - 1> dynX {};
-        std::array<std::atomic<float>*, polisher::kDynBands> thr {}, ratio {}, atk {}, rel {}, gain {}, impact {};
+        std::array<std::atomic<float>*, polisher::kDynBands> thr {}, ratio {}, atk {}, rel {}, gain {}, impact {}, sustain {};
         std::atomic<float>* satOn = nullptr;
         std::atomic<float>* satMode = nullptr;
         std::atomic<float>* satFocus = nullptr;

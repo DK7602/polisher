@@ -12,7 +12,8 @@ Gap list vs Ozone 12 Advanced, Claude's order (user: "do 1-8 and the items alrea
 think is best"). Already on this branch before the list: Listen/Solo (5 modules), snapshots + undo, Match ref,
 genre target line. Remaining, in order:
 1. Punch per band = Dynamics IMPACT - DONE v0.17.0 (below).
-2. 808 focus (Ozone "Low End Focus"): punchy vs smooth low end (not level/mono: that's Bass Control).
+2. 808 focus -> built as Dynamics SUSTAIN (user: "no need to be redundant"; Ozone-style Low End Focus would
+   duplicate Bass Control Punch / Sub Tame + LOW Impact) - DONE v0.18.0 (below).
 3. Pro EQ: dynamic EQ bands (harsh 3-5 kHz, boomy lows), mid/side per band, linear-phase mode.
 4. Maximizer: transient-aware / multiband modes, dither for 16-bit exports, codec (streaming) preview.
 5. Multiband saturation (Ozone "Exciter").
@@ -22,6 +23,16 @@ genre target line. Remaining, in order:
 Optional: Listen (delta) on the 6 modules without it - a version for all 11 exists as a stash/patch from
 the older branch (claude session 2026-10-12), only if the user asks.
 Also open: validation steps 2-3, Auto-Master turning a too-hot mix down, Auto-Master rule for Impact.
+
+## Dynamics Sustain (v0.18.0, 2026-10-12)
+Per-band "Sustain" (dynSustain1..4, -100..+100 %, hint 9) next to Impact. Followers on Impact's smoothed power,
+same attack (Impact's fast), release fast 40 / 25 / 15 / 12 ms vs slow 400 / 250 / 180 / 150 ms; fall = slow/fast dB
+minus 1.5 dead band; move = Sustain x 0.5 x fall, faded out between 24 and 36 dB down (no lifting the noise
+floor), +/-9 dB, 3 ms smoothing out, 0.5 ms back; zero while the power rises past the fast follower (review
+find: the tail gain used to spill onto the next hit, +3.4 dB). Shares the warm-up and loudness keeping.
+Measured (808-like 50 Hz notes, 300 ms decay): tail vs hit +4.0 dB at +100 %, -2.9 dB at -100 %, first 15 ms
+of each note within 0.3 dB; LUFS within 1 on that sparse line (gating), steady tones within 0.1 dB.
+Auto-Master sets it to 0. UI: 9 cells in Dynamics (knobs zoom .86, cells 84 px). NOT YET HEARD by the user.
 
 ## Dynamics Impact (v0.17.0, 2026-10-12)
 Per-band "Impact" knob (dynImpact1..4, -100..+100 %, 0 = off, version hint 8) inside MultibandDynamics,

@@ -29,6 +29,7 @@
     sliders["dynThr" + b] = { start: -48, end: 0, skew: 1, interval: 0.1, value: -20, label: "dB" };
     sliders["dynRatio" + b] = { start: 1, end: 10, skew: 0.5, interval: 0.01, value: 1, label: "" };
     sliders["dynImpact" + b] = { start: -100, end: 100, skew: 1, interval: 1, value: 0, label: "%" };
+    sliders["dynSustain" + b] = { start: -100, end: 100, skew: 1, interval: 1, value: 0, label: "%" };
     sliders["dynAtk" + b] = { start: 0.5, end: 100, skew: 0.4, interval: 0.1, value: atk, label: "ms" };
     sliders["dynRel" + b] = { start: 20, end: 1000, skew: 0.4, interval: 1, value: [200, 150, 120, 100][i], label: "ms" };
     sliders["dynGain" + b] = { start: -12, end: 12, skew: 1, interval: 0.1, value: 0, label: "dB" };
@@ -140,7 +141,7 @@
   // Dynamics by the window's band names, like SettingsScope::displayName.
   const DYN = ["LOW", "LO-MID", "HI-MID", "HIGH"];
   DYN.forEach((band, i) => {
-    for (const [id, what] of [["dynThr", "Threshold"], ["dynRatio", "Ratio"], ["dynAtk", "Attack"], ["dynRel", "Release"], ["dynGain", "Gain"], ["dynImpact", "Impact"]]) NAMES[id + (i + 1)] = `Dynamics ${band} ${what}`;
+    for (const [id, what] of [["dynThr", "Threshold"], ["dynRatio", "Ratio"], ["dynAtk", "Attack"], ["dynRel", "Release"], ["dynGain", "Gain"], ["dynImpact", "Impact"], ["dynSustain", "Sustain"]]) NAMES[id + (i + 1)] = `Dynamics ${band} ${what}`;
     if (i < 3) NAMES["dynX" + (i + 1)] = `Dynamics Split ${band} / ${DYN[i + 1]}`;
   });
   const kindOf = (n) => (n in sliders ? "slider" : n in toggles ? "toggle" : n in combos ? "combo" : null);
@@ -432,6 +433,7 @@
         const over = Math.max(0, base + 8 + 6 * beat - sliders["dynThr" + b].value - 6 * b);
         return toggles.dynOn && !bypass && r > 1.005 ? +(-over * (1 - 1 / r) * 0.5).toFixed(1) : 0;
       }),
+      dynSustain: [1, 2, 3, 4].map((b) => (toggles.dynOn && !bypass ? +(sliders["dynSustain" + b].value / 100 * 2 * (1 - beat)).toFixed(1) : 0)),
       dynImpact: [1, 2, 3, 4].map((b) => (toggles.dynOn && !bypass ? +(sliders["dynImpact" + b].value / 100 * 2.5 * beat).toFixed(1) : 0)),
       rtCut: toggles.rtOn && !bypass && sliders.rtAmount.value > 0.5 ? +(-(1.5 + 3 * beat) * sliders.rtAmount.value / 50).toFixed(1) : 0, rtHz: 2870,
       tsDb: toggles.tsOn && !bypass && sliders.tsAmount.value > 0.5 ? +(-(0.8 + 1.4 * beat) * sliders.tsAmount.value / 40).toFixed(1) : 0, tsHz: 310,

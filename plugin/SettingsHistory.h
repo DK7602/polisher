@@ -35,7 +35,7 @@ namespace SettingsScope
         const int n = id.getTrailingIntValue();
         if (id.startsWith ("dynX") && n >= 1 && n <= 3)   // the split between two bands
             return juce::String ("Dynamics Split ") + bands[n - 1] + " / " + bands[n];
-        static const char* const perBand[] = { "dynThr", "dynRatio", "dynAtk", "dynRel", "dynGain", "dynImpact" };
+        static const char* const perBand[] = { "dynThr", "dynRatio", "dynAtk", "dynRel", "dynGain", "dynImpact", "dynSustain" };
         for (const char* prefix : perBand)
             if (id.startsWith (prefix) && n >= 1 && n <= 4)
             {
