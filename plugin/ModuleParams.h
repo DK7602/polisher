@@ -34,7 +34,12 @@ namespace ModuleParams
         return ids;
     }
     inline juce::StringArray toggleIds() { return { "ulOn", "stemOn", "stemKeep", "tsOn", "rtOn", "dynOn", "dynAdaptive", "satOn" }; }
-    inline juce::StringArray comboIds()  { return { "satMode", "satFocus", "tsSpeed", "rtFocus", "ulFocus" }; }
+    inline juce::StringArray comboIds()
+    {
+        juce::StringArray ids { "satMode", "satFocus", "tsSpeed", "rtFocus", "ulFocus" };
+        for (int b = 1; b <= polisher::kEqBands; ++b) ids.add ("eqMode" + juce::String (b));   // EQ band channels (defined with the EQ)
+        return ids;
+    }
 
     inline void addTo (juce::AudioProcessorValueTreeState::ParameterLayout& layout)
     {

@@ -14,7 +14,9 @@ genre target line. Remaining, in order:
 1. Punch per band = Dynamics IMPACT - DONE v0.17.0 (below).
 2. 808 focus -> built as Dynamics SUSTAIN (user: "no need to be redundant"; Ozone-style Low End Focus would
    duplicate Bass Control Punch / Sub Tame + LOW Impact) - DONE v0.18.0 (below).
-3. Pro EQ: dynamic EQ bands (harsh 3-5 kHz, boomy lows), mid/side per band, linear-phase mode.
+3. Pro EQ -> built as Stereo / Mid / Side per Tonal EQ band - DONE v0.19.0. Skipped as redundant (user rule
+   "no need to be redundant"): dynamic EQ bands (Resonance Tamer Harshness/Boxiness + Dynamics bands do it);
+   linear phase (adds latency + pre-ringing, little gain for broad master moves) - offer only if asked.
 4. Maximizer: transient-aware / multiband modes, dither for 16-bit exports, codec (streaming) preview.
 5. Multiband saturation (Ozone "Exciter").
 6. Mid/side on more modules (Dynamics, Saturation, ...).
@@ -23,6 +25,16 @@ genre target line. Remaining, in order:
 Optional: Listen (delta) on the 6 modules without it - a version for all 11 exists as a stash/patch from
 the older branch (claude session 2026-10-12), only if the user asks.
 Also open: validation steps 2-3, Auto-Master turning a too-hot mix down, Auto-Master rule for Impact.
+
+## Tonal EQ mid / side (v0.19.0, 2026-10-12)
+eqMode1..7 (choice Stereo / Mid / Side, version hint 10, in comboIds for the relays). TonalEQParams::channels;
+a mid band filters (L+R)/2, side (L-R)/2 (filter state [0]), rebuilt L = M+S, R = M-S: the other part is exact.
+Channel change glides the band to 0 dB, switches with reset filters, glides back. Mono: mid = the channel,
+side = nothing. responseDb (spectrum curve) unchanged (shows the band's move). Auto-Master sets all Stereo.
+UI: STEREO/MID/SIDE pill under each EQ knob (cycles), Learn names the part + a TRY MID / SIDE tip.
+Tone Steady's stage target (toneTargetAtStage) counts a mid/side band by an estimated part of the energy (side
+~5 % below 200 Hz rising to ~25 % above 5 kHz) - review find: it took a SIDE Air boost as whole-mix and fought it.
+Tests: [eq][ms] (4) + target test in test_songlistener. NOT YET HEARD by the user.
 
 ## Dynamics Sustain (v0.18.0, 2026-10-12)
 Per-band "Sustain" (dynSustain1..4, -100..+100 %, hint 9) next to Impact. Followers on Impact's smoothed power,

@@ -55,6 +55,7 @@
     ulFocus: { choices: ["Full", "Kick", "Snap"], value: 0 },
     tsSpeed: { choices: ["Slow", "Medium", "Fast"], value: 0.5 },
     rtFocus: { choices: ["Full", "Boxiness", "Harshness"], value: 0 },
+    ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map((b) => ["eqMode" + b, { choices: ["Stereo", "Mid", "Side"], value: 0 }])),
     amGenre: { choices: ["Trap / Hip-Hop", "R&B", "Pop", "EDM", "Rock", "Acoustic"], value: 0 },
     amIntensity: { choices: ["Gentle", "Balanced", "Punchy"], value: 0.5 },
     amTarget: { choices: ["Stream -14", "Loud -9", "Club -7"], value: 0.5 },
@@ -137,7 +138,7 @@
                   stemOn: "Stem EQ On", stemKeep: "Stem EQ Keep Loudness", stemVoc: "Stem EQ Vocals", stemDrums: "Stem EQ Drums", stemBass: "Stem EQ Bass", stemOther: "Stem EQ Other",
                   bassOn: "Bass On", bassMono: "Bass Mono Below", bassTame: "Bass Sub Tame", bassPunch: "Bass Punch", eqOn: "EQ On", imgOn: "Imager On",
                   imgLow: "Imager Low Width", imgMid: "Imager Mid Width", imgHigh: "Imager High Width", ulOn: "Unlimiter On", dynOn: "Dynamics On", tsOn: "Tone Steady On", rtOn: "Resonance Tamer On" };
-  ["Low End", "Bass", "Low Mid", "Mid", "Upper Mid", "Presence", "Air"].forEach((b, i) => { NAMES["eqGain" + (i + 1)] = `EQ ${b} Gain`; NAMES["eqFreq" + (i + 1)] = `EQ ${b} Freq`; });
+  ["Low End", "Bass", "Low Mid", "Mid", "Upper Mid", "Presence", "Air"].forEach((b, i) => { NAMES["eqGain" + (i + 1)] = `EQ ${b} Gain`; NAMES["eqFreq" + (i + 1)] = `EQ ${b} Freq`; NAMES["eqMode" + (i + 1)] = `EQ ${b} Channels`; });
   // Dynamics by the window's band names, like SettingsScope::displayName.
   const DYN = ["LOW", "LO-MID", "HI-MID", "HIGH"];
   DYN.forEach((band, i) => {

@@ -25,6 +25,7 @@ namespace ParamIDs
     inline constexpr const char* bassPunch = "bassPunch";
     inline juce::String eqGain (int band) { return "eqGain" + juce::String (band + 1); }
     inline juce::String eqFreq (int band) { return "eqFreq" + juce::String (band + 1); }
+    inline juce::String eqMode (int band) { return "eqMode" + juce::String (band + 1); }
 }
 
 namespace
@@ -69,6 +70,7 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     {
         eqGainParams[static_cast<size_t> (b)] = parameters.getRawParameterValue (ParamIDs::eqGain (b));
         eqFreqParams[static_cast<size_t> (b)] = parameters.getRawParameterValue (ParamIDs::eqFreq (b));
+        eqModeParams[static_cast<size_t> (b)] = parameters.getRawParameterValue (ParamIDs::eqMode (b));
     }
 
     // Undo / redo: an Auto-Master run is one step, and it carries the report and Tone Steady's target
@@ -168,6 +170,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
             ParameterID { ParamIDs::eqFreq (b), 1 }, "EQ " + name + " Freq", freqRange, static_cast<float> (spec.defaultHz),
             AudioParameterFloatAttributes().withLabel ("Hz")
                 .withStringFromValueFunction ([] (float v, int) { return hzText (v); })));
+        // Which part of the stereo image the band works on (version hint 10). Stereo, the default, is
+        // also what a state saved before it existed loads as: exactly how it sounded then.
+        layout.add (std::make_unique<AudioParameterChoice> (
+            ParameterID { ParamIDs::eqMode (b), 10 }, "EQ " + name + " Channels", StringArray { "Stereo", "Mid", "Side" }, 0));
     }
 
     // Bass Control (after the EQ). On by default with every tool at its neutral setting.
@@ -332,9 +338,10 @@ void PolisherAudioProcessor::updateLimiterParams()
     {
         e.gainDb[b] = eqGainParams[b]->load();
         e.freqHz[b] = eqFreqParams[b]->load();
+        e.channels[b] = static_cast<polisher::EqChannels> (juce::jlimit (0, 2, juce::roundToInt (eqModeParams[b]->load())));
     }
     const auto& ce = eq.getParams();
-    if (e.enabled != ce.enabled || e.gainDb != ce.gainDb || e.freqHz != ce.freqHz)
+    if (e.enabled != ce.enabled || e.gainDb != ce.gainDb || e.freqHz != ce.freqHz || e.channels != ce.channels)
         eq.setParams (e);
 
     polisher::BassParams bp;
@@ -361,7 +368,7 @@ void PolisherAudioProcessor::updateLimiterParams()
     const bool newTone = toneTarget.fetch (songTone, songToneVersion);
     const double trimDb = static_cast<double> (trimParam->load());
     if (newTone || getSampleRate() != stageToneRate || trimDb != stageToneTrimDb || e.enabled != stageToneEq.enabled
-        || e.gainDb != stageToneEq.gainDb || e.freqHz != stageToneEq.freqHz)
+        || e.gainDb != stageToneEq.gainDb || e.freqHz != stageToneEq.freqHz || e.channels != stageToneEq.channels)
     {
         stageToneEq = e;
         stageToneRate = getSampleRate();

@@ -12,7 +12,7 @@ meters only) with a button to Microsoft's free download page; install it and reo
 
 User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (also inside the plug-in: Quick Help > Open the full manual).
 
-## Status — v0.18.0
+## Status — v0.19.0
 
 | Piece | State |
 | --- | --- |
@@ -32,6 +32,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | MATCH never boosts (the louder side is turned down) and gives a clipping original headroom, so A doesn't distort the interface | Done (v0.8.2) |
 | Dynamics: 4-band compressor (LR4 splits, zero latency, per-band threshold / ratio / attack / release / gain, program-dependent release, per-band reduction meters, Learn) | Done (v0.9) |
 | Dynamics Impact: per-band transient shaping (−100…+100 %), loudness kept per band, steady sound untouched | Done (v0.17) |
+| Tonal EQ Stereo / Mid / Side per band (glides on change, mono-safe) | Done (v0.19) |
 | Dynamics Sustain: per-band tail length (−100…+100 %, the 808-length control), shares Impact's loudness keeping | Done (v0.18) |
 | Saturation: tape / tube / clip, 4x oversampled (aliasing 74–119 dB below full scale: 119 dB on a single tone, about 74 dB with hot highs at full Drive), Drive, Mix, harmonics meter, exact pass-through at Drive 0, Learn | Done (v0.9) |
 | Auto-Master sets Dynamics (per-band glue, thresholds found by running the compressor on your mix), Stereo Imager (opens narrow highs, never the lows, mono-safe) and Saturation (mode by genre, Drive found by measuring the harmonics against a target) | Done (v0.10) |

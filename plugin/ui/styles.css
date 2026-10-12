@@ -430,6 +430,7 @@ body.theme-mono .sw-ref { border-top-color: #E6E6E6; }
 .mb-stop:hover { background: rgba(5,15,34,1); }
 /* Dynamics band picker: each band has its S (solo) button */
 .cell.dyn-pick { width: 140px; }
+.ms-btn { height: 18px; min-width: 60px; padding: 0 8px; font-size: 9.5px; font-weight: 700; letter-spacing: .08em; margin-top: 2px; }
 .knob-row.dyn .cell.dyn-pick { width: 128px; }
 .knob-row.dyn .cell:not(.dyn-pick) { width: 84px; }   /* nine cells: band picker + eight knobs */
 .knob-row.dyn .knob { zoom: .86; }

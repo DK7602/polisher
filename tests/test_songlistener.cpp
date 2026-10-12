@@ -396,6 +396,26 @@ TEST_CASE ("A stored tone follows the Tonal EQ in front of Tone Steady", "[songl
     CHECK (toneTargetAtStage (tone, flat, sr).bandDb == tone.bandDb);
     eq.enabled = false;
     CHECK (toneTargetAtStage (tone, eq, sr).bandDb == tone.bandDb);
+
+    // A mid or side band moves the target by its part of the energy only (Air +6 dB: stereo > mid > side > 0).
+    TonalEQParams air;
+    air.gainDb[6] = 6.0;
+    auto at12k = [&] (EqChannels ch)
+    {
+        air.channels[6] = ch;
+        const auto t = toneTargetAtStage (tone, air, sr);
+        double moved = 0.0;
+        for (int band = 0; band < kToneBands; ++band)
+            if (std::abs (StemEQ::bandCentreHz (band, sr) - 12000.0) < 1500.0)
+                moved = std::max (moved, static_cast<double> (t.bandDb[static_cast<size_t> (band)] - tone.bandDb[static_cast<size_t> (band)]));
+        return moved;
+    };
+    const double st = at12k (EqChannels::stereo), mid = at12k (EqChannels::mid), side = at12k (EqChannels::side);
+    UNSCOPED_INFO ("target move near 12 kHz: stereo " << st << ", mid " << mid << ", side " << side);
+    CHECK (st > mid);
+    CHECK (mid > side);
+    CHECK (side > 0.3);
+    CHECK (side < 3.0);
 }
 
 TEST_CASE ("Auto-Master holds the song to its own tone when it listened to the song", "[songlistener][automaster]")

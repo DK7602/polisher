@@ -49,6 +49,7 @@ const P = {
   amTarget: Juce.getComboBoxState("amTarget"),
   eqGain: [1, 2, 3, 4, 5, 6, 7].map((b) => Juce.getSliderState("eqGain" + b)),
   eqFreq: [1, 2, 3, 4, 5, 6, 7].map((b) => Juce.getSliderState("eqFreq" + b)),
+  eqMode: [1, 2, 3, 4, 5, 6, 7].map((b) => Juce.getComboBoxState("eqMode" + b)),
   dynOn: Juce.getToggleState("dynOn"),
   dynAdaptive: Juce.getToggleState("dynAdaptive"),
   dynX: [1, 2, 3].map((x) => Juce.getSliderState("dynX" + x)),
@@ -552,9 +553,26 @@ function eqKnobCell(b) {
   P.eqFreq[b].valueChangedEvent.addListener(() => { refresh(); onParamsChanged(); });
   P.eqFreq[b].propertiesChangedEvent.addListener(refresh);
   refresh();
-  cell.refresh = () => { knobRefresh(); refresh(); };   // after the spectrum point moves this band
+  // Which part of the stereo image the band works on: click cycles STEREO -> MID -> SIDE.
+  const ms = document.createElement("button");
+  ms.type = "button";
+  ms.className = "pill mono ms-btn";
+  const msRefresh = () => {
+    const i = eqModeAt(b);
+    ms.textContent = EQ_MODES[i];
+    ms.classList.toggle("pill-red", i > 0);
+    ms.classList.toggle("pill-blue", i === 0);
+    ms.title = ["Stereo: the band works on the whole mix", "Mid: only the centre (vocal, kick, 808, snare)", "Side: only the stereo edges (width, reverbs, wide synths and hats)"][i] + ". Click to change.";
+  };
+  ms.addEventListener("click", () => { P.eqMode[b].setChoiceIndex((eqModeAt(b) + 1) % 3); msRefresh(); onParamsChanged(); userEdited(); renderLearn(); });
+  P.eqMode[b].valueChangedEvent.addListener(msRefresh);
+  msRefresh();
+  cell.appendChild(ms);
+  cell.refresh = () => { knobRefresh(); refresh(); msRefresh(); };   // after the spectrum point moves this band
   return cell;
 }
+const EQ_MODES = ["STEREO", "MID", "SIDE"];
+const eqModeAt = (b) => clamp(Math.round(P.eqMode[b].value * 2), 0, 2);
 const eqCells = EQ_BANDS.map((_, b) => eqKnobCell(b));
 
 // Bass Control cells
@@ -1200,15 +1218,19 @@ function renderEqLearn(body) {
   if (bypassed) body.appendChild(para("l-p", "You're on A: the original mix, untouched. Switch to B to hear the chain."));
   else if (!on) body.appendChild(para("l-p", "The Tonal EQ is off, so your mix's tone goes through unchanged. Turn it on to hear your band settings."));
   else if (!moved.length) body.appendChild(para("l-p", "All seven bands are at 0 dB, so the EQ isn't touching the sound (and uses no CPU). Turn a knob, or drag a numbered point on the spectrum: sideways moves the frequency, up/down sets the gain."));
-  else body.appendChild(para("l-p", "Shaping the tone: " + moved.map((x) => `${sgn(x.g)} ${x.band.name} at ${fmtHz(x.f)}`).join(", ") +
+  else body.appendChild(para("l-p", "Shaping the tone: " + moved.map((x) => `${sgn(x.g)} ${x.band.name} at ${fmtHz(x.f)}${eqModeAt(x.b) ? ` (${["", "centre only", "sides only"][eqModeAt(x.b)]})` : ""}`).join(", ") +
     ". The blue curve on the spectrum is the change; the red line is the master after the whole chain."));
 
   body.appendChild(sep());
   body.appendChild(head("WHAT EACH CONTROL IS DOING"));
-  if (moved.length && on) moved.forEach((x) => body.appendChild(item(`${x.band.name} · ${fmtHz(x.f)}`, sgn(x.g), x.g > 0 ? x.band.boost : x.band.cut)));
+  const MS_WHY = ["", " MID: only the centre of the mix moves (vocal, kick, 808, snare); the stereo edges stay as they were.",
+                  " SIDE: only the stereo edges move (width, reverbs, wide synths and hats); the centre stays as it was."];
+  if (moved.length && on) moved.forEach((x) => body.appendChild(item(`${x.band.name} · ${fmtHz(x.f)}${eqModeAt(x.b) ? ` · ${EQ_MODES[eqModeAt(x.b)]}` : ""}`, sgn(x.g), (x.g > 0 ? x.band.boost : x.band.cut) + MS_WHY[eqModeAt(x.b)])));
   else modules.find((m) => m.id === "eq").controls.forEach(([n, w]) => body.appendChild(item(n, null, w)));
   body.appendChild(genreLineItem());
 
+  if (!bypassed && on && !moved.some((x) => eqModeAt(x.b)))
+    body.appendChild(tip("TRY MID / SIDE", "The button under each knob picks what the band works on. Air on SIDE (+1 to +2 dB) opens the width without making the vocal brighter; Low Mid on MID (−1 dB) clears mud in the centre while the wide parts keep their body.", true));
   if (bypassed || !on) {
     body.appendChild(tip("TIP", "Cut before you boost: a 1–2 dB Low Mid cut often sounds clearer than boosting the highs. It can end up louder too, but only because the Maximizer turns the headroom the cut frees into level.", true));
     return;

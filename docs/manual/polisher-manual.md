@@ -1,6 +1,6 @@
 # Polisher User Manual
 
-Version 0.18.0 · October 2026
+Version 0.19.0 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
@@ -8,7 +8,7 @@ Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d7
 
 Polisher is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds eleven modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.18.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.19.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 
@@ -187,6 +187,16 @@ Shapes the overall tone in seven bands. Turn a band's knob, or drag its numbered
 Every band keeps its true shape right up to 20 kHz, at 44.1 and 48 kHz too, so the curve on the spectrum is what you hear. Air set high is still a subtle move: at 44.1 or 48 kHz the shelf above about 16 kHz only lifts the last few kHz before the top of the file, where most people hear little. For audible sheen, keep Air between 10 and 14 kHz.
 
 **Subsonic filter.** While Low End is boosted, a gentle high-pass at 15 Hz fades in by itself, so rumble and DC below about 12 Hz, which no speaker plays but the Maximizer still has to make room for, are turned down instead of up. Between 12 and 20 Hz part of the boost remains (Low End +6 dB: about +3 dB at 15 Hz and +5 dB at 18 Hz). It costs about 0.5 dB at 20 Hz and nothing you can measure from 30 Hz up. With Low End at 0 dB or cut, it's out of the path.
+
+**Stereo / Mid / Side** (the button under each knob, Stereo by default): what the band works on.
+
+| Setting | Works on | Good for |
+| --- | --- | --- |
+| STEREO | The whole mix | Normal tone moves |
+| MID | Only the centre: vocal, kick, 808, snare | Cut mud (Low Mid −1 dB) or add vocal presence without touching the wide parts |
+| SIDE | Only the stereo edges: width, reverbs, wide synths and hats | Air +1 to +2 dB for more width without a brighter vocal; cut harsh wide hats |
+
+Click the button to cycle STEREO → MID → SIDE. The change glides, so it never clicks. Keep Low End and Bass on STEREO or MID: boosting the lows on SIDE makes the bass wide, which costs headroom and collapses on phones (Bass Control's Mono Below undoes it anyway). On a mono track a SIDE band does nothing. Auto-Master sets every band back to STEREO.
 
 On the spectrum, the white line is your mix, the blue curve is the EQ change and the red line is the master after the whole chain. The dotted line (for example **Trap target**) is the tone typical masters in your genre have, the balance Auto-Master's EQ aims for: where the red line sits above it, your master has more of that range than typical (see [The spectrum screen](#the-spectrum-screen)).
 

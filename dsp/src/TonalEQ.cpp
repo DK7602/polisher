@@ -204,8 +204,10 @@ void TonalEQ::setParams (const TonalEQParams& p) noexcept
         const auto i = static_cast<size_t> (b);
         band.targetGainDb = p.enabled ? std::clamp (p.gainDb[i], -kEqMaxGainDb, kEqMaxGainDb) : 0.0;
         band.targetLogFreq = std::log (clampFreq (b, p.freqHz[i], sampleRate));
+        band.targetChannels = p.channels[i];
         if (firstParams)
         {
+            band.channels = band.targetChannels;
             band.gainDb = band.targetGainDb;
             band.logFreq = band.targetLogFreq;
             band.running = band.gainDb != 0.0;
@@ -266,7 +268,15 @@ void TonalEQ::advanceSmoothing() noexcept
     for (int b = 0; b < kEqBands; ++b)
     {
         auto& band = bands[static_cast<size_t> (b)];
-        const double dg = band.targetGainDb - band.gainDb;
+        // A change of channels (stereo / mid / side): glide to 0 dB, switch with clean filters, glide back.
+        if (band.channels != band.targetChannels && band.gainDb == 0.0)
+        {
+            band.channels = band.targetChannels;
+            for (auto& f : band.filters)
+                f.reset();
+        }
+        const double goal = band.channels == band.targetChannels ? band.targetGainDb : 0.0;
+        const double dg = goal - band.gainDb;
         const double df = band.targetLogFreq - band.logFreq;
         if (dg == 0.0 && df == 0.0)
         {
@@ -290,7 +300,7 @@ void TonalEQ::advanceSmoothing() noexcept
             continue;
         }
 
-        band.gainDb  = std::abs (dg) < 1.0e-3 ? band.targetGainDb  : band.gainDb + dg * k;
+        band.gainDb  = std::abs (dg) < 1.0e-3 ? goal : band.gainDb + dg * k;
         band.logFreq = std::abs (df) < 1.0e-5 ? band.targetLogFreq : band.logFreq + df * k;
         band.running = true;
         applyCoefficients (b);

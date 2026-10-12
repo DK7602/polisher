@@ -213,7 +213,7 @@ private:
     std::atomic<float>* clipSoftnessParam = nullptr;
     std::atomic<float>* clipOversamplingParam = nullptr;
     std::atomic<float>* eqOnParam = nullptr;
-    std::array<std::atomic<float>*, polisher::kEqBands> eqGainParams {}, eqFreqParams {};
+    std::array<std::atomic<float>*, polisher::kEqBands> eqGainParams {}, eqFreqParams {}, eqModeParams {};
     std::atomic<float>* bassOnParam = nullptr;
     std::atomic<float>* bassMonoParam = nullptr;
     std::atomic<float>* bassTameParam = nullptr;

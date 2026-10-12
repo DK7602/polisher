@@ -350,3 +350,124 @@ TEST_CASE ("After prepare, the next change glides whether the settings came befo
         d = std::max (d, std::abs ((double) first.channels[0][i] - after.channels[0][i]));
     CHECK (d < 1.0e-9);
 }
+
+namespace {
+/** A 1 kHz tone, centred (mid) or opposite in the two channels (side), through the EQ; returns the
+    second second's level in dB (re the input) and the output. */
+double msGainDb (TonalEQ& eq, double sr, bool sideInput, AudioClip* outClip = nullptr)
+{
+    AudioClip c = testsig::sine (sr, 2, 1000.0, -12.0, 2.0);
+    if (sideInput)
+        for (auto& v : c.channels[1]) v = -v;
+    const AudioClip in = c;
+    float* ch[2] = { c.channels[0].data(), c.channels[1].data() };
+    eq.process (ch, 2, c.numSamples());
+    double eo = 0.0, ei = 0.0;
+    for (int i = c.numSamples() / 2; i < c.numSamples(); ++i)
+        for (int k = 0; k < 2; ++k)
+        {
+            eo += static_cast<double> (c.channels[static_cast<size_t> (k)][static_cast<size_t> (i)]) * c.channels[static_cast<size_t> (k)][static_cast<size_t> (i)];
+            ei += static_cast<double> (in.channels[static_cast<size_t> (k)][static_cast<size_t> (i)]) * in.channels[static_cast<size_t> (k)][static_cast<size_t> (i)];
+        }
+    if (outClip != nullptr) *outClip = c;
+    return 10.0 * std::log10 (eo / ei);
+}
+} // namespace
+
+TEST_CASE ("A mid band moves only the centre, a side band only the edges", "[eq][ms]")
+{
+    for (double sr : { 44100.0, 48000.0, 96000.0 })
+        for (auto which : { EqChannels::mid, EqChannels::side })
+        {
+            TonalEQParams p;
+            p.gainDb[3] = 6.0;   // Mid band, 1 kHz
+            p.channels[3] = which;
+            for (bool sideInput : { false, true })
+            {
+                TonalEQ eq;
+                eq.prepare (sr, 2);
+                eq.setParams (p);
+                AudioClip out;
+                const double g = msGainDb (eq, sr, sideInput, &out);
+                const bool moved = (which == EqChannels::mid) != sideInput;
+                INFO ("sr " << sr << ", band " << (which == EqChannels::mid ? "mid" : "side") << ", input " << (sideInput ? "side" : "mid"));
+                if (moved)
+                    CHECK_THAT (g, WithinAbs (6.0, 0.05));
+                else
+                {
+                    // Untouched, sample for sample (the other part is exactly 0 and passes the filter as 0).
+                    AudioClip ref = testsig::sine (sr, 2, 1000.0, -12.0, 2.0);
+                    if (sideInput) for (auto& v : ref.channels[1]) v = -v;
+                    double worst = 0.0;
+                    for (int k = 0; k < 2; ++k)
+                        for (size_t i = 0; i < ref.channels[0].size(); ++i)
+                            worst = std::max (worst, std::abs (static_cast<double> (out.channels[static_cast<size_t> (k)][i]) - ref.channels[static_cast<size_t> (k)][i]));
+                    CHECK (worst < 1.0e-6);
+                }
+            }
+        }
+}
+
+TEST_CASE ("A stereo band still moves both parts alike", "[eq][ms]")
+{
+    TonalEQParams p;
+    p.gainDb[3] = -4.0;
+    for (bool sideInput : { false, true })
+    {
+        TonalEQ eq;
+        eq.prepare (48000.0, 2);
+        eq.setParams (p);
+        CHECK_THAT (msGainDb (eq, 48000.0, sideInput), WithinAbs (-4.0, 0.05));
+    }
+}
+
+TEST_CASE ("Switching a band between stereo, mid and side glides without a click", "[eq][ms]")
+{
+    const double sr = 48000.0;
+    AudioClip c = testsig::musicLike (sr, 3.0, -12.0);
+    TonalEQParams p;
+    p.gainDb[4] = 8.0;
+    TonalEQ eq;
+    eq.prepare (sr, 2);
+    eq.setParams (p);
+    const int block = 64, at1 = static_cast<int> (1.0 * sr) / block * block, at2 = static_cast<int> (2.0 * sr) / block * block;
+    double worstJump = 0.0, inJump = 0.0;
+    const AudioClip in = c;
+    for (int s = 0; s < c.numSamples(); s += block)
+    {
+        if (s == at1) { p.channels[4] = EqChannels::side; eq.setParams (p); }
+        if (s == at2) { p.channels[4] = EqChannels::mid; eq.setParams (p); }
+        float* ch[2] = { c.channels[0].data() + s, c.channels[1].data() + s };
+        eq.process (ch, 2, std::min (block, c.numSamples() - s));
+    }
+    for (int k = 0; k < 2; ++k)
+        for (size_t i = 1; i < c.channels[0].size(); ++i)
+        {
+            const auto K = static_cast<size_t> (k);
+            worstJump = std::max (worstJump, std::abs (static_cast<double> (c.channels[K][i]) - c.channels[K][i - 1]));
+            inJump = std::max (inJump, std::abs (static_cast<double> (in.channels[K][i]) - in.channels[K][i - 1]));
+        }
+    // No step beyond what an 8 dB boost of the music itself makes.
+    CHECK (worstJump < inJump * std::pow (10.0, 8.0 / 20.0) * 1.1);
+    for (float v : c.channels[0]) CHECK (std::isfinite (v));
+}
+
+TEST_CASE ("Mono input: a mid band works on it, a side band leaves it alone", "[eq][ms]")
+{
+    for (auto which : { EqChannels::mid, EqChannels::side })
+    {
+        TonalEQParams p;
+        p.gainDb[3] = 6.0;
+        p.channels[3] = which;
+        TonalEQ eq;
+        eq.prepare (48000.0, 1);
+        eq.setParams (p);
+        AudioClip c = testsig::sine (48000.0, 1, 1000.0, -12.0, 1.0);
+        const AudioClip in = c;
+        float* ch[1] = { c.channels[0].data() };
+        eq.process (ch, 1, c.numSamples());
+        double eo = 0.0, ei = 0.0;
+        for (size_t i = c.channels[0].size() / 2; i < c.channels[0].size(); ++i) { eo += c.channels[0][i] * c.channels[0][i]; ei += in.channels[0][i] * in.channels[0][i]; }
+        CHECK_THAT (10.0 * std::log10 (eo / ei), WithinAbs (which == EqChannels::mid ? 6.0 : 0.0, 0.05));
+    }
+}

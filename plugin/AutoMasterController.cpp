@@ -376,6 +376,7 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         {
             set ("eqGain" + juce::String (b + 1), static_cast<float> (c.eq.gainDb[static_cast<size_t> (b)]));
             set ("eqFreq" + juce::String (b + 1), static_cast<float> (polisher::kEqBandSpecs[static_cast<size_t> (b)].defaultHz));
+            set ("eqMode" + juce::String (b + 1), 0.0f);   // Stereo: Auto-Master's tone plan works on both channels
         }
         set ("ulOn", 1.0f);
         set ("ulAmount", static_cast<float> (c.unlimiter.amount));

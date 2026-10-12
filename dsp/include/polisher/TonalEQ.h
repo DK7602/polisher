@@ -31,10 +31,15 @@ inline constexpr std::array<EqBandSpec, kEqBands> kEqBandSpecs { {
     { EqBandSpec::Shape::highShelf, 12000.0, 6000.0, 20000.0, 0.707 }, // Air
 } };
 
+/** Which part of the stereo image a band works on: both channels alike, only the centre (mid,
+    (L + R) / 2) or only the edges (side, (L - R) / 2). */
+enum class EqChannels { stereo = 0, mid = 1, side = 2 };
+
 struct TonalEQParams
 {
     bool enabled = true;
     std::array<double, kEqBands> gainDb {};
+    std::array<EqChannels, kEqBands> channels {};   // all stereo by default
     std::array<double, kEqBands> freqHz { 45.0, 100.0, 350.0, 1000.0, 2500.0, 5000.0, 12000.0 };
 };
 
@@ -62,6 +67,11 @@ struct BiquadCoefficients
       every 16 samples, so moving a knob or dragging a band never clicks.
     - A band at 0 dB is skipped once it has settled, so a flat or disabled EQ is an exact, bit-for-bit
       pass-through. Turning the EQ off glides every band to 0 dB first.
+    - Mid / side per band: a mid band filters only (L + R) / 2, a side band only (L - R) / 2, and the
+      pair is rebuilt (L = M + S, R = M - S), so the other part passes untouched. Changing a band's
+      channels glides it to 0 dB, switches, and glides back (no click). Mono input: a mid band works
+      on the one channel, a side band does nothing. Channels past the first two are only touched by
+      stereo bands.
 
     process() never allocates. Up to kMaxChannels channels. */
 class TonalEQ
@@ -94,12 +104,32 @@ public:
             {
                 if (! band.running)
                     continue;
-                for (int c = 0; c < nch; ++c)
+                if (band.channels == EqChannels::stereo || nch < 2)
                 {
-                    auto& f = band.filters[static_cast<size_t> (c)];
-                    Sample* x = channels[c] + done;
+                    if (band.channels == EqChannels::side)
+                        continue;   // mono: no side to work on
+                    for (int c = 0; c < nch; ++c)
+                    {
+                        auto& f = band.filters[static_cast<size_t> (c)];
+                        Sample* x = channels[c] + done;
+                        for (int i = 0; i < n; ++i)
+                            x[i] = static_cast<Sample> (f.process (static_cast<double> (x[i])));
+                    }
+                }
+                else
+                {
+                    auto& f = band.filters[0];
+                    const bool mid = band.channels == EqChannels::mid;
+                    Sample* l = channels[0] + done;
+                    Sample* r = channels[1] + done;
                     for (int i = 0; i < n; ++i)
-                        x[i] = static_cast<Sample> (f.process (static_cast<double> (x[i])));
+                    {
+                        const double a = static_cast<double> (l[i]), b = static_cast<double> (r[i]);
+                        double m = 0.5 * (a + b), s = 0.5 * (a - b);
+                        if (mid) m = f.process (m); else s = f.process (s);
+                        l[i] = static_cast<Sample> (m + s);
+                        r[i] = static_cast<Sample> (m - s);
+                    }
                 }
             }
             if (sub.running)
@@ -145,6 +175,7 @@ private:
         double gainDb = 0.0, logFreq = 0.0;             // current (smoothed)
         double targetGainDb = 0.0, targetLogFreq = 0.0;
         bool running = false;                            // filtering (or letting its state ring out)
+        EqChannels channels = EqChannels::stereo, targetChannels = EqChannels::stereo;
         std::array<Biquad, kMaxChannels> filters;
     };
 

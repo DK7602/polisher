@@ -547,9 +547,22 @@ ToneTarget toneTargetAtStage (const ToneTarget& song, const TonalEQParams& eq, d
     for (int band = 0; band < kToneBands; ++band)
     {
         const double f = StemEQ::bandCentreHz (band, sampleRate);
+        // A mid or side band changes only part of the energy. The stored tone has no mid / side split, so
+        // the side's share is estimated as a typical master's: ~5 % below 200 Hz rising to ~25 % above 5 kHz.
+        const double side = std::clamp (0.05 + 0.2 * std::log2 (std::max (f, 1.0) / 200.0) / std::log2 (25.0), 0.05, 0.25);
         double db = 0.0;
         for (size_t j = 0; j < bands.size(); ++j)
-            if (on[j]) db += bands[j].magnitudeDb (f, sampleRate);
+        {
+            if (! on[j]) continue;
+            const double g = bands[j].magnitudeDb (f, sampleRate);
+            if (eq.channels[j] == EqChannels::stereo)
+                db += g;
+            else
+            {
+                const double part = eq.channels[j] == EqChannels::mid ? 1.0 - side : side;
+                db += 10.0 * std::log10 (part * std::pow (10.0, g / 10.0) + (1.0 - part));
+            }
+        }
         if (subsonic) db += hp[0].magnitudeDb (f, sampleRate) + hp[1].magnitudeDb (f, sampleRate);
         const double was = song.bandDb[static_cast<size_t> (band)];
         t.bandDb[static_cast<size_t> (band)] = static_cast<float> (was + db);
