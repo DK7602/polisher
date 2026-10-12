@@ -267,11 +267,14 @@ TEST_CASE ("Dynamics switches on and off without a hole at its crossovers", "[dy
     DynamicsParams glue;   // compressing settings, low split at 40 Hz; the -6 dB tone stays under the threshold
     glue.crossoverHz[0] = 40.0;
     for (auto& b : glue.bands) { b.ratio = 2.0; b.thresholdDb = 0.0; }
+    DynamicsParams impact;
+    for (auto& b : impact.bands) b.impact = 50.0;
     DynamicsParams glueOff = glue;
     glueOff.enabled = false;
     struct Switch { const char* what; DynamicsParams off, on; };
     for (double sr : { 44100.0, 48000.0, 96000.0, 192000.0 })
-        for (const auto& sw : { Switch { "neutral -> Air +0.1 dB", DynamicsParams {}, air }, Switch { "module switch, low split 40 Hz", glueOff, glue } })
+        for (const auto& sw : { Switch { "neutral -> Air +0.1 dB", DynamicsParams {}, air }, Switch { "module switch, low split 40 Hz", glueOff, glue },
+                                Switch { "neutral -> Impact +50 % on every band", DynamicsParams {}, impact } })
             for (double hz : { 40.0, 120.0, 1000.0, 6000.0, 12000.0 })
             {
                 const auto tone = tones (sr, 2.0, { { hz, -6.0 } });
@@ -346,4 +349,121 @@ TEST_CASE ("Dynamics: a soloed band plays on while the module switches", "[dynam
         CHECK (r.dipDb > -0.5);
         CHECK (r.bumpDb < 0.5);
     }
+}
+
+namespace {
+// Kick-like hits (55 Hz, 2 ms rise, 150 ms decay) every 0.5 s over a steady 1 kHz pad at -20 dB.
+AudioClip kicks (double sr, double seconds)
+{
+    AudioClip c = testsig::silence (sr, 2, seconds);
+    const int period = static_cast<int> (0.5 * sr);
+    for (int i = 0; i < c.numSamples(); ++i)
+    {
+        const double t = static_cast<double> (i % period) / sr;
+        const double env = std::min (1.0, t / 0.002) * std::exp (-t / 0.15);
+        const double v = 0.5 * env * std::sin (2.0 * std::numbers::pi * 55.0 * t)
+                       + 0.1 * std::sin (2.0 * std::numbers::pi * 1000.0 * i / sr);
+        c.channels[0][static_cast<size_t> (i)] = c.channels[1][static_cast<size_t> (i)] = static_cast<float> (v);
+    }
+    return c;
+}
+
+/** Average over the hits (after the first second) of each hit's peak in its first 40 ms (dB). */
+double hitPeakDb (const AudioClip& c)
+{
+    const int period = static_cast<int> (0.5 * c.sampleRate), win = static_cast<int> (0.04 * c.sampleRate);
+    double sum = 0.0;
+    int count = 0;
+    for (int start = 2 * period; start + period <= c.numSamples(); start += period)
+    {
+        double p = 0.0;
+        for (int i = start; i < start + win; ++i) p = std::max (p, std::abs (static_cast<double> (c.channels[0][static_cast<size_t> (i)])));
+        sum += 20.0 * std::log10 (p);
+        ++count;
+    }
+    return sum / count;
+}
+} // namespace
+
+TEST_CASE ("Impact leaves a steady sound alone", "[dynamics][impact]")
+{
+    DynamicsParams p;
+    for (auto& b : p.bands) b.impact = 100.0;
+    for (double sr : { 44100.0, 48000.0, 96000.0 })
+    {
+        // (The tone starting is a hit: loudness keeping settles over a few seconds after it.)
+        auto c = tones (sr, 12.0, { { 60.0, -10.0 }, { 2000.0, -16.0 }, { 9000.0, -22.0 } });
+        MultibandDynamics d;
+        d.prepare (sr, 2);
+        d.setParams (p);
+        d.reset();
+        CHECK (d.isActive());
+        run (d, c);
+        INFO ("sr " << sr);
+        CHECK_THAT (toneDb (c, 60.0, 10.0, 12.0), WithinAbs (-10.0, 0.1));
+        CHECK_THAT (toneDb (c, 2000.0, 10.0, 12.0), WithinAbs (-16.0, 0.1));
+        CHECK_THAT (toneDb (c, 9000.0, 10.0, 12.0), WithinAbs (-22.0, 0.1));
+    }
+}
+
+TEST_CASE ("Impact makes hits punch harder or softer without changing the loudness much", "[dynamics][impact]")
+{
+    const double sr = 48000.0;
+    const auto in = kicks (sr, 10.0);
+    const double inPeak = hitPeakDb (in), inLufs = measure (in).integratedLufs;
+    auto render = [&] (double impactLow)
+    {
+        DynamicsParams p;
+        p.bands[0].impact = impactLow;
+        AudioClip c = in;
+        MultibandDynamics d;
+        d.prepare (sr, 2);
+        d.setParams (p);
+        d.reset();
+        run (d, c);
+        return c;
+    };
+    const auto up = render (100.0), half = render (50.0), down = render (-100.0);
+    const double upPeak = hitPeakDb (up), halfPeak = hitPeakDb (half), downPeak = hitPeakDb (down);
+    INFO ("hit peak: in " << inPeak << ", +100 % " << upPeak << ", +50 % " << halfPeak << ", -100 % " << downPeak);
+    // At the same loudness (below), +100 % lifts the hits ~2 dB, -100 % softens them.
+    CHECK (upPeak > inPeak + 1.5);
+    CHECK (halfPeak > inPeak + 0.7);
+    CHECK (halfPeak < upPeak);
+    CHECK (downPeak < inPeak - 0.4);
+    CHECK (upPeak < inPeak + kImpactMaxDb + 0.5);
+    // Loudness is kept (measured after the 2 s it takes to settle).
+    auto lufsAfter = [] (const AudioClip& c)
+    {
+        AudioClip tail = c;
+        const auto skip = static_cast<size_t> (3.0 * c.sampleRate);
+        for (auto& ch : tail.channels) ch.erase (ch.begin(), ch.begin() + static_cast<std::ptrdiff_t> (skip));
+        return measure (tail).integratedLufs;
+    };
+    const double inTail = lufsAfter (in), upLufs = lufsAfter (up), downLufs = lufsAfter (down);
+    INFO ("LUFS: in " << inTail << ", +100 % " << upLufs << ", -100 % " << downLufs << " (whole clip in " << inLufs << ")");
+    CHECK (std::abs (upLufs - inTail) < 0.5);
+    CHECK (std::abs (downLufs - inTail) < 0.5);
+    // The steady pad (another band) is untouched.
+    CHECK_THAT (toneDb (up, 1000.0, 1.0, 6.0), WithinAbs (toneDb (in, 1000.0, 1.0, 6.0), 0.15));
+    // Only the low band was set: the meter reports its boost, the others stay at 0.
+    MultibandDynamics d;
+    DynamicsParams p;
+    p.bands[0].impact = 100.0;
+    d.prepare (sr, 2);
+    d.setParams (p);
+    d.reset();
+    AudioClip c = in;
+    run (d, c);
+    CHECK (d.takeMaxImpactDb (0) > 2.0);
+    CHECK (d.takeMaxImpactDb (2) == 0.0);
+}
+
+TEST_CASE ("Impact under 0.5 % counts as off", "[dynamics][impact]")
+{
+    DynamicsParams p;
+    p.bands[1].impact = 0.4;
+    CHECK (MultibandDynamics::isNeutral (p));
+    p.bands[1].impact = -0.6;
+    CHECK_FALSE (MultibandDynamics::isNeutral (p));
 }

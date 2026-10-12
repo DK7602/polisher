@@ -7,6 +7,37 @@ latest green Actions run.
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
 
+## UPGRADE PLAN (user 2026-10-12, this branch is the current one: "all new builds should be in that")
+Gap list vs Ozone 12 Advanced, Claude's order (user: "do 1-8 and the items already on list in the order you
+think is best"). Already on this branch before the list: Listen/Solo (5 modules), snapshots + undo, Match ref,
+genre target line. Remaining, in order:
+1. Punch per band = Dynamics IMPACT - DONE v0.17.0 (below).
+2. 808 focus (Ozone "Low End Focus"): punchy vs smooth low end (not level/mono: that's Bass Control).
+3. Pro EQ: dynamic EQ bands (harsh 3-5 kHz, boomy lows), mid/side per band, linear-phase mode.
+4. Maximizer: transient-aware / multiband modes, dither for 16-bit exports, codec (streaming) preview.
+5. Multiband saturation (Ozone "Exciter").
+6. Mid/side on more modules (Dynamics, Saturation, ...).
+7. Vintage-style modules (tape / compressor / EQ / limiter flavours) - lowest value.
+8. Blind loudness-matched shoot-out (tools/blindtest exists) vs TDR Limiter 6 GE / LoudMax / Ozone trial.
+Optional: Listen (delta) on the 6 modules without it - a version for all 11 exists as a stash/patch from
+the older branch (claude session 2026-10-12), only if the user asks.
+Also open: validation steps 2-3, Auto-Master turning a too-hot mix down, Auto-Master rule for Impact.
+
+## Dynamics Impact (v0.17.0, 2026-10-12)
+Per-band "Impact" knob (dynImpact1..4, -100..+100 %, 0 = off, version hint 8) inside MultibandDynamics,
+so it shares the split, park-and-glide switching and the aux detection split. Per band: each channel's power
+smoothed (8 / 3 / 1.5 / 1 ms, loses a steady tone's ripple), louder channel followed fast (4 / 1.5 / 0.8 / 0.5 ms
+attack) and slow (60 / 35 / 20 / 12 ms), shared release (120 / 80 / 60 / 50 ms); rise = fast/slow in dB minus a
+1.5 dB dead band; move = Impact x 1.0 x rise, +/-9 dB, 0.5 ms smoothing. Loudness kept per band: power with /
+without the moves averaged ~2 s, the band turned down/up by the difference (impactKeepDb). Moves add to the
+band's dB (so compWeight fades them; the wideband fallback while switching includes them). Measured
+(kick-like test beat): +100 % = hits +2.2 dB at the same loudness, +50 % +0.9, -100 % -0.6; steady tones
+within 0.1 dB. Meter: takeMaxImpactDb -> frame "dynImpact" (Learn shows "hits up x dB right now").
+UI: 8th cell in Dynamics (cells 94 px there). Auto-Master sets Impact to 0 (it plans without it).
+Followers warm up after a detector reset (3 x (slow + rms) ms: slow = fast, no moves, no keeping), so switching
+on mid-song is not read as a hit (review find; switching test caught it).
+Tests: [impact] in test_dynamics + switching case "neutral -> Impact +50 %". NOT YET HEARD by the user.
+
 ## 2026-10-11 Auto-Master re-audit fixes (worktree agent; report /tmp/.../reaudit_automaster.md)
 - Reference loudness hook vs hook: ReferenceProfile::hookLufs = loudest kHookSeconds (12 s) over the whole song
   (LoudestPartFinder::loudestLufs, BS.1770-gated from 100 ms hops), saved as "hookLufs" (+ "sampleRate");

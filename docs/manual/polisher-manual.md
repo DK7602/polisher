@@ -1,6 +1,6 @@
 # Polisher User Manual
 
-Version 0.16.0 · October 2026
+Version 0.17.0 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
@@ -8,7 +8,7 @@ Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d7
 
 Polisher is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds eleven modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.16.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.17.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 
@@ -269,9 +269,17 @@ Four-band compression. Click a band button (LOW, LO-MID, HI-MID, HIGH) to edit i
 | Attack | 0.5–100 ms (30 / 20 / 10 / 5) | Slow lets drum hits through; fast catches peaks. The Low band never reacts faster than about 20 ms, so bass notes don't wobble. |
 | Release | 20–1000 ms (200 / 150 / 120 / 100) | How fast it lets go. |
 | Gain | ±12 dB (0) | The band's level after compression. |
+| Impact | −100 to +100 % (0 = off) | Punch of the hits in this band. **+** makes the start of each hit harder (kick thump, snare crack); **−** softens it (spiky hats, a poking snare). The steady sound in between isn't touched and the band's loudness is kept, so you hear punch, not volume. |
 | Adaptive release | on | Lets go quickly after short hits, slower on long notes. |
 
 How to set a band: raise Ratio to 2:1, then lower Threshold until the band button shows 1–3 dB on the loud hits.
+
+How to use Impact: for a kick that doesn't hit, set the **Low** band's Impact to +20 to +40 % and compare with MATCH. For harsh, spiky hats, try the **High** band at −20 to −40 %. Impact works even with Ratio at 1:1 (no compression), as long as Dynamics is on.
+
+- At +100 %, hits come out about 2 dB punchier at the same loudness. Small moves go a long way.
+- Punchier hits mean taller peaks, so the Maximizer works a little harder. If its GR jumps on every kick, turn Impact down or use the Soft Clipper.
+- Loudness keeping settles over about 2 seconds after you move the knob.
+- Auto-Master doesn't use Impact yet: it sets every band's Impact to 0 % (off), so its loudness plan stays right. Add Impact after Auto-Master, then check Short-term and adjust Drive if needed. The undo arrow brings back your earlier Impact.
 
 ### 08 Stereo Imager
 

@@ -19,6 +19,7 @@ struct DynBandParams
     double attackMs = 20.0;
     double releaseMs = 150.0;
     double gainDb = 0.0;        // makeup / band level after compression
+    double impact = 0.0;        // -100 ... +100 %: hits in this band punch harder (+) or softer (-); 0 = off
 };
 
 struct DynamicsParams
@@ -32,6 +33,17 @@ struct DynamicsParams
         DynBandParams { 0.0, 1.0, 5.0, 100.0, 0.0 } };
     bool adaptiveRelease = true;
 };
+
+/** Impact (transient shaping per band): the band's level is compared with a fast and a slow
+    follower of itself; while a hit rises (fast above slow) the band is turned up (+) or down (-) by
+    Impact x kImpactScale x the gap, at most kImpactMaxDb. Sustained sound (both followers level) is
+    left alone, and the band's loudness is kept (its power with and without the moves, ~2 s
+    average, turns it down or up slowly), so Impact changes punch, not level; peaks do rise (more
+    Impact = more for the Maximizer). */
+inline constexpr double kImpactScale = 1.0;
+inline constexpr double kImpactMaxDb = 9.0;
+inline constexpr double kImpactNeutral = 0.5;   // |Impact| under this (%) counts as off
+inline constexpr double kImpactDeadDb = 1.5;    // rises smaller than this (a steady tone's ripple) are left alone
 
 /** Crossover ranges (Hz) for the three split points. */
 inline constexpr std::array<std::array<double, 2>, kDynBands - 1> kDynCrossoverRange { { { 40.0, 300.0 }, { 300.0, 3000.0 }, { 3000.0, 12000.0 } } };
@@ -187,8 +199,53 @@ public:
                 d.grAverage += (d.grDb - d.grAverage) * averageCoeff;
                 d.maxGr = std::min (d.maxGr, d.grDb * compWeight);
                 d.makeupDb += (d.targetMakeupDb - d.makeupDb) * makeupCoeff;
-                bandDb[k] = d.grDb + d.makeupDb;
-                gain[k] = std::pow (10.0, (d.grDb + d.makeupDb) * compWeight / 20.0);
+
+                // Impact: each channel's power, smoothed just enough to lose a steady tone's own ripple, the
+                // louder one followed fast and slow (same release); their gap in dB, past a small dead band,
+                // is how much a hit is rising right now.
+                double p = 0.0;
+                for (int c = 0; c < nch; ++c)
+                {
+                    const double v = detected[static_cast<size_t> (c)][k];
+                    double& ms = d.impactPow[static_cast<size_t> (c)];
+                    ms += (v * v - ms) * d.impactRmsCoeff;
+                    if (ms < 1.0e-30) ms = 0.0;
+                    p = std::max (p, ms);
+                }
+                d.fastPow += (p - d.fastPow) * (p > d.fastPow ? d.fastAttackCoeff : d.impactReleaseCoeff);
+                d.slowPow += (p - d.slowPow) * (p > d.slowPow ? d.slowAttackCoeff : d.impactReleaseCoeff);
+                const bool warming = d.impactWarm > 0;
+                if (warming)
+                {
+                    // Followers just restarted (switching on mid-song): the music already playing is not a hit.
+                    --d.impactWarm;
+                    d.slowPow = d.fastPow;
+                }
+                if (d.fastPow < 1.0e-30) d.fastPow = 0.0;
+                if (d.slowPow < 1.0e-30) d.slowPow = 0.0;
+                double impactTarget = 0.0;
+                if (d.impactAmount != 0.0 && ! warming && d.slowPow > 1.0e-12)   // nothing to shape under -120 dB
+                {
+                    const double rise = std::max (0.0, 10.0 * std::log10 ((d.fastPow + 1.0e-30) / d.slowPow) - kImpactDeadDb);
+                    impactTarget = std::clamp (d.impactAmount * kImpactScale * rise, -kImpactMaxDb, kImpactMaxDb);
+                }
+                d.impactDb += (impactTarget - d.impactDb) * impactSmoothCoeff;
+                if (std::abs (d.impactDb) < 1.0e-9) d.impactDb = 0.0;
+                // Keep the band's loudness: its power with and without the Impact moves, averaged over ~2 s;
+                // the band is turned down (or up) by the difference, slowly, like a makeup gain.
+                if (! warming && (d.impactAmount != 0.0 || d.impactKeepDb != 0.0))
+                {
+                    d.powIn += (p - d.powIn) * impactKeepCoeff;
+                    d.powOut += (p * std::pow (10.0, d.impactDb / 10.0) - d.powOut) * impactKeepCoeff;
+                    const double keep = d.impactAmount != 0.0 && d.powIn > 1.0e-12 && d.powOut > 1.0e-12
+                                      ? std::clamp (-10.0 * std::log10 (d.powOut / d.powIn), -kImpactMaxDb, kImpactMaxDb) : 0.0;
+                    d.impactKeepDb += (keep - d.impactKeepDb) * impactKeepCoeff;
+                    if (d.impactAmount == 0.0 && std::abs (d.impactKeepDb) < 1.0e-6) d.impactKeepDb = d.powIn = d.powOut = 0.0;
+                }
+                if (std::abs (d.impactDb * compWeight) > std::abs (d.maxImpact)) d.maxImpact = d.impactDb * compWeight;
+
+                bandDb[k] = d.grDb + d.makeupDb + d.impactDb + d.impactKeepDb;
+                gain[k] = std::pow (10.0, bandDb[k] * compWeight / 20.0);
             }
             double dryGain = 1.0;
             if (bandsWeight < 1.0)
@@ -246,6 +303,15 @@ public:
         }
     }
 
+    /** Largest Impact move in a band since the last call (dB, signed: + boost, - cut). */
+    double takeMaxImpactDb (int bandIndex) noexcept
+    {
+        auto& d = det[static_cast<size_t> (bandIndex)];
+        const double v = d.maxImpact;
+        d.maxImpact = 0.0;
+        return v;
+    }
+
     /** Deepest gain reduction in a band since the last call (dB, <= 0). */
     double takeMaxGrDb (int bandIndex) noexcept
     {
@@ -280,6 +346,11 @@ private:
         std::array<double, 2> channelMeanSquare {};
         double meanSquare = 0.0, grDb = 0.0, grAverage = 0.0, maxGr = 0.0;
         double makeupDb = 0.0, targetMakeupDb = 0.0;
+        double fastPow = 0.0, slowPow = 0.0, impactDb = 0.0, maxImpact = 0.0, impactAmount = 0.0;
+        double powIn = 0.0, powOut = 0.0, impactKeepDb = 0.0;   // loudness keeping
+        int impactWarm = 0, impactWarmSamples = 0;               // samples until the followers have settled
+        double fastAttackCoeff = 0.0, slowAttackCoeff = 0.0, impactReleaseCoeff = 0.0, impactRmsCoeff = 0.0;
+        std::array<double, 2> impactPow {};
         double rmsCoeff = 0.0, attackCoeff = 0.0, releaseCoeff = 0.0, fastReleaseCoeff = 0.0;
         double setAttackMs = -1.0, setReleaseMs = -1.0;
     };
@@ -323,7 +394,7 @@ private:
     bool auxRunning = false;                                          // the detectors hear Channel::a
     std::array<ParkGlide::Segment, kDynBands - 1> segment {};         // the switching glide, a sample at a time
     bool gliding = false;
-    double glideCoeff = 0.0, makeupCoeff = 0.0, averageCoeff = 0.0;
+    double glideCoeff = 0.0, makeupCoeff = 0.0, averageCoeff = 0.0, impactSmoothCoeff = 0.0, impactKeepCoeff = 0.0;
     std::array<double, kDynBands - 1> logFreq {}, targetLogFreq {}, auxLogFreq {};
     std::array<Channel, 2> chan {};
     std::array<Detector, kDynBands> det {};

@@ -57,6 +57,7 @@ const P = {
   dynAtk: [1, 2, 3, 4].map((b) => Juce.getSliderState("dynAtk" + b)),
   dynRel: [1, 2, 3, 4].map((b) => Juce.getSliderState("dynRel" + b)),
   dynGain: [1, 2, 3, 4].map((b) => Juce.getSliderState("dynGain" + b)),
+  dynImpact: [1, 2, 3, 4].map((b) => Juce.getSliderState("dynImpact" + b)),
   satOn: Juce.getToggleState("satOn"),
   satMode: Juce.getComboBoxState("satMode"),
   satFocus: Juce.getComboBoxState("satFocus"),
@@ -113,7 +114,7 @@ const M = {
   // How far the music playing sits from that stored tone (dB, -1 unknown), and whether far for long (another song's?).
   tsFar: false, tsDist: -1,
   undo: "", redo: "", snaps: [{}, {}, {}, {}], snapActive: -1, snapModified: false,
-  dynGr: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], stemKeep: 0, rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
+  dynGr: [0, 0, 0, 0], dynImpact: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], stemKeep: 0, rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
   ulBoost: 0, ulSquash: 0, refVersion: 0, refState: 0,
   listen: 0, mono: false, phone: false, listenNow: 0, listenGain: 0, listenUnder: -100,
 };
@@ -609,7 +610,9 @@ const fmtMs = (v) => `${v < 10 ? v.toFixed(1) : Math.round(v)} ms`;
 const fmtSigned = (v) => `${v > 0.049 ? "+" : ""}${fmtNum(v, 1)} dB`;
 const dynRatioAt = (b) => P.dynRatio[b].getScaledValue();
 const dynGainAt = (b) => P.dynGain[b].getScaledValue();
-const dynBandActive = (b) => dynRatioAt(b) > 1.005 || Math.abs(dynGainAt(b)) >= 0.05;
+const dynImpactAt = (b) => P.dynImpact[b].getScaledValue();
+const dynBandActive = (b) => dynRatioAt(b) > 1.005 || Math.abs(dynGainAt(b)) >= 0.05 || Math.abs(dynImpactAt(b)) >= 0.5;
+const fmtPct = (v) => `${v > 0.5 ? "+" : ""}${Math.round(v)} %`;
 const dynIsNeutral = () => ![0, 1, 2, 3].some(dynBandActive);
 function dynRangeText(b) {
   const x = P.dynX.map((s) => s.getScaledValue());
@@ -669,6 +672,7 @@ function dynBandCells(b) {
     liveKnobCell({ label: "Attack", sub: "grab speed", state: P.dynAtk[b], def: [30, 20, 10, 5][b], minText: "0.5", maxText: "100", fmt: fmtMs }),
     liveKnobCell({ label: "Release", sub: "let go", state: P.dynRel[b], def: [200, 150, 120, 100][b], minText: "20", maxText: "1000", fmt: fmtMs }),
     liveKnobCell({ label: "Gain", sub: "band level", state: P.dynGain[b], def: 0, minText: `${MINUS}12`, maxText: "+12", fmt: fmtSigned }),
+    liveKnobCell({ label: "Impact", sub: "hit punch", state: P.dynImpact[b], def: 0, minText: `${MINUS}100`, maxText: "+100", fmt: fmtPct }),
     split,
   ];
 }
@@ -857,6 +861,7 @@ function renderModule() {
   const m = modules.find((x) => x.id === selected);
   const row = $("knob-row");
   row.innerHTML = "";
+  row.classList.toggle("dyn", m.id === "dyn");
   $("module-name").textContent = m.name.toUpperCase();
   $("soon-badge").hidden = !!m.live;
   $("btn-bypass").hidden = !m.live;
@@ -1336,7 +1341,9 @@ function renderDynLearn(body) {
     const parts = [0, 1, 2, 3].filter(dynBandActive).map((k) => {
       const gr = M.dynGr[k] || 0;
       const r = dynRatioAt(k);
-      return `${DYN_BANDS[k].name} (${dynRangeText(k)}): ${r > 1.005 ? `${r.toFixed(1)}:1` : "no compression"}${Math.abs(dynGainAt(k)) >= 0.05 ? `, ${fmtSigned(dynGainAt(k))}` : ""}${r > 1.005 && playing ? `, pulling down ${gr < -0.05 ? fmtNum(-gr) : "0.0"} dB right now` : ""}.`;
+      const im = dynImpactAt(k), imNow = M.dynImpact[k] || 0;
+      const impactText = Math.abs(im) < 0.5 ? "" : `, Impact ${fmtPct(im)}${playing ? ` (hits ${(Math.abs(imNow) < 0.05 ? im : imNow) >= 0 ? "up" : "down"} ${fmtNum(Math.abs(imNow), 1)} dB right now)` : ""}`;
+      return `${DYN_BANDS[k].name} (${dynRangeText(k)}): ${r > 1.005 ? `${r.toFixed(1)}:1` : "no compression"}${Math.abs(dynGainAt(k)) >= 0.05 ? `, ${fmtSigned(dynGainAt(k))}` : ""}${r > 1.005 && playing ? `, pulling down ${gr < -0.05 ? fmtNum(-gr) : "0.0"} dB right now` : ""}${impactText}.`;
     });
     body.appendChild(para("l-p", parts.join(" ")));
   }
@@ -1348,6 +1355,10 @@ function renderDynLearn(body) {
   body.appendChild(item("Attack", fmtMs(atk), atk >= 20 ? "Slow: the start of each hit gets through before the band is turned down, so drums keep their punch." : atk >= 5 ? "Medium: catches most of each hit, a little of the snap stays." : b === 0 ? "Fast: the low band still needs about 20 ms to react (any quicker and bass notes would wobble), so a kick's first moment gets through. Smoother but less punchy." : "Fast: catches peaks within a few ms, smoother but less punchy."));
   body.appendChild(item("Release", fmtMs(rel), (rel <= 80 ? "Fast: recovers between hits; too fast can sound like fluttering on bass." : rel <= 300 ? "Medium: recovers between beats, the usual choice for a master." : "Slow: smooth and steady, evens out whole phrases.") + (P.dynAdaptive.getValue() ? " Adaptive release is on: quick after short hits, this setting on sustained notes." : "")));
   body.appendChild(item("Gain", fmtSigned(gain), Math.abs(gain) < 0.05 ? "The band's level after compression is unchanged." : gain > 0 ? "Turns the band up after compression: makes up what it lost, or brings it forward." : "Turns the band down after compression."));
+  const im = dynImpactAt(b);
+  body.appendChild(item("Impact", fmtPct(im), Math.abs(im) < 0.5 ? "Off: the hits in this band keep their own punch."
+    : im > 0 ? `Makes the start of each hit in this band louder (${band.holds}), so it punches harder. The steady sound in between isn't touched, so the loudness barely moves, but the peaks rise: the Maximizer will work a little harder.`
+    : `Softens the start of each hit in this band (${band.holds}): smoother, less spiky. Good for hats or a snare that pokes out.`));
   body.appendChild(item("Split", fmtHz(P.dynX[Math.min(b, 2)].getScaledValue()), b < 3 ? "Where this band ends and the next begins." : "Where this band starts."));
   const worst = Math.min(...[0, 1, 2, 3].map((k) => (dynRatioAt(k) > 1.005 ? M.dynGr[k] || 0 : 0)));
   if (on && !bypassed && playing && worst < -6)
@@ -1356,6 +1367,11 @@ function renderDynLearn(body) {
   else if (on && [0, 1, 2, 3].some((k) => dynRatioAt(k) > 4))
     body.appendChild(tip("HEADS UP", "A band is above 4:1. That's heavy for a master.", false,
       { need: "Optional. Check with MATCH whether it sounds squashed.", steps: ["Set that band's Ratio to 2:1.", "Lower its Threshold a little if you still want the same control."] }));
+  else if (on && [0, 1, 2, 3].some((k) => dynImpactAt(k) > 60))
+    body.appendChild(tip("HEADS UP", "Impact above +60 % makes hits a lot spikier. The Maximizer has to pull those peaks down again, which can undo the punch.", false,
+      { need: "Optional. Check with MATCH and watch the Maximizer's GR.", steps: ["Try Impact +20 to +40 % first.", "If the Maximizer's GR jumps on every kick, turn Impact down or use the Soft Clipper."] }));
+  else if (on && [0, 1, 2, 3].every((k) => Math.abs(dynImpactAt(k)) < 0.5) && [0, 1, 2, 3].some((k) => dynRatioAt(k) > 1.005))
+    body.appendChild(tip("TRY THIS", "Kick not hitting? On the LOW band, set Impact to +30 % and compare with MATCH: the kick's thump gets harder without making the beat louder. On the HIGH band, Impact −30 % calms spiky hats.", true));
   else
     body.appendChild(tip("TRY THIS", "On the LOW band: Ratio 2:1, Attack 30 ms, then lower the Threshold until the band pulls 1 to 2 dB on the kick and 808. The low end gets steadier without ducking the vocal. Compare with MATCH on.", true));
 }
@@ -1977,7 +1993,7 @@ $("btn-bypass").addEventListener("click", () => {
 });
 P.bypass.valueChangedEvent.addListener(onParamsChanged);
 for (const [state] of Object.values(HEAD_POWER)) state.valueChangedEvent.addListener(onParamsChanged);
-for (const s of [...P.dynX, ...P.dynRatio, ...P.dynGain]) s.valueChangedEvent.addListener(() => { dynPicker.refresh(); updateLiveReadouts(); });
+for (const s of [...P.dynX, ...P.dynRatio, ...P.dynGain, ...P.dynImpact]) s.valueChangedEvent.addListener(() => { dynPicker.refresh(); updateLiveReadouts(); });
 
 function togglePopover(id) {
   for (const p of ["pop-settings", "pop-help"]) $(p).hidden = p === id ? !$(p).hidden : true;
