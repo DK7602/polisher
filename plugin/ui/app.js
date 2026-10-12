@@ -51,6 +51,8 @@ const P = {
   eqFreq: [1, 2, 3, 4, 5, 6, 7].map((b) => Juce.getSliderState("eqFreq" + b)),
   eqMode: [1, 2, 3, 4, 5, 6, 7].map((b) => Juce.getComboBoxState("eqMode" + b)),
   dynOn: Juce.getToggleState("dynOn"),
+  maxBassFirst: Juce.getSliderState("maxBassFirst"),
+  maxDither: Juce.getComboBoxState("maxDither"),
   dynAdaptive: Juce.getToggleState("dynAdaptive"),
   dynX: [1, 2, 3].map((x) => Juce.getSliderState("dynX" + x)),
   dynThr: [1, 2, 3, 4].map((b) => Juce.getSliderState("dynThr" + b)),
@@ -490,6 +492,10 @@ const maximizerCells = [
   toggleCell({ label: "Release Mode", sub: "program dependent", state: P.adaptive, onText: "ADAPTIVE", offText: "FIXED" }),
   liveKnobCell({ label: "Input Trim", sub: "before the chain", state: P.inTrim, def: 0, minText: `${MINUS}24`, maxText: "0",
                  fmt: (v) => `${fmtNum(v, 1)} dB` }),
+  liveKnobCell({ label: "Bass First", sub: "808 ducks first", state: P.maxBassFirst, def: 0, minText: "off", maxText: "100",
+                 fmt: (v) => (v < 0.5 ? "off" : `${Math.round(v)} %`) }),
+  segCell({ label: "Dither", sub: "for exports", state: P.maxDither, labels: ["Off", "16-bit", "24-bit"],
+            notes: ["float export", "16-bit WAV", "24-bit WAV"] }),
 ];
 
 function oversamplingCell() {
@@ -1156,6 +1162,14 @@ function renderLearnBody() {
     `Nothing leaves Polisher above ${fmtNum(ceiling, 1)} dBTP on the true-peak meter streaming services use (it counts peaks between samples too). ` +
     (ceiling > -0.95 ? "Above −1 dBTP, the MP3/AAC versions streaming services make are likely to clip. −1.0 is the usual choice; for loud masters (around −9 LUFS and louder) −1.5 (what Auto-Master sets for Loud and Club) to −2 (Spotify's advice) is safer."
                      : "That leaves room for the MP3/AAC conversion streaming services do. The louder the master, the higher its MP3/AAC copy peaks: at −9 LUFS and louder, use −1.5 (Auto-Master's choice for Loud and Club) or −2 (Spotify's advice), and the converted copies stay at or close to 0 dBTP instead of going a dB over.")));
+  const bf = P.maxBassFirst.getScaledValue(), bassCut = M.bassCut || 0;
+  body.appendChild(item("Bass First", bf < 0.5 ? "off" : `${Math.round(bf)} %`,
+    bf < 0.5 ? "Off: when the 808 pushes the master into the limiter, the whole mix is turned down with it, so the vocal and hats dip on every 808 hit."
+             : `When the 808 (below 120 Hz) pushes a peak over the ceiling, the low end is turned down first (up to 12 dB) instead of the whole mix, so the vocal and hats stop dipping with it.${playing && bassCut < -0.05 ? ` Right now the low end is taking ${fmtNum(-bassCut, 1)} dB on the loudest 808 hits.` : ""} The trade: on those hits the 808 sits a little lower. 50–100 % for trap with a heavy 808.`));
+  const dith = clamp(Math.round(P.maxDither.value * 2), 0, 2);
+  body.appendChild(item("Dither", ["Off", "16-bit", "24-bit"][dith],
+    dith === 0 ? "Off: right for a 24-bit or 32-bit float export. Turn on 16-bit only when you export a 16-bit WAV (CD, some distributors)."
+    : `On for ${dith === 1 ? "16" : "24"}-bit: adds a very quiet hiss (about ${dith === 1 ? "−98" : "−146"} dBFS) so quiet fades don't turn gritty when Cubase cuts the export to ${dith === 1 ? "16" : "24"} bits. Export at exactly that bit depth, with nothing after Polisher changing the level (Stereo Out fader at 0 dB).`));
   body.appendChild(item("Release", `${release} ms`,
     adaptive
       ? `Adaptive around ${release} ms: recovers quickly after single hits (drums) and moves slowly on sustained sound (808s, pads), so it doesn't pump.`

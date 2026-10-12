@@ -34,6 +34,7 @@
     sliders["dynRel" + b] = { start: 20, end: 1000, skew: 0.4, interval: 1, value: [200, 150, 120, 100][i], label: "ms" };
     sliders["dynGain" + b] = { start: -12, end: 12, skew: 1, interval: 0.1, value: 0, label: "dB" };
   });
+  sliders.maxBassFirst = { start: 0, end: 100, skew: 1, interval: 1, value: 0, label: "%" };
   sliders.satDrive = { start: 0, end: 18, skew: 1, interval: 0.1, value: 0, label: "dB" };
   sliders.satMix = { start: 0, end: 100, skew: 1, interval: 0.1, value: 100, label: "%" };
   sliders.bassMono = { start: 0, end: 250, skew: 1, interval: 1, value: 0, label: "Hz" };
@@ -55,6 +56,7 @@
     ulFocus: { choices: ["Full", "Kick", "Snap"], value: 0 },
     tsSpeed: { choices: ["Slow", "Medium", "Fast"], value: 0.5 },
     rtFocus: { choices: ["Full", "Boxiness", "Harshness"], value: 0 },
+    maxDither: { choices: ["Off", "16-bit", "24-bit"], value: 0 },
     ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map((b) => ["eqMode" + b, { choices: ["Stereo", "Mid", "Side"], value: 0 }])),
     amGenre: { choices: ["Trap / Hip-Hop", "R&B", "Pop", "EDM", "Rock", "Acoustic"], value: 0 },
     amIntensity: { choices: ["Gentle", "Balanced", "Punchy"], value: 0.5 },
@@ -134,7 +136,7 @@
   const isSetting = (n) => !NOT_SETTINGS.has(n);
   const NAMES = { drive: "Drive", ceiling: "Ceiling", release: "Release", inTrim: "Input Trim", adaptive: "Adaptive Release",
                   clipOn: "Clipper On", clipLevel: "Clip Level", clipSoftness: "Clipper Softness", clipOversampling: "Clipper Oversampling",
-                  satOn: "Saturation On", satMode: "Saturation Mode", satFocus: "Saturation Focus", satDrive: "Saturation Drive", satMix: "Saturation Mix",
+                  satOn: "Saturation On", satMode: "Saturation Mode", satFocus: "Saturation Focus", satDrive: "Saturation Drive", satMix: "Saturation Mix", maxBassFirst: "Bass First", maxDither: "Dither",
                   stemOn: "Stem EQ On", stemKeep: "Stem EQ Keep Loudness", stemVoc: "Stem EQ Vocals", stemDrums: "Stem EQ Drums", stemBass: "Stem EQ Bass", stemOther: "Stem EQ Other",
                   bassOn: "Bass On", bassMono: "Bass Mono Below", bassTame: "Bass Sub Tame", bassPunch: "Bass Punch", eqOn: "EQ On", imgOn: "Imager On",
                   imgLow: "Imager Low Width", imgMid: "Imager Mid Width", imgHigh: "Imager High Width", ulOn: "Unlimiter On", dynOn: "Dynamics On", tsOn: "Tone Steady On", rtOn: "Resonance Tamer On" };
@@ -434,6 +436,7 @@
         const over = Math.max(0, base + 8 + 6 * beat - sliders["dynThr" + b].value - 6 * b);
         return toggles.dynOn && !bypass && r > 1.005 ? +(-over * (1 - 1 / r) * 0.5).toFixed(1) : 0;
       }),
+      bassCut: sliders.maxBassFirst.value > 0.5 && !bypass ? +(-(1 + 4 * beat) * sliders.maxBassFirst.value / 100).toFixed(1) : 0,
       dynSustain: [1, 2, 3, 4].map((b) => (toggles.dynOn && !bypass ? +(sliders["dynSustain" + b].value / 100 * 2 * (1 - beat)).toFixed(1) : 0)),
       dynImpact: [1, 2, 3, 4].map((b) => (toggles.dynOn && !bypass ? +(sliders["dynImpact" + b].value / 100 * 2.5 * beat).toFixed(1) : 0)),
       rtCut: toggles.rtOn && !bypass && sliders.rtAmount.value > 0.5 ? +(-(1.5 + 3 * beat) * sliders.rtAmount.value / 50).toFixed(1) : 0, rtHz: 2870,

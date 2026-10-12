@@ -431,6 +431,7 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         set ("drive", static_cast<float> (c.driveDb));
         set ("ceiling", static_cast<float> (c.limiter.ceilingDbtp));
         set ("release", static_cast<float> (c.limiter.releaseMs));
+        set ("maxBassFirst", static_cast<float> (c.limiter.bassFirst * 100.0));   // 0: Auto-Master plans the plain limiter
         set ("adaptive", c.limiter.adaptiveRelease ? 1.0f : 0.0f);
 
         juce::Array<juce::var> notes;

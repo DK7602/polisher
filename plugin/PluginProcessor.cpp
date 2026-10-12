@@ -10,6 +10,8 @@ namespace ParamIDs
     inline constexpr const char* ceiling  = "ceiling";
     inline constexpr const char* release  = "release";
     inline constexpr const char* adaptive = "adaptive";
+    inline constexpr const char* bassFirst = "maxBassFirst";
+    inline constexpr const char* dither = "maxDither";
     inline constexpr const char* bypass   = "bypass";
     inline constexpr const char* autoReset = "autoreset";
     inline constexpr const char* resetOnChange = "resetOnChange";
@@ -48,6 +50,8 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     ceilingParam  = parameters.getRawParameterValue (ParamIDs::ceiling);
     releaseParam  = parameters.getRawParameterValue (ParamIDs::release);
     adaptiveParam = parameters.getRawParameterValue (ParamIDs::adaptive);
+    bassFirstParam = parameters.getRawParameterValue (ParamIDs::bassFirst);
+    ditherParam = parameters.getRawParameterValue (ParamIDs::dither);
     bypassParam   = parameters.getRawParameterValue (ParamIDs::bypass);
     trimParam     = parameters.getRawParameterValue ("inTrim");
     autoResetParam = parameters.getRawParameterValue (ParamIDs::autoReset);
@@ -120,6 +124,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
             .withStringFromValueFunction ([] (float v, int) { return String (juce::roundToInt (v)) + " ms"; })));
 
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::adaptive, 1 }, "Adaptive Release", true));
+    // Bass First and Dither (version hint 11). Their defaults (0 %, Off) are also what a state saved before
+    // they existed loads as: exactly how it sounded then.
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ParamIDs::bassFirst, 11 }, "Bass First",
+        NormalisableRange<float> (0.0f, 100.0f, 1.0f), 0.0f,
+        AudioParameterFloatAttributes().withLabel ("%")
+            .withStringFromValueFunction ([] (float v, int) { return String (juce::roundToInt (v)) + " %"; })));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::dither, 11 }, "Dither", StringArray { "Off", "16-bit", "24-bit" }, 0));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::bypass, 1 }, "Bypass", false));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::autoReset, 1 }, "Reset Meter On Play", true,
                                                       AudioParameterBoolAttributes().withAutomatable (false)));
@@ -232,6 +244,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     eq.setParams (eq.getParams());
     updateLimiterParams();
     limiter.prepare (sampleRate, channels);
+    dither.reset();
     clipper.prepare (channels, sampleRate);
     unlimiter.prepare (sampleRate, channels);
     eq.prepare (sampleRate, channels);
@@ -317,11 +330,14 @@ void PolisherAudioProcessor::updateLimiterParams()
     p.releaseMs       = releaseParam->load();
     p.adaptiveRelease = adaptiveParam->load() > 0.5f;
     p.bypassed        = bypassParam->load() > 0.5f;
+    p.bassFirst       = juce::jlimit (0.0, 1.0, static_cast<double> (bassFirstParam->load()) / 100.0);
 
     const auto& cur = limiter.getParams();
     if (p.driveDb != cur.driveDb || p.ceilingDbtp != cur.ceilingDbtp || p.releaseMs != cur.releaseMs
-        || p.adaptiveRelease != cur.adaptiveRelease || p.bypassed != cur.bypassed)
+        || p.adaptiveRelease != cur.adaptiveRelease || p.bypassed != cur.bypassed || p.bassFirst != cur.bassFirst)
         limiter.setParams (p);
+    static constexpr int kDitherBits[] = { 0, 16, 24 };
+    dither.setBits (kDitherBits[juce::jlimit (0, 2, juce::roundToInt (ditherParam->load()))]);
 
     static constexpr int kOversampling[] = { 1, 2, 4, 8 };
     polisher::ClipperParams c;
@@ -570,17 +586,16 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
             sig[1][i] = r;
         }
     }
-    if (lm == L::maxRemoved) copyPre();
-    limiter.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, lm != L::off ? monLimGain.data() : nullptr);
+    limiter.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, lm != L::off ? monLimGain.data() : nullptr,
+                     lm == L::maxRemoved ? aux : nullptr);
     if (lm == L::maxRemoved)
     {
-        // What the limiter took off: its aligned input minus its output.
+        // What the limiter took off: its input with no limiting (delayed, through Bass First's split when that
+        // is in the path, so the split's phase turn is not heard as "taken off") minus its output.
         for (int i = 0; i < numSamples; ++i)
         {
-            double l = pre[0][i], r = pre[1][i];
-            monForm.process (l, r);
-            sig[0][i] = l - in (0, i);
-            sig[1][i] = r - in (1, i);
+            sig[0][i] = aux[0][i] - in (0, i);
+            sig[1][i] = (numChannels > 1 ? aux[1][i] : aux[0][i]) - in (1, i);
         }
     }
     else if (lm != L::off)
@@ -603,6 +618,9 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
             sig[1][i] *= g;
         }
     }
+    // Dither (16 / 24-bit exports): the master's last step, so the host's conversion to that depth is exact.
+    if (bypassParam->load() <= 0.5f)
+        dither.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     outputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     outputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
 
@@ -869,6 +887,9 @@ void PolisherAudioProcessor::publishMeters()
     const float clip = static_cast<float> (clipper.takeMaxClipDb());
     if (clip < meters.clipReduction.load())
         meters.clipReduction.store (clip);
+    const float bassCut = static_cast<float> (limiter.takeMaxBassCutDb());
+    if (bassCut < meters.bassFirstCut.load())
+        meters.bassFirstCut.store (bassCut);
     const float gr = static_cast<float> (limiter.takeMaxGainReductionDb());
     if (gr < meters.gainReduction.load())
         meters.gainReduction.store (gr);

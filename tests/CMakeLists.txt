@@ -21,6 +21,7 @@ add_executable(polisher_tests
     test_stemeq.cpp
     test_spectral.cpp
     test_unlimiter.cpp
+    test_dither.cpp
     test_validation.cpp
     test_reference.cpp
     test_monitoring.cpp

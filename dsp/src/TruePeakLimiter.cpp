@@ -1,4 +1,5 @@
 #include "polisher/TruePeakLimiter.h"
+#include "polisher/FilterDesign.h"
 
 namespace polisher {
 
@@ -90,6 +91,14 @@ void TruePeakLimiter::prepare (double newSampleRate, int numChannels)
     delayLength = lookahead + TruePeakDetector::kLatency;
 
     delayBuffer.assign (static_cast<size_t> (channelCount * delayLength), 0.0);
+    refBuffer.assign (static_cast<size_t> (channelCount * delayLength), 0.0);
+    bassLookahead = std::max (1, static_cast<int> (std::lround (kBassLookaheadMs * 0.001 * sampleRate)));
+    for (auto* v : { &bassLine, &lowLine, &highLine })
+        v->assign (static_cast<size_t> (channelCount * (bassLookahead + 1)), 0.0);
+    bassMin.prepare (bassLookahead + 1);
+    bassSmooth.prepare (bassLookahead);
+    bassFloor = std::pow (10.0, -kBassMaxCutDb / 20.0);
+    bassFadeStep = 1.0 / (ParkGlide::kFadeSeconds * sampleRate);
     slidingMin.prepare (lookahead + 1);
     smoother.prepare (lookahead);
     drainExtra = static_cast<int> (std::lround (kBypassDrainMs * 0.001 * sampleRate));
@@ -103,7 +112,24 @@ void TruePeakLimiter::reset() noexcept
 {
     for (auto& d : detectors) d.reset();
     std::fill (delayBuffer.begin(), delayBuffer.end(), 0.0);
+    std::fill (refBuffer.begin(), refBuffer.end(), 0.0);
+    lastRef = {};
     delayPos = 0;
+    for (auto* v : { &bassLine, &lowLine, &highLine })
+        std::fill (v->begin(), v->end(), 0.0);
+    bassPos = bassCountdown = 0;
+    bassMin.reset();
+    bassSmooth.reset (1.0);
+    bassGain = 1.0;
+    minBassSinceRead = 1.0;
+    bassSeg.stop();
+    // Start in the set state: split at its frequency when Bass First is on (no glide after a reset).
+    bassRunning = bassEngaged = ! params.bypassed && params.bassFirst > 0.0;
+    bassFade = bassFadeGoal = bassRunning ? 1.0 : 0.0;
+    bassLog = bassRunning ? std::log (kBassSplitHz) : ParkGlide::parkLog (sampleRate);
+    for (auto& ch : bassLp) for (auto& f : ch) f.reset();
+    for (auto& ch : bassHp) for (auto& f : ch) f.reset();
+    designBassSplit (std::exp (bassLog));
     slidingMin.reset();
     smoother.reset (1.0);
     gain = 1.0;
@@ -141,21 +167,152 @@ void TruePeakLimiter::setParams (const LimiterParams& p) noexcept
         releaseFastCoef = releaseSlowCoef = timeCoefficient (base, sampleRate);
     }
     sustainCoef = timeCoefficient (400.0, sampleRate);
+    bassReleaseCoef = timeCoefficient (std::max (10.0, base * 0.5), sampleRate);
+    bassOffCoef = timeCoefficient (10.0, sampleRate);   // A, or Bass First turned off: the low end comes back at once
     drainReleaseCoef = timeCoefficient (kBypassDrainReleaseMs, sampleRate);
 }
 
-void TruePeakLimiter::processFrame (const double* in, double* out, int numChannels) noexcept
+void TruePeakLimiter::designBassSplit (double hz) noexcept
 {
-    const int nch = std::min (numChannels, channelCount);
+    const auto lp = ParkGlide::butterworth (false, hz, sampleRate), hp = ParkGlide::butterworth (true, hz, sampleRate);
+    for (int c = 0; c < channelCount; ++c)
+        for (size_t k = 0; k < 2; ++k)
+        {
+            design::apply (bassLp[static_cast<size_t> (c)][k], lp);
+            design::apply (bassHp[static_cast<size_t> (c)][k], hp);
+        }
+}
 
-    // 1. Drive, delay line and oversampled peak detection (linked across channels).
-    double peak = 0.0;
+void TruePeakLimiter::bassUpdate (bool wanted) noexcept
+{
+    const double park = ParkGlide::parkLog (sampleRate), target = std::log (kBassSplitHz);
+    if (wanted && ! bassRunning)
+    {
+        // Switch in parked: clean filters just under Nyquist, then fade in (an all-pass up there is
+        // practically the plain signal, so the fade can't cut a hole).
+        bassRunning = true;
+        bassEngaged = false;
+        bassSeg.stop();
+        bassLog = park;
+        for (auto& ch : bassLp) for (auto& f : ch) f.reset();
+        for (auto& ch : bassHp) for (auto& f : ch) f.reset();
+        designBassSplit (std::exp (bassLog));
+        // The lines hold only the plain input while the stage is out: fill the bands as the split at the park
+        // gives them (all low), so nothing older leaks into the fade.
+        lowLine = bassLine;
+        std::fill (highLine.begin(), highLine.end(), 0.0);
+    }
+    if (! bassRunning || bassSeg.active())
+        return;
+    const double dt = kUpdateSamples / sampleRate;
+    if (wanted)
+    {
+        bassFadeGoal = 1.0;
+        if (bassFade >= 1.0 && bassLog != target)
+            bassSeg.start (bassLog, ParkGlide::step (bassLog, target, dt, sampleRate), kUpdateSamples);
+        bassEngaged = bassFade >= 1.0 && bassLog == target;
+        return;
+    }
+    // Off: let the cut go first, then glide up to the park, then fade out.
+    bassEngaged = false;
+    if (bassGain < 1.0)
+        return;
+    if (bassLog != park)
+        bassSeg.start (bassLog, ParkGlide::step (bassLog, park, dt, sampleRate), kUpdateSamples);
+    else
+    {
+        bassFadeGoal = 0.0;
+        if (bassFade <= 0.0)
+            bassRunning = false;   // out of the path: an exact delay again
+    }
+}
+
+void TruePeakLimiter::bassFirstStage (const double* in, double* out, double* ref, int nch) noexcept
+{
+    const int len = bassLookahead + 1;
+    const double amount = params.bypassed ? 0.0 : std::clamp (params.bassFirst, 0.0, 1.0);
+    if (--bassCountdown <= 0)
+    {
+        bassUpdate (amount > 0.0);
+        bassCountdown = kUpdateSamples;
+    }
+    if (bassSeg.active())
+    {
+        bassLog = bassSeg.next();
+        designBassSplit (std::exp (bassLog));
+    }
+
+    // What the low band must come down to so each channel's sample stays at the ceiling (1 = nothing).
+    double need = 1.0;
     for (int c = 0; c < nch; ++c)
     {
         const double x = params.bypassed ? in[c] : in[c] * inputGain;
+        const auto at = static_cast<size_t> (c * len + bassPos);
+        bassLine[at] = x;
+        if (! bassRunning)
+            continue;
+        auto& lp = bassLp[static_cast<size_t> (c)];
+        auto& hp = bassHp[static_cast<size_t> (c)];
+        const double low = lp[1].process (lp[0].process (x));
+        const double high = hp[1].process (hp[0].process (x));
+        lowLine[at] = low;
+        highLine[at] = high;
+        const double s = low + high;
+        if (bassEngaged && amount > 0.0 && std::abs (s) > ceilingSafe && low * s > 0.0)
+        {
+            // The low band pushes this sample over: the low band alone brings it back to the ceiling.
+            const double a = (std::copysign (ceilingSafe, s) - high) / low;
+            need = std::min (need, std::clamp (a, bassFloor, 1.0));
+        }
+    }
+    const double wanted = 1.0 - (bassEngaged ? amount : 0.0) * (1.0 - need);
+    const double attack = bassSmooth.push (bassMin.push (wanted));
+    if (attack < bassGain) bassGain = attack;
+    else bassGain = attack + (bassGain - attack) * (bassEngaged && amount > 0.0 ? bassReleaseCoef : bassOffCoef);
+    if (bassGain > 0.99995) bassGain = 1.0;
+    if (! params.bypassed) minBassSinceRead = std::min (minBassSinceRead, bassGain);
+    if (bassRunning)
+        ParkGlide::fadeToward (bassFade, bassFadeGoal, bassFadeStep);
+    const double w = ParkGlide::fadeWeight (bassFade);
+
+    // The oldest sample leaves the lines: plain, split (low band at bassGain), or a fade between the two.
+    const int oldest = (bassPos + 1) % len;
+    for (int c = 0; c < nch; ++c)
+    {
+        const auto at = static_cast<size_t> (c * len + oldest);
+        const double plain = bassLine[at];
+        if (! bassRunning || w <= 0.0)
+        {
+            out[c] = ref[c] = plain;
+            continue;
+        }
+        const double whole = lowLine[at] + highLine[at];
+        const double split = bassGain * lowLine[at] + highLine[at];
+        out[c] = w >= 1.0 ? split : plain + (split - plain) * w;
+        ref[c] = w >= 1.0 ? whole : plain + (whole - plain) * w;   // the same without the cut
+    }
+    bassPos = oldest;
+}
+
+void TruePeakLimiter::processFrame (const double* rawIn, double* out, int numChannels) noexcept
+{
+    const int nch = std::min (numChannels, channelCount);
+
+    // 0. Bass First: the low end takes the limiting first (an exact delay when off).
+    std::array<double, kMaxChannels> in {}, ref {};
+    bassFirstStage (rawIn, in.data(), ref.data(), nch);
+
+    // 1. Drive (applied in the stage above), delay line and oversampled peak detection (linked across channels).
+    double peak = 0.0;
+    for (int c = 0; c < nch; ++c)
+    {
+        const double x = in[static_cast<size_t> (c)];
         double* line = delayBuffer.data() + c * delayLength;
         out[c] = line[delayPos];        // oldest sample leaves the line
         line[delayPos] = x;
+        double* refLine = refBuffer.data() + c * delayLength;   // (the same, without Bass First's cut)
+        lastRef[static_cast<size_t> (c)] = refLine[delayPos];
+        refLine[delayPos] = ref[static_cast<size_t> (c)];
         peak = std::max (peak, detectors[static_cast<size_t> (c)].process (x));
     }
     delayPos = (delayPos + 1) % delayLength;

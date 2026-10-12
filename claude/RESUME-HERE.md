@@ -17,7 +17,9 @@ genre target line. Remaining, in order:
 3. Pro EQ -> built as Stereo / Mid / Side per Tonal EQ band - DONE v0.19.0. Skipped as redundant (user rule
    "no need to be redundant"): dynamic EQ bands (Resonance Tamer Harshness/Boxiness + Dynamics bands do it);
    linear phase (adds latency + pre-ringing, little gain for broad master moves) - offer only if asked.
-4. Maximizer: transient-aware / multiband modes, dither for 16-bit exports, codec (streaming) preview.
+4. Maximizer -> Bass First (808-aware / multiband limiting) + Dither - DONE v0.20.0. Skipped: transient-aware
+   mode (Soft Clipper + Impact cover it); codec preview (needs an MP3/AAC encoder in the plug-in; -1 dBTP
+   ceiling covers the clipping risk) - offer only if asked.
 5. Multiband saturation (Ozone "Exciter").
 6. Mid/side on more modules (Dynamics, Saturation, ...).
 7. Vintage-style modules (tape / compressor / EQ / limiter flavours) - lowest value.
@@ -25,6 +27,27 @@ genre target line. Remaining, in order:
 Optional: Listen (delta) on the 6 modules without it - a version for all 11 exists as a stash/patch from
 the older branch (claude session 2026-10-12), only if the user asks.
 Also open: validation steps 2-3, Auto-Master turning a too-hot mix down, Auto-Master rule for Impact.
+
+## Maximizer Bass First + Dither (v0.20.0, 2026-10-12)
+TruePeakLimiter::bassFirstStage in front of the main stage, always in the path (latency + kBassLookaheadMs 1.5 ms
+= 72 samples at 48 k; plug-in latency up by that). LR4 split at 120 Hz (low + high = all-pass, in phase); when
+|low+high| > ceiling and the low band pushes it, low alone is scaled to bring the sample to the ceiling (floor
+-12 dB), sliding min + moving average over its look-ahead, release = half the set release; bassFirst (0..1) scales
+the cut. Off = exact delay; on/off by park and glide (fade in at the park, glide to 120 Hz, then cut; reverse).
+First try (input minus a plain low-pass as "high") made the vocal duck MORE (phase-shifted low band): don't redo.
+Measured (808 50 Hz + steady 2 kHz "vocal" driven 4-5 dB over): vocal dip per 808 -3.9 dB plain, -0.9 dB at
+100 %; true peak held; switching (50 / 120 / 1000 Hz, 44.1-96 k) no dip/click. Param maxBassFirst 0-100 %
+(hint 11, in sliderIds), Auto-Master sets 0. Meter takeMaxBassCutDb -> frame "bassCut" (Learn).
+Dither: dsp/include/polisher/Dither.h, TPDF +-1 LSB, rounded onto the 16/24-bit grid, xorshift per channel, no
+shaping; param maxDither Off/16/24 (hint 11, comboIds); applied after the limiter on B only (A untouched).
+Review fixes: in A / Bass First off the cut lets go in 10 ms (was half the Release: up to 10 s with the all-pass
+in A); the limiter also outputs a no-limiting reference through its delay (process(..., gainOut, refOut)) and
+the Maximizer Listen uses reference - output (was delayed input - output: heard the split's phase turn as
+"taken off", +1.9 dB with nothing limited); switch-in fills the band lines as the split at the park gives
+them (no old-audio blip); LoudnessTargeting renders reset() after setParams (start engaged).
+Known approximation: Listen of modules before the Maximizer scales by the main gain only (not Bass First's
+low-band cut).
+Tests: [bassfirst] (6) in test_limiter, test_dither.cpp (3). NOT YET HEARD by the user.
 
 ## Tonal EQ mid / side (v0.19.0, 2026-10-12)
 eqMode1..7 (choice Stereo / Mid / Side, version hint 10, in comboIds for the relays). TonalEQParams::channels;

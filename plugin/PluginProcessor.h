@@ -13,6 +13,7 @@
 #include "polisher/Saturation.h"
 #include "polisher/StemEQ.h"
 #include "polisher/Unlimiter.h"
+#include "polisher/Dither.h"
 #include "polisher/Monitoring.h"
 #include "ModuleParams.h"
 #include "SpectrumTap.h"
@@ -77,6 +78,7 @@ public:
         std::atomic<float> truePeakMax { -100.0f };
         std::atomic<float> truePeakRecent { -100.0f };
         std::atomic<float> gainReduction { 0.0f };
+        std::atomic<float> bassFirstCut { 0.0f };    // deepest Bass First low-end cut since read (dB, <= 0)
         std::atomic<float> peakLeft { -100.0f };
         std::atomic<float> peakRight { -100.0f };
         std::atomic<float> clipReduction { 0.0f };   // largest clipper peak reduction since read (dB, <= 0)
@@ -205,6 +207,9 @@ private:
     std::atomic<float>* ceilingParam = nullptr;
     std::atomic<float>* releaseParam = nullptr;
     std::atomic<float>* adaptiveParam = nullptr;
+    std::atomic<float>* bassFirstParam = nullptr;
+    std::atomic<float>* ditherParam = nullptr;
+    polisher::Dither dither;
     std::atomic<float>* bypassParam = nullptr;
     double tailSeconds = 0.25;
     std::atomic<float>* autoResetParam = nullptr;

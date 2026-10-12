@@ -1,6 +1,6 @@
 # Polisher User Manual
 
-Version 0.19.0 · October 2026
+Version 0.20.0 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
@@ -8,7 +8,7 @@ Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d7
 
 Polisher is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds eleven modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.19.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.20.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 
@@ -343,9 +343,21 @@ The final true-peak limiter. It makes the master loud and keeps every peak at or
 | Ceiling | −3 to 0 dBTP (−1) | The highest peak allowed, between samples too (measured the way streaming services measure true peak). −1 suits most masters; loud ones (−9 LUFS and louder) are safer at −1.5 (what Auto-Master sets for Loud and Club) to −2 (Spotify's advice), because their MP3/AAC/Ogg copies peak higher. |
 | Release | 10–1000 ms (120) | How fast the limiter lets go. Shorter = louder but can distort bass. |
 | Release Mode | Adaptive (default) or Fixed | Adaptive recovers fast after drum hits and slowly on 808s and pads, so it doesn't pump. |
+| Bass First | off–100 % (off) | When the 808 (below 120 Hz) pushes a peak into the limiter, the low end is turned down first (up to 12 dB) instead of the whole mix, so the vocal and hats stop dipping with every 808. |
+| Dither | Off, 16-bit, 24-bit (Off) | For exports at a lower bit depth. Set it to the bit depth you export. |
 | GR | meter | Gain reduction. Under about 4 dB is comfortable. |
 
 Set Drive while watching **Short-term** in the footer. If Learn says **Diminishing returns**, the extra Drive only adds squashing, not loudness: turn it down.
+
+**Bass First (808-aware limiting).** A normal limiter turns the whole master down when a peak hits the ceiling. In trap the peaks are usually the 808, so the vocal and hats dip on every 808 hit: that's the "pumping" you hear on loud masters. With Bass First up, the low end takes that reduction instead. On a test beat (heavy 808 under a steady vocal) the vocal dipped 3.9 dB per 808 hit with Bass First off and 0.9 dB with it at 100 %, with the same ceiling.
+
+- Try 50–100 % on trap with a heavy 808, and compare with MATCH.
+- The trade: on the loudest hits the 808 sits a little lower. Learn shows how much the low end is taking right now.
+- Turning it on or off glides in about a quarter of a second, so it never clicks.
+- Polisher's delay is 1.5 ms longer than before (Cubase compensates it automatically).
+- Auto-Master sets it back to off (it plans the plain limiter); add it afterwards.
+
+**Dither.** When you export a **16-bit** WAV (CD, some distributors), set Dither to 16-bit. It adds a very quiet hiss (about −98 dBFS) so quiet fades and reverb tails don't turn gritty when the export is cut to 16 bits. For a 24-bit or 32-bit float export, leave it Off (or 24-bit for a 24-bit WAV). For it to work, Polisher must be the last thing on Stereo Out and the Stereo Out fader must sit at 0 dB. Don't also turn on Cubase's own dither.
 
 ## MATCH and A / B
 

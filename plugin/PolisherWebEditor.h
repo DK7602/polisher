@@ -111,7 +111,7 @@ private:
     juce::dsp::WindowingFunction<float> window { static_cast<size_t> (kFftSize), juce::dsp::WindowingFunction<float>::hann, false };
     std::array<float, 2 * kFftSize> fftBuffer {};
     Analyser mixAnalyser, masterAnalyser;
-    float grHold = 0.0f, clipHold = 0.0f, tameHold = 0.0f, punchHold = 0.0f;
+    float grHold = 0.0f, clipHold = 0.0f, tameHold = 0.0f, punchHold = 0.0f, bassCutHold = 0.0f;
     std::array<float, polisher::kDynBands> dynHold {}, impactHold {}, sustainHold {};
     double satResHold = 0.0, satSigHold = 0.0;
     std::array<double, polisher::kStems> stemHold {};

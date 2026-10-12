@@ -57,6 +57,7 @@ AudioClip renderLimited (const AudioClip& clip, const LimiterParams& params)
     TruePeakLimiter limiter;
     limiter.prepare (clip.sampleRate, clip.numChannels());
     limiter.setParams (params);
+    limiter.reset();   // start in the set state (Bass First engaged, if set)
 
     const int nch = clip.numChannels();
     const int n = clip.numSamples();
@@ -318,6 +319,7 @@ AudioClip renderMaster (const AudioClip& input, const MasterChainParams& params)
     auto lp = params.limiter;
     lp.driveDb = 0.0;
     limiter.setParams (lp);
+    limiter.reset();   // start in the set state (Bass First engaged, if set)
 
     const double drive = std::pow (10.0, params.driveDb / 20.0);
     const int latency = SoftClipper::latencySamples() + limiter.latencySamples();

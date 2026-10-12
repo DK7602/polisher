@@ -417,8 +417,11 @@ void PolisherWebEditor::timerCallback()
     grHold = gr < grHold ? gr : grHold * 0.8f + gr * 0.2f;
     const float clip = m.clipReduction.exchange (0.0f);
     clipHold = clip < clipHold ? clip : clipHold * 0.8f + clip * 0.2f;
+    const float bassCut = m.bassFirstCut.exchange (0.0f);
+    bassCutHold = bassCut < bassCutHold ? bassCut : bassCutHold * 0.8f + bassCut * 0.2f;
 
     auto* frame = new juce::DynamicObject();
+    frame->setProperty ("bassCut",    roundTo (bassCutHold, 0.1f));
     frame->setProperty ("momentary",  roundTo (m.momentary.load(), 0.1f));
     frame->setProperty ("shortTerm",  roundTo (m.shortTerm.load(), 0.1f));
     frame->setProperty ("integrated", roundTo (m.integrated.load(), 0.1f));

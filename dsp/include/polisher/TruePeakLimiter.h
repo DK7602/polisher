@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Biquad.h"
+#include "ParkGlide.h"
 #include "TruePeakDetector.h"
 
 #include <algorithm>
@@ -16,6 +18,7 @@ struct LimiterParams
     double releaseMs      = 120.0;  // base release time
     bool   adaptiveRelease = true;  // faster on transients, slower on sustained gain reduction
     double outputTrimDb   = 0.0;    // post-limiter trim (<= 0 keeps the ceiling guarantee)
+    double bassFirst      = 0.0;    // 0 ... 1: take the limiting from the low end (< 120 Hz) first (see TruePeakLimiter)
     bool   bypassed       = false;  // passes audio through, still delayed by the latency (see TruePeakLimiter)
 };
 
@@ -30,6 +33,17 @@ struct LimiterParams
       4. exponential release, program dependent when adaptiveRelease is on
     The audio is delayed by L + TruePeakDetector::kLatency samples, so peaks are caught before they
     happen, with no overshoot.
+
+    Bass First (a stage in front, kBassLookaheadMs of its own look-ahead, always in the path so the
+    latency never changes): a Linkwitz-Riley split at kBassSplitHz (low and high add up to an all-pass,
+    in phase with each other). When a sample would go over the ceiling and the low band pushes it there
+    (an 808 under a vocal), the low band alone is turned down far enough to bring it back (at most
+    kBassMaxCutDb), smoothed like the main gain (sliding minimum + moving average, release at half the
+    set release). The rest of the mix is not turned down for that peak, so vocals and hats don't duck
+    with the 808; the main stage then catches whatever is left (true peaks, highs that peak on their
+    own). bassFirst scales how much of that cut is used. Off (0), the stage is an exact delay; it
+    switches in by park and glide (see ParkGlide): the split fades in parked under Nyquist, glides down
+    to kBassSplitHz, and only then starts cutting (backwards to switch off).
 
     Bypass (A in the plug-in) passes the delayed input through untouched. The gain computer keeps
     running underneath, so it always knows what is in the delay line. When bypass switches on, the
@@ -49,13 +63,25 @@ public:
     static constexpr double kBypassDrainMs = 50.0;
     static constexpr double kBypassDrainReleaseMs = 3.0;
     static constexpr double kBypassGlideMs = 10.0;
+    static constexpr double kBassLookaheadMs = 1.5;
+    static constexpr double kBassSplitHz = 120.0;
+    static constexpr double kBassMaxCutDb = 12.0;
+    static constexpr int kUpdateSamples = 16;   // Bass First's switching steps
 
     void prepare (double sampleRate, int numChannels);
     void reset() noexcept;
     void setParams (const LimiterParams& p) noexcept;
     const LimiterParams& getParams() const noexcept { return params; }
 
-    int latencySamples() const noexcept { return lookahead + TruePeakDetector::kLatency; }
+    int latencySamples() const noexcept { return bassLookahead + lookahead + TruePeakDetector::kLatency; }
+
+    /** Deepest Bass First low-end cut since the last call (dB, <= 0). */
+    double takeMaxBassCutDb() noexcept
+    {
+        const double g = minBassSinceRead;
+        minBassSinceRead = 1.0;
+        return g > 0.0 ? 20.0 * std::log10 (g) : -120.0;
+    }
 
     /** Gain reduction applied to the most recent sample, in dB (<= 0). */
     double currentGainReductionDb() const noexcept { return gain > 0.0 ? 20.0 * std::log10 (gain) : -120.0; }
@@ -80,6 +106,15 @@ public:
     template <typename Sample>
     void process (Sample* const* channels, int numChannels, int numSamples, double* gainOut) noexcept
     {
+        process (channels, numChannels, numSamples, gainOut, nullptr);
+    }
+
+    /** The same, also writing (for the first two channels) what the output would be with no limiting at
+        all, lined up with it: the input delayed, through Bass First's split when it is in the path. The
+        plug-in's "what the Maximizer takes off" is that minus the output. */
+    template <typename Sample>
+    void process (Sample* const* channels, int numChannels, int numSamples, double* gainOut, double* const* refOut) noexcept
+    {
         armDrain (numSamples);   // a switch to bypass: this block (Drive ramping out) is still limited
         const int nch = std::min (numChannels, channelCount);
         for (int i = 0; i < numSamples; ++i)
@@ -93,6 +128,9 @@ public:
 
             for (int c = 0; c < nch; ++c)
                 channels[c][i] = static_cast<Sample> (out[static_cast<size_t> (c)]);
+            if (refOut != nullptr)
+                for (int c = 0; c < std::min (nch, 2); ++c)
+                    refOut[c][i] = lastRef[static_cast<size_t> (c)];
             if (gainOut != nullptr)
                 gainOut[i] = lastGain;
         }
@@ -164,6 +202,22 @@ private:
     double sustain = 0.0;
     double minGainSinceRead = 1.0;
     double lastGain = 1.0;   // gain applied to the latest output sample
+
+    // Bass First (see the class comment).
+    void bassFirstStage (const double* in, double* out, double* ref, int nch) noexcept;
+    std::vector<double> refBuffer;                         // the stage's output without its cut, through the main delay
+    std::array<double, kMaxChannels> lastRef {};
+    void bassUpdate (bool wanted) noexcept;
+    void designBassSplit (double hz) noexcept;
+    int bassLookahead = 72, bassPos = 0, bassCountdown = 0;
+    std::vector<double> bassLine, lowLine, highLine;      // delayed input and its two bands, channelCount * (bassLookahead + 1)
+    std::array<std::array<Biquad, 2>, kMaxChannels> bassLp {}, bassHp {};
+    SlidingMin bassMin;
+    MovingAverage bassSmooth;
+    double bassGain = 1.0, bassReleaseCoef = 0.0, bassOffCoef = 0.0, bassFloor = 0.25, minBassSinceRead = 1.0;
+    bool bassRunning = false, bassEngaged = false;        // split in the path / at its frequency and cutting
+    double bassFade = 0.0, bassFadeGoal = 0.0, bassFadeStep = 0.0, bassLog = 0.0;
+    ParkGlide::Segment bassSeg;
 };
 
 } // namespace polisher

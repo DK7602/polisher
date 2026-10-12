@@ -29,6 +29,7 @@ namespace ModuleParams
         for (int x = 0; x < polisher::kDynBands - 1; ++x) ids.add (band ("dynX", x));
         for (const char* p : { "dynThr", "dynRatio", "dynAtk", "dynRel", "dynGain", "dynImpact", "dynSustain" })
             for (int b = 0; b < polisher::kDynBands; ++b) ids.add (band (p, b));
+        ids.add ("maxBassFirst");   // (defined with the Maximizer in PluginProcessor)
         ids.add ("satDrive");
         ids.add ("satMix");
         return ids;
@@ -36,7 +37,7 @@ namespace ModuleParams
     inline juce::StringArray toggleIds() { return { "ulOn", "stemOn", "stemKeep", "tsOn", "rtOn", "dynOn", "dynAdaptive", "satOn" }; }
     inline juce::StringArray comboIds()
     {
-        juce::StringArray ids { "satMode", "satFocus", "tsSpeed", "rtFocus", "ulFocus" };
+        juce::StringArray ids { "satMode", "satFocus", "tsSpeed", "rtFocus", "ulFocus", "maxDither" };
         for (int b = 1; b <= polisher::kEqBands; ++b) ids.add ("eqMode" + juce::String (b));   // EQ band channels (defined with the EQ)
         return ids;
     }
