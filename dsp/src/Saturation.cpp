@@ -33,6 +33,44 @@ double Saturation::estimateHarmonicsDb (const std::vector<std::vector<float>>& c
     if (m <= 0.0)
         return -100.0;
     const bool bassOnly = p.focus == SaturationFocus::bass;
+    if (p.focus == SaturationFocus::highs || p.focus == SaturationFocus::bassHighs)
+    {
+        // The same filters as the plug-in, each band at its own bend.
+        const auto hpHi = design::butterworth (true, std::min (kHighResidualHz, 0.4 * sampleRate), sampleRate);
+        const auto lpLow = design::butterworth (false, kBassSplitHz, sampleRate);
+        const auto hpLow = design::butterworth (true, kBassResidualHz, sampleRate);
+        const double sHi = bendFor (p.driveDb, SaturationFocus::highs), sLow = bendFor (p.driveDb, SaturationFocus::bass);
+        const bool withBass = p.focus == SaturationFocus::bassHighs;
+        double res = 0.0, sig = 0.0;
+        for (const auto& ch : channels)
+        {
+            Biquad hpSplit[2], post, lsplit[2], lpost;
+            double fxy = 0.0, fxx = 0.0;
+            const double fc = 1.0 - std::exp (-1.0 / (0.003 * sampleRate));
+            for (auto& f : hpSplit) design::apply (f, design::butterworth (true, std::min (kHighSplitHz, 0.4 * sampleRate), sampleRate));
+            design::apply (post, hpHi);
+            for (auto& f : lsplit) design::apply (f, lpLow);
+            design::apply (lpost, hpLow);
+            for (float v : ch)
+            {
+                const double x = v, hi = hpSplit[1].process (hpSplit[0].process (x));
+                const double y = shape (hi, p.mode, sHi);
+                fxy += (y * hi - fxy) * fc;
+                fxx += (hi * hi - fxx) * fc;
+                const double g = fxx > 1.0e-20 ? std::clamp (fxy / fxx, 0.0, 1.0) : 1.0;
+                double r = post.process (y - g * hi);
+                if (withBass)
+                {
+                    const double low = lsplit[1].process (lsplit[0].process (x));
+                    r += lpost.process (shape (low, p.mode, sLow) - low);
+                }
+                res += r * r;
+                sig += x * x;
+            }
+        }
+        const double ratio = sig > 0.0 ? m * m * res / sig : 0.0;
+        return ratio > 1.0e-10 ? 10.0 * std::log10 (ratio) : -100.0;
+    }
     const double s = bendFor (p.driveDb, p.focus);
     const auto lp = design::butterworth (false, kBassSplitHz, sampleRate);
     const auto hp = design::butterworth (true, kBassResidualHz, sampleRate);
@@ -84,6 +122,8 @@ void Saturation::prepare (double newSampleRate, int numChannels)
         {
             for (auto& f : st.split) design::apply (f, lp);
             design::apply (st.bassHp, hp);
+            for (auto& f : st.hiSplit) design::apply (f, design::butterworth (true, std::min (kHighSplitHz, 0.4 * sampleRate), sampleRate));
+            design::apply (st.hiHp, design::butterworth (true, std::min (kHighResidualHz, 0.4 * sampleRate), sampleRate));
         }
     }
     glideCoeff = 1.0 - std::exp (-1.0 / (0.030 * sampleRate));
@@ -92,6 +132,8 @@ void Saturation::prepare (double newSampleRate, int numChannels)
     dcGlideCoeff = 1.0 - std::exp (-1.0 / (kDcGlideSeconds * sampleRate));
     dcWindow = static_cast<int> (0.05 * sampleRate);   // two cycles of the lowest 808 note
     bassBendScale = std::pow (10.0, -kBassDriveDb / 20.0);
+    highBendScale = std::pow (10.0, -kHighDriveDb / 20.0);
+    fitCoeff = 1.0 - std::exp (-1.0 / (0.003 * 4.0 * sampleRate));   // ~3 ms at the 4x rate
     blendStep = 1.0 / (kFocusFadeSeconds * sampleRate);
     reset();
 }
@@ -119,6 +161,10 @@ void Saturation::stopSlot (int index) noexcept
         for (auto& stage : st.stages) stage.reset();
         for (auto& f : st.split) f.reset();
         st.bassHp.reset();
+        for (auto& stage : st.hiStages) stage.reset();
+        for (auto& f : st.hiSplit) f.reset();
+        st.hiHp.reset();
+        st.fitXY = st.fitXX = 0.0;
         st.hpX = st.hpY = st.dcSum = 0.0;
     }
 }
@@ -148,23 +194,55 @@ void Saturation::reset() noexcept
     resEnergy = sigEnergy = 0.0;
 }
 
+double Saturation::lowWet (SaturationMode mode, SlotState& st, double x) const noexcept
+{
+    // The curve hears the low end alone; the high-pass keeps the harmonics above the 808's fundamental
+    // (and removes the tube curve's DC within a few ms).
+    double a, b, u[4];
+    const double low = st.split[1].process (st.split[0].process (x));
+    const double bassBend = bend * bassBendScale;
+    st.stages[0].upsample (low, a, b);
+    st.stages[1].upsample (a, u[0], u[1]);
+    st.stages[1].upsample (b, u[2], u[3]);
+    for (double& v : u) v = shape (v, mode, bassBend) - v;
+    const double ra = st.stages[1].downsample (u[0], u[1]);
+    const double rb = st.stages[1].downsample (u[2], u[3]);
+    return st.bassHp.process (st.stages[0].downsample (ra, rb));
+}
+
+double Saturation::highWet (SaturationMode mode, SlotState& st, double x) const noexcept
+{
+    // The curve hears the top alone. Only its new harmonics are kept: the part of its output that follows
+    // the top itself (g x, g from a running least-squares fit) is taken out, so the top keeps its level.
+    // The high-pass then keeps only what is added up there (no difference tones in the vocal's range, no DC).
+    double a, b, u[4];
+    const double high = st.hiSplit[1].process (st.hiSplit[0].process (x));
+    const double highBend = bend * highBendScale;
+    st.hiStages[0].upsample (high, a, b);
+    st.hiStages[1].upsample (a, u[0], u[1]);
+    st.hiStages[1].upsample (b, u[2], u[3]);
+    for (double& v : u)
+    {
+        const double y = shape (v, mode, highBend);
+        st.fitXY += (y * v - st.fitXY) * fitCoeff;
+        st.fitXX += (v * v - st.fitXX) * fitCoeff;
+        const double g = st.fitXX > 1.0e-20 ? std::clamp (st.fitXY / st.fitXX, 0.0, 1.0) : 1.0;
+        v = y - g * v;
+    }
+    const double ra = st.hiStages[1].downsample (u[0], u[1]);
+    const double rb = st.hiStages[1].downsample (u[2], u[3]);
+    return st.hiHp.process (st.hiStages[0].downsample (ra, rb));
+}
+
 double Saturation::slotWet (const Slot& slot, SlotState& st, double x, double dcWeight, bool measuringDc, bool seedDc, double dcCoeff) const noexcept
 {
     double a, b, u[4];
     if (slot.focus == SaturationFocus::bass)
-    {
-        // Bass only: the curve hears the low end alone; the high-pass keeps the harmonics above the
-        // 808's fundamental (and removes the tube curve's DC within a few ms).
-        const double low = st.split[1].process (st.split[0].process (x));
-        const double bassBend = bend * bassBendScale;
-        st.stages[0].upsample (low, a, b);
-        st.stages[1].upsample (a, u[0], u[1]);
-        st.stages[1].upsample (b, u[2], u[3]);
-        for (double& v : u) v = shape (v, slot.mode, bassBend) - v;
-        const double ra = st.stages[1].downsample (u[0], u[1]);
-        const double rb = st.stages[1].downsample (u[2], u[3]);
-        return st.bassHp.process (st.stages[0].downsample (ra, rb));
-    }
+        return lowWet (slot.mode, st, x);
+    if (slot.focus == SaturationFocus::highs)
+        return highWet (slot.mode, st, x);
+    if (slot.focus == SaturationFocus::bassHighs)
+        return lowWet (slot.mode, st, x) + highWet (slot.mode, st, x);
 
     // Full: up 4x, keep only what the curve adds (the clean signal never goes through the filters),
     // down 4x, remove DC.

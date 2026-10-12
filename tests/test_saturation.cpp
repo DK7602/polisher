@@ -818,3 +818,102 @@ TEST_CASE ("Saturation Mode changes cross-fade: no click, no thump, constant lat
     }
     CHECK (10.0 * std::log10 (err / sig) < -50.0);
 }
+
+TEST_CASE ("Saturation Highs only adds sheen up top and leaves the vocal and 808 clean; Bass + Highs does both", "[saturation][focus]")
+{
+    // A hat-like 6 kHz tone, a vocal-like 1 kHz tone and an 808-like 45 Hz note, together.
+    const double sr = 48000.0;
+    auto mixed = testsig::sine (sr, 2, 6000.0, -12.0, 2.0);
+    for (auto [hz, db] : { std::pair { 1000.0, -9.0 }, std::pair { 45.0, -6.0 } })
+    {
+        const auto t = testsig::sine (sr, 2, hz, db, 2.0);
+        for (size_t c = 0; c < 2; ++c)
+            for (size_t i = 0; i < mixed.channels[c].size(); ++i) mixed.channels[c][i] += t.channels[c][i];
+    }
+    for (auto m : { SaturationMode::tape, SaturationMode::tube })
+    {
+        const auto highs = saturate (mixed, with (m, 12.0, 100.0, SaturationFocus::highs));
+        const auto both = saturate (mixed, with (m, 12.0, 100.0, SaturationFocus::bassHighs));
+        const double sheen = m == SaturationMode::tube ? 12000.0 : 18000.0;   // tube: the 2nd; tape: the 3rd
+        INFO ("mode " << static_cast<int> (m) << ": Highs only " << levelAt (highs, sheen) << " dB at " << sheen << " Hz, 2 kHz "
+              << levelAt (highs, 2000.0) << ", 135 Hz " << levelAt (highs, 135.0) << "; Bass + Highs 135 Hz " << levelAt (both, 135.0)
+              << ", " << sheen << " Hz " << levelAt (both, sheen) << ", 2 kHz " << levelAt (both, 2000.0));
+        CHECK (levelAt (highs, sheen) > -60.0);          // sheen on the hat
+        CHECK (levelAt (highs, 2000.0) < -100.0);        // the vocal gets no harmonics
+        CHECK (levelAt (highs, 135.0) < -100.0);         // the 808 gets none either
+        CHECK (levelAt (highs, 5000.0) < -70.0);         // no audible difference tone under the hat (6 kHz - 1 kHz): > 60 dB down
+        CHECK_THAT (levelAt (highs, 1000.0), WithinAbs (-9.0, 0.1));
+        CHECK (levelAt (both, 135.0) > -40.0);           // Bass + Highs: the 808's 3rd...
+        CHECK (levelAt (both, sheen) > -60.0);           // ...and the sheen...
+        CHECK (levelAt (both, 2000.0) < -60.0);          // ...and the vocal still (almost) clean
+    }
+}
+
+TEST_CASE ("Saturation switches between all four Focus settings without clicks, at constant latency", "[saturation][focus]")
+{
+    const double sr = 48000.0;
+    const auto sharpest = [] (const AudioClip& c, int from)
+    {
+        const auto& x = c.channels[0];
+        double worst = 0.0;
+        for (size_t i = static_cast<size_t> (std::max (2, from)); i < x.size(); ++i)
+            worst = std::max (worst, std::abs (static_cast<double> (x[i]) - 2.0 * x[i - 1] + x[i - 2]));
+        return worst;
+    };
+    auto sig = testsig::sine (sr, 2, 50.0, -3.0, 2.4);
+    const auto hat = testsig::sine (sr, 2, 7000.0, -14.0, 2.4);
+    for (size_t c = 0; c < 2; ++c)
+        for (size_t i = 0; i < sig.channels[c].size(); ++i) sig.channels[c][i] += hat.channels[c][i];
+    const SaturationFocus order[] = { SaturationFocus::full, SaturationFocus::highs, SaturationFocus::bassHighs, SaturationFocus::bass };
+    const auto pick = [&] (int i) { return with (SaturationMode::tube, 15.0, 100.0, order[(i / static_cast<int> (0.3 * sr)) % 4]); };
+    const auto switching = render<Saturation> (sig, pick, true);
+    double limit = 0.0;
+    for (auto f : order)
+        limit = std::max (limit, sharpest (render<Saturation> (sig, [&] (int) { return with (SaturationMode::tube, 15.0, 100.0, f); }, true), 4800));
+    INFO ("sharpest bend switching " << sharpest (switching, 4800) << ", steady " << limit);
+    CHECK (sharpest (switching, 4800) < 1.1 * limit);
+
+    // Latency: a quiet signal passes delayed and unchanged whatever the Focus.
+    const auto quiet = testsig::musicLike (sr, 1.2, -50.0);
+    const auto moved = render<Saturation> (quiet, [&] (int i) { return with (SaturationMode::tape, 18.0, 100.0, order[(i / 4800) % 4]); }, true);
+    double err = 0.0, s = 0.0;
+    for (size_t i = 4800; i < quiet.channels[0].size(); ++i)
+    {
+        const double d = moved.channels[0][i] - quiet.channels[0][i - static_cast<size_t> (Saturation::kLatency)];
+        err += d * d;
+        s += static_cast<double> (quiet.channels[0][i]) * quiet.channels[0][i];
+    }
+    CHECK (10.0 * std::log10 (err / s) < -50.0);
+}
+
+TEST_CASE ("Saturation Highs only adds sheen and keeps the top's level", "[saturation][focus]")
+{
+    // Review find: the top band is phase-turned against the dry path, so the curve's rounding of a loud hat
+    // came out as a boost (+2.6 dB at 6 kHz). Only the new harmonics are added now: the hat keeps its level.
+    const double sr = 48000.0;
+    for (double drive : { 12.0, 18.0 })
+        for (double hz : { 5000.0, 6000.0, 8000.0, 16000.0 })
+        {
+            const auto hat = testsig::sine (sr, 2, hz, -12.0, 1.0);
+            const auto out = saturate (hat, with (SaturationMode::tape, drive, 100.0, SaturationFocus::highs));
+            INFO ("Drive " << drive << ", " << hz << " Hz: " << levelAt (out, hz) << " dB (in -12), 3rd " << levelAt (out, 3.0 * hz));
+            CHECK_THAT (levelAt (out, hz), WithinAbs (-12.0, 0.3));
+            if (3.0 * hz < 0.45 * sr) CHECK (levelAt (out, 3.0 * hz) > -60.0);   // the sheen is there
+        }
+    // On a mix, the estimate Auto-Master would use lands near the real meter.
+    const auto mix = testsig::musicLike (sr, 3.0, -1.0);
+    for (auto f : { SaturationFocus::highs, SaturationFocus::bassHighs })
+    {
+        const auto p = with (SaturationMode::tape, 12.0, 100.0, f);
+        Saturation s;
+        s.prepare (sr, 2);
+        s.setParams (p);
+        s.reset();
+        auto c = mix;
+        float* ch[2] = { c.channels[0].data(), c.channels[1].data() };
+        s.process (ch, 2, c.numSamples());
+        const double real = s.takeHarmonicsDb(), est = Saturation::estimateHarmonicsDb (mix.channels, p, sr);
+        INFO ("focus " << static_cast<int> (f) << ": meter " << real << " dB, estimate " << est << " dB");
+        CHECK (std::abs (real - est) < 3.0);
+    }
+}

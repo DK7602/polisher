@@ -562,6 +562,25 @@ TEST_CASE ("Plug-in: Saturation Bass only reaches the engine (a vocal tone passe
     CHECK (maxAbsDiff (full, clean, settled) > 1.0e-2);
 }
 
+TEST_CASE ("Plug-in: Saturation Highs only reaches the engine (the vocal passes clean, a hat gets sheen)", "[plugin][saturation]")
+{
+    const double sr = 48000.0;
+    auto renderWith = [&] (const AudioClip& in, float drive, float focus)
+    {
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "satMode", 0.0f);
+        set (*p, "satDrive", drive);
+        set (*p, "satFocus", focus);
+        p->prepareToPlay (sr, 512);
+        return renderFixed (*p, in, 512);
+    };
+    const int settled = 4800;
+    const auto voice = testsig::sine (sr, 2, 1000.0, -6.0, 1.0);
+    CHECK (maxAbsDiff (renderWith (voice, 18.0f, 2.0f), renderWith (voice, 0.0f, 0.0f), settled) < 1.0e-5);   // Highs only: vocal clean
+    const auto hat = testsig::sine (sr, 2, 7000.0, -6.0, 1.0);
+    CHECK (maxAbsDiff (renderWith (hat, 18.0f, 2.0f), renderWith (hat, 0.0f, 0.0f), settled) > 1.0e-3);       // ...the hat gets sheen
+}
+
 TEST_CASE ("Plug-in: Stem EQ Keep loudness holds the level of a Bass move and shows how much", "[plugin]")
 {
     const double sr = 48000.0;

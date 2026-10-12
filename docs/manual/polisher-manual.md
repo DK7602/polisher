@@ -1,6 +1,6 @@
 # Polisher User Manual
 
-Version 0.20.0 · October 2026
+Version 0.21.0 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
@@ -8,7 +8,7 @@ Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d7
 
 Polisher is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds eleven modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.20.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.21.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 
@@ -312,7 +312,7 @@ Adds harmonics so bass translates on small speakers and the master feels denser.
 | Control | Range (default) | What it does |
 | --- | --- | --- |
 | Mode | Tape, Tube, Clip (Tape) | Tape = smooth and warm. Tube = rich, fuller bass. Clip = firm and bright. Changing it while playing fades over in about 0.1 s. |
-| Focus | Full, Bass only (Full) | Full = the whole mix gets harmonics. Bass only = only the low end (below about 150 Hz: 808 and kick). |
+| Focus | Full, Bass only, Highs only, Bass + Highs (Full) | Full = the whole mix gets harmonics. Bass only = only the low end (below about 150 Hz: 808 and kick). Highs only = only the top (above about 4 kHz: hats, cymbals, air). Bass + Highs = both, with the middle (the vocal) left clean. |
 | Drive | 0–18 dB (0) | How many harmonics. 0 = off. |
 | Mix | 0–100 % (100) | Blend with the clean sound. |
 | Harmonics meter | −60 to −10 dB | What was added. Aim for about −25 to −35 dB. |
@@ -320,6 +320,12 @@ Adds harmonics so bass translates on small speakers and the master feels denser.
 **Bass only ("808 to phone").** Phone and laptop speakers can't play an 808's low notes, so on them the 808 disappears. They can play its harmonics (the 2nd, 3rd, 4th... overtones, roughly 90–600 Hz), and your ear fills in the low note. With Focus on Bass only, Saturation adds those harmonics to the 808 and kick only: vocals, hats and snares stay clean (even at full Drive), the clean sound itself is never filtered, and no extra sub is added, so the 808 sounds about the same on headphones and big speakers. The Harmonics meter reads about the same as Full at the same Drive. Switching between Full and Bass only is click-free. Auto-Master picks Bass only (with Tube) for Trap / Hip-Hop and R&B, unless the part it heard has almost no low end.
 
 Try it: Bass only, Tube, Drive +9. Play the song on your phone or laptop speakers and flip A/B with MATCH on: on B the 808 should come through. Songs saved before Focus existed open on Full and sound exactly as before.
+
+**Highs only ("sheen").** Saturation adds harmonics only to the top of the mix (above about 4 kHz): dull hats and cymbals get sheen and sparkle, while the vocal's body, the snare and the 808 stay clean. Only the new harmonics are added (the hats themselves keep their exact level), and they are kept above about 3 kHz, so they never muddy the middle. The top is much quieter than the whole mix, so the Harmonics meter reads lower here: about −40 to −50 dB is already a clear sheen. Try Tape, Drive +9 to +12; if the hats turn fizzy, lower Drive or Mix.
+
+**Bass + Highs.** Both at once, each on its own: the 808 gets harmonics for phones and the hats get sheen, while the middle, where the vocal lives, stays clean. The meter reads about like Bass only (the 808's harmonics are the louder part). Try Tube, Drive +9.
+
+Switching between all four Focus settings is click-free. Auto-Master picks only Full or Bass only. If you drew automation for Focus in Cubase with an older Polisher, check that lane: with four choices, a lane that used to mean Bass only now reads as Bass + Highs. Saved songs themselves open with the Focus they had.
 
 ### 10 Soft Clipper
 

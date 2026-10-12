@@ -20,13 +20,27 @@ genre target line. Remaining, in order:
 4. Maximizer -> Bass First (808-aware / multiband limiting) + Dither - DONE v0.20.0. Skipped: transient-aware
    mode (Soft Clipper + Impact cover it); codec preview (needs an MP3/AAC encoder in the plug-in; -1 dBTP
    ceiling covers the clipping risk) - offer only if asked.
-5. Multiband saturation (Ozone "Exciter").
+5. Multiband saturation -> Saturation Focus Highs only + Bass + Highs - DONE v0.21.0 (Bass only already existed;
+   no per-band Drive/Mode: one Drive, the bands bend at their own offsets - offer per-band amounts only if asked).
 6. Mid/side on more modules (Dynamics, Saturation, ...).
 7. Vintage-style modules (tape / compressor / EQ / limiter flavours) - lowest value.
 8. Blind loudness-matched shoot-out (tools/blindtest exists) vs TDR Limiter 6 GE / LoudMax / Ozone trial.
 Optional: Listen (delta) on the 6 modules without it - a version for all 11 exists as a stash/patch from
 the older branch (claude session 2026-10-12), only if the user asks.
 Also open: validation steps 2-3, Auto-Master turning a too-hot mix down, Auto-Master rule for Impact.
+
+## Saturation Highs only / Bass + Highs (v0.21.0, 2026-10-12)
+SaturationFocus highs = 2, bassHighs = 3 (satFocus choices appended: saved state indexes keep their meaning;
+host automation lanes stored normalised do NOT: an old lane at 1.0 = Bass only now = Bass + Highs). Highs: LR4
+high-pass at 4 kHz in front of the curve, bend kHighDriveDb 12 dB earlier, own oversampling (hiStages); only the
+NEW harmonics are added: y - g x with g from a running least-squares fit (~3 ms, fitXY / fitXX) - review find:
+the plain residual's rounding came out phase-turned and LIFTED loud hats +2.6 dB at 6 kHz (and 15 dB bend aliased);
+a complementary split (x - LP) was tried and leaks the vocal into the top band: don't redo. Residual 2nd-order
+high-pass at 3 kHz. bassHighs = low + high residuals. Measured: top level unchanged (0.00 dB at 5-16 kHz, Drive
+12/18), Harmonics meter (musicLike -1 dB) -50 / -41 / -34 dB at +6 / +12 / +18 (Learn: -40 to -50 = clear sheen),
+aliasing (15 kHz -12 dBFS at 44.1 k, tape) -80 dB at +12, -52 at +18. estimateHarmonicsDb handles the new ones
+(within 0.2 dB of the meter). Tests [saturation][focus] (3 new) + plug-in test. UI: FULL / BASS / HIGHS / BASS+HI.
+NOT YET HEARD by the user.
 
 ## Maximizer Bass First + Dither (v0.20.0, 2026-10-12)
 TruePeakLimiter::bassFirstStage in front of the main stage, always in the path (latency + kBassLookaheadMs 1.5 ms

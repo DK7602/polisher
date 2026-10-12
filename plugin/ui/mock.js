@@ -52,7 +52,7 @@
   const combos = {
     clipOversampling: { choices: ["1x", "2x", "4x", "8x"], value: 2 / 3 },
     satMode: { choices: ["Tape", "Tube", "Clip"], value: 0 },
-    satFocus: { choices: ["Full", "Bass only"], value: 0 },
+    satFocus: { choices: ["Full", "Bass only", "Highs only", "Bass + Highs"], value: 0 },
     ulFocus: { choices: ["Full", "Kick", "Snap"], value: 0 },
     tsSpeed: { choices: ["Slow", "Medium", "Fast"], value: 0.5 },
     rtFocus: { choices: ["Full", "Boxiness", "Harshness"], value: 0 },

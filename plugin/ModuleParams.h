@@ -149,7 +149,8 @@ namespace ModuleParams
         // Focus: the whole mix, or the low end only (harmonics of the 808 for phone speakers). Version hint 7.
         // The default, Full, is also what a state saved before Focus existed loads as (JUCE gives a control
         // missing from a state its default), which is exactly how it sounded then.
-        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "satFocus", 7 }, "Saturation Focus", StringArray { "Full", "Bass only" }, 0));
+        // Highs only and Bass + Highs were added after it (v0.21): appended, so saved indexes keep their meaning.
+        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "satFocus", 7 }, "Saturation Focus", StringArray { "Full", "Bass only", "Highs only", "Bass + Highs" }, 0));
         layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "satDrive", 1 }, "Saturation Drive",
                                                            NormalisableRange<float> (0.0f, static_cast<float> (polisher::Saturation::kMaxDriveDb), 0.1f), 0.0f,
                                                            AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction (dbText)));
@@ -256,7 +257,7 @@ namespace ModuleParams
             p.mode = static_cast<polisher::SaturationMode> (juce::jlimit (0, 2, juce::roundToInt (satMode->load())));
             p.driveDb = satDrive->load();
             p.mix = satMix->load();
-            p.focus = satFocus->load() > 0.5f ? polisher::SaturationFocus::bass : polisher::SaturationFocus::full;
+            p.focus = static_cast<polisher::SaturationFocus> (juce::jlimit (0, 3, juce::roundToInt (satFocus->load())));
             return p;
         }
 
