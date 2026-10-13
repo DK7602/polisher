@@ -11,6 +11,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include "BlindTestCore.h"
+#include "ShootoutReport.h"
 #include "polisher/LoudnessTargeting.h"
 
 #include <iostream>
@@ -51,7 +52,8 @@ int run (const juce::StringArray& args)
     {
         std::cout << "\nDrag 2 to 8 exported songs (WAV, AIFF or FLAC) onto this program, for example your mix,\n"
                      "Polisher's master and another master of the same song. It plays them back at the same\n"
-                     "loudness in a shuffled order, so you judge the sound and not the volume or the name.\n\n"
+                     "loudness in a shuffled order, so you judge the sound and not the volume or the name.\n"
+                     "For a shoot-out against other mastering tools, see \"Shoot-out\" in the Polisher manual.\n\n"
                      "Command line: PolisherBlindTest a.wav b.wav [...] [--start seconds] [--length seconds]\n";
         waitForEnter (wait);
         return 1;
@@ -60,7 +62,7 @@ int run (const juce::StringArray& args)
     juce::AudioFormatManager formats;
     formats.registerBasicFormats();
 
-    struct Song { juce::File file; polisher::AudioClip clip; blindtest::Measured measured; };
+    struct Song { juce::File file; polisher::AudioClip clip; blindtest::Measured measured; blindtest::Report report; };
     std::vector<Song> songs;
     for (const auto& p : paths)
     {
@@ -92,7 +94,7 @@ int run (const juce::StringArray& args)
             return 1;
         }
 
-        Song s { f, {}, {} };
+        Song s { f, {}, {}, {} };
         s.clip.sampleRate = sr;
         for (int c = 0; c < 2; ++c)
             s.clip.channels.emplace_back (buf.getReadPointer (c), buf.getReadPointer (c) + count);
@@ -108,15 +110,28 @@ int run (const juce::StringArray& args)
                     ch[ch.size() - 1 - (size_t) i] *= w;
                 }
         }
-        const auto stats = polisher::measure (s.clip);
-        s.measured = { stats.integratedLufs, stats.truePeakDbtp };
-        std::cout << "  " << f.getFileName() << ": " << db (stats.integratedLufs) << " LUFS, " << db (stats.truePeakDbtp) << " dBTP\n";
+        s.report = blindtest::analyse (s.clip);
+        s.measured = { s.report.lufs, s.report.truePeakDbtp };
+        std::cout << "  " << f.getFileName() << ": " << db (s.report.lufs) << " LUFS, " << db (s.report.truePeakDbtp) << " dBTP\n";
         songs.push_back (std::move (s));
     }
 
     std::vector<blindtest::Measured> measured;
     for (const auto& s : songs) measured.push_back (s.measured);
     const auto gains = blindtest::matchGains (measured);
+    // Two files can share a name (two "Mixdown.wav" from different folders): then show the full path.
+    const auto shownName = [&] (const Song& s)
+    {
+        int sameName = 0;
+        for (const auto& other : songs)
+            sameName += other.file.getFileName() == s.file.getFileName() ? 1 : 0;
+        return sameName > 1 ? s.file.getFullPathName() : s.file.getFileName();
+    };
+    std::vector<std::string> names;
+    for (const auto& s : songs) names.push_back (shownName (s).toStdString());
+    const auto fairness = blindtest::checkFairness (measured, names);
+    const auto fairText = blindtest::fairnessText (fairness, measured, names);
+    std::cout << "\n" << fairText;
     const auto order = blindtest::shuffledOrder ((int) songs.size(), (unsigned) juce::Time::currentTimeMillis());
 
     // A new folder every time (two runs in the same second must not mix their samples).
@@ -143,6 +158,9 @@ int run (const juce::StringArray& args)
                          "3. Write down what you hear: punch of the kick and snare, 808 / bass, vocal clarity,\n"
                          "   harshness, width, anything that pumps or distorts. Score each 1-10.\n"
                          "4. Only then open Answer key.txt.\n\n";
+    if (! fairText.empty())
+        sheet << juce::String (fairText) << "\n";
+    std::vector<blindtest::Report> reports;
     for (size_t k = 0; k < order.size(); ++k)
     {
         const auto& s = songs[(size_t) order[k]];
@@ -173,17 +191,17 @@ int run (const juce::StringArray& args)
             return 1;
         }
 
-        // Two files can share a name (two "Mixdown.wav" from different folders): then show the full path.
-        int sameName = 0;
-        for (const auto& other : songs)
-            sameName += other.file.getFileName() == s.file.getFileName() ? 1 : 0;
-        key << name << " = " << (sameName > 1 ? s.file.getFullPathName() : s.file.getFileName()) << "\n"
+        key << name << " = " << shownName (s) << "\n"
             << "           measured " << db (s.measured.integratedLufs) << " LUFS, " << db (s.measured.truePeakDbtp)
             << " dBTP; turned down " << db (std::max (0.0, -g)) << " dB for the test\n";
         sheet << name << "   score (1-10): ____   notes: ________________________________________\n\n";
+        reports.push_back (s.report);
     }
     key << "\nThe louder files were turned down to the quietest one (never up), then all together if a peak\n"
-           "would pass -1 dBTP, so every sample plays at the same loudness without clipping.\n";
+           "would pass -1 dBTP, so every sample plays at the same loudness without clipping.\n\n";
+    key << juce::String (fairText) << "\n" << juce::String (blindtest::reportTable (reports))
+        << "\nKeep this file with your score sheet: the numbers show why the winner won (send both to Claude to\n"
+           "have Polisher improved where it lost).\n";
     folder.getChildFile ("Answer key.txt").replaceWithText (key);
     folder.getChildFile ("Score sheet.txt").replaceWithText (sheet);
 

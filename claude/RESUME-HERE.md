@@ -1,7 +1,7 @@
-# Polisher — resume here (updated 2026-10-12)
+# Polisher — resume here (updated 2026-10-13)
 
 Read this first in a new chat. Code: github.com/DK7602/polisher. Newest work: branch
-`claude/eloquent-einstein-sscadx` (v0.22.0, 2026-10-12 sessions below; it fast-forwarded from
+`claude/eloquent-einstein-sscadx` (v0.23.0, 2026-10-13 sessions below; it fast-forwarded from
 `claude/gracious-wright-tgs0no`, which is older). Merge to `main` when ready. Every push builds Mac + Windows; download Polisher-Windows from the
 latest green Actions run.
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
@@ -26,10 +26,32 @@ genre target line. Remaining, in order:
    redundant: Imager is already M/S, Tonal EQ has it per band (v0.19), Maximizer / Clipper must stay linked
    (M/S limiting moves the image), Resonance Tamer / Tone Steady - offer only if asked.
 7. Vintage-style modules (tape / compressor / EQ / limiter flavours) - lowest value.
-8. Blind loudness-matched shoot-out (tools/blindtest exists) vs TDR Limiter 6 GE / LoudMax / Ozone trial.
+8. Blind loudness-matched shoot-out vs TDR Limiter 6 GE / LoudMax / Ozone trial - KIT DONE v0.23.0 (user asked
+   to do this before 7): Blind Test fairness check + measurements, manual "Shoot-out" (2 rounds). WAITING on the
+   user's listening: they send Score sheet + Answer key; then fix what loses (the measurements say why).
 Optional: Listen (delta) on the 6 modules without it - a version for all 11 exists as a stash/patch from
 the older branch (claude session 2026-10-12), only if the user asks.
 Also open: validation steps 2-3, Auto-Master turning a too-hot mix down, Auto-Master rule for Impact.
+
+## Shoot-out kit (v0.23.0, 2026-10-13)
+Claude can't run Ozone / TDR / LoudMax (Windows/Mac plug-ins), so the user listens. tools/blindtest:
+BlindTestCore.h checkFairness(files, names): the mix = a file with the WORD "mix" in its name (namedAsMix; not
+"Mixdown"), left out; the others are masters, matched to the one named "polisher" (shortest such name; else the
+loudest); unfair if loudness spread > 0.5 LU or true-peak spread > 0.3 dB (both judged on the 0.1-rounded
+value). fairnessText(): no sample letters, so it goes to the console, the score sheet AND the answer key.
+ShootoutReport.h analyse(): LUFS / TP / LRA via measure(); Kick punch (< 150 Hz) and Snare punch (1-5 kHz) =
+median of band (sample peak - RMS) in 0.4 s blocks over the loud part (blocks within 8 dB of the loudest).
+Review find: the first "Punch" (true peak over 3 s - short-term) just tracked the ceiling 1:1 and rewarded
+true-peak overs - don't go back. Per band it moves ~1 dB for 6 dB harder limiting; a hard clip keeps snare
+punch (it doesn't hear distortion: said in the legend). Tone: band level - LUFS (what the matched test plays;
+the power-share version let the 808 dominate), shown vs the average of all samples. Width = side/mid power,
+BassW = same < 120 Hz. Auto-Master's ceiling is -1.5 on Loud / Club (-1.0 Stream): the manual tells the user to
+give every tool Polisher's ceiling. Tests [blindtest]. Manual "Shoot-out": file names polisher.wav / my mix.wav /
+others; round 1 Auto-Master vs Ozone 12 Master Assistant (+ mix); round 2 fresh Polisher Soft Clipper + Drive
+(polisher.wav), Clipper off (polisher no clipper.wav), TDR Limiter 6 GE, LoudMax.
+Local JUCE build works: JUCE 8.0.15 cloned to the scratchpad, apt-get update + X11 headers (libxrandr /
+libxinerama / libxcursor / libxext / libfontconfig1 / libasound2 -dev), cmake -DFETCHCONTENT_SOURCE_DIR_JUCE=
+<clone> builds PolisherBlindTest + polisher_plugin_tests (all 58 pass; a new container has to redo this).
 
 ## Mid / side: Dynamics + Saturation Channels (v0.22.0, 2026-10-12)
 New params (hint 12): dynChannels, satChannels {Stereo, Mid, Side}; Auto-Master sets both Stereo. Saturation:

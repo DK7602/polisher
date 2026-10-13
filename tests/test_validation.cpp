@@ -245,3 +245,119 @@ TEST_CASE ("Blind test: every sample plays at the same loudness, turned down onl
     for (int i = 0; i < 8; ++i)
         CHECK (order[(size_t) i] == i);
 }
+
+#include "../tools/blindtest/ShootoutReport.h"
+
+TEST_CASE ("Shoot-out: the fairness check matches the masters to Polisher's and finds the mix by name", "[validation][blindtest]")
+{
+    CHECK (blindtest::namedAsMix ("my mix.wav"));
+    CHECK (blindtest::namedAsMix ("Trap_MIX_v2.wav"));
+    CHECK_FALSE (blindtest::namedAsMix ("Mixdown.wav"));
+    CHECK_FALSE (blindtest::namedAsMix ("remixed.wav"));
+
+    const std::vector<std::string> names { "my mix.wav", "polisher.wav", "ozone.wav", "tdr.wav" };
+    std::vector<blindtest::Measured> files { { -17.0, -1.0 }, { -9.7, -1.5 }, { -10.6, -1.5 }, { -9.0, -1.5 } };
+    auto f = blindtest::checkFairness (files, names);
+    CHECK (f.mixes == std::vector<size_t> { 0 });
+    CHECK (f.masters == std::vector<size_t> { 1, 2, 3 });
+    CHECK (f.reference == 1);
+    CHECK_THAT (f.spreadLu, WithinAbs (1.6, 1e-9));
+    CHECK_FALSE (f.fair());
+    auto text = blindtest::fairnessText (f, files, names);
+    INFO (text);
+    CHECK (text.find ("my mix.wav (-17.0 LUFS): your unmastered mix") != std::string::npos);
+    CHECK (text.find ("polisher.wav (-9.7 LUFS): the one the others are matched to") != std::string::npos);
+    CHECK (text.find ("ozone.wav (-10.6 LUFS): needs 0.9 LU more") != std::string::npos);
+    CHECK (text.find ("tdr.wav (-9.0 LUFS): 0.7 LU too loud") != std::string::npos);
+    CHECK (text.find ("Sample") == std::string::npos);   // never a sample letter: it goes on the score sheet
+
+    // Matched loudness but a different ceiling (Auto-Master's -1.5 vs another tool's -1.0): not fair either.
+    files = { { -17.0, -1.0 }, { -9.7, -1.5 }, { -9.6, -1.0 }, { -9.8, -1.5 } };
+    f = blindtest::checkFairness (files, names);
+    CHECK (f.loudnessFair());
+    CHECK_FALSE (f.peaksFair());
+    CHECK (blindtest::fairnessText (f, files, names).find ("ceilings differ") != std::string::npos);
+
+    // 0.54 LU shows as 0.5, so it counts as 0.5: fair.
+    files = { { -9.70, -1.0 }, { -10.24, -1.0 } };
+    f = blindtest::checkFairness (files, { "polisher.wav", "ozone.wav" });
+    CHECK (f.fair());
+    CHECK (blindtest::fairnessText (f, files, { "polisher.wav", "ozone.wav" }).rfind ("Fair fight", 0) == 0);
+}
+
+TEST_CASE ("Shoot-out: the measurements show punch, tone and width differences", "[validation][blindtest]")
+{
+    const double sr = 48000.0;
+    const auto beat = testsig::trapLike (sr, 12.0);
+    const auto r = blindtest::analyse (beat);
+    CHECK_THAT (r.lufs, WithinAbs (measure (beat).integratedLufs, 1e-9));
+    REQUIRE (std::isfinite (r.kickPunchDb));
+    REQUIRE (std::isfinite (r.snarePunchDb));
+    const auto gained = [] (polisher::AudioClip c, double db)
+    {
+        const auto g = static_cast<float> (std::pow (10.0, db / 20.0));
+        for (auto& ch : c.channels) for (auto& v : ch) v *= g;
+        return c;
+    };
+    const auto atLoudness = [&] (const polisher::AudioClip& c, double lufs) { return gained (c, lufs - measure (c).integratedLufs); };
+
+    // Only the sound counts, not the level: the same beat 6 dB down reads the same punch and tone.
+    const auto rq = blindtest::analyse (gained (beat, -6.0));
+    CHECK_THAT (rq.kickPunchDb, WithinAbs (r.kickPunchDb, 0.01));
+    CHECK_THAT (rq.bandDb[2], WithinAbs (r.bandDb[2], 0.01));
+
+    // Limited 6 dB harder, at the same loudness as a gentle master: less punch.
+    LimiterParams gentle, hard;
+    gentle.driveDb = 2.0;
+    hard.driveDb = 8.0;
+    const auto soft = renderLimited (beat, gentle);
+    const auto squashed = atLoudness (renderLimited (beat, hard), measure (soft).integratedLufs);
+    const auto rs = blindtest::analyse (soft), rh = blindtest::analyse (squashed);
+    INFO ("kick punch: gentle " << rs.kickPunchDb << ", hard " << rh.kickPunchDb << "; snare: gentle " << rs.snarePunchDb << ", hard " << rh.snarePunchDb);
+    CHECK (rh.kickPunchDb < rs.kickPunchDb - 0.5);
+    CHECK (rh.snarePunchDb < rs.snarePunchDb - 0.5);
+
+    // A plain hard clip at the same loudness chops the kick's peaks: its kick punch reads lower than the
+    // limited master's (a peak-minus-loudness number would have rewarded the clipped one). The snare,
+    // under the clip level, keeps its punch: the number doesn't hear distortion, the ears do.
+    auto clipped = gained (beat, 8.0);
+    for (auto& ch : clipped.channels)
+        for (auto& v : ch) v = std::clamp (v, -0.891f, 0.891f);
+    const auto rc = blindtest::analyse (atLoudness (clipped, rh.lufs));
+    INFO ("hard clip: kick " << rc.kickPunchDb << ", snare " << rc.snarePunchDb << ", true peak " << rc.truePeakDbtp
+          << "; limited: kick " << rh.kickPunchDb << ", snare " << rh.snarePunchDb << ", true peak " << rh.truePeakDbtp);
+    CHECK (rc.kickPunchDb < rh.kickPunchDb);
+
+    // +6 dB at 5 kHz (a wide bell): much more Presence against the loudness.
+    auto boosted = beat;
+    for (auto& ch : boosted.channels)
+    {
+        polisher::Biquad bell;
+        polisher::design::apply (bell, polisher::design::bell (5000.0, 6.0, 0.7, sr));
+        for (auto& v : ch) v = static_cast<float> (bell.process (v));
+    }
+    const auto rb = blindtest::analyse (boosted);
+    INFO ("Pres " << r.bandDb[4] << " -> " << rb.bandDb[4] << " dB, Sub " << r.bandDb[0] << " -> " << rb.bandDb[0] << " dB");
+    CHECK (rb.bandDb[4] > r.bandDb[4] + 3.0);
+    const auto table = blindtest::reportTable ({ r, rb });
+    INFO (table);
+    CHECK (table.find ("  A ") != std::string::npos);
+    CHECK (table.find ("  B ") != std::string::npos);
+    CHECK (table.find ("-0.0") == std::string::npos);
+
+    // Width: the beat's hats differ between L and R; a mono copy has none; a 50 Hz tone in opposite
+    // polarity on L / R makes the bass wide.
+    CHECK (std::isfinite (r.widthDb));
+    CHECK (r.bassWidthDb < -30.0);
+    auto mono = beat;
+    mono.channels[1] = mono.channels[0];
+    CHECK (std::isinf (blindtest::analyse (mono).widthDb));
+    auto wideBass = beat;
+    for (size_t i = 0; i < wideBass.channels[0].size(); ++i)
+    {
+        const auto v = static_cast<float> (0.2 * std::sin (2.0 * std::numbers::pi * 50.0 * static_cast<double> (i) / sr));
+        wideBass.channels[0][i] += v;
+        wideBass.channels[1][i] -= v;
+    }
+    CHECK (blindtest::analyse (wideBass).bassWidthDb > -10.0);
+}

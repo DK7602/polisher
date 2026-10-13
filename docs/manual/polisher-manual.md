@@ -1,6 +1,6 @@
 # Polisher User Manual
 
-Version 0.22.0 · October 2026
+Version 0.23.0 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
@@ -8,7 +8,7 @@ Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d7
 
 Polisher is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds eleven modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.22.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.23.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 
@@ -404,6 +404,40 @@ MATCH takes care of loudness, but you still know which side is Polisher. To comp
 5. Only then open **Answer key.txt** to see which sample was which.
 
 To compare just one part (say 30 seconds from the hook at 1:00), run it from a command prompt: `PolisherBlindTest.exe "my mix.wav" polisher.wav --start 60 --length 30` (quotes around names with spaces).
+
+The test also checks the fight is fair and measures each file:
+
+- **Fair fight?** A master pushed harder usually loses some punch, and a higher ceiling gives it more room, so the masters should be **made** at the same loudness (within 0.5 LU) and with the same ceiling, not only played back equally loud. The test matches every master to the file with **polisher** in its name and says how far off each one is ("ozone.wav: needs 0.9 LU more: push it about 0.9 dB harder"). Export that one again and rerun. A file with the word **mix** in its name (`my mix.wav`) is your unmastered mix and is left out of the check. The message is on the score sheet too; it never says which sample is which.
+- **Measurements** (at the end of **Answer key.txt**, so they can't sway your ears): loudness, true peak, **Kick** and **Snare** punch (how far the hits stick out in their own band; a squashed master reads lower), loudness range, **Width** and **BassW** (stereo width overall and below 120 Hz), and the tone balance in six bands (Sub to Air) against the average of all samples. They show *why* the winner won: more punch, more 808, a brighter top, a wider image. Punch doesn't hear distortion: your ears judge that.
+
+### Shoot-out: Polisher against other mastering tools
+
+To find out how Polisher really stacks up, run two blind rounds on one of your own songs against **iZotope Ozone 12** (it has a free trial), **TDR Limiter 6 GE** (Tokyo Dawn Labs; check their site for a free or demo version) and **LoudMax** (free, by Thomas Mundt).
+
+Rules for every master, so nothing but the sound decides:
+
+- The same mix, the same export settings (WAV, the project's sample rate, 24-bit).
+- **The same ceiling as Polisher's.** Auto-Master sets the Ceiling to −1.5 dBTP on the Loud and Club targets (−1.0 on Stream): set every other tool's ceiling (output) to that number, with its true-peak mode on where it has one. The test warns you when the masters' true peaks differ.
+- **The same loudness**, within 0.5 LU. Make Polisher's master first, then match the others to it: the test tells you how many dB to change each one.
+- **Name the files the way the test understands:** `polisher.wav` for Polisher's master, `my mix.wav` for your unmastered mix, and any name without "polisher" or "mix" for the others (`ozone.wav`, `tdr.wav`, `loudmax.wav`).
+- One tool on Stereo Out at a time; switch the others off (Cubase: the insert's power button).
+
+**Round 1, the whole master: Polisher vs Ozone.**
+
+1. Polisher: run **Auto-Master** (your genre, Loud target), adjust if you like, note the Ceiling, export `polisher.wav`.
+2. Ozone 12: run its **Master Assistant** on the same song, set its Maximizer's ceiling to Polisher's, then move its Threshold until it matches `polisher.wav`'s loudness. Export `ozone.wav`.
+3. Your mix with nothing on Stereo Out: `my mix.wav`.
+4. Drag all three onto PolisherBlindTest.exe. If it says the fight isn't fair yet, fix that file and run it again. Then listen, score, and open the answer key.
+
+**Round 2, loudness only: Polisher's limiter vs TDR Limiter 6 GE vs LoudMax.** This shows which one gets loud with the least damage.
+
+1. Polisher: a fresh instance (every module is neutral when loaded), Ceiling as in Round 1. Turn on the **Soft Clipper** (Clip Level 0, Softness 50 %), raise **Drive** until the export matches Round 1's loudness. Export `polisher.wav`.
+2. The same with the Soft Clipper **off** and Drive raised to the same loudness: `polisher no clipper.wav`. (The others are limiters only, so this shows Polisher's limiter alone.)
+3. TDR Limiter 6 GE, its default preset, output ceiling as Polisher's: raise its input (or lower its threshold) to the same loudness. Export `tdr.wav`.
+4. LoudMax: Output at Polisher's ceiling, ISP (true peak) detection on if your version has it, lower Threshold to the same loudness. Export `loudmax.wav`.
+5. Blind test all four.
+
+Tips: listen at one comfortable volume and take a break between rounds. Run a round twice (each run shuffles again): the same winner both times is a good sign, a different winner each time means the masters are close. Keep the answer keys and score sheets: if another tool wins, the measurements show what to fix in Polisher.
 
 ## Undo, redo and snapshots
 
