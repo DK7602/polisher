@@ -23,7 +23,8 @@ Header: one image plugin/ui/assets/logo.webp (cut from the user's transparent PN
 wave.png + title_band.webp. .logo 262x83, margin -3px -8px 0 -1px: placed to match the user's mock-up exactly
 (the name sits just above the header's bottom edge; user: "too high off the bottom frame" when it was higher).
 Click it still toggles the mono theme. ui_smoke lets the logo hang up to 16 px past the row's left edge.
-The live manual copy (Claude Docs artifact 3bf99dd7...) was NOT updated (it was already behind since v0.16-ish).
+The live manual copy (Claude Docs doc 3bf99dd7..., now titled "Masterology User Manual") is renamed to match
+(v0.25.0, install step about Polisher.vst3, Blind Test names, diagram caption); it was already in step with v0.24.
 
 ## UPGRADE PLAN (user 2026-10-12, this branch is the current one: "all new builds should be in that")
 Gap list vs Ozone 12 Advanced, Claude's order (user: "do 1-8 and the items already on list in the order you
