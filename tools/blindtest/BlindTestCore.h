@@ -53,8 +53,8 @@ inline std::vector<double> matchGains (const std::vector<Measured>& files, doubl
     usually gives up some punch, and a higher ceiling leaves it more room, so for a fair fight they should
     be made within kFairLu of each other and with the same ceiling (true peaks within kFairPeakDb).
     The unmastered mix is the file with the word "mix" in its name (my mix.wav; not "Mixdown"); it is
-    left out. The others are matched to the master named "polisher" (the shortest such name), or to the
-    loudest one when no file is named so. */
+    left out. The others are matched to the master named "masterology" (or "polisher", the old name; the
+    shortest such name), or to the loudest one when no file is named so. */
 inline constexpr double kFairLu = 0.5;
 inline constexpr double kFairPeakDb = 0.3;
 inline constexpr double kFarLu = 4.0;   // a master this far under is probably an unnamed mix
@@ -82,7 +82,7 @@ struct Fairness
 {
     std::vector<size_t> masters, mixes;   // indexes into the files
     long reference = -1;                  // the master the others are matched to
-    bool referenceNamed = false;          // ... found by its name ("polisher")
+    bool referenceNamed = false;          // ... found by its name ("masterology" / "polisher")
     double spreadLu = 0.0, peakSpreadDb = 0.0;
     bool loudnessFair() const noexcept { return std::round (spreadLu * 10.0) / 10.0 <= kFairLu; }
     bool peaksFair() const noexcept { return std::round (peakSpreadDb * 10.0) / 10.0 <= kFairPeakDb; }
@@ -103,7 +103,9 @@ inline Fairness checkFairness (const std::vector<Measured>& files, const std::ve
             continue;
         }
         f.masters.push_back (i);
-        if (detail::lower (names[i]).find ("polisher") != std::string::npos && (! f.referenceNamed || names[i].size() < refNameLength))
+        const auto lowerName = detail::lower (names[i]);
+        const bool ours = lowerName.find ("masterology") != std::string::npos || lowerName.find ("polisher") != std::string::npos;
+        if (ours && (! f.referenceNamed || names[i].size() < refNameLength))
         {
             f.reference = static_cast<long> (i);
             f.referenceNamed = true;

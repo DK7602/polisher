@@ -76,12 +76,12 @@ namespace SettingsScope
     }
 }
 
-/** Polisher's own undo / redo: one linear list of steps, each holding what changed (0..1 values before
+/** Masterology's own undo / redo: one linear list of steps, each holding what changed (0..1 values before
     and after, by parameter). Lives in the processor, so it survives closing and reopening the window;
     it is not saved with the project (a project or preset load clears it). Message thread only.
 
     Steps come from
-      - the user moving a control in Polisher's window. JUCE's attachments wrap every user change in a
+      - the user moving a control in Masterology's window. JUCE's attachments wrap every user change in a
         change gesture (a knob drag from press to release, a typed value, a switch, a choice), so one
         gesture = one step. Gestures that overlap (dragging an EQ point moves its gain and frequency) are
         one step, and quick repeats on the same control (mouse wheel, arrow keys) merge into one.

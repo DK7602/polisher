@@ -7,6 +7,24 @@ latest green Actions run.
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
 
+## NAME CHANGE: Polisher -> Masterology (v0.25.0, 2026-10-13)
+User renamed the plug-in Masterology and supplied the logo (chrome crown + red/blue waves + MASTEROLOGY). Older
+notes below still say "Polisher": same product. Renamed: PRODUCT_NAME "Masterology" (Masterology.vst3 /
+.component), COMPANY_NAME "Masterology Audio", every user-facing string (UI, manual, Blind Test now
+MasterologyBlindTest, CI artifact Masterology-Windows / -macOS), README, LICENSE, comments. Kept on purpose (so
+saved projects / presets still load and nothing internal churns): repo name, CMake target `Polisher` (so the
+build folder is still build/plugin/Polisher_artefacts), project(Polisher), the POLISHER_* CMake options, the
+`polisher` namespace / include dir / polisher_dsp / polisher_tests, the class names (PolisherAudioProcessor,
+PolisherWebEditor, PolisherUI), the plug-in codes Plsh / Pls1, BUNDLE_ID com.polisheraudio.polisher, the
+"polisherMeters" event, localStorage keys polisher.*, and docs/manual/polisher-manual.md. Blind Test matches the
+reference master by "masterology" OR "polisher" in the file name. Manual Install: delete the old Polisher.vst3
+first (same class ID, so Cubase would see two copies).
+Header: one image plugin/ui/assets/logo.webp (cut from the user's transparent PNG, 840x265) replaced
+wave.png + title_band.webp. .logo 262x83, margin -3px -8px 0 -1px: placed to match the user's mock-up exactly
+(the name sits just above the header's bottom edge; user: "too high off the bottom frame" when it was higher).
+Click it still toggles the mono theme. ui_smoke lets the logo hang up to 16 px past the row's left edge.
+The live manual copy (Claude Docs artifact 3bf99dd7...) was NOT updated (it was already behind since v0.16-ish).
+
 ## UPGRADE PLAN (user 2026-10-12, this branch is the current one: "all new builds should be in that")
 Gap list vs Ozone 12 Advanced, Claude's order (user: "do 1-8 and the items already on list in the order you
 think is best"). Already on this branch before the list: Listen/Solo (5 modules), snapshots + undo, Match ref,

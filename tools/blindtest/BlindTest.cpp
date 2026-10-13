@@ -1,11 +1,11 @@
-// Polisher Blind Test: turns 2-8 exported songs (your mix, Polisher's master, another master...) into
+// Masterology Blind Test: turns 2-8 exported songs (your mix, Masterology's master, another master...) into
 // a fair blind listening test. Every file is played at the same loudness (EBU R128, turned down
 // only, never clipping), the order is shuffled into "Sample A", "Sample B"..., and the answer key
 // waits in its own file until you've written down what you heard.
 //
-//   PolisherBlindTest file1.wav file2.wav [...] [--start 60] [--length 30] [--no-wait]
+//   MasterologyBlindTest file1.wav file2.wav [...] [--start 60] [--length 30] [--no-wait]
 //
-// On Windows, drag the files onto PolisherBlindTest.exe. The test lands in a new folder next to the
+// On Windows, drag the files onto MasterologyBlindTest.exe. The test lands in a new folder next to the
 // first file.
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -47,14 +47,14 @@ int run (const juce::StringArray& args)
         else                                              paths.add (a);
     }
 
-    std::cout << "Polisher Blind Test\n";
+    std::cout << "Masterology Blind Test\n";
     if (paths.size() < 2 || paths.size() > 8)
     {
         std::cout << "\nDrag 2 to 8 exported songs (WAV, AIFF or FLAC) onto this program, for example your mix,\n"
-                     "Polisher's master and another master of the same song. It plays them back at the same\n"
+                     "Masterology's master and another master of the same song. It plays them back at the same\n"
                      "loudness in a shuffled order, so you judge the sound and not the volume or the name.\n"
-                     "For a shoot-out against other mastering tools, see \"Shoot-out\" in the Polisher manual.\n\n"
-                     "Command line: PolisherBlindTest a.wav b.wav [...] [--start seconds] [--length seconds]\n";
+                     "For a shoot-out against other mastering tools, see \"Shoot-out\" in the Masterology manual.\n\n"
+                     "Command line: MasterologyBlindTest a.wav b.wav [...] [--start seconds] [--length seconds]\n";
         waitForEnter (wait);
         return 1;
     }
@@ -136,7 +136,7 @@ int run (const juce::StringArray& args)
 
     // A new folder every time (two runs in the same second must not mix their samples).
     const auto folder = songs.front().file.getParentDirectory()
-                            .getChildFile ("Polisher blind test " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S"))
+                            .getChildFile ("Masterology blind test " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S"))
                             .getNonexistentSibling (false);
     if (! folder.createDirectory())
     {
@@ -145,13 +145,13 @@ int run (const juce::StringArray& args)
         return 1;
     }
 
-    juce::String key = "POLISHER BLIND TEST - ANSWER KEY\n"
+    juce::String key = "MASTEROLOGY BLIND TEST - ANSWER KEY\n"
                        "Open this only after you have filled in Score sheet.txt.\n\n";
     double matchedLufs = -INFINITY;
     for (size_t i = 0; i < measured.size(); ++i)
         if (std::isfinite (measured[i].integratedLufs))
             matchedLufs = measured[i].integratedLufs + gains[i];
-    juce::String sheet = "POLISHER BLIND TEST - SCORE SHEET\n\n"
+    juce::String sheet = "MASTEROLOGY BLIND TEST - SCORE SHEET\n\n"
                          "Every sample plays at the same loudness (" + db (matchedLufs) + " LUFS), so louder can't win. How to listen:\n"
                          "1. Headphones or speakers at one comfortable volume; don't touch it during the test.\n"
                          "2. Play each sample, then jump between them at the same moment (the hook, a drop, a quiet verse).\n"
@@ -201,7 +201,7 @@ int run (const juce::StringArray& args)
            "would pass -1 dBTP, so every sample plays at the same loudness without clipping.\n\n";
     key << juce::String (fairText) << "\n" << juce::String (blindtest::reportTable (reports))
         << "\nKeep this file with your score sheet: the numbers show why the winner won (send both to Claude to\n"
-           "have Polisher improved where it lost).\n";
+           "have Masterology improved where it lost).\n";
     folder.getChildFile ("Answer key.txt").replaceWithText (key);
     folder.getChildFile ("Score sheet.txt").replaceWithText (sheet);
 

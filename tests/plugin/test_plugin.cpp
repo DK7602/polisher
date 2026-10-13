@@ -204,7 +204,7 @@ TEST_CASE ("Plug-in: the latency it reports is the real delay, at every sample r
     }
 }
 
-TEST_CASE ("Plug-in: the host's bypass button is Polisher's latency-matched A, and the tail covers the delay", "[plugin]")
+TEST_CASE ("Plug-in: the host's bypass button is Masterology's latency-matched A, and the tail covers the delay", "[plugin]")
 {
     auto p = makeProcessor (48000.0, 512, false);
     auto* hostBypass = p->getBypassParameter();
@@ -447,7 +447,7 @@ TEST_CASE ("Plug-in: the Unlimiter lifts the first bar of an export like the res
 
 TEST_CASE ("Plug-in: a state saved before a control existed puts that control back to its default", "[plugin]")
 {
-    // A v0.13 preset has no Input Trim. Loaded into a running Polisher whose trim Auto-Master set to
+    // A v0.13 preset has no Input Trim. Loaded into a running Masterology whose trim Auto-Master set to
     // -6.6 dB, the trim must go back to 0 dB, not stay (the master would play 6.6 dB quieter). JUCE's
     // parameter tree does this (a control missing from the state gets its default); this pins it.
     auto old = makeProcessor (48000.0, 512, false);
@@ -520,7 +520,7 @@ TEST_CASE ("Plug-in: Saturation Focus is Full for a new instance and for a song 
     again->setStateInformation (state.getData(), (int) state.getSize());
     CHECK (focusOf (*again) == 1.0f);
 
-    // A v0.15.0 song (no satFocus in its state, Tube +12) loads as Full in a Polisher set to Bass only,
+    // A v0.15.0 song (no satFocus in its state, Tube +12) loads as Full in a Masterology set to Bass only,
     // and plays exactly like the old version did (Full is the old algorithm, bit for bit).
     set (*fresh, "satFocus", 0.0f);
     fresh->getStateInformation (state);
@@ -1562,7 +1562,7 @@ AudioClip sliceOf (const AudioClip& clip, double from, double to)
 
 TEST_CASE ("Auto-Master: a short listen keeps a stored tone only when it is this song's", "[plugin][automaster]")
 {
-    // A preset, a copied Polisher or an older project can carry another song's tone. A quick Auto-Master
+    // A preset, a copied Masterology or an older project can carry another song's tone. A quick Auto-Master
     // run (under 30 s) used to keep any stored tone learned from more music: song B was then held to A's.
     const double sr = 48000.0;
     const auto song = testsig::trapLike (sr, 45.0);
@@ -1749,7 +1749,7 @@ TEST_CASE ("Plug-in: the meters say whether the host is playing, so the loudness
 
 namespace {
 
-/** A user change the way Polisher's window makes it: one gesture (press, values, release). */
+/** A user change the way Masterology's window makes it: one gesture (press, values, release). */
 void gesture (PolisherAudioProcessor& p, const juce::String& id, std::initializer_list<float> plainValues)
 {
     auto* param = p.parameters.getParameter (id);

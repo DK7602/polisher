@@ -26,7 +26,7 @@
 #include <array>
 #include <atomic>
 
-/** Polisher: Input Trim -> Unlimiter -> Tonal EQ -> Stem EQ -> Bass Control -> Glue -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
+/** Masterology: Input Trim -> Unlimiter -> Tonal EQ -> Stem EQ -> Bass Control -> Glue -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
     -> Maximizer (true-peak limiter), plus EBU R128
     meters, spectrum taps and Auto-Master (which listens to the incoming mix and sets the chain). After the
     meters, for listening only: Listen / Solo (setListenMode), MATCH, then the MONO / PHONE checks. */
@@ -55,7 +55,7 @@ public:
     // ~45 ms of audio still sits in the look-ahead buffers when the input stops, plus the limiter's
     // release: a host that suspends silent plug-ins must keep calling us until it has come out.
     double getTailLengthSeconds() const override { return tailSeconds; }
-    // The host's bypass button is Polisher's own A: latency-matched (no ~45 ms jump) and MATCH-aware.
+    // The host's bypass button is Masterology's own A: latency-matched (no ~45 ms jump) and MATCH-aware.
     juce::AudioProcessorParameter* getBypassParameter() const override { return parameters.getParameter ("bypass"); }
 
     int getNumPrograms() override { return 1; }
@@ -166,7 +166,7 @@ public:
     AutoMasterController autoMaster { parameters, reference, toneTarget };
 
     // --- Undo / redo and snapshots (message thread; see SettingsHistory.h) ----------------------------
-    /** Every change made in Polisher's window, Auto-Master run, Stem EQ Apply and snapshot recall, as
+    /** Every change made in Masterology's window, Auto-Master run, Stem EQ Apply and snapshot recall, as
         undo / redo steps. Kept while the window closes and opens; not saved (a project load clears it). */
     SettingsHistory history { *this };
     /** Snapshot slots S1..S4 (the whole sound), saved with the project. A recall is one undo step, and

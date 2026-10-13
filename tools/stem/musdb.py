@@ -3,7 +3,7 @@ prep.py expects:  <out>/<split>/<song>/{vocals,drums,bass,other}.wav
 One parquet row is one stem file of one song, and a song's rows may straddle two shards, so prep
 only the songs whose four stems are all present.
   python musdb.py <out-dir> shard1.parquet shard2.parquet ...
-Licence: MUSDB18 is for non-commercial research only (fine while Polisher is free)."""
+Licence: MUSDB18 is for non-commercial research only (fine while Masterology is free)."""
 import os, sys, pyarrow.parquet as pq
 
 STEMS = {'vocals', 'drums', 'bass', 'other'}

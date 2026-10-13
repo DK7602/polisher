@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Polisher</title>
+<title>Masterology</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="styles.css">
 <script src="mock.js"></script>
@@ -26,8 +26,7 @@
   <header id="header" class="panel">
     <img class="panel-bg" src="assets/panel_header.png" alt="">
     <div class="header-row">
-      <img class="logo" src="assets/wave.png" alt="Polisher logo">
-      <img class="title fade-x" src="assets/title_band.webp" alt="Polisher">
+      <img class="logo" src="assets/logo.webp" alt="Masterology">
       <div class="pill pill-blue genre" title="Genre: what Auto-Master compares your mix with">
         <button type="button" id="genre-prev" aria-label="Previous genre"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg></button>
         <span id="genre-name">Trap / Hip-Hop</span>
@@ -198,7 +197,7 @@
     <label class="check"><input type="checkbox" id="chk-autoreset"> Reset loudness meter when playback starts</label>
     <label class="check"><input type="checkbox" id="chk-resetchange"> Restart loudness after you change a control</label>
     <label class="check"><input type="checkbox" id="chk-adaptive"> Adaptive release (Maximizer)</label>
-    <div class="pop-foot mono">Polisher v0.24.0 · Auto-Master · Unlimiter · EQ · Stem EQ · Tone Steady · Resonance Tamer · Bass · Glue · Dynamics · Imager · Saturation · Clipper · Maximizer</div>
+    <div class="pop-foot mono">Masterology v0.25.0 · Auto-Master · Unlimiter · EQ · Stem EQ · Tone Steady · Resonance Tamer · Bass · Glue · Dynamics · Imager · Saturation · Clipper · Maximizer</div>
   </div>
   <div class="popover" id="pop-help" hidden>
     <div class="pop-title wm">QUICK HELP</div>
@@ -209,13 +208,13 @@
     </div>
     <ul>
       <li><b>Auto-Master:</b> pick your genre (top), an intensity and a target, press Auto-Master and play your whole song from the start. It finds the loudest part by itself, finishes a few seconds after the song ends (or click it again any time after 12 seconds to use what it heard), sets every module and explains why in Learn. The undo arrow puts everything back.</li>
-      <li><b>Undo / redo:</b> the arrows at the top step back and forward through your changes one at a time (a knob move, a switch, an Auto-Master run, a snapshot). Point at an arrow to see what it will undo. Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes (click inside Polisher first). Kept while the window is closed; not saved with the project.</li>
+      <li><b>Undo / redo:</b> the arrows at the top step back and forward through your changes one at a time (a knob move, a switch, an Auto-Master run, a snapshot). Point at an arrow to see what it will undo. Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes (click inside Masterology first). Kept while the window is closed; not saved with the project.</li>
       <li><b>Snapshots S1–S4:</b> each keeps a whole sound (every setting and Tone Steady's target, plus its Auto-Master report). Click an empty slot to keep what you hear; click a stored one to switch to it (it glides, and undo goes back); STORE then a slot (or Shift-click) replaces it. Red = playing, S1• = changed since. They're not A/B and never change A/B, MATCH or the listening aids. Try Balanced in S1 vs Punchy in S2 with MATCH on: play each for 15 s once, then flip; MATCH remembers each one's level.</li>
-      <li><b>Match ref:</b> click <b>Match ref</b> (next to the targets) and load a released song you want to sound like (WAV, AIFF, FLAC or MP3). Polisher measures its loudest part; then press Auto-Master and play <i>your</i> song: it aims for the reference's tone, loudness, width and low end instead of the genre's. The dashed line on the spectrum is the reference's tone. The &times; on the pill clears it.</li>
+      <li><b>Match ref:</b> click <b>Match ref</b> (next to the targets) and load a released song you want to sound like (WAV, AIFF, FLAC or MP3). Masterology measures its loudest part; then press Auto-Master and play <i>your</i> song: it aims for the reference's tone, loudness, width and low end instead of the genre's. The dashed line on the spectrum is the reference's tone. The &times; on the pill clears it.</li>
       <li><b>Spectrum / History:</b> the dotted line (e.g. <b>Trap target</b>) is the tone typical masters in your genre have: where your red master line sits above it, your master has more of that range (1–2 dB either way is normal); click its name to show or hide it. <b>HISTORY</b> (under the spectrum) shows your master's loudness over the last 2 minutes of playback, with the Maximizer's gain reduction hanging from the top (orange = more than 6 dB, heavy limiting).</li>
       <li><b>Knobs:</b> drag up/down. Hold Shift for fine control. Double-click to reset. Mouse wheel works too.</li>
-      <li><b>A / B:</b> A plays your original mix (bypassed), B plays the master. Turn on <b>MATCH</b> first and play B for a few seconds (about 3 after Auto-Master or a new snapshot; after you change settings by hand it follows within about 20 seconds, or press RESET under the Output meter to make it learn afresh): the louder side is turned down so both play at the same loudness, and your original is kept from clipping. Then you compare tone and punch, not volume. On B the meters show the real master (on A, your original mix), never the matched level. MATCH switches itself off when you close Polisher, when you open the project again and during a normal export; for a Realtime Export, switch MATCH off and make sure B is on first.</li>
-      <li><b>MONO / PHONE:</b> listening checks next to MATCH. MONO plays left + right together (club PAs, phones): anything that disappears is out of phase. PHONE plays your master like a phone speaker (mono, about 300 Hz to 8 kHz): does the 808 still come through? You hear its harmonics, not its sub; that's what Saturation is for. They work with A/B and MATCH, switch off when you close Polisher and are never in a normal export (for a Realtime Export, switch them off first). A red banner shows while any listening aid is on.</li>
+      <li><b>A / B:</b> A plays your original mix (bypassed), B plays the master. Turn on <b>MATCH</b> first and play B for a few seconds (about 3 after Auto-Master or a new snapshot; after you change settings by hand it follows within about 20 seconds, or press RESET under the Output meter to make it learn afresh): the louder side is turned down so both play at the same loudness, and your original is kept from clipping. Then you compare tone and punch, not volume. On B the meters show the real master (on A, your original mix), never the matched level. MATCH switches itself off when you close Masterology, when you open the project again and during a normal export; for a Realtime Export, switch MATCH off and make sure B is on first.</li>
+      <li><b>MONO / PHONE:</b> listening checks next to MATCH. MONO plays left + right together (club PAs, phones): anything that disappears is out of phase. PHONE plays your master like a phone speaker (mono, about 300 Hz to 8 kHz): does the 808 still come through? You hear its harmonics, not its sub; that's what Saturation is for. They work with A/B and MATCH, switch off when you close Masterology and are never in a normal export (for a Realtime Export, switch them off first). A red banner shows while any listening aid is on.</li>
       <li><b>Listen (headphones button):</b> on Saturation, Soft Clipper, Resonance Tamer, Maximizer and Dynamics, it plays only what that module adds or takes off, so you learn what it does. Quiet changes are turned up so you can hear them (the banner says by how much). On Dynamics, the S buttons solo one band. One at a time; BACK TO MASTER on the banner (or the button again) returns to the master.</li>
       <li><b>Maximizer:</b> makes the master loud. Drive pushes the mix into the limiter; Ceiling is the highest peak allowed (−1 dBTP, or −1.5 for Loud and Club masters, leaves room for streaming's MP3/AAC copies). Input Trim turns a mix that is already too loud down before the whole chain. Watch Short-term while you turn Drive.</li>
       <li><b>Loudness:</b> watch Short-term while you turn Drive (it follows the last 3 seconds). Integrated averages the whole time since it started, so it restarts a moment after you change a control (Settings). True Peak stays at or below the Ceiling.</li>
@@ -237,7 +236,7 @@
   <div class="toast" id="toast" hidden></div>
 
   <!-- USER MANUAL (docs/manual/polisher-manual.md, bundled into the plug-in) -->
-  <div class="manual" id="manual" hidden role="dialog" aria-label="Polisher user manual">
+  <div class="manual" id="manual" hidden role="dialog" aria-label="Masterology user manual">
     <div class="manual-head">
       <span class="wm">USER MANUAL</span>
       <button type="button" id="btn-manual-close" class="manual-close" aria-label="Close the manual" title="Close (Esc)">&times;</button>

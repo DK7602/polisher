@@ -10,7 +10,7 @@
 #include <vector>
 #include <optional>
 
-/** The Polisher liquid-glass interface: an HTML/CSS/JS front end (plugin/ui) embedded in the
+/** The Masterology liquid-glass interface: an HTML/CSS/JS front end (plugin/ui) embedded in the
     binary and shown in the platform web view (WKWebView on macOS, WebView2 on Windows).
 
     C++ -> JS: parameters through JUCE web relays, plus a "polisherMeters" event at 30 Hz with

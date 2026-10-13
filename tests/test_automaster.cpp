@@ -335,7 +335,7 @@ TEST_CASE ("Acoustic masters are gentler than trap on the same mix", "[automaste
 
 TEST_CASE ("Auto-Master won't master a single instrument", "[automaster]")
 {
-    // A lone synth line (what Auto-Master heard when Polisher sat on a HALion track): harmonics
+    // A lone synth line (what Auto-Master heard when Masterology sat on a HALion track): harmonics
     // between 500 Hz and 2 kHz, nothing below or above.
     AudioClip synth = testsig::silence (48000.0, 2, 12.0);
     for (int i = 0; i < synth.numSamples(); ++i)

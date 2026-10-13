@@ -30,7 +30,7 @@ add_executable(polisher_tests
     test_genrecurve.cpp)
 
 target_link_libraries(polisher_tests PRIVATE polisher_dsp Catch2::Catch2WithMain)
-set_target_properties(polisher_tests PROPERTIES FOLDER "Polisher")
+set_target_properties(polisher_tests PROPERTIES FOLDER "Masterology")
 
 include(Catch)
 catch_discover_tests(polisher_tests)
@@ -38,7 +38,7 @@ catch_discover_tests(polisher_tests)
 # Plug-in-level tests: the real processor (all modules, parameters, MATCH, latency, state) as a DAW
 # drives it. Built from the plug-in's processor sources without its editors (POLISHER_HEADLESS).
 if(POLISHER_BUILD_PLUGIN)
-    juce_add_console_app(polisher_plugin_tests PRODUCT_NAME "Polisher Plugin Tests")
+    juce_add_console_app(polisher_plugin_tests PRODUCT_NAME "Masterology Plugin Tests")
     target_sources(polisher_plugin_tests PRIVATE
         plugin/test_plugin.cpp
         ${CMAKE_SOURCE_DIR}/plugin/PluginProcessor.cpp
@@ -48,7 +48,7 @@ if(POLISHER_BUILD_PLUGIN)
     target_include_directories(polisher_plugin_tests PRIVATE ${CMAKE_SOURCE_DIR}/plugin)
     target_compile_definitions(polisher_plugin_tests PRIVATE
         POLISHER_HEADLESS=1
-        JucePlugin_Name="Polisher"
+        JucePlugin_Name="Masterology"
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_USE_MP3AUDIOFORMAT=1
@@ -60,6 +60,6 @@ if(POLISHER_BUILD_PLUGIN)
         Catch2::Catch2
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
-    set_target_properties(polisher_plugin_tests PROPERTIES FOLDER "Polisher")
+    set_target_properties(polisher_plugin_tests PROPERTIES FOLDER "Masterology")
     catch_discover_tests(polisher_plugin_tests DISCOVERY_TIMEOUT 60)
 endif()

@@ -2,7 +2,7 @@
 its four stems are in, deleting the audio as it goes, so the whole set needs only ~1 GB of free disk.
   python fetch_musdb.py <work-dir> [train|validation ...]
 Songs land in data/ as <song>.npz (train split) or val_<song>.npz (MUSDB test split; held out).
-Licence: MUSDB18 is for non-commercial research only (fine while Polisher is free)."""
+Licence: MUSDB18 is for non-commercial research only (fine while Masterology is free)."""
 import os, shutil, sys, time, urllib.request
 import numpy as np, pyarrow.parquet as pq, soundfile as sf
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

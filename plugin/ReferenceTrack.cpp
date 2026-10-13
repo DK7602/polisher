@@ -202,13 +202,13 @@ polisher::ReferenceProfile ReferenceTrack::analyseFile (const juce::File& file, 
     std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
     if (reader == nullptr)
     {
-        error = "Polisher can't read " + quoted (file) + ". Use a WAV, AIFF, FLAC or MP3 file.";
+        error = "Masterology can't read " + quoted (file) + ". Use a WAV, AIFF, FLAC or MP3 file.";
         return {};
     }
     const double sr = reader->sampleRate;
     if (sr < 8000.0 || reader->lengthInSamples <= 0 || reader->numChannels == 0)
     {
-        error = quoted (file) + " has no audio Polisher can use.";
+        error = quoted (file) + " has no audio Masterology can use.";
         return {};
     }
 

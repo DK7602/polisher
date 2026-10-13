@@ -248,14 +248,14 @@ TEST_CASE ("Blind test: every sample plays at the same loudness, turned down onl
 
 #include "../tools/blindtest/ShootoutReport.h"
 
-TEST_CASE ("Shoot-out: the fairness check matches the masters to Polisher's and finds the mix by name", "[validation][blindtest]")
+TEST_CASE ("Shoot-out: the fairness check matches the masters to Masterology's and finds the mix by name", "[validation][blindtest]")
 {
     CHECK (blindtest::namedAsMix ("my mix.wav"));
     CHECK (blindtest::namedAsMix ("Trap_MIX_v2.wav"));
     CHECK_FALSE (blindtest::namedAsMix ("Mixdown.wav"));
     CHECK_FALSE (blindtest::namedAsMix ("remixed.wav"));
 
-    const std::vector<std::string> names { "my mix.wav", "polisher.wav", "ozone.wav", "tdr.wav" };
+    const std::vector<std::string> names { "my mix.wav", "masterology.wav", "ozone.wav", "tdr.wav" };
     std::vector<blindtest::Measured> files { { -17.0, -1.0 }, { -9.7, -1.5 }, { -10.6, -1.5 }, { -9.0, -1.5 } };
     auto f = blindtest::checkFairness (files, names);
     CHECK (f.mixes == std::vector<size_t> { 0 });
@@ -266,7 +266,7 @@ TEST_CASE ("Shoot-out: the fairness check matches the masters to Polisher's and 
     auto text = blindtest::fairnessText (f, files, names);
     INFO (text);
     CHECK (text.find ("my mix.wav (-17.0 LUFS): your unmastered mix") != std::string::npos);
-    CHECK (text.find ("polisher.wav (-9.7 LUFS): the one the others are matched to") != std::string::npos);
+    CHECK (text.find ("masterology.wav (-9.7 LUFS): the one the others are matched to") != std::string::npos);
     CHECK (text.find ("ozone.wav (-10.6 LUFS): needs 0.9 LU more") != std::string::npos);
     CHECK (text.find ("tdr.wav (-9.0 LUFS): 0.7 LU too loud") != std::string::npos);
     CHECK (text.find ("Sample") == std::string::npos);   // never a sample letter: it goes on the score sheet
@@ -278,10 +278,11 @@ TEST_CASE ("Shoot-out: the fairness check matches the masters to Polisher's and 
     CHECK_FALSE (f.peaksFair());
     CHECK (blindtest::fairnessText (f, files, names).find ("ceilings differ") != std::string::npos);
 
-    // 0.54 LU shows as 0.5, so it counts as 0.5: fair.
+    // 0.54 LU shows as 0.5, so it counts as 0.5: fair. (A file named with the old name, "polisher", is ours too.)
     files = { { -9.70, -1.0 }, { -10.24, -1.0 } };
     f = blindtest::checkFairness (files, { "polisher.wav", "ozone.wav" });
     CHECK (f.fair());
+    CHECK (f.reference == 0);
     CHECK (blindtest::fairnessText (f, files, { "polisher.wav", "ozone.wav" }).rfind ("Fair fight", 0) == 0);
 }
 

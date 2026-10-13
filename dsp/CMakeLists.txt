@@ -26,4 +26,4 @@ else()
     target_compile_options(polisher_dsp PRIVATE -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion)
 endif()
 
-set_target_properties(polisher_dsp PROPERTIES POSITION_INDEPENDENT_CODE ON FOLDER "Polisher")
+set_target_properties(polisher_dsp PROPERTIES POSITION_INDEPENDENT_CODE ON FOLDER "Masterology")

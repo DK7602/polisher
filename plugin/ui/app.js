@@ -1,4 +1,4 @@
-// Polisher liquid-glass UI.
+// Masterology liquid-glass UI.
 // Talks to the plug-in through JUCE's web relays (parameters) and the "polisherMeters" event.
 
 import * as Juce from "./juce/index.js";
@@ -908,7 +908,7 @@ function tsTargetCell() {
     if (M.amState === 1 && M.amMode === 1) { learnView = "listen"; renderLearn(); return; }
     if (M.amState !== 0) { toast("Auto-Master is busy. Let it finish (or cancel it), then press LEARN."); return; }
     const started = await amStart("tone");
-    if (started === false) { toast("Polisher isn't ready yet: press play in your DAW once, then press LEARN again."); return; }
+    if (started === false) { toast("Masterology isn't ready yet: press play in your DAW once, then press LEARN again."); return; }
     toneRequested = true;
     Object.assign(M, { amState: 1, amMode: 1, amProgress: 0, amHearing: false, amHeard: 0, amLoudAt: -1, amCanFinish: false });
     if (learnOn) learnView = "listen";
@@ -1243,9 +1243,9 @@ function renderLearnBody() {
   body.appendChild(item("Input Trim", `${fmtNum(trim, 1)} dB`,
     trim > -0.05
       ? "Your mix goes into the chain as it is. Auto-Master turns this down only when the master would otherwise land above your target."
-      : `Turns your mix down ${fmtNum(-trim, 1)} dB before the whole chain (all 12 modules). Drive can only push up; this is how Polisher masters a mix that would otherwise land above your target. A (bypass) ignores it.`));
+      : `Turns your mix down ${fmtNum(-trim, 1)} dB before the whole chain (all 12 modules). Drive can only push up; this is how Masterology masters a mix that would otherwise land above your target. A (bypass) ignores it.`));
   body.appendChild(item("Ceiling", `${fmtNum(ceiling, 1)} dBTP`,
-    `Nothing leaves Polisher above ${fmtNum(ceiling, 1)} dBTP on the true-peak meter streaming services use (it counts peaks between samples too). ` +
+    `Nothing leaves Masterology above ${fmtNum(ceiling, 1)} dBTP on the true-peak meter streaming services use (it counts peaks between samples too). ` +
     (ceiling > -0.95 ? "Above −1 dBTP, the MP3/AAC versions streaming services make are likely to clip. −1.0 is the usual choice; for loud masters (around −9 LUFS and louder) −1.5 (what Auto-Master sets for Loud and Club) to −2 (Spotify's advice) is safer."
                      : "That leaves room for the MP3/AAC conversion streaming services do. The louder the master, the higher its MP3/AAC copy peaks: at −9 LUFS and louder, use −1.5 (Auto-Master's choice for Loud and Club) or −2 (Spotify's advice), and the converted copies stay at or close to 0 dBTP instead of going a dB over.")));
   const bf = P.maxBassFirst.getScaledValue(), bassCut = M.bassCut || 0;
@@ -1255,7 +1255,7 @@ function renderLearnBody() {
   const dith = clamp(Math.round(P.maxDither.value * 2), 0, 2);
   body.appendChild(item("Dither", ["Off", "16-bit", "24-bit"][dith],
     dith === 0 ? "Off: right for a 24-bit or 32-bit float export. Turn on 16-bit only when you export a 16-bit WAV (CD, some distributors)."
-    : `On for ${dith === 1 ? "16" : "24"}-bit: adds a very quiet hiss (about ${dith === 1 ? "−98" : "−146"} dBFS) so quiet fades don't turn gritty when Cubase cuts the export to ${dith === 1 ? "16" : "24"} bits. Export at exactly that bit depth, with nothing after Polisher changing the level (Stereo Out fader at 0 dB).`));
+    : `On for ${dith === 1 ? "16" : "24"}-bit: adds a very quiet hiss (about ${dith === 1 ? "−98" : "−146"} dBFS) so quiet fades don't turn gritty when Cubase cuts the export to ${dith === 1 ? "16" : "24"} bits. Export at exactly that bit depth, with nothing after Masterology changing the level (Stereo Out fader at 0 dB).`));
   body.appendChild(item("Release", `${release} ms`,
     adaptive
       ? `Adaptive around ${release} ms: recovers quickly after single hits (drums) and moves slowly on sustained sound (808s, pads), so it doesn't pump.`
@@ -1744,12 +1744,12 @@ function renderTsLearn(body) {
   body.appendChild(item("Speed", speed, speed === "Slow" ? "Reacts over about a second: the gentlest, best for most masters."
     : speed === "Medium" ? "Reacts within about half a second: catches a phrase that gets muddier or a hook that gets harsher." : "Reacts within a few notes (0.15 s): strongest, can make the mix feel controlled."));
   if (M.tsTarget)
-    body.appendChild(item("Target", `your song · ${fmtTime(M.tsTarget)}`, `Tone Steady now holds your song to its own overall tone, learned when it listened to ${fmtTime(M.tsTarget)} of music. So what you hear is what you export, from any start point. Parts that come and go in the low end are left alone: an 808 that enters after the intro isn't cut, and the intro without it isn't lifted. A part that isn't playing isn't faked back. A part that comes in above the bass (a lead in the chorus) is treated like a drift: it's pulled down, by at most half the Range, for as long as it plays. It follows your Tonal EQ moves. It's saved with your project, and also in presets and copies of Polisher, so on a new song press LEARN again. CLEAR goes back to following the music.`));
+    body.appendChild(item("Target", `your song · ${fmtTime(M.tsTarget)}`, `Tone Steady now holds your song to its own overall tone, learned when it listened to ${fmtTime(M.tsTarget)} of music. So what you hear is what you export, from any start point. Parts that come and go in the low end are left alone: an 808 that enters after the intro isn't cut, and the intro without it isn't lifted. A part that isn't playing isn't faked back. A part that comes in above the bass (a lead in the chorus) is treated like a drift: it's pulled down, by at most half the Range, for as long as it plays. It follows your Tonal EQ moves. It's saved with your project, and also in presets and copies of Masterology, so on a new song press LEARN again. CLEAR goes back to following the music.`));
   else
     body.appendChild(item("Target", "following the music", "Your song's own balance over the last ~10 seconds, so the Tonal EQ sets the tone and Tone Steady only keeps it. Quiet breakdowns are left alone. When a bass or 808 comes in (the low end jumps more than 4 dB against the rest), it re-learns the balance within about a second instead of cutting the new low end. Because it follows the music, what you hear can depend a little on where playback starts. LEARN holds it to your whole song's tone instead."));
   if (on && !bypassed && amount >= 0.5 && M.tsTarget && M.tsFar)
-    body.appendChild(tip("HEADS UP", `Your song sits far from the tone Tone Steady is holding it to (about ${fmtNum(Math.max(0, M.tsDist || 0))} dB off, for 20 seconds or more of music). That happens when the tone was learned on another song: presets, copies of Polisher and older projects carry it along. Held to another song's tone, parts of your mix get cut or lifted by up to the Range.`, false,
-      { need: "Yes, if this tone came from another song (a preset, a copied Polisher, another project). If you learned it on this song, a section that sounds very different (a beat switch) can show this too: then you can leave it.",
+    body.appendChild(tip("HEADS UP", `Your song sits far from the tone Tone Steady is holding it to (about ${fmtNum(Math.max(0, M.tsDist || 0))} dB off, for 20 seconds or more of music). That happens when the tone was learned on another song: presets, copies of Masterology and older projects carry it along. Held to another song's tone, parts of your mix get cut or lifted by up to the Range.`, false,
+      { need: "Yes, if this tone came from another song (a preset, a copied Masterology, another project). If you learned it on this song, a section that sounds very different (a beat switch) can show this too: then you can leave it.",
         steps: ["Press LEARN in this panel.", "Play your whole song from the start. It finishes by itself when the song ends.", "Or press CLEAR to follow the music instead."] }));
   else if (on && !bypassed && amount >= 0.5 && M.tsTarget && M.tsTarget < 30)
     body.appendChild(tip("HEADS UP", `Tone Steady learned your song's tone from only ${fmtTime(M.tsTarget)} of music, so it may not describe the whole song.`, false,
@@ -1827,7 +1827,7 @@ function renderListenLearn(body) {
     : M.amHearing ? "Keep the song playing."
     : heard >= AM_AUTO_FINISH ? `No music for a moment. After ${AM_AUTO_FINISH} seconds of music, ${AM_END_SILENCE} seconds without music count as the end of the song, and it finishes by itself. To keep listening, press play again right away.`
     : "Paused. Press play to go on, or finish with what it has heard."));
-  body.appendChild(para("l-p", (tone ? "Polisher listens to the whole song and learns its overall tone for Tone Steady. Nothing else changes."
+  body.appendChild(para("l-p", (tone ? "Masterology listens to the whole song and learns its overall tone for Tone Steady. Nothing else changes."
                                      : "Auto-Master listens to the whole song, finds its loudest part by itself and sets every module for it. It also learns your song's tone for Tone Steady.")
     + ` It finishes by itself ${AM_END_SILENCE} seconds after the song ends (once it has heard ${AM_AUTO_FINISH} seconds of music). Or press FINISH NOW any time after 12 seconds.`));
   body.appendChild(sep());
@@ -2385,7 +2385,7 @@ $("btn-automaster").addEventListener("click", async () => {
   if (M.amState === 2) return;
   const started = await amStart();
   if (started === false) {
-    toast("Polisher isn't ready yet: press play in your DAW once, then click Auto-Master again.");
+    toast("Masterology isn't ready yet: press play in your DAW once, then click Auto-Master again.");
     return;
   }
   amRequested = true;
@@ -2475,7 +2475,7 @@ for (const type of ["keydown", "keypress", "keyup"]) document.addEventListener(t
 
 $("btn-undo").addEventListener("click", () => stepHistory(false));
 $("btn-redo").addEventListener("click", () => stepHistory(true));
-// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (Cmd on a Mac) while Polisher's window has the keyboard. A box you are
+// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (Cmd on a Mac) while Masterology's window has the keyboard. A box you are
 // typing a value into keeps its own undo.
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && storeArmed) { storeArmed = false; refreshSnapshots(); return; }
@@ -2941,7 +2941,7 @@ function howToUseRef() {
   const ol = document.createElement("ol");
   ol.className = "l-steps";
   for (const st of ["Pick a commercial trap song with the sound you want: the released WAV, FLAC or MP3 (a good-quality file, not a phone recording).",
-                    "Click Match ref (next to the targets) and choose the file. Polisher measures its loudest part in a few seconds.",
+                    "Click Match ref (next to the targets) and choose the file. Masterology measures its loudest part in a few seconds.",
                     "Press Auto-Master and play YOUR song from the start: it finds the loudest part by itself.",
                     "Turn on MATCH and A/B. The dashed line on the spectrum is the reference's tone; the × on the pill goes back to the genre targets."]) {
     const li = document.createElement("li"); li.textContent = st; ol.appendChild(li);
@@ -2971,7 +2971,7 @@ function renderRefLearn(body) {
     return;
   }
   const hookNote = isFinite(p.hookLufs) && p.hookLufs > -99 ? ` Its loudest 12 seconds measure ${fmtNum(p.hookLufs)} LUFS: that's what Auto-Master aims for, compared with the loudest 12 seconds of your song.` : "";
-  body.appendChild(para("l-p", `Matching “${p.name}”. Polisher measured its loudest ${Math.round(p.partSeconds)} s (from ${mmss(p.startSeconds)}): ${fmtNum(p.lufs)} LUFS, the whole song ${fmtNum(p.trackLufs)} LUFS.${hookNote} Only these measurements are saved with your project, not the song.`));
+  body.appendChild(para("l-p", `Matching “${p.name}”. Masterology measured its loudest ${Math.round(p.partSeconds)} s (from ${mmss(p.startSeconds)}): ${fmtNum(p.lufs)} LUFS, the whole song ${fmtNum(p.trackLufs)} LUFS.${hookNote} Only these measurements are saved with your project, not the song.`));
   body.appendChild(item("What Auto-Master takes from it", null,
     "The tone (all seven EQ bands), the loudness (kept between −16 and −6 LUFS), the stereo width of the mids and highs, and the low end: how stereo the bass is and how deep the 808 reaches. Your genre still decides compression, saturation, clipping and punch, which a reference can't show."));
   const r = amReport;
@@ -3005,7 +3005,7 @@ function renderSnapLearn(body) {
   body.appendChild(tip("TRY THIS", "Balanced vs Punchy: pick Balanced, click Auto-Master and play your whole song from the start (it finishes by itself), then click S1. Pick Punchy, run Auto-Master the same way and click S2. Turn on MATCH, play your chorus and listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip S1 / S2 every few seconds: you hear punch and weight, not volume. Click the one you like and keep going.", true));
   body.appendChild(sep());
   body.appendChild(head("UNDO AND REDO"));
-  body.appendChild(para("l-p", `The arrows at the top step back and forward through your changes, one at a time: a knob move, a switch, a typed value, an Auto-Master run, Apply, a snapshot. Point at an arrow to see what it will undo. ${IS_MAC ? "⌘Z undoes, ⇧⌘Z redoes" : "Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes"} (click inside Polisher first, or Cubase takes the keys). The last 100 steps are kept while Polisher's window is closed, but not when you close the project. Automation from Cubase is never in the list.`));
+  body.appendChild(para("l-p", `The arrows at the top step back and forward through your changes, one at a time: a knob move, a switch, a typed value, an Auto-Master run, Apply, a snapshot. Point at an arrow to see what it will undo. ${IS_MAC ? "⌘Z undoes, ⇧⌘Z redoes" : "Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes"} (click inside Masterology first, or Cubase takes the keys). The last 100 steps are kept while Masterology's window is closed, but not when you close the project. Automation from Cubase is never in the list.`));
 }
 
 const AM_MODULES = [["ul", "UNLIMITER"], ["eq", "TONAL EQ"], ["stem", "STEM EQ"], ["ts", "TONE STEADY"], ["rt", "RESONANCE TAMER"], ["bass", "BASS CONTROL"], ["glue", "GLUE"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];

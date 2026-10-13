@@ -1191,7 +1191,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
 
     // --- One instrument, not a mix -------------------------------------------------------------------
     // A finished mix spreads its energy across the bands; even a muddy or honky one sits within a
-    // few dB of a genre's balance. When one band towers far above it, Polisher is almost certainly on
+    // few dB of a genre's balance. When one band towers far above it, Masterology is almost certainly on
     // a single track (a synth, a vocal, an 808), and mastering that to a genre curve would do harm.
     {
         const auto target = genreTargetCurve (s.genre);
@@ -1211,9 +1211,9 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                         ", " + (excess > 30.0 ? std::string ("more than 30") : "about " + num (excess)) + " dB above the balance of a finished " + genre + " song. That's what a "
                         "single instrument or vocal sounds like. Mastering one track would pile on EQ it doesn't need, so I haven't "
                         "changed anything.";
-            r.tipTitle = "PUT POLISHER ON THE MASTER";
-            r.tip = "Polisher belongs on the channel every track flows into. In Cubase: open the MixConsole (F3), find Stereo Out "
-                    "on the far right, and load Polisher in its last insert slot. Remove it from this track, then press play on "
+            r.tipTitle = "PUT MASTEROLOGY ON THE MASTER";
+            r.tip = "Masterology belongs on the channel every track flows into. In Cubase: open the MixConsole (F3), find Stereo Out "
+                    "on the far right, and load Masterology in its last insert slot. Remove it from this track, then press play on "
                     "the chorus and run Auto-Master again.";
             return r;
         }
@@ -1228,7 +1228,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     // --- Unlimiter: only when the audio arrives already squashed, and only if the punch survives ----
     // An unmastered mix keeps its peaks well above the average level (Squash 12.5 dB or more) or at
     // least doesn't press them flat against one ceiling; a beat or mix that was limited or clipped
-    // before Polisher has lost that. The Maximizer then has to make the restored hits loud again, and
+    // before Masterology has lost that. The Maximizer then has to make the restored hits loud again, and
     // the closer the target is to the loudness the audio arrives at, the more of them it presses
     // straight back down. So the Unlimiter is tried at the target and kept only when the hits still
     // jump out clearly further than without it. Everything after this hears the restored mix.
@@ -1247,7 +1247,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         const double tryAmount = s.intensity == Intensity::gentle ? 50.0 : s.intensity == Intensity::punchy ? 100.0 : 75.0;
         const bool wall = squash <= Unlimiter::kFullSquashDb + 0.5;
         const std::string arrives = std::string ("Your audio arrives ") + (wall ? "brickwalled" : "already squashed") + " (Squash " + num (squash) +
-                                    " dB; an unmastered mix reads 12.5 dB or more), so something limited or clipped it before Polisher. ";
+                                    " dB; an unmastered mix reads 12.5 dB or more), so something limited or clipped it before Masterology. ";
         if (Unlimiter::squashScale (squash) < 0.25)
             reason ("ul", "Amount", "0 %", "Your mix still has its punch (Squash " + num (squash) + " dB, like an unmastered mix: its peaks stand well "
                     "above the average level, or don't press flat against one ceiling the way a limiter leaves them), so there is nothing "
@@ -1283,10 +1283,10 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                            " your target, so there is little punch left to win back";
                 }
                 reason ("ul", "Amount", "0 %", why);
-                r.notes.push_back ("SQUASHED INPUT: your audio was already limited or clipped before Polisher (Squash " + num (squash) +
+                r.notes.push_back ("SQUASHED INPUT: your audio was already limited or clipped before Masterology (Squash " + num (squash) +
                                    " dB), and " + why2 + "."
                                    "\nNEED: Optional. The master works as it is."
-                                   "\nSTEP: If it's your own mix, turn off the limiter or clipper on Stereo Out before Polisher (or export the beat without it)."
+                                   "\nSTEP: If it's your own mix, turn off the limiter or clipper on Stereo Out before Masterology (or export the beat without it)."
                                    "\nSTEP: Then run Auto-Master again.");
             }
             else
@@ -1296,10 +1296,10 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                         pct (ul.amount) + " makes the hits jump out about " + num (kept) + " dB further than without it, after the Maximizer has made "
                         "the song loud again. Compare at the final loudness with MATCH on: the drums should hit harder while the level "
                         "between them stays the same.");
-                r.notes.push_back ("SQUASHED INPUT: your audio was already limited or clipped before Polisher (Squash " + num (squash) +
+                r.notes.push_back ("SQUASHED INPUT: your audio was already limited or clipped before Masterology (Squash " + num (squash) +
                                    " dB). The Unlimiter wins back part of the punch, but the cleanest result comes from the unlimited mix."
                                    "\nNEED: Optional. The master works as it is."
-                                   "\nSTEP: If it's your own mix, turn off the limiter or clipper on Stereo Out before Polisher (or export the beat without it)."
+                                   "\nSTEP: If it's your own mix, turn off the limiter or clipper on Stereo Out before Masterology (or export the beat without it)."
                                    "\nSTEP: Then set the Unlimiter Amount back to 0 and run Auto-Master again.");
             }
         }
@@ -1999,11 +1999,11 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     }
 
     if (arrivesPeak > 0.0)
-        r.notes.push_back ("HEADS UP: your mix peaks at " + num (arrivesPeak, true) + " dBTP before Polisher. That's fine inside your DAW, "
+        r.notes.push_back ("HEADS UP: your mix peaks at " + num (arrivesPeak, true) + " dBTP before Masterology. That's fine inside your DAW, "
                            "but if you export the unmastered mix (for example to send to someone), turn the master fader down so it peaks below "
                            "\xE2\x88\x92" "1 dB, or the file will clip."
-                           "\nNEED: Not for the master: Polisher handles it. Only before exporting the unmastered mix."
-                           "\nSTEP: Put a gain plug-in (or lower every track fader) before Polisher by about " + num (std::ceil (arrivesPeak + 1.0), false, 0) + " dB."
+                           "\nNEED: Not for the master: Masterology handles it. Only before exporting the unmastered mix."
+                           "\nSTEP: Put a gain plug-in (or lower every track fader) before Masterology by about " + num (std::ceil (arrivesPeak + 1.0), false, 0) + " dB."
                            "\nSTEP: Run Auto-Master again; the master comes out the same.");
 
     std::string driveWhy;
@@ -2015,7 +2015,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         driveWhy = trimDb <= kMinTrimDb
             ? arrivesText + ", so loud that even with Input Trim at its " + num (kMinTrimDb) +
               " dB limit the master lands at " + num (out.integratedLufs) + " LUFS, above the " + tname +
-              " target. Turn the mix down before Polisher."
+              " target. Turn the mix down before Masterology."
             : "With Drive at 0 dB the master lands at " + num (out.integratedLufs) + " LUFS, " + num (out.integratedLufs - r.targetLufs) +
               " dB above the " + tname + " target. Lower Input Trim by that much, or run Auto-Master again.";
     else if (r.reachedTarget)
@@ -2042,7 +2042,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         r.notes.push_back ("HEADS UP: your mix arrives very quiet (" + num (arrivesLufs) + " LUFS), so even the maximum Drive leaves the master at "
                            + num (out.integratedLufs) + " LUFS, short of the " + tname + " target (" + num (r.targetLufs) + " LUFS)."
                            "\nNEED: Yes, if you want the target loudness."
-                           "\nSTEP: Turn the mix up before Polisher: raise the Stereo Out fader, or the track faders, by about "
+                           "\nSTEP: Turn the mix up before Masterology: raise the Stereo Out fader, or the track faders, by about "
                            + num (std::ceil (r.targetLufs - out.integratedLufs), false, 0) + " dB."
                            "\nSTEP: Run Auto-Master again.");
     }
@@ -2090,14 +2090,14 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     if (useRef)
     {
         if (refLufs > kRefMaxLufs + 0.05)
-            r.notes.push_back ("REFERENCE LOUDNESS: " + refName + " measures " + num (refLufs) + " LUFS in its loudest 12 seconds. That's louder than Polisher "
+            r.notes.push_back ("REFERENCE LOUDNESS: " + refName + " measures " + num (refLufs) + " LUFS in its loudest 12 seconds. That's louder than Masterology "
                                "will aim for (" + num (kRefMaxLufs) + " LUFS at most): past that, every mix loses its punch and starts to distort, "
                                "so Auto-Master aims for " + num (kRefMaxLufs) + "."
                                "\nNEED: No. Streaming services turn masters this loud down anyway, so the extra loudness wouldn't be heard there."
                                "\nSTEP: Compare with MATCH on: your master should sound as full as the reference at the same level.");
         else if (refLufs < kRefMinLufs - 0.05)
             r.notes.push_back ("REFERENCE LOUDNESS: " + refName + " measures only " + num (refLufs) + " LUFS in its loudest 12 seconds, quieter than any "
-                               "release Polisher aims for (" + num (kRefMinLufs) + " LUFS at least), so Auto-Master aims for " + num (kRefMinLufs) + ". "
+                               "release Masterology aims for (" + num (kRefMinLufs) + " LUFS at least), so Auto-Master aims for " + num (kRefMinLufs) + ". "
                                "It may be a turned-down copy, a live recording or a rough mix."
                                "\nNEED: Only if this isn't the song you meant to load."
                                "\nSTEP: Load the released version of the song (a WAV, FLAC or high-quality MP3) with Match ref.");

@@ -16,11 +16,11 @@ namespace
     const char* const webView2Url = "https://developer.microsoft.com/microsoft-edge/webview2/";
 
    #if JUCE_WINDOWS
-    const char* const noticeText = "BASIC VIEW: Polisher's full screen needs the Microsoft Edge WebView2 Runtime. Click GET WEBVIEW2, "
-                                   "install it (free), then reopen Polisher. All 12 modules keep working meanwhile; Auto-Master and "
+    const char* const noticeText = "BASIC VIEW: Masterology's full screen needs the Microsoft Edge WebView2 Runtime. Click GET WEBVIEW2, "
+                                   "install it (free), then reopen Masterology. All 12 modules keep working meanwhile; Auto-Master and "
                                    "Learn need the full screen.";
    #else
-    const char* const noticeText = "BASIC VIEW: Polisher's full screen couldn't start because this system has no web view. "
+    const char* const noticeText = "BASIC VIEW: Masterology's full screen couldn't start because this system has no web view. "
                                    "All 12 modules keep working with their saved settings; Auto-Master and Learn need the full screen.";
    #endif
 
@@ -113,7 +113,7 @@ void PolisherAudioProcessorEditor::paint (juce::Graphics& g)
     auto header = getLocalBounds().removeFromTop (56).reduced (16, 8);
     g.setColour (Colours::pearl);
     g.setFont (juce::FontOptions (26.0f, juce::Font::bold));
-    g.drawText ("POLISHER", header, juce::Justification::centredLeft);
+    g.drawText ("MASTEROLOGY", header, juce::Justification::centredLeft);
     g.setColour (Colours::muted);
     g.setFont (juce::FontOptions (13.0f));
     g.drawText ("Basic view  |  Maximizer + loudness meter  |  v" JucePlugin_VersionString, header, juce::Justification::centredRight);

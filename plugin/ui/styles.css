@@ -76,7 +76,6 @@ img { -webkit-user-drag: none; }
 #header { left: 341px; top: 64px; width: 1221px; height: 96px; }
 .header-row { position: absolute; left: 16px; right: 16px; top: 12px; bottom: 12px; display: flex; align-items: center; gap: 12px; }
 .logo { height: 58px; width: 118px; filter: drop-shadow(0 3px 6px rgba(0,0,0,.6)); cursor: pointer; }
-.title { height: 70px; width: 344px; border-radius: 10px; }
 .genre { margin-left: 6px; height: 46px; width: 236px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px; }
 .genre button { width: 34px; height: 34px; border: 0; background: transparent; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .genre span { font-size: 15px; font-weight: 700; }
@@ -306,7 +305,7 @@ img { -webkit-user-drag: none; }
    Black & white liquid glass; red stays as the only colour (selection, warnings, Auto-Master). Look only. */
 body.theme-mono { --powder: #E6E6E6; --navy: #050505; --muted: #CFCFCF; --dim: #A8A8A8; }
 body.theme-mono #stage { background: #050505; }
-body.theme-mono .frame, body.theme-mono .chain-bg, body.theme-mono .panel-bg, body.theme-mono .title, body.theme-mono .logo { filter: grayscale(1) contrast(1.12) brightness(1.04); }
+body.theme-mono .frame, body.theme-mono .chain-bg, body.theme-mono .panel-bg, body.theme-mono .logo { filter: grayscale(1) contrast(1.12) brightness(1.04); }
 body.theme-mono .logo { filter: grayscale(1) contrast(1.12) brightness(1.15) drop-shadow(0 3px 6px rgba(0,0,0,.6)); }
 body.theme-mono .row > img[src*="row_blue"], body.theme-mono .imgbtn img, body.theme-mono .knob img { filter: grayscale(1) contrast(1.1); }
 body.theme-mono .pill-blue { background-image: url("assets/pill_blue.png"); filter: grayscale(1) contrast(1.15); }
@@ -407,7 +406,6 @@ body.theme-mono .pop-note { background: rgba(255,255,255,.06); border-color: rgb
 body.theme-mono .sw-ref { border-top-color: #E6E6E6; }
 
 /* ---------- monitoring: MONO / PHONE checks, Listen / Solo, the banner ---------- */
-.title { width: 266px; object-fit: contain; }
 .checks { display: flex; flex-direction: column; gap: 3px; flex-shrink: 0; }
 .check-pill { height: 21px; width: 72px; font-size: 11px; font-weight: 700; letter-spacing: .08em; cursor: pointer; line-height: 21px; padding: 0; }
 .listen { height: 30px; padding: 0 14px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12px; font-weight: 700; letter-spacing: .06em; cursor: pointer; }
@@ -451,8 +449,11 @@ body.theme-mono .monitor-banner { background: linear-gradient(180deg, rgba(225,2
 
 /* ---------- header: snapshots S1..S4, undo / redo (tightened so the row still fits 1189 px) ---------- */
 .header-row { gap: 7px; }
-.logo { width: 84px; height: 46px; object-fit: contain; flex-shrink: 0; }
-.title { width: 168px; min-width: 120px; flex-shrink: 1; }   /* gives way if MATCH's reading needs room */
+/* Masterology logo: one image (crown + wave + name), a little taller than the row, sitting low so the name rests
+   just above the header's bottom edge and the crown reaches up toward the top edge (placed to the user's mock-up).
+   Gives way (shrinks) if MATCH's reading needs room. */
+.logo { width: 262px; min-width: 190px; height: 83px; margin: -3px -8px 0 -1px; object-fit: contain; object-position: left center;
+  flex-shrink: 1; position: relative; z-index: 2; }
 .genre { width: 186px; margin-left: 2px; flex-shrink: 0; }
 .genre button { width: 28px; }
 .learn-toggle { width: 96px; font-size: 14px; flex-shrink: 0; }

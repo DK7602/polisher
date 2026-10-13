@@ -1,18 +1,21 @@
-# Polisher — AI mastering plug-in
+# Masterology — AI mastering plug-in
+
+(Formerly called **Polisher**; renamed in v0.25.0. The repository, code names and plug-in ID keep
+"polisher", so projects saved with Polisher open with Masterology.)
 
 Producer-minded mastering suite with an **Auto-Master** button and a **Learn** mode that explains
 every setting. Style: red / white / powder-blue liquid glass.
 
 Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
 
-**System requirements.** Windows 10 or 11 (64-bit) or macOS 11+. On Windows the Polisher screen runs on
+**System requirements.** Windows 10 or 11 (64-bit) or macOS 11+. On Windows the Masterology screen runs on
 the **Microsoft Edge WebView2 Runtime**: it ships with Windows 11 and comes with Microsoft Edge on
-Windows 10. Without it Polisher still processes audio but opens a basic view (Maximizer controls and
-meters only) with a button to Microsoft's free download page; install it and reopen Polisher.
+Windows 10. Without it Masterology still processes audio but opens a basic view (Maximizer controls and
+meters only) with a button to Microsoft's free download page; install it and reopen Masterology.
 
 User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (also inside the plug-in: Quick Help > Open the full manual).
 
-## Status — v0.24.0
+## Status — v0.25.0
 
 | Piece | State |
 | --- | --- |
@@ -28,12 +31,13 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | Auto-Master: listens 12 s, analyses tone vs genre, bass width, 808 jumps, kick punch and loudness; sets every module; explains each choice; undo | Done (v0.6) |
 | Level-matched A/B (MATCH): the master plays at the original's loudness; off during a normal export, when the window closes and when a project opens | Done (v0.7) |
 | Stereo Imager: width for lows / mids / highs (side only, LR4 crossovers), correlation meter, Learn | Done (v0.8) |
-| Auto-Master recognises a single instrument (one band far above any genre balance), changes nothing and says to put Polisher on the master | Done (v0.8.1) |
+| Auto-Master recognises a single instrument (one band far above any genre balance), changes nothing and says to put Masterology on the master | Done (v0.8.1) |
 | MATCH never boosts (the louder side is turned down) and gives a clipping original headroom, so A doesn't distort the interface | Done (v0.8.2) |
 | Dynamics: 4-band compressor (LR4 splits, zero latency, per-band threshold / ratio / attack / release / gain, program-dependent release, per-band reduction meters, Learn) | Done (v0.9) |
 | Dynamics Impact: per-band transient shaping (−100…+100 %), loudness kept per band, steady sound untouched | Done (v0.17) |
 | Glue (module 07): one bus compressor for the whole mix in three vintage flavours (Bus / Opto / Tube: knee, detector, timing), Ignore Lows sidechain high-pass, Auto release, parallel Mix, Gain, zero latency, exact pass-through at 1:1 | Done (v0.24) |
-| Shoot-out kit: Blind Test checks the masters were made at the same loudness (names the one to push and by how much) and and the same ceiling (names the file to change and by how much, matched to polisher.wav), and adds measurements to the answer key (kick / snare punch, range, width, bass width, 6-band tone balance); manual guide for Polisher vs Ozone 12 / TDR Limiter 6 GE / LoudMax | Done (v0.23) |
+| New name and logo: Polisher is now **Masterology** (plug-in name, vendor "Masterology Audio", header logo, manual, Blind Test). Same plug-in ID, so old projects and presets load | Done (v0.25) |
+| Shoot-out kit: Blind Test checks the masters were made at the same loudness (names the one to push and by how much) and and the same ceiling (names the file to change and by how much, matched to masterology.wav), and adds measurements to the answer key (kick / snare punch, range, width, bass width, 6-band tone balance); manual guide for Masterology vs Ozone 12 / TDR Limiter 6 GE / LoudMax | Done (v0.23) |
 | Mid / side on Dynamics (Channels: Stereo / Mid only / Side only, all bands, click-free switch) and Saturation (Channels: Stereo / Mid / Side, works with Focus) | Done (v0.22) |
 | Saturation Focus Highs only (sheen above 4 kHz) and Bass + Highs (808 + hats, mids clean), each with its own split and oversampling | Done (v0.21) |
 | Maximizer Bass First (808-aware limiting: Linkwitz-Riley split at 120 Hz, low band takes the reduction first, park-and-glide switching) and Dither (TPDF, 16 / 24-bit) | Done (v0.20) |
@@ -79,7 +83,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 - **UI smoke test** (CI, `tests/ui/`): the web UI in headless Chromium: every module's on/off switch, A / B,
   host changes, undo / redo (buttons, labels, Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y), snapshots, no script errors.
 - **pluginval** at strictness 10 + Steinberg's VST3 validator (CI, Windows).
-- **Listening**: `PolisherBlindTest` (built with the plug-in) turns exported masters into a loudness-matched,
+- **Listening**: `MasterologyBlindTest` (built with the plug-in) turns exported masters into a loudness-matched,
   shuffled blind test with a score sheet and a separate answer key with a fairness check and measurements (see the
   manual's Blind test and Shoot-out sections).
 
@@ -120,7 +124,7 @@ plugin/     JUCE AudioProcessor, web-view editor (+ basic native fallback editor
 tests/      Catch2 unit tests for the engine
 docs/manual/  User manual (bundled into the plug-in; its version line must match the release)
 tools/stem/   Stem EQ model training (Python / PyTorch; see tools/stem/README.md)
-tools/blindtest/  Polisher Blind Test: loudness-matched, shuffled listening test from exported songs
+tools/blindtest/  Masterology Blind Test: loudness-matched, shuffled listening test from exported songs
 .github/workflows/build.yml   Windows (every push) and macOS (manual run) builds, tests, validation, artifacts
 ```
 
@@ -147,7 +151,7 @@ Meter behaviour: the loudness meter resets automatically when the host transport
 
 Every push runs the GitHub Actions workflow on Windows: build, unit tests, pluginval at strictness 10
 (the maximum) with Steinberg's VST3 validator, and the built plug-in as a downloadable artifact
-(Polisher-Windows). macOS (universal arm64 + x86_64, VST3 / AU / Standalone, pluginval + `auval`) builds
+(Masterology-Windows). macOS (universal arm64 + x86_64, VST3 / AU / Standalone, pluginval + `auval`) builds
 on a manual run: Actions > Build & Test > Run workflow, "Also build macOS".
 
 ## Engine notes

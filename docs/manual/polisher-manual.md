@@ -1,18 +1,18 @@
-# Polisher User Manual
+# Masterology User Manual
 
-Version 0.24.0 · October 2026
+Version 0.25.0 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
-## What Polisher is
+## What Masterology is
 
-Polisher is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds twelve modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
+Masterology (called **Polisher** before version 0.25.0) is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds twelve modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.24.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.25.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 
-1. Put Polisher in the **last insert slot of Stereo Out**.
+1. Put Masterology in the **last insert slot of Stereo Out**.
 2. Turn off any other limiter, clipper or mastering chain on Stereo Out.
 3. Pick your genre, an intensity and a target at the top.
 4. Press **Auto-Master** and play your whole song from the start. It finds the loudest part by itself and finishes when the song ends.
@@ -21,26 +21,27 @@ This manual covers version 0.24.0. Every control is explained in plain words, wi
 
 ## Getting started in Cubase
 
-Polisher goes on **Stereo Out**, the channel every track flows into, in the **last insert slot**. On a single track it can't master anything, and Auto-Master will refuse and tell you so.
+Masterology goes on **Stereo Out**, the channel every track flows into, in the **last insert slot**. On a single track it can't master anything, and Auto-Master will refuse and tell you so.
 
 ### Install
 
-1. Download the Windows build (Polisher-Windows) and unzip it.
-2. Copy **Polisher.vst3** into `C:\Program Files\Common Files\VST3`.
-3. Start Cubase. If Polisher doesn't show up, open **Studio > VST Plug-in Manager** and click **Update Plug-in Information**.
+1. Download the Windows build (Masterology-Windows) and unzip it.
+2. Copy **Masterology.vst3** into `C:\Program Files\Common Files\VST3`.
+3. **Updating from Polisher** (Masterology's old name)? Delete **Polisher.vst3** from that folder first. It's the same plug-in, so your projects that used Polisher open with Masterology and keep their settings.
+4. Start Cubase. If Masterology doesn't show up, open **Studio > VST Plug-in Manager** and click **Update Plug-in Information**.
 
-Polisher's screen runs on the **Microsoft Edge WebView2 Runtime**. Windows 11 has it built in and Windows 10 gets it with Microsoft Edge, so you rarely need to do anything. If Polisher opens a small screen that says **BASIC VIEW**, the runtime is missing: click **GET WEBVIEW2**, install the free "Evergreen" runtime from Microsoft, then close and reopen Polisher. Your settings are kept, and the whole chain keeps processing audio in the basic view.
+Masterology's screen runs on the **Microsoft Edge WebView2 Runtime**. Windows 11 has it built in and Windows 10 gets it with Microsoft Edge, so you rarely need to do anything. If Masterology opens a small screen that says **BASIC VIEW**, the runtime is missing: click **GET WEBVIEW2**, install the free "Evergreen" runtime from Microsoft, then close and reopen Masterology. Your settings are kept, and the whole chain keeps processing audio in the basic view.
 
 ### Load it on Stereo Out
 
 1. Press **F3** to open the MixConsole.
 2. Find **Stereo Out** on the far right.
-3. Click the **last insert slot** and choose Polisher.
-4. Bypass every other plug-in on Stereo Out that changes loudness or tone (limiters, clippers, compressors, mastering EQs). Polisher replaces that chain; stacking two chains makes the input far too hot.
+3. Click the **last insert slot** and choose Masterology.
+4. Bypass every other plug-in on Stereo Out that changes loudness or tone (limiters, clippers, compressors, mastering EQs). Masterology replaces that chain; stacking two chains makes the input far too hot.
 
 ### Set your mix level
 
-Leave headroom going in. A good input is about **−17 LUFS integrated with peaks around −1 dBTP**. If your mix is hotter, pull it down (for example, lower the Stereo Out fader before Polisher, or turn down the mix bus by about 6 dB).
+Leave headroom going in. A good input is about **−17 LUFS integrated with peaks around −1 dBTP**. If your mix is hotter, pull it down (for example, lower the Stereo Out fader before Masterology, or turn down the mix bus by about 6 dB).
 
 ### Your first master
 
@@ -58,12 +59,12 @@ Leave headroom going in. A good input is about **−17 LUFS integrated with peak
 - **Double-click the number** under a knob to type an exact value, then press **Enter** (**Esc** cancels). Units are optional: `-3`, `1.2k` for 1.2 kHz, `2.5` for a 2.5:1 ratio, `off` for a control's lowest setting. Values outside the range stop at its end. With a knob selected, **Enter** opens the box too.
 - The **mouse wheel** works too.
 - Changed your mind? The **undo arrow** at the top (or **Ctrl+Z**) takes back your last change; see [Undo, redo and snapshots](#undo-redo-and-snapshots).
-- **Space and Enter** never press a Polisher button a second time after you clicked it, so pressing Space to play the song can't cancel Auto-Master or switch MATCH off. If Space doesn't start Cubase while Polisher's window is in front, click Cubase's project window first. Moving around with **Tab**, Space and Enter press buttons as usual.
+- **Space and Enter** never press a Masterology button a second time after you clicked it, so pressing Space to play the song can't cancel Auto-Master or switch MATCH off. If Space doesn't start Cubase while Masterology's window is in front, click Cubase's project window first. Moving around with **Tab**, Space and Enter press buttons as usual.
 - Drag the window's corner to resize it; everything scales together. It doesn't go smaller than 1120 × 630, where the small print would be too small to read.
 
 ### Exporting
 
-Export as usual with **File > Export > Audio Mixdown**. MATCH and the listening aids (Listen, Solo, MONO, PHONE) switch themselves off during a normal (offline) export, so your file is the real master. For a Realtime Export, switch MATCH and every listening aid off (no red banner on the spectrum) and make sure B is on before you start: in real time Polisher can't tell an export from playback. Polisher reports its delay to Cubase, which lines everything up for you.
+Export as usual with **File > Export > Audio Mixdown**. MATCH and the listening aids (Listen, Solo, MONO, PHONE) switch themselves off during a normal (offline) export, so your file is the real master. For a Realtime Export, switch MATCH and every listening aid off (no red banner on the spectrum) and make sure B is on before you start: in real time Masterology can't tell an export from playback. Masterology reports its delay to Cubase, which lines everything up for you.
 
 ## The signal chain
 
@@ -104,7 +105,7 @@ Auto-Master sets the Tonal EQ bands together. Neighbouring bands overlap, so it 
 3. Play your **whole song**, ideally from the very start. The button shows how much it has heard and where the loudest part is so far; Learn shows the same, with **FINISH NOW** and **CANCEL**.
 4. It **finishes by itself** 4 seconds after the song ends: once it has heard at least 30 seconds of music, 4 seconds without music (the music stops, or you stop playback) count as the end. So a pause longer than 4 seconds after the first 30 seconds also ends it; before 30 seconds you can stop and play on. In a hurry? From **12 seconds** of music on (the bar under the button turns green), click Auto-Master again or press **FINISH NOW**: it uses what it has heard. Before 12 seconds a click stops it without changing anything.
 5. It then **chooses every setting** (the button says THINKING and counts the seconds). That runs the whole chain many times on the 12 seconds it kept, so it takes longer at higher sample rates: usually 5–15 seconds at 44.1 or 48 kHz, 10–30 seconds at 96 kHz, 20–60 seconds at 192 kHz (slower computers take longer). **CANCEL** in Learn stops it without changing anything, and closing the project doesn't wait for it.
-6. Read the report in Learn (**WHY IT SOUNDS LIKE THIS**). It starts with what it heard, for example *Listened to 2:47 of your song; the loudest part (0:54–1:06, usually the hook or drop) set the levels*, and shows the **Whole song** loudness and loudness range as your mix arrives. *Your mix measured …* is your mix as it reaches Polisher, before Input Trim and before your Stem EQ moves (with Keep Loudness off, a Stem EQ boost makes it louder inside Polisher, and the report says so).
+6. Read the report in Learn (**WHY IT SOUNDS LIKE THIS**). It starts with what it heard, for example *Listened to 2:47 of your song; the loudest part (0:54–1:06, usually the hook or drop) set the levels*, and shows the **Whole song** loudness and loudness range as your mix arrives. *Your mix measured …* is your mix as it reaches Masterology, before Input Trim and before your Stem EQ moves (with Keep Loudness off, a Stem EQ boost makes it louder inside Masterology, and the report says so).
 7. Don't like it? Click the **undo arrow** to put every control back as it was, Tone Steady's target too (the whole run is one undo step; the redo arrow brings it back). To compare two runs, keep each in a snapshot: see [Undo, redo and snapshots](#undo-redo-and-snapshots).
 
 Timeline positions come from Cubase's playhead. If playback **jumps** while it listens (a **cycle loop** wraps, or you move the playhead), the report says so: when the loudest 12 seconds it heard join two places on your timeline it names both, and the whole-song figures then count what it heard, repeats included. For exact figures, turn Cycle off and play the song once through. It listens for up to 15 minutes, and its memory stays the same however long the song is (it keeps only the loudest 12 seconds of audio and a few numbers per second). On a **mono** bus it measures one channel, as loudness meters do.
@@ -118,7 +119,7 @@ Timeline positions come from Cubase's playhead. If playback **jumps** while it l
 - If you change a module after Auto-Master, Learn notes that its reasons no longer describe what you hear.
 - If you finished early and a later part of the song plays more than 2 LU louder than the part it heard, the Maximizer's Learn says **LOUDER THAN WHAT AUTO-MASTER HEARD**: that part is limited harder than planned. Run Auto-Master again and play the whole song.
 - A quick run (finished before 30 seconds) doesn't replace a Tone Steady target learned from more of the song, as long as what it heard matches that tone. If it doesn't (the target came with a preset or from another song), the tone of what it heard replaces it.
-- If the audio doesn't sound like a full mix (for example, Polisher is on one track), Auto-Master changes nothing and tells you to move it to Stereo Out.
+- If the audio doesn't sound like a full mix (for example, Masterology is on one track), Auto-Master changes nothing and tells you to move it to Stereo Out.
 
 Every warning in the report says **Do I need to fix it?** and gives numbered steps. Auto-Master is a starting point: your ears and MATCH make the final call.
 
@@ -127,7 +128,7 @@ Every warning in the report says **Do I need to fix it?** and gives numbered ste
 Instead of a genre's typical sound, Auto-Master can aim for a **reference**: a released song you want your master to sound like.
 
 1. Pick a commercial song with the sound you want (for trap: a big trap single). Use a good file of the released version: WAV, AIFF, FLAC or MP3.
-2. Click **Match ref** (at the end of the TARGET row) and choose the file. Polisher reads the whole song (up to 15 minutes) and measures its **loudest 30 seconds** (tone, width, low end), usually the chorus or drop, and the loudness of its **loudest 12 seconds**. That takes a few seconds; your music keeps playing.
+2. Click **Match ref** (at the end of the TARGET row) and choose the file. Masterology reads the whole song (up to 15 minutes) and measures its **loudest 30 seconds** (tone, width, low end), usually the chorus or drop, and the loudness of its **loudest 12 seconds**. That takes a few seconds; your music keeps playing.
 3. The pill now shows the song's name, and the spectrum shows its tone as a **dashed yellow line** (moved to the loudness of what's playing, so you compare tone, not volume, and to your project's sample rate). The dotted genre line steps aside while a reference is loaded; click its legend entry to show it too (see [The spectrum screen](#the-spectrum-screen)).
 4. Click **Auto-Master** and play **your own song**, as usual.
 
@@ -210,7 +211,7 @@ Turns the **Vocals, Drums, Bass** (808 included) or **Other** (synths, keys, gui
 | Keep Loudness | on / off (on) | Your moves change the balance, not the loudness. The line under the switch shows how much it is turning the whole mix down (or up) right now, e.g. "Keeping level: −4.0 dB". |
 | Model Hears | meter | How the model divides the mix coming in (before your moves): each part's share of the loudness, weighed like a loudness meter. The share tells you what a move does: with Keep Loudness off, a part with a 70 % share turned up 6 dB makes the mix about 5 dB louder; one with 10 %, about 1 dB. In trap the 808 is often most of the loudness. |
 
-**Keep Loudness.** Turning a part up also makes the mix louder, and louder always sounds better in a quick A/B. With Keep Loudness on, Stem EQ measures how much louder (or quieter) your moves make the mix, the way a loudness meter hears it, and turns the whole mix down (or up) by that much, so the loudness stays within about half a dB. It listens over about 2 seconds, so it doesn't pump with the beat, and a knob move is made up at once. When the song drops into a quieter part (a breakdown without the 808), it catches up within about 5 seconds (on a test mix at Bass +6: about 2.7 dB too quiet over the first 4 seconds, half a dB over the next 4). It never moves the level more than 12 dB. Songs saved before this switch existed open with it off, so they sound exactly as before; new Polisher instances start with it on.
+**Keep Loudness.** Turning a part up also makes the mix louder, and louder always sounds better in a quick A/B. With Keep Loudness on, Stem EQ measures how much louder (or quieter) your moves make the mix, the way a loudness meter hears it, and turns the whole mix down (or up) by that much, so the loudness stays within about half a dB. It listens over about 2 seconds, so it doesn't pump with the beat, and a knob move is made up at once. When the song drops into a quieter part (a breakdown without the 808), it catches up within about 5 seconds (on a test mix at Bass +6: about 2.7 dB too quiet over the first 4 seconds, half a dB over the next 4). It never moves the level more than 12 dB. Songs saved before this switch existed open with it off, so they sound exactly as before; new Masterology instances start with it on.
 
 Big Bass boosts: in a trap mix the 808 is a large part of the loudness. At the same loudness, more 808 always means less of everything else, with or without Keep Loudness. On a bass-heavy test mix at Bass +6, the master at −9 LUFS came out the same both ways: the 808 band up about 1 dB, 300 Hz–16 kHz down about 4.5 dB (a 5.5 dB shift in balance). What Keep Loudness changes is where the turning down happens: inside Stem EQ, cleanly, instead of in the Maximizer. With Drive left where it was, the Maximizer limited 4.4 dB instead of 8.7 dB at Bass +6, and 4.1 dB instead of 13.7 dB at Bass +12. With Keep Loudness off, a big Bass move pushes the Maximizer much harder; run Auto-Master again (or lower Drive) and compare with MATCH.
 
@@ -232,7 +233,7 @@ Keeps the tone consistent through the song. When a section drifts muddier, harsh
 
 It leaves quiet breakdowns alone and is gentle on the top end, so busy hi-hats keep their sparkle. Range is the most it can move any part of the spectrum, so a section meant to sound different can be pulled by up to that much: if the drop feels smaller, lower Range (to about 1.5 dB) or Amount.
 
-**Target: your song.** When Auto-Master listens to your whole song, it also learns the song's own overall tone and gives it to Tone Steady (you can also press **LEARN** in this panel and play the song: that only learns the tone and changes nothing else). Tone Steady then holds every part to your song's own tone, so **what you hear is what you export**, from any start point (quiet intros and breakdowns, more than 15 dB under the song, are left alone, judged against the whole song's level). Parts that come and go **in the low end** are left alone: an 808 that enters after the intro is not cut, and the intro without it is not lifted (the low end below 160 Hz is judged as one: more than 4 dB away from the song's tone is the arrangement, not a drift). A part that isn't playing is not faked back (anything else more than 6 dB under the song's tone). A part that comes in **above the bass** (a lead in the chorus) can't be told from a harsher passage, so it is treated like a drift: pulled down for as long as it plays, by at most half the Range (1.5 dB at Range 3). A passage that drifts muddier or harsher is pulled back the same way. When most of the spectrum above the bass rises at once, part of that reads as a thinner low end, which is lifted a little. The target follows your Tonal EQ moves and Input Trim, so a tone change you make there isn't undone (if you change the mix's level before Polisher by more than about 10 dB, press LEARN again). It is saved with your project, and also in presets and copies of Polisher: on a new song, press LEARN again. If the music sits far from the stored tone for about 30 seconds (another song's tone), the Target cell reads "another song?" and Learn explains what to do. **CLEAR** goes back to following the music. If it learned from under 30 seconds of music, Learn suggests learning again from the whole song.
+**Target: your song.** When Auto-Master listens to your whole song, it also learns the song's own overall tone and gives it to Tone Steady (you can also press **LEARN** in this panel and play the song: that only learns the tone and changes nothing else). Tone Steady then holds every part to your song's own tone, so **what you hear is what you export**, from any start point (quiet intros and breakdowns, more than 15 dB under the song, are left alone, judged against the whole song's level). Parts that come and go **in the low end** are left alone: an 808 that enters after the intro is not cut, and the intro without it is not lifted (the low end below 160 Hz is judged as one: more than 4 dB away from the song's tone is the arrangement, not a drift). A part that isn't playing is not faked back (anything else more than 6 dB under the song's tone). A part that comes in **above the bass** (a lead in the chorus) can't be told from a harsher passage, so it is treated like a drift: pulled down for as long as it plays, by at most half the Range (1.5 dB at Range 3). A passage that drifts muddier or harsher is pulled back the same way. When most of the spectrum above the bass rises at once, part of that reads as a thinner low end, which is lifted a little. The target follows your Tonal EQ moves and Input Trim, so a tone change you make there isn't undone (if you change the mix's level before Masterology by more than about 10 dB, press LEARN again). It is saved with your project, and also in presets and copies of Masterology: on a new song, press LEARN again. If the music sits far from the stored tone for about 30 seconds (another song's tone), the Target cell reads "another song?" and Learn explains what to do. **CLEAR** goes back to following the music. If it learned from under 30 seconds of music, Learn suggests learning again from the whole song.
 
 **Following the music** (no target, and every song saved before targets existed): it learns your song's balance over about 10 seconds. When a bass or 808 comes in (the low end jumps more than 4 dB against the rest, say from the intro into the chorus), it re-learns the balance within about a second instead of cutting the new low end. Because it follows the music, what you hear can depend a little on where playback or an export starts.
 
@@ -360,7 +361,7 @@ Try it: Bass only, Tube, Drive +9. Play the song on your phone or laptop speaker
 
 **Channels Mid / Side.** Mid keeps the harmonics in the centre, so a wide mix stays exactly as wide and clean at the edges. Side adds harmonics only to the stereo edges: wide synths and reverbs get thicker and the mix sounds a little wider, while the vocal and 808 stay clean. With Side, check MONO now and then: what Side adds disappears in mono (that's normal), but the centre must still sound right. On a mono track Side does nothing. The Harmonics meter reads lower on Side (the edges are quieter than the centre) and a little lower on Mid. Switching Channels is click-free. Auto-Master always sets Stereo.
 
-Switching between all four Focus settings is click-free. Auto-Master picks only Full or Bass only. If you drew automation for Focus in Cubase with an older Polisher, check that lane: with four choices, a lane that used to mean Bass only now reads as Bass + Highs. Saved songs themselves open with the Focus they had.
+Switching between all four Focus settings is click-free. Auto-Master picks only Full or Bass only. If you drew automation for Focus in Cubase with an older Masterology, check that lane: with four choices, a lane that used to mean Bass only now reads as Bass + Highs. Saved songs themselves open with the Focus they had.
 
 ### 11 Soft Clipper
 
@@ -380,7 +381,7 @@ The final true-peak limiter. It makes the master loud and keeps every peak at or
 | Control | Range (default) | What it does |
 | --- | --- | --- |
 | Drive | 0–24 dB (0) | Pushes the mix into the limiter. More Drive = louder. |
-| Input Trim | −24–0 dB (0) | Turns your mix down **before the whole chain**. Drive only pushes up, so this is how Polisher masters a mix that already arrives louder than your target. Auto-Master sets it when needed; at 0 dB the mix goes in as it is. A (bypass) ignores it. |
+| Input Trim | −24–0 dB (0) | Turns your mix down **before the whole chain**. Drive only pushes up, so this is how Masterology masters a mix that already arrives louder than your target. Auto-Master sets it when needed; at 0 dB the mix goes in as it is. A (bypass) ignores it. |
 | Ceiling | −3 to 0 dBTP (−1) | The highest peak allowed, between samples too (measured the way streaming services measure true peak). −1 suits most masters; loud ones (−9 LUFS and louder) are safer at −1.5 (what Auto-Master sets for Loud and Club) to −2 (Spotify's advice), because their MP3/AAC/Ogg copies peak higher. |
 | Release | 10–1000 ms (120) | How fast the limiter lets go. Shorter = louder but can distort bass. |
 | Release Mode | Adaptive (default) or Fixed | Adaptive recovers fast after drum hits and slowly on 808s and pads, so it doesn't pump. |
@@ -395,71 +396,71 @@ Set Drive while watching **Short-term** in the footer. If Learn says **Diminishi
 - Try 50–100 % on trap with a heavy 808, and compare with MATCH.
 - The trade: on the loudest hits the 808 sits a little lower. Learn shows how much the low end is taking right now.
 - Turning it on or off glides in about a quarter of a second, so it never clicks.
-- Polisher's delay is 1.5 ms longer than before (Cubase compensates it automatically).
+- Masterology's delay is 1.5 ms longer than before (Cubase compensates it automatically).
 - Auto-Master sets it back to off (it plans the plain limiter); add it afterwards.
 
-**Dither.** When you export a **16-bit** WAV (CD, some distributors), set Dither to 16-bit. It adds a very quiet hiss (about −98 dBFS) so quiet fades and reverb tails don't turn gritty when the export is cut to 16 bits. For a 24-bit or 32-bit float export, leave it Off (or 24-bit for a 24-bit WAV). For it to work, Polisher must be the last thing on Stereo Out and the Stereo Out fader must sit at 0 dB. Don't also turn on Cubase's own dither.
+**Dither.** When you export a **16-bit** WAV (CD, some distributors), set Dither to 16-bit. It adds a very quiet hiss (about −98 dBFS) so quiet fades and reverb tails don't turn gritty when the export is cut to 16 bits. For a 24-bit or 32-bit float export, leave it Off (or 24-bit for a 24-bit WAV). For it to work, Masterology must be the last thing on Stereo Out and the Stereo Out fader must sit at 0 dB. Don't also turn on Cubase's own dither.
 
 ## MATCH and A / B
 
 Louder always sounds better, so compare at equal loudness: turn on **MATCH**, then flip **A / B**.
 
-- **A** plays your original mix (Polisher bypassed). **B** plays the master.
-- With MATCH on, play **B for a few seconds** first. Polisher learns how much louder the master is (roughly after half a second, exactly after about 3 seconds), then turns the louder side **down** to match. It never turns anything up, so B can't go past its ceiling.
+- **A** plays your original mix (Masterology bypassed). **B** plays the master.
+- With MATCH on, play **B for a few seconds** first. Masterology learns how much louder the master is (roughly after half a second, exactly after about 3 seconds), then turns the louder side **down** to match. It never turns anything up, so B can't go past its ceiling.
 - After **Auto-Master**, a snapshot you haven't heard yet, or opening the project, MATCH learns the level afresh the same way. After you change settings by hand, it follows within about 20 seconds of B; press **RESET** (under the Output meter) to make it learn afresh at once.
 - Quick A / B flips don't disturb it: it only learns from B played for 3 seconds or more at a stretch.
 - If your original mix peaks above 0 dBFS, both sides are turned down together so A doesn't clip your audio interface and sound worse than it is.
 - Now judge tone and punch, not volume. Ask: is B clearer, fuller, punchier? Did the kick or vocal lose anything?
 - On B the meters show the **real master**, never the matched level. On A they show your original mix.
-- MATCH switches itself off when you close Polisher's window, when you open the project again, and during a normal (offline) export. For a Realtime Export, switch it off yourself first.
+- MATCH switches itself off when you close Masterology's window, when you open the project again, and during a normal (offline) export. For a Realtime Export, switch it off yourself first.
 
 On headphones, compare at a low, comfortable volume and take breaks. Ears tire fast, and tired ears like everything brighter.
 
 ### Blind test: compare masters without knowing which is which
 
-MATCH takes care of loudness, but you still know which side is Polisher. To compare Polisher's master with another one (your old chain, another plug-in, a pro master of the same song) fairly, use **Polisher Blind Test** (`PolisherBlindTest.exe`, in the same download as the plug-in):
+MATCH takes care of loudness, but you still know which side is Masterology. To compare Masterology's master with another one (your old chain, another plug-in, a pro master of the same song) fairly, use **Masterology Blind Test** (`MasterologyBlindTest.exe`, in the same download as the plug-in):
 
-1. In Cubase, export each version of the same song with **File > Export > Audio Mixdown** (WAV), for example: your mix with Polisher bypassed (`my mix.wav`), Polisher's master (`polisher.wav`), and the other master (`other.wav`). Two to eight files.
-2. Drag all the files at once onto **PolisherBlindTest.exe** (in the **BlindTest** folder of the download).
+1. In Cubase, export each version of the same song with **File > Export > Audio Mixdown** (WAV), for example: your mix with Masterology bypassed (`my mix.wav`), Masterology's master (`masterology.wav`), and the other master (`other.wav`). Two to eight files.
+2. Drag all the files at once onto **MasterologyBlindTest.exe** (in the **BlindTest** folder of the download).
 3. It measures each file, turns the louder ones **down** to the quietest one's loudness (never up, never into clipping), shuffles them and saves them as **Sample A**, **Sample B**, ... in a new folder next to your files.
 4. Listen in any player at one fixed volume. Jump between the samples at the same moment of the song and fill in **Score sheet.txt** (score 1–10 and notes for each).
 5. Only then open **Answer key.txt** to see which sample was which.
 
-To compare just one part (say 30 seconds from the hook at 1:00), run it from a command prompt: `PolisherBlindTest.exe "my mix.wav" polisher.wav --start 60 --length 30` (quotes around names with spaces).
+To compare just one part (say 30 seconds from the hook at 1:00), run it from a command prompt: `MasterologyBlindTest.exe "my mix.wav" masterology.wav --start 60 --length 30` (quotes around names with spaces).
 
 The test also checks the fight is fair and measures each file:
 
-- **Fair fight?** A master pushed harder usually loses some punch, and a higher ceiling gives it more room, so the masters should be **made** at the same loudness (within 0.5 LU) and with the same ceiling, not only played back equally loud. The test matches every master to the file with **polisher** in its name and says how far off each one is ("ozone.wav: needs 0.9 LU more: push it about 0.9 dB harder"). Export that one again and rerun. A file with the word **mix** in its name (`my mix.wav`) is your unmastered mix and is left out of the check. The message is on the score sheet too; it never says which sample is which.
+- **Fair fight?** A master pushed harder usually loses some punch, and a higher ceiling gives it more room, so the masters should be **made** at the same loudness (within 0.5 LU) and with the same ceiling, not only played back equally loud. The test matches every master to the file with **masterology** in its name (or **polisher**, the old name) and says how far off each one is ("ozone.wav: needs 0.9 LU more: push it about 0.9 dB harder"). Export that one again and rerun. A file with the word **mix** in its name (`my mix.wav`) is your unmastered mix and is left out of the check. The message is on the score sheet too; it never says which sample is which.
 - **Measurements** (at the end of **Answer key.txt**, so they can't sway your ears): loudness, true peak, **Kick** and **Snare** punch (how far the hits stick out in their own band; a squashed master reads lower), loudness range, **Width** and **BassW** (stereo width overall and below 120 Hz), and the tone balance in six bands (Sub to Air) against the average of all samples. They show *why* the winner won: more punch, more 808, a brighter top, a wider image. Punch doesn't hear distortion: your ears judge that.
 
-### Shoot-out: Polisher against other mastering tools
+### Shoot-out: Masterology against other mastering tools
 
-To find out how Polisher really stacks up, run two blind rounds on one of your own songs against **iZotope Ozone 12** (it has a free trial), **TDR Limiter 6 GE** (Tokyo Dawn Labs; check their site for a free or demo version) and **LoudMax** (free, by Thomas Mundt).
+To find out how Masterology really stacks up, run two blind rounds on one of your own songs against **iZotope Ozone 12** (it has a free trial), **TDR Limiter 6 GE** (Tokyo Dawn Labs; check their site for a free or demo version) and **LoudMax** (free, by Thomas Mundt).
 
 Rules for every master, so nothing but the sound decides:
 
 - The same mix, the same export settings (WAV, the project's sample rate, 24-bit).
-- **The same ceiling as Polisher's.** Auto-Master sets the Ceiling to −1.5 dBTP on the Loud and Club targets (−1.0 on Stream): set every other tool's ceiling (output) to that number, with its true-peak mode on where it has one. The test warns you when the masters' true peaks differ.
-- **The same loudness**, within 0.5 LU. Make Polisher's master first, then match the others to it: the test tells you how many dB to change each one.
-- **Name the files the way the test understands:** `polisher.wav` for Polisher's master, `my mix.wav` for your unmastered mix, and any name without "polisher" or "mix" for the others (`ozone.wav`, `tdr.wav`, `loudmax.wav`).
+- **The same ceiling as Masterology's.** Auto-Master sets the Ceiling to −1.5 dBTP on the Loud and Club targets (−1.0 on Stream): set every other tool's ceiling (output) to that number, with its true-peak mode on where it has one. The test warns you when the masters' true peaks differ.
+- **The same loudness**, within 0.5 LU. Make Masterology's master first, then match the others to it: the test tells you how many dB to change each one.
+- **Name the files the way the test understands:** `masterology.wav` for Masterology's master, `my mix.wav` for your unmastered mix, and any name without "masterology" or "mix" for the others (`ozone.wav`, `tdr.wav`, `loudmax.wav`).
 - One tool on Stereo Out at a time; switch the others off (Cubase: the insert's power button).
 
-**Round 1, the whole master: Polisher vs Ozone.**
+**Round 1, the whole master: Masterology vs Ozone.**
 
-1. Polisher: run **Auto-Master** (your genre, Loud target), adjust if you like, note the Ceiling, export `polisher.wav`.
-2. Ozone 12: run its **Master Assistant** on the same song, set its Maximizer's ceiling to Polisher's, then move its Threshold until it matches `polisher.wav`'s loudness. Export `ozone.wav`.
+1. Masterology: run **Auto-Master** (your genre, Loud target), adjust if you like, note the Ceiling, export `masterology.wav`.
+2. Ozone 12: run its **Master Assistant** on the same song, set its Maximizer's ceiling to Masterology's, then move its Threshold until it matches `masterology.wav`'s loudness. Export `ozone.wav`.
 3. Your mix with nothing on Stereo Out: `my mix.wav`.
-4. Drag all three onto PolisherBlindTest.exe. If it says the fight isn't fair yet, fix that file and run it again. Then listen, score, and open the answer key.
+4. Drag all three onto MasterologyBlindTest.exe. If it says the fight isn't fair yet, fix that file and run it again. Then listen, score, and open the answer key.
 
-**Round 2, loudness only: Polisher's limiter vs TDR Limiter 6 GE vs LoudMax.** This shows which one gets loud with the least damage.
+**Round 2, loudness only: Masterology's limiter vs TDR Limiter 6 GE vs LoudMax.** This shows which one gets loud with the least damage.
 
-1. Polisher: a fresh instance (every module is neutral when loaded), Ceiling as in Round 1. Turn on the **Soft Clipper** (Clip Level 0, Softness 50 %), raise **Drive** until the export matches Round 1's loudness. Export `polisher.wav`.
-2. The same with the Soft Clipper **off** and Drive raised to the same loudness: `polisher no clipper.wav`. (The others are limiters only, so this shows Polisher's limiter alone.)
-3. TDR Limiter 6 GE, its default preset, output ceiling as Polisher's: raise its input (or lower its threshold) to the same loudness. Export `tdr.wav`.
-4. LoudMax: Output at Polisher's ceiling, ISP (true peak) detection on if your version has it, lower Threshold to the same loudness. Export `loudmax.wav`.
+1. Masterology: a fresh instance (every module is neutral when loaded), Ceiling as in Round 1. Turn on the **Soft Clipper** (Clip Level 0, Softness 50 %), raise **Drive** until the export matches Round 1's loudness. Export `masterology.wav`.
+2. The same with the Soft Clipper **off** and Drive raised to the same loudness: `masterology no clipper.wav`. (The others are limiters only, so this shows Masterology's limiter alone.)
+3. TDR Limiter 6 GE, its default preset, output ceiling as Masterology's: raise its input (or lower its threshold) to the same loudness. Export `tdr.wav`.
+4. LoudMax: Output at Masterology's ceiling, ISP (true peak) detection on if your version has it, lower Threshold to the same loudness. Export `loudmax.wav`.
 5. Blind test all four.
 
-Tips: listen at one comfortable volume and take a break between rounds. Run a round twice (each run shuffles again): the same winner both times is a good sign, a different winner each time means the masters are close. Keep the answer keys and score sheets: if another tool wins, the measurements show what to fix in Polisher.
+Tips: listen at one comfortable volume and take a break between rounds. Run a round twice (each run shuffles again): the same winner both times is a good sign, a different winner each time means the masters are close. Keep the answer keys and score sheets: if another tool wins, the measurements show what to fix in Masterology.
 
 ## Undo, redo and snapshots
 
@@ -470,8 +471,8 @@ The two arrows at the top step **back and forward through your changes, one at a
 - **One step per change**: a knob drag from press to release, a typed value, a switch, a choice, a dragged EQ point (its frequency and gain together). Quick mouse-wheel turns or arrow-key presses on one knob count as one step.
 - **Auto-Master** is one step that puts back everything it set (A / B included), Tone Steady's target and the report that was there before. **APPLY** of the Stem EQ suggestion, a **snapshot recall**, and Tone Steady's **LEARN** and **CLEAR** are one step each.
 - Undo something and then change something else, and the undone steps are gone (nothing to redo any more). Changes you made after an Auto-Master run are never thrown away by undoing it: they come off first, one by one.
-- **Keys**: Ctrl+Z undoes; Ctrl+Shift+Z or Ctrl+Y redoes (Cmd on a Mac). Click inside Polisher's window first, or Cubase gets the keys and uses its own undo. While you type a value into a box, Ctrl+Z works on the text.
-- Polisher keeps the **last 100 steps** while its window is closed and reopened. They are **not saved** with the project: opening the project, or loading a preset (anything that replaces all of Polisher's settings at once), starts a new list.
+- **Keys**: Ctrl+Z undoes; Ctrl+Shift+Z or Ctrl+Y redoes (Cmd on a Mac). Click inside Masterology's window first, or Cubase gets the keys and uses its own undo. While you type a value into a box, Ctrl+Z works on the text.
+- Masterology keeps the **last 100 steps** while its window is closed and reopened. They are **not saved** with the project: opening the project, or loading a preset (anything that replaces all of Masterology's settings at once), starts a new list.
 - **Not in the list**: A / B, MATCH, MONO, PHONE, Listen and Solo (listening only), the Settings switches for the meters, and the genre / intensity / target choices. Automation and changes Cubase makes are never in it either, so playing back automation doesn't fill it up.
 
 ### Snapshots S1–S4
@@ -492,7 +493,7 @@ The **red** slot is the one playing; a dot after it (**S1•**) means you've cha
 
 ## Listening aids: Listen, Solo, MONO and PHONE
 
-These change only what you **hear**, never your master: they are not saved with the song, they switch off when you close Polisher, and a normal export never contains them. While any of them is on, a **red banner** across the top of the spectrum says what you are hearing ("LISTENING: what Saturation adds — not the master"); **BACK TO MASTER** on the banner turns everything off. The meters keep measuring the real master the whole time.
+These change only what you **hear**, never your master: they are not saved with the song, they switch off when you close Masterology, and a normal export never contains them. While any of them is on, a **red banner** across the top of the spectrum says what you are hearing ("LISTENING: what Saturation adds — not the master"); **BACK TO MASTER** on the banner turns everything off. The meters keep measuring the real master the whole time.
 
 ### Listen: hear only what a module changes
 
@@ -508,7 +509,7 @@ Five modules have a headphones button, **LISTEN**, at the top right of their pan
 
 **Dynamics also has S (solo) buttons**, one per band: S plays only that band (after its compression, at its real level in the master), so you hear what lives in it. Move a band's Split until the kick and 808 sit in LOW and the vocal's body in LO-MID. The four solos add up to exactly what Dynamics puts out.
 
-What a module adds or removes is often 20–40 dB quieter than the music, too quiet to hear at your normal volume. So Polisher **turns quiet changes up** (toward 15 dB under the master, at most +24 dB) and says so on the banner ("+18 dB so you can hear it"); Learn tells you how far under the music it really sits ("In your master it sits about 33 dB under the music"). Judge the **character** (ticks or crackle, a ring or a note), and remember the real level. A change that would peak over the ceiling is turned down instead ("kept under the ceiling"); a solo plays at its real level. Each change is lined up with the master to the sample and given the same Drive, Soft Clipper level (a Clip Level below 0 adds level) and limiting it gets in the master. On **A** nothing is processed, so a Listen is silent there.
+What a module adds or removes is often 20–40 dB quieter than the music, too quiet to hear at your normal volume. So Masterology **turns quiet changes up** (toward 15 dB under the master, at most +24 dB) and says so on the banner ("+18 dB so you can hear it"); Learn tells you how far under the music it really sits ("In your master it sits about 33 dB under the music"). Judge the **character** (ticks or crackle, a ring or a note), and remember the real level. A change that would peak over the ceiling is turned down instead ("kept under the ceiling"); a solo plays at its real level. Each change is lined up with the master to the sample and given the same Drive, Soft Clipper level (a Clip Level below 0 adds level) and limiting it gets in the master. On **A** nothing is processed, so a Listen is silent there.
 
 ### MONO and PHONE: check how your master translates
 
@@ -517,7 +518,7 @@ Next to MATCH, two small buttons check your master on other speakers. They work 
 - **MONO** plays left and right mixed together on both speakers, like a club PA or a phone. If a part gets much quieter or disappears (often wide synths, reverbs or doubled vocals), it is out of phase and will vanish on mono speakers: bring the Stereo Imager's Mids and Highs toward 100 %, or narrow that part in the mix.
 - **PHONE** plays your master like a phone speaker: mono, thin below about 300 Hz (200 Hz is about 13 dB down and almost nothing under 150 Hz comes through, so no 808 sub), soft above 8 kHz, with a small bump around 2 kHz, at about the same loudness on a balanced mix (a mix whose weight is all sub gets quieter, as on a real phone). **Does the 808 still come through?** You hear its upper harmonics, not its sub; that's normal, and it's what Saturation (Tube is the fullest) and an 808's own distortion are for. If the 808 disappears, add a little Saturation Drive or 1–2 dB of Bass on the Tonal EQ, or saturate the 808 track in the mix.
 
-While any check or Listen is on, nothing leaves Polisher above 0 dBFS. A loud, bright master can go over on PHONE (the 2 kHz bump): then the whole check is turned down a few dB, smoothly rather than peak by peak, so what you hear is your master and not the check distorting. It lets go as soon as you switch the check off.
+While any check or Listen is on, nothing leaves Masterology above 0 dBFS. A loud, bright master can go over on PHONE (the 2 kHz bump): then the whole check is turned down a few dB, smoothly rather than peak by peak, so what you hear is your master and not the check distorting. It lets go as soon as you switch the check off.
 
 ## Learn and Quick Help
 
@@ -529,7 +530,7 @@ The **Learn** panel on the right explains, live, what the selected module is doi
 - **Blue boxes** are tips, or warnings that don't need fixing. Nothing blue is a problem.
 - After Auto-Master, the top of each module's Learn shows the reasons for its settings, and **WHY IT SOUNDS LIKE THIS** holds the whole report.
 
-**Quick Help** (the **?** button, top right) is a one-page cheat sheet: the chain order and the first moves for every module. Its **OPEN THE FULL MANUAL** button opens this manual inside Polisher, with contents on the left; it works offline. Press **Esc** or **×** to close it.
+**Quick Help** (the **?** button, top right) is a one-page cheat sheet: the chain order and the first moves for every module. Its **OPEN THE FULL MANUAL** button opens this manual inside Masterology, with contents on the left; it works offline. Press **Esc** or **×** to close it.
 
 **Settings** has three switches:
 
@@ -541,7 +542,7 @@ The **Learn** panel on the right explains, live, what the selected module is doi
 
 ## The spectrum screen
 
-The big screen in the middle has two views. Switch with **SPECTRUM / HISTORY** at its bottom right; Polisher remembers your choice.
+The big screen in the middle has two views. Switch with **SPECTRUM / HISTORY** at its bottom right; Masterology remembers your choice.
 
 ### Spectrum
 
@@ -575,7 +576,7 @@ Time only runs while your song plays: stopping leaves a gap and the graph waits 
 
 ## Meters
 
-The footer meters always measure the **master** (what leaves Polisher), using the streaming standard (ITU-R BS.1770 / EBU R128), also while MATCH, a Listen, Solo, MONO or PHONE is on.
+The footer meters always measure the **master** (what leaves Masterology), using the streaming standard (ITU-R BS.1770 / EBU R128), also while MATCH, a Listen, Solo, MONO or PHONE is on.
 
 | Meter | Unit | What it tells you | Good range (trap / hip-hop) |
 | --- | --- | --- | --- |
@@ -591,9 +592,9 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 
 | Problem | Likely cause | Fix |
 | --- | --- | --- |
-| Master is too loud or squashed even at Drive 0; input reads far above 0 dBTP | Your old chain (EQ, saturator, compressor, limiter) is still on Stereo Out before Polisher, so the mix arrives already limited and hot | Bypass every other insert on Stereo Out, keep Polisher in the last slot, and run Auto-Master again |
+| Master is too loud or squashed even at Drive 0; input reads far above 0 dBTP | Your old chain (EQ, saturator, compressor, limiter) is still on Stereo Out before Masterology, so the mix arrives already limited and hot | Bypass every other insert on Stereo Out, keep Masterology in the last slot, and run Auto-Master again |
 | Input is hot even with nothing else on Stereo Out | The mix itself is too loud | Run Auto-Master: it turns the mix down with Input Trim when it's louder than your target. Or lower Input Trim yourself (Maximizer screen) by about as many dB as the master's Integrated reads above your target |
-| Auto-Master says "This doesn't sound like a full mix" | Polisher is on one track, not Stereo Out | Remove it from the track, load it in Stereo Out's last insert slot (F3 > Stereo Out), play the chorus and run Auto-Master again |
+| Auto-Master says "This doesn't sound like a full mix" | Masterology is on one track, not Stereo Out | Remove it from the track, load it in Stereo Out's last insert slot (F3 > Stereo Out), play the chorus and run Auto-Master again |
 | Auto-Master keeps listening | It waits for the song to end (4 seconds without music after at least 30 s of it), or Cycle is on and the loop keeps playing | Let the song play to its end, or click Auto-Master again (or FINISH NOW in Learn) any time after 12 s of music |
 | Auto-Master finished while you only paused | After 30 s of music, 4 seconds without music count as the song's end | Fine if it heard the hook. Otherwise run it again and keep the song playing |
 | The report says playback jumped | A cycle loop or a playhead move while it listened | Turn Cycle off on the transport bar and play the song once from start to end |
@@ -605,9 +606,9 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | B sounds better but you're not sure why | B is louder | Turn on MATCH and play B for a few seconds before comparing |
 | B sounds louder with MATCH on after you changed settings by hand | MATCH follows hand changes over about 20 s of B | Keep playing B, or press RESET under the Output meter: MATCH learns the level afresh in about 3 s |
 | One snapshot sounds louder right after you switch, even with MATCH on | MATCH hasn't heard that snapshot yet | Give it 3 seconds of B; play each snapshot for about 15 s once and MATCH remembers its level, so flips are matched at once |
-| Ctrl+Z undoes something in Cubase instead of in Polisher | Cubase had the keyboard | Click inside Polisher's window first, or use the undo arrow at the top |
+| Ctrl+Z undoes something in Cubase instead of in Masterology | Cubase had the keyboard | Click inside Masterology's window first, or use the undo arrow at the top |
 | The undo arrow is grey after opening the project | The undo list isn't saved with the project | Working as intended. Snapshots are saved: keep versions you may want back in S1–S4 |
-| Polisher sounds thin, mono, crackly or like a phone; a red banner is on the spectrum | A listening aid is on (Listen, Solo, MONO or PHONE) | Click BACK TO MASTER on the banner. They switch off by themselves when you close Polisher and are never in a normal export |
+| Masterology sounds thin, mono, crackly or like a phone; a red banner is on the spectrum | A listening aid is on (Listen, Solo, MONO or PHONE) | Click BACK TO MASTER on the banner. They switch off by themselves when you close Masterology and are never in a normal export |
 | Listen plays silence | The module isn't changing anything right now (or you're on A) | Fine: nothing to hear. Play a louder part, switch to B, or set the module up first |
 | Kick or snare sounds weaker than the mix | Too much limiting | Lower Drive 1–2 dB, or turn on the Soft Clipper so it takes some peaks |
 | Learn says Diminishing returns | Drive past the point where it adds loudness | Lower Drive until Short-term starts to drop, then back up 0.5 dB |
@@ -616,8 +617,8 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Unlimiter does nothing | Your mix is open (Squash 12.5 dB or more) | Working as intended: it only restores audio that was squashed |
 | Auto-Master left the Unlimiter off on a squashed beat | Your target is about as loud as the beat already is, so the Maximizer would press the hits straight back down | Working as intended. Pick a quieter target (Stream −14) if you want the punch back |
 | Integrated keeps restarting | The Settings switches restart it on play and after changes | Turn off those switches in Settings if you want one long reading |
-| Polisher isn't in the plug-in list | Cubase hasn't scanned it | Check the VST3 folder, then Studio > VST Plug-in Manager > Update |
-| Polisher opens a small screen that says BASIC VIEW | The Microsoft Edge WebView2 Runtime is missing on this PC | Click GET WEBVIEW2, install the runtime, close and reopen Polisher. Audio keeps working meanwhile |
+| Masterology isn't in the plug-in list | Cubase hasn't scanned it | Check the VST3 folder, then Studio > VST Plug-in Manager > Update |
+| Masterology opens a small screen that says BASIC VIEW | The Microsoft Edge WebView2 Runtime is missing on this PC | Click GET WEBVIEW2, install the runtime, close and reopen Masterology. Audio keeps working meanwhile |
 
 ## FAQ
 
@@ -627,7 +628,7 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 
 **Should I use Match ref or a genre?** A genre is a safe average. A reference is better when you know exactly whose sound you want. Pick a reference in the same style as your song: a trap reference for a trap song.
 
-**Can a Listen, Solo, MONO or PHONE end up in my export?** Not in a normal (offline) export: Polisher switches them off. They are not saved with the song and switch off when you close Polisher. Only a Realtime Export plays what you hear, so check that the red banner is gone first.
+**Can a Listen, Solo, MONO or PHONE end up in my export?** Not in a normal (offline) export: Masterology switches them off. They are not saved with the song and switch off when you close Masterology. Only a Realtime Export plays what you hear, so check that the red banner is gone first.
 
 **Will Auto-Master change my Stem EQ?** Never. It may suggest a Vocals move with an APPLY button; you decide.
 
@@ -639,11 +640,11 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 
 **Can I trust my headphones?** For tone and punch, yes, if you use MATCH and moderate volume. For loudness, trust the meters. Check on a phone and in a car too.
 
-**Can I put Polisher on a beat or a single track?** On a finished beat, yes (the Unlimiter is made for loud beats). On one instrument or vocal, no: put it on Stereo Out.
+**Can I put Masterology on a beat or a single track?** On a finished beat, yes (the Unlimiter is made for loud beats). On one instrument or vocal, no: put it on Stereo Out.
 
-**Does Polisher add delay?** A little (Stem EQ about 40 ms). Cubase compensates it automatically, and the export lines up.
+**Does Masterology add delay?** A little (Stem EQ about 40 ms). Cubase compensates it automatically, and the export lines up.
 
-**Is my project saved with Polisher's settings?** Yes. All settings, including genre, intensity and target, and your snapshots S1–S4 are saved with the Cubase project. The undo list is not.
+**Is my project saved with Masterology's settings?** Yes. All settings, including genre, intensity and target, and your snapshots S1–S4 are saved with the Cubase project. The undo list is not.
 
 **What's the difference between A / B and S1–S4?** A / B compares your original mix (A) with the master (B). S1–S4 are four versions of the master you can switch between, for example two Auto-Master runs.
 

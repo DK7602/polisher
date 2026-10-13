@@ -442,7 +442,7 @@ await page.waitForTimeout(150);
 h2 = await hist();
 check(h2.steps === h.steps && h2.pos === h.pos, 'A / B, MATCH and MONO are never undo steps');
 
-// While typing a value, Ctrl+Z belongs to the text box, not to Polisher's undo.
+// While typing a value, Ctrl+Z belongs to the text box, not to Masterology's undo.
 h = await hist();
 await cellOf('Drive').locator('.cell-value').dblclick();
 await page.keyboard.press('Control+z');
@@ -525,10 +525,12 @@ sn = await snapsUi();
 check(!sn[2].empty && sn[2].lit, 'Shift-click stores in a slot');
 await page.click('#btn-b'); await page.click('#btn-match'); await page.waitForTimeout(150);
 
-// The header still fits on one row with the new controls (the page scales the 1600 x 900 design).
+// The header still fits on one row with the new controls (the page scales the 1600 x 900 design). The
+// logo may hang a little past the row's left edge (it overlaps the frame on purpose), by at most 16 px.
 const fits = await page.evaluate(() => {
   const row = document.querySelector('.header-row'), r = row.getBoundingClientRect();
-  return row.scrollWidth <= row.clientWidth && [...row.children].every((c) => { const b = c.getBoundingClientRect(); return b.left >= r.left - 0.5 && b.right <= r.right + 0.5 && b.width > 0; });
+  return row.scrollWidth <= row.clientWidth && [...row.children].every((c) => { const b = c.getBoundingClientRect();
+    return b.left >= r.left - (c.classList.contains('logo') ? 16 : 0.5) && b.right <= r.right + 0.5 && b.width > 0; });
 });
 check(fits, 'header controls fit on one row');
 // Whole-song listen: the button and Learn say what it has heard; FINISH NOW works from 12 s of music on.
@@ -740,7 +742,7 @@ await restarts('an Auto-Master run', async () => {
 check(errors.length === 0, `no script errors (${errors.join(' | ')})`);
 await browser.close();
 
-// The listening banner at the window sizes Polisher opens at (1280 x 720) and its smallest (1120 x 630):
+// The listening banner at the window sizes Masterology opens at (1280 x 720) and its smallest (1120 x 630):
 // the longest description (a Dynamics band on PHONE) is shown whole, "— not the master" included.
 const browser2 = await chromium.launch();
 for (const [w, hgt] of [[1280, 720], [1120, 630]]) {

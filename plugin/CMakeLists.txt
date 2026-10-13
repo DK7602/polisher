@@ -6,8 +6,8 @@ endif()
 # No COMPANY_WEBSITE yet: hosts show the plug-in's web address, so add one only when there is a real
 # product page (an empty one is better than a placeholder).
 juce_add_plugin(Polisher
-    PRODUCT_NAME                "Polisher"
-    COMPANY_NAME                "Polisher Audio"
+    PRODUCT_NAME                "Masterology"
+    COMPANY_NAME                "Masterology Audio"
     BUNDLE_ID                   com.polisheraudio.polisher
     PLUGIN_MANUFACTURER_CODE    Plsh
     PLUGIN_CODE                 Pls1
