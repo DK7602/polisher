@@ -398,6 +398,7 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         set ("bassPunch", static_cast<float> (c.bass.punch * 100.0));
         set ("dynOn", 1.0f);
         set ("dynAdaptive", c.dynamics.adaptiveRelease ? 1.0f : 0.0f);
+        set ("dynChannels", static_cast<float> (static_cast<int> (c.dynamics.channels)));   // Stereo: Auto-Master plans on both
         for (int x = 0; x < polisher::kDynBands - 1; ++x)
             set (ModuleParams::band ("dynX", x), static_cast<float> (c.dynamics.crossoverHz[static_cast<size_t> (x)]));
         for (int b = 0; b < polisher::kDynBands; ++b)
@@ -418,6 +419,7 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         set ("satOn", 1.0f);
         set ("satMode", static_cast<float> (static_cast<int> (c.saturation.mode)));
         set ("satFocus", static_cast<float> (static_cast<int> (c.saturation.focus)));
+        set ("satChannels", static_cast<float> (static_cast<int> (c.saturation.channels)));
         set ("satDrive", static_cast<float> (c.saturation.driveDb));
         set ("satMix", static_cast<float> (c.saturation.mix));
         set ("clipOn", c.clipper.enabled ? 1.0f : 0.0f);

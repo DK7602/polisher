@@ -18,6 +18,10 @@ enum class SaturationMode { tape = 0, tube = 1, clip = 2 };
     own (the mids, where the vocal lives, stay clean). */
 enum class SaturationFocus { full = 0, bass = 1, highs = 2, bassHighs = 3 };
 
+/** Which part of the stereo image gets the harmonics: both channels alike, only the centre (mid,
+    (L + R) / 2: vocal, kick, 808) or only the edges (side, (L - R) / 2: width, reverbs, wide synths). */
+enum class SaturationChannels { stereo = 0, mid = 1, side = 2 };
+
 struct SaturationParams
 {
     bool enabled = true;
@@ -25,6 +29,7 @@ struct SaturationParams
     double driveDb = 0.0;   // 0 = off (exact pass-through) ... kMaxDriveDb
     double mix = 100.0;     // % of the saturated signal (parallel blend)
     SaturationFocus focus = SaturationFocus::full;
+    SaturationChannels channels = SaturationChannels::stereo;
 };
 
 /** Mastering saturation: adds harmonics that make a master feel denser and help bass translate
@@ -64,6 +69,9 @@ struct SaturationParams
       filter starts at kDcStartHz and glides down to 1 Hz (kDcGlideSeconds), so a render that starts
       mid-song lets out no thump. Full is bit-for-bit what it was before Focus, apart from that start
       after reset() and the Mode cross-fade.
+    - Channels Mid / Side: the curve hears only the centre ((L + R) / 2) or only the edges ((L - R) / 2) and
+      what it adds goes back onto that part alone (mid: the same on L and R; side: opposite), so the other
+      part passes untouched. Changing Channels cross-fades like Focus and Mode.
 
     prepare() allocates; process() does not. */
 class Saturation
@@ -159,7 +167,8 @@ private:
         SaturationMode mode = SaturationMode::tape;
         int dcCount = 0;       // Full + tube: samples of the warm-up's DC window measured so far
         double dcHz = 1.0;     // Full + tube: the DC filter's corner (above 1 Hz only right after reset())
-        bool is (SaturationFocus f, SaturationMode m) const noexcept { return active && focus == f && mode == m; }
+        SaturationChannels channels = SaturationChannels::stereo;
+        bool is (SaturationFocus f, SaturationMode m, SaturationChannels ch) const noexcept { return active && focus == f && mode == m && channels == ch; }
     };
     /** A slot's filters and state for one channel. */
     struct SlotState
@@ -181,7 +190,10 @@ private:
         std::array<SlotState, 2> slot;
     };
 
-    void startSlot (int index, SaturationFocus focus, SaturationMode mode, int warmSamples) noexcept;
+    void startSlot (int index, SaturationFocus focus, SaturationMode mode, SaturationChannels channels, int warmSamples) noexcept;
+    bool wanted (const Slot& s) const noexcept { return s.is (params.focus, params.mode, params.channels); }
+    /** One slot's residual for this frame, per channel (mid / side: worked out on the one part, put back on L and R). */
+    void slotWetFrame (int index, const double* x, int nch, double* wet, double dcWeight, bool measuringDc, bool seedDc, double dcCoeff) noexcept;
     void stopSlot (int index) noexcept;
     double slotWet (const Slot& slot, SlotState& st, double x, double dcWeight, bool measuringDc, bool seedDc, double dcCoeff) const noexcept;
 

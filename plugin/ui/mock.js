@@ -57,6 +57,8 @@
     tsSpeed: { choices: ["Slow", "Medium", "Fast"], value: 0.5 },
     rtFocus: { choices: ["Full", "Boxiness", "Harshness"], value: 0 },
     maxDither: { choices: ["Off", "16-bit", "24-bit"], value: 0 },
+    satChannels: { choices: ["Stereo", "Mid", "Side"], value: 0 },
+    dynChannels: { choices: ["Stereo", "Mid", "Side"], value: 0 },
     ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map((b) => ["eqMode" + b, { choices: ["Stereo", "Mid", "Side"], value: 0 }])),
     amGenre: { choices: ["Trap / Hip-Hop", "R&B", "Pop", "EDM", "Rock", "Acoustic"], value: 0 },
     amIntensity: { choices: ["Gentle", "Balanced", "Punchy"], value: 0.5 },
@@ -136,7 +138,7 @@
   const isSetting = (n) => !NOT_SETTINGS.has(n);
   const NAMES = { drive: "Drive", ceiling: "Ceiling", release: "Release", inTrim: "Input Trim", adaptive: "Adaptive Release",
                   clipOn: "Clipper On", clipLevel: "Clip Level", clipSoftness: "Clipper Softness", clipOversampling: "Clipper Oversampling",
-                  satOn: "Saturation On", satMode: "Saturation Mode", satFocus: "Saturation Focus", satDrive: "Saturation Drive", satMix: "Saturation Mix", maxBassFirst: "Bass First", maxDither: "Dither",
+                  satOn: "Saturation On", satMode: "Saturation Mode", satFocus: "Saturation Focus", satDrive: "Saturation Drive", satMix: "Saturation Mix", maxBassFirst: "Bass First", maxDither: "Dither", satChannels: "Saturation Channels", dynChannels: "Dynamics Channels",
                   stemOn: "Stem EQ On", stemKeep: "Stem EQ Keep Loudness", stemVoc: "Stem EQ Vocals", stemDrums: "Stem EQ Drums", stemBass: "Stem EQ Bass", stemOther: "Stem EQ Other",
                   bassOn: "Bass On", bassMono: "Bass Mono Below", bassTame: "Bass Sub Tame", bassPunch: "Bass Punch", eqOn: "EQ On", imgOn: "Imager On",
                   imgLow: "Imager Low Width", imgMid: "Imager Mid Width", imgHigh: "Imager High Width", ulOn: "Unlimiter On", dynOn: "Dynamics On", tsOn: "Tone Steady On", rtOn: "Resonance Tamer On" };

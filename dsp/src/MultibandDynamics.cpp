@@ -113,8 +113,54 @@ void MultibandDynamics::resetDetectors() noexcept
     }
 }
 
+void MultibandDynamics::switchDomain (DynChannels to) noexcept
+{
+    // The split filters are linear and the same on both channels, so their states convert like the audio:
+    // L / R -> mid / side is ((a + b) / 2, (a - b) / 2), back is (m + s, m - s). Mid <-> side needs nothing.
+    const bool fromMs = domain != DynChannels::stereo, toMs = to != DynChannels::stereo;
+    if (fromMs != toMs && channelCount == 2)
+    {
+        const auto convert = [toMs] (Biquad& a, Biquad& b) noexcept
+        {
+            for (auto [x, y] : { std::pair { &a.z1, &b.z1 }, std::pair { &a.z2, &b.z2 } })
+            {
+                const double p = *x, q = *y;
+                *x = toMs ? 0.5 * (p + q) : p + q;
+                *y = toMs ? 0.5 * (p - q) : p - q;
+            }
+        };
+        const auto convertSplit = [&] (Split& a, Split& b) noexcept
+        {
+            for (size_t i = 0; i < 2; ++i)
+            {
+                convert (a.x1lp[i], b.x1lp[i]); convert (a.x1hp[i], b.x1hp[i]);
+                convert (a.x2lp[i], b.x2lp[i]); convert (a.x2hp[i], b.x2hp[i]);
+                convert (a.x3lp[i], b.x3lp[i]); convert (a.x3hp[i], b.x3hp[i]);
+            }
+            convert (a.apX1, b.apX1);
+            convert (a.apX3, b.apX3);
+        };
+        convertSplit (chan[0], chan[1]);
+        convertSplit (chan[0].a, chan[1].a);
+    }
+    domain = to;
+    // The compression carries on from where it was: the detectors keep their level (both channels at the
+    // louder one, as the linked detector saw it), so the new part's level takes over within the RMS window
+    // and Attack / Release move the gain on from there - no fresh start, so no swell after the fade back in.
+    // Impact and Sustain warm up again, so the change itself isn't taken for a hit or a tail.
+    for (auto& d : det)
+    {
+        const double ms = std::max (d.channelMeanSquare[0], d.channelMeanSquare[1]);
+        const double ip = std::max (d.impactPow[0], d.impactPow[1]);
+        d.channelMeanSquare = { ms, ms };
+        d.impactPow = { ip, ip };
+        d.impactWarm = d.impactWarmSamples;
+    }
+}
+
 void MultibandDynamics::reset() noexcept
 {
+    domain = channelCount == 2 ? params.channels : DynChannels::stereo;
     resetFilters();
     resetDetectors();
     for (size_t k = 0; k < kDynBands - 1; ++k)
@@ -155,6 +201,11 @@ void MultibandDynamics::applyAuxCrossovers() noexcept
 void MultibandDynamics::update() noexcept
 {
     const bool wanted = ! isNeutral (params);
+    // Channels (stereo / mid / side): switch once the compression has faded out (or while resting).
+    const DynChannels wantDomain = channelCount == 2 ? params.channels : DynChannels::stereo;
+    if (wantDomain != domain && (! running || comp <= 0.0))
+        switchDomain (wantDomain);
+    const bool domainReady = wantDomain == domain;
     const bool canPark = monitorBand < 0;   // a soloed band is heard: it stays in place even while switching
     const double park = ParkGlide::parkLog (sampleRate);
     bool moved = false;
@@ -246,7 +297,7 @@ void MultibandDynamics::update() noexcept
         auxRunning = needAux;
         if (engaged)
             bandsGoal = 1.0;
-        compGoal = wanted ? 1.0 : 0.0;
+        compGoal = wanted && domainReady ? 1.0 : 0.0;
         fadeGoal = wanted || comp > 0.0 || (canPark && ! parked) ? 1.0 : 0.0;
         if (! wanted && fade <= 0.0 && comp <= 0.0)
         {

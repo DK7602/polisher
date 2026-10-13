@@ -917,3 +917,71 @@ TEST_CASE ("Saturation Highs only adds sheen and keeps the top's level", "[satur
         CHECK (std::abs (real - est) < 3.0);
     }
 }
+
+TEST_CASE ("Saturation Channels: Mid saturates only the centre, Side only the edges", "[saturation][ms]")
+{
+    const double sr = 48000.0;
+    // A centred 808-ish note (mid) and a wide synth (side: opposite on L and R).
+    auto centred = testsig::sine (sr, 2, 110.0, -3.0, 2.0);
+    auto wide = testsig::sine (sr, 2, 700.0, -3.0, 2.0);
+    for (auto& v : wide.channels[1]) v = -v;
+    auto msParams = [] (SaturationChannels ch) { auto p = with (SaturationMode::tube, 15.0); p.channels = ch; return p; };
+    const auto delayedEqual = [] (const AudioClip& out, const AudioClip& in)
+    {
+        double worst = 0.0;
+        for (size_t c = 0; c < 2; ++c)
+            for (size_t i = static_cast<size_t> (Saturation::kLatency); i < in.channels[0].size(); ++i)
+                worst = std::max (worst, std::abs (static_cast<double> (out.channels[c][i]) - in.channels[c][i - static_cast<size_t> (Saturation::kLatency)]));
+        return worst;
+    };
+    // The part a setting doesn't work on passes untouched.
+    CHECK (delayedEqual (saturate (wide, msParams (SaturationChannels::mid)), wide) < 1.0e-6);
+    CHECK (delayedEqual (saturate (centred, msParams (SaturationChannels::side)), centred) < 1.0e-6);
+    // The part it works on gets harmonics, and they stay in that part (mid: same on L and R; side: opposite).
+    const auto midOut = saturate (centred, msParams (SaturationChannels::mid));
+    const auto sideOut = saturate (wide, msParams (SaturationChannels::side));
+    CHECK (levelAt (midOut, 220.0) > -50.0);
+    CHECK (levelAt (sideOut, 1400.0) > -50.0);
+    double midDiff = 0.0, sideSum = 0.0;
+    for (size_t i = 0; i < midOut.channels[0].size(); ++i)
+    {
+        midDiff = std::max (midDiff, std::abs (static_cast<double> (midOut.channels[0][i]) - midOut.channels[1][i]));
+        sideSum = std::max (sideSum, std::abs (static_cast<double> (sideOut.channels[0][i]) + sideOut.channels[1][i]));
+    }
+    CHECK (midDiff < 1.0e-6);   // the centre stays centred
+    CHECK (sideSum < 1.0e-6);   // the edges stay at the edges
+
+    // One channel (a mono track) has no edges: Side adds nothing, Mid works as Stereo.
+    AudioClip mono = centred;
+    mono.channels.resize (1);
+    const auto monoSide = saturate (mono, msParams (SaturationChannels::side));
+    double monoWorst = 0.0;
+    for (size_t i = static_cast<size_t> (Saturation::kLatency); i < mono.channels[0].size(); ++i)
+        monoWorst = std::max (monoWorst, std::abs (static_cast<double> (monoSide.channels[0][i]) - mono.channels[0][i - static_cast<size_t> (Saturation::kLatency)]));
+    CHECK (monoWorst < 1.0e-6);
+    const auto monoMid = saturate (mono, msParams (SaturationChannels::mid)), monoStereo = saturate (mono, msParams (SaturationChannels::stereo));
+    CHECK (monoMid.channels[0] == monoStereo.channels[0]);
+}
+
+TEST_CASE ("Saturation Channels switch without clicks", "[saturation][ms]")
+{
+    const double sr = 48000.0;
+    const auto sharpest = [] (const AudioClip& c, int from)
+    {
+        const auto& x = c.channels[0];
+        double worst = 0.0;
+        for (size_t i = static_cast<size_t> (std::max (2, from)); i < x.size(); ++i)
+            worst = std::max (worst, std::abs (static_cast<double> (x[i]) - 2.0 * x[i - 1] + x[i - 2]));
+        return worst;
+    };
+    auto sig = testsig::sine (sr, 2, 60.0, -3.0, 2.0);
+    for (size_t i = 0; i < sig.channels[1].size(); ++i) sig.channels[1][i] *= 0.4f;   // partly wide
+    const SaturationChannels order[] = { SaturationChannels::stereo, SaturationChannels::mid, SaturationChannels::side };
+    auto pick = [&] (int i) { auto p = with (SaturationMode::tube, 18.0); p.channels = order[(i / static_cast<int> (0.3 * sr)) % 3]; return p; };
+    const auto switching = render<Saturation> (sig, pick, true);
+    double limit = 0.0;
+    for (auto ch : order)
+        limit = std::max (limit, sharpest (render<Saturation> (sig, [&] (int) { auto p = with (SaturationMode::tube, 18.0); p.channels = ch; return p; }, true), 4800));
+    INFO ("sharpest bend switching " << sharpest (switching, 4800) << ", steady " << limit);
+    CHECK (sharpest (switching, 4800) < 1.1 * limit);   // (a latency jump would be a kink too)
+}

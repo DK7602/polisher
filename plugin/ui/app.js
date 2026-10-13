@@ -65,6 +65,8 @@ const P = {
   satOn: Juce.getToggleState("satOn"),
   satMode: Juce.getComboBoxState("satMode"),
   satFocus: Juce.getComboBoxState("satFocus"),
+  satChannels: Juce.getComboBoxState("satChannels"),
+  dynChannels: Juce.getComboBoxState("dynChannels"),
   satDrive: Juce.getSliderState("satDrive"),
   satMix: Juce.getSliderState("satMix"),
   ulOn: Juce.getToggleState("ulOn"),
@@ -174,7 +176,8 @@ const modules = [
     what: "Four-band compression: steadies the low end without ducking the vocal, and evens out section jumps gently.",
     cells: [["Crossovers", "3 splits", "120/1k/6k", .5], ["Low Ratio", "low band", "1:1", 0], ["Mid Attack", "mid band", "30 ms", .45], ["Release", "all bands", "Auto", .5]],
     controls: [["Crossovers", "Split points between the bands."], ["Ratio", "How firmly each band is held down."],
-               ["Attack", "Slow lets drum hits through, fast catches vocal peaks."], ["Release", "Auto follows the tempo so it recovers between hits."]] },
+               ["Attack", "Slow lets drum hits through, fast catches vocal peaks."], ["Release", "Auto follows the tempo so it recovers between hits."],
+               ["Channels", "STEREO / MID ONLY / SIDE ONLY: work on both channels, only the centre, or only the stereo edges."]] },
   { id: "img", name: "Stereo Imager", live: true, soon: "",
     what: "Controls width per band: keeps the low end centred and opens up hats, reverbs and ad-libs.",
     cells: [["Lows", "< 250 Hz", "0%", .5], ["Mids", "250 Hz–5 kHz", "0%", .5], ["Highs", "> 5 kHz", "0%", .5]],
@@ -184,6 +187,7 @@ const modules = [
     what: "Adds harmonics (tape, tube or clip styles) so bass translates on small speakers and the master feels denser.",
     cells: [["Mode", "character", "Tape", .5], ["Focus", "which part", "Full", 0], ["Drive", "input", "0.0 dB", 0], ["Mix", "wet / dry", "0%", 0]],
     controls: [["Mode", "Tape = soft and warm. Tube = richer. Clip = aggressive."], ["Focus", "Full = the whole mix. Bass only = the 808 and kick, so they show up on phone speakers. Highs only = sheen on hats and cymbals. Bass + Highs = both, vocal clean."],
+               ["Channels", "Stereo = both alike. Mid = only the centre (vocal, 808). Side = only the stereo edges (width, reverbs)."],
                ["Drive", "How many harmonics are generated."],
                ["Mix", "Blend keeps transients clean while harmonics fill in underneath."]] },
   { id: "clip", name: "Soft Clipper", live: true, soon: "",
@@ -674,7 +678,22 @@ function dynBandCell() {
     wrap.appendChild(row);
     return { btn, solo };
   });
-  cell.refresh = () => rows.forEach(({ btn, solo }, b) => {
+  // Channels: what Dynamics works on (STEREO / MID / SIDE), for every band.
+  const ms = document.createElement("button");
+  ms.type = "button";
+  ms.className = "pill mono ms-btn dyn-ms";
+  ms.addEventListener("click", () => { P.dynChannels.setChoiceIndex((dynChannelsAt() + 1) % 3); cell.refresh(); onParamsChanged(); userEdited(); renderLearn(); });
+  P.dynChannels.valueChangedEvent.addListener(() => cell.refresh());
+  cell.appendChild(ms);
+  const msRefresh = () => {
+    const i = dynChannelsAt();
+    ms.textContent = ["STEREO", "MID ONLY", "SIDE ONLY"][i];
+    ms.classList.toggle("pill-red", i > 0);
+    ms.classList.toggle("pill-blue", i === 0);
+    ms.title = ["Dynamics works on the whole mix", "Dynamics works only on the centre (vocal, kick, 808, snare); the wide parts pass untouched", "Dynamics works only on the stereo edges (wide synths, reverbs, wide hats); the centre passes untouched"][i] + ". Click to change.";
+  };
+  cell.refresh = () => { msRefresh(); refreshRows(); };
+  const refreshRows = () => rows.forEach(({ btn, solo }, b) => {
     btn.className = "pill mono band-btn " + (b === dynBand ? "pill-red" : "pill-blue");
     btn.setAttribute("aria-pressed", String(b === dynBand));
     const gr = M.dynGr[b] || 0;
@@ -705,6 +724,8 @@ function dynBandCells(b) {
 }
 const dynCellsByBand = [0, 1, 2, 3].map(dynBandCells);
 const dynCells = () => [dynPicker, ...dynCellsByBand[dynBand]];
+function dynChannelsAt() { return clamp(Math.round(P.dynChannels.value * 2), 0, 2); }
+function satChannelsAt() { return clamp(Math.round(P.satChannels.value * 2), 0, 2); }
 
 // Saturation cells
 const SAT_MODES = ["Tape", "Tube", "Clip"];
@@ -745,6 +766,8 @@ const satCells = [
   satModeCell(),
   segCell({ label: "Focus", sub: "which part", state: P.satFocus, labels: ["Full", "Bass", "Highs", "Bass+Hi"],
             notes: ["whole mix", "808 · kick → phones", "sheen on hats", "808 + hats, vocal clean"] }),
+  segCell({ label: "Channels", sub: "stereo part", state: P.satChannels, labels: ["Stereo", "Mid", "Side"],
+            notes: ["both", "centre only", "edges only"] }),
   liveKnobCell({ label: "Drive", sub: "harmonics", state: P.satDrive, def: 0, minText: "0", maxText: "+18", fmt: (v) => `+${v.toFixed(1)} dB` }),
   liveKnobCell({ label: "Mix", sub: "wet / dry", state: P.satMix, def: 100, minText: "dry", maxText: "wet", fmt: (v) => `${Math.round(v)} %` }),
   barCell({ label: "Harmonics", sub: "added vs signal", minText: `${MINUS}60`, maxText: `${MINUS}10 dB`, id: "harmmeter" }),
@@ -1391,6 +1414,10 @@ function renderDynLearn(body) {
     });
     body.appendChild(para("l-p", parts.join(" ")));
   }
+  const dch = dynChannelsAt();
+  if (dch && on && !bypassed) body.appendChild(item("Channels", ["Stereo", "Mid only", "Side only"][dch], dch === 1
+    ? "Every band works only on the centre of the mix (vocal, kick, 808, snare). The wide parts (reverbs, wide synths and hats) pass through untouched, so the compression glues the middle without pulling the width in."
+    : "Every band works only on the stereo edges (wide synths, reverbs, wide hats). The centre (vocal, kick, 808) passes through untouched: good for calming wide, harsh hats or a reverb that pumps. The edges are quieter than the full mix, so the same Threshold catches less: set it a few dB lower."));
   body.appendChild(sep());
   body.appendChild(head(`${band.name.toUpperCase()} BAND (${dynRangeText(b)})`));
   body.appendChild(para("l-p", `Holds the ${band.holds}.`));
@@ -1429,13 +1456,16 @@ function renderSatLearn(body) {
   const playing = performance.now() - lastAudioTime < 1500;
   const mode = SAT_MODES[satModeIndex()], drive = satDriveAt(), mix = satMixAt(), harm = M.satHarm, bass = satBassOnly();
   const focusNow = satFocusIndex(), highs = focusNow === 2, both = focusNow === 3;
-  const what = focusNow ? `${mode} (${SAT_FOCUS[focusNow]})` : mode;
+  const chNow = satChannelsAt();
+  const tags = [focusNow ? SAT_FOCUS[focusNow] : "", ["", "Mid", "Side"][chNow]].filter(Boolean);
+  const what = tags.length ? `${mode} (${tags.join(", ")})` : mode;
   body.appendChild(head("WHAT'S HAPPENING"));
   body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
     : !on ? "Saturation is off, so nothing is added."
     : drive < 0.05 ? "Drive is at 0, so Saturation passes the sound untouched. Turn Drive up to add harmonics."
     : mix < 0.05 ? "Mix is at 0 %, so you only hear the dry signal."
     : !playing ? "Press play to see how much Saturation is adding."
+    : harm <= -60 && chNow === 2 ? `${what} is on, but the stereo edges carry almost nothing here (a centred or mono mix), so Side has little to work on.`
     : harm <= -60 ? `${what} is on, but ${bass ? "the low end" : highs ? "the top of the mix" : both ? "the low end and the top" : "the mix"} is too quiet for it to add much yet.`
     : highs ? `${what} is adding sheen about ${fmtNum(-harm, 0)} dB below the music${harm > -35 ? ": strong, check the hats don't turn fizzy" : harm > -52 ? ": a clear sheen on the top" : ": very subtle"}.`
     : `${what} is adding harmonics about ${fmtNum(-harm, 0)} dB below the music${harm > -25 ? (bass || both ? ": clearly audible, the 808 is getting louder on small speakers" : ": clearly audible, the master is getting denser") : harm > -40 ? ": felt more than heard, the usual sweet spot" : ": very subtle"}.`));
@@ -1451,6 +1481,10 @@ function renderSatLearn(body) {
     "Only the low end (below about 150 Hz: 808 and kick) gets harmonics. Phone and laptop speakers can't play an 808's low notes, but they do play its harmonics, so you hear the 808 there. Vocals, hats and snares stay clean, and the deep sub stays as it was.",
     "Only the top (above about 4 kHz: hats, cymbals, the air on the vocal) gets harmonics: sheen and sparkle. The vocal's body, the snare and the 808 stay clean. The top is much quieter than the whole mix, so the Harmonics meter reads lower here: around −40 to −50 dB is already a clear sheen.",
     "Two jobs at once: the 808 gets harmonics for phones and the hats get sheen, each on its own, while the middle, where the vocal lives, stays clean. The usual trap choice when you want both."][fi]));
+  const sch = satChannelsAt();
+  body.appendChild(item("Channels", ["Stereo", "Mid", "Side"][sch], sch === 0 ? "Both channels get the harmonics alike."
+    : sch === 1 ? "Only the centre gets harmonics (vocal, kick, 808, snare): the wide parts stay clean, so the stereo image stays as clean and wide as it was."
+    : "Only the stereo edges get harmonics (wide synths, reverbs, wide hats): adds width and air around a clean centre. Check mono (MONO button) stays fine."));
   body.appendChild(item("Drive", `+${drive.toFixed(1)} dB`, drive < 0.05 ? "Off." : drive <= 6 ? (bass ? "Light: only the loudest 808 notes get harmonics." : highs ? "Light: a touch of sheen on the loudest hats." : "Light: only the loudest moments are shaped.") : drive <= 12 ? `Medium: ${bass ? "the 808 gets noticeably richer" : highs ? "the hats get a clear sheen" : both ? "the 808 gets richer and the hats get sheen" : "the master gets noticeably denser"}.` : "Heavy: obvious color. Pull Mix back if it gets harsh."));
   body.appendChild(item("Mix", `${Math.round(mix)} %`, mix >= 99.5 ? "Fully saturated signal." : `Blends ${Math.round(mix)} % of the harmonics in and keeps the rest clean, so transients stay sharp while the harmonics fill in underneath.`));
   body.appendChild(item("Level", "", bass ? "The 808's level stays put: only its harmonics are added, so on big speakers and headphones it sounds about the same, and on small speakers it comes through."
@@ -2938,15 +2972,18 @@ function renderReport(body) {
 function paramValue(id) {
   if (id.startsWith("eqGain")) return eqGainAt(Number(id.slice(6)) - 1);
   if (id.startsWith("eqFreq")) return eqFreqAt(Number(id.slice(6)) - 1);
+  if (id.startsWith("eqMode")) return eqModeAt(Number(id.slice(6)) - 1);
   const map = { drive: P.drive, inTrim: P.inTrim, ceiling: P.ceiling, release: P.release, clipLevel: P.clipLevel, clipSoftness: P.clipSoftness,
                 bassMono: P.bassMono, bassTame: P.bassTame, bassPunch: P.bassPunch,
-                imgLow: P.imgLow, imgMid: P.imgMid, imgHigh: P.imgHigh, satDrive: P.satDrive, satMix: P.satMix,
+                imgLow: P.imgLow, imgMid: P.imgMid, imgHigh: P.imgHigh, satDrive: P.satDrive, satMix: P.satMix, maxBassFirst: P.maxBassFirst,
                 ulAmount: P.ulAmount, ulLength: P.ulLength, tsAmount: P.tsAmount, tsRange: P.tsRange, rtAmount: P.rtAmount, rtSens: P.rtSens, rtRelease: P.rtRelease,
                 stemVoc: P.stemGain[0], stemDrums: P.stemGain[1], stemBass: P.stemGain[2], stemOther: P.stemGain[3] };
-  const band = /^dyn(X|Thr|Ratio|Atk|Rel|Gain)(\d)$/.exec(id);
+  const band = /^dyn(X|Thr|Ratio|Atk|Rel|Gain|Impact|Sustain)(\d)$/.exec(id);
   if (band) return P["dyn" + band[1]][Number(band[2]) - 1].getScaledValue();
   if (id === "satMode") return satModeIndex();
   if (id === "satFocus") return satFocusIndex();
+  if (id === "satChannels") return satChannelsAt();
+  if (id === "dynChannels") return dynChannelsAt();
   if (id === "tsSpeed") return comboIndex(P.tsSpeed);
   if (id === "ulFocus") return comboIndex(P.ulFocus);
   if (id === "rtFocus") return comboIndex(P.rtFocus);
@@ -2957,7 +2994,7 @@ function paramValue(id) {
   if (id === "clipOversampling") return osIndex();
   return null;
 }
-const MODULE_PARAMS = { ul: /^ul/, stem: /^stem/, ts: /^ts/, rt: /^rt/, eq: /^eq/, bass: /^bass/, dyn: /^dyn/, img: /^img/, sat: /^sat/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive|inTrim)$/ };
+const MODULE_PARAMS = { ul: /^ul/, stem: /^stem/, ts: /^ts/, rt: /^rt/, eq: /^eq/, bass: /^bass/, dyn: /^dyn/, img: /^img/, sat: /^sat/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive|inTrim|maxBassFirst)$/ };
 function moduleUnchanged(module) {
   const values = (amReport && amReport.values) || {};
   return Object.entries(values).every(([id, v]) => {
@@ -3129,7 +3166,7 @@ function updateLiveReadouts() {
   }
   const rd = $("read-dyn");
   if (rd) rd.textContent = P.bypass.getValue() ? "Bypassed" : !P.dynOn.getValue() ? "Off" : dynIsNeutral() ? neutralText("dyn")
-    : `${[0, 1, 2, 3].filter(dynBandActive).length} band${[0, 1, 2, 3].filter(dynBandActive).length > 1 ? "s" : ""} \u00b7 ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`;
+    : `${[0, 1, 2, 3].filter(dynBandActive).length} band${[0, 1, 2, 3].filter(dynBandActive).length > 1 ? "s" : ""} \u00b7 ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB${["", " \u00b7 mid", " \u00b7 side"][dynChannelsAt()]}`;
   if (selected === "dyn") dynPicker.refresh();
   const rul = $("read-ul");
   if (rul) rul.textContent = P.bypass.getValue() ? "Bypassed" : !P.ulOn.getValue() ? "Off" : ulIsNeutral() ? neutralText("ul")
@@ -3175,7 +3212,7 @@ function updateLiveReadouts() {
     $("sh-val-" + k).textContent = `${Math.round(v)} %`;
   }
   const rs = $("read-sat");
-  if (rs) rs.textContent = P.bypass.getValue() ? "Bypassed" : !P.satOn.getValue() ? "Off" : satIsNeutral() ? neutralText("sat") : `${SAT_MODES[satModeIndex()]} +${satDriveAt().toFixed(1)} dB${SAT_FOCUS_TAG[satFocusIndex()].toLowerCase()}`;
+  if (rs) rs.textContent = P.bypass.getValue() ? "Bypassed" : !P.satOn.getValue() ? "Off" : satIsNeutral() ? neutralText("sat") : `${SAT_MODES[satModeIndex()]} +${satDriveAt().toFixed(1)} dB${SAT_FOCUS_TAG[satFocusIndex()].toLowerCase()}${["", " \u00b7 mid", " \u00b7 side"][satChannelsAt()]}`;
   const hf = $("harmmeter-fill");
   if (hf) {
     const active = P.satOn.getValue() && !satIsNeutral() && !P.bypass.getValue();

@@ -37,7 +37,7 @@ namespace ModuleParams
     inline juce::StringArray toggleIds() { return { "ulOn", "stemOn", "stemKeep", "tsOn", "rtOn", "dynOn", "dynAdaptive", "satOn" }; }
     inline juce::StringArray comboIds()
     {
-        juce::StringArray ids { "satMode", "satFocus", "tsSpeed", "rtFocus", "ulFocus", "maxDither" };
+        juce::StringArray ids { "satMode", "satFocus", "tsSpeed", "rtFocus", "ulFocus", "maxDither", "satChannels", "dynChannels" };
         for (int b = 1; b <= polisher::kEqBands; ++b) ids.add ("eqMode" + juce::String (b));   // EQ band channels (defined with the EQ)
         return ids;
     }
@@ -102,6 +102,9 @@ namespace ModuleParams
         // Dynamics (after Bass Control): four bands, 1:1 = untouched.
         layout.add (std::make_unique<AudioParameterBool> (ParameterID { "dynOn", 1 }, "Dynamics On", true));
         layout.add (std::make_unique<AudioParameterBool> (ParameterID { "dynAdaptive", 1 }, "Dynamics Adaptive Release", true));
+        // Which part of the stereo image Dynamics works on (version hint 12). Stereo, the default, is also what
+        // a state saved before it existed loads as.
+        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "dynChannels", 12 }, "Dynamics Channels", StringArray { "Stereo", "Mid", "Side" }, 0));
         const polisher::DynamicsParams def;
         for (int x = 0; x < polisher::kDynBands - 1; ++x)
         {
@@ -151,6 +154,8 @@ namespace ModuleParams
         // missing from a state its default), which is exactly how it sounded then.
         // Highs only and Bass + Highs were added after it (v0.21): appended, so saved indexes keep their meaning.
         layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "satFocus", 7 }, "Saturation Focus", StringArray { "Full", "Bass only", "Highs only", "Bass + Highs" }, 0));
+        // Which part of the stereo image gets the harmonics (version hint 12; Stereo = how it always sounded).
+        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "satChannels", 12 }, "Saturation Channels", StringArray { "Stereo", "Mid", "Side" }, 0));
         layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "satDrive", 1 }, "Saturation Drive",
                                                            NormalisableRange<float> (0.0f, static_cast<float> (polisher::Saturation::kMaxDriveDb), 0.1f), 0.0f,
                                                            AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction (dbText)));
@@ -175,6 +180,7 @@ namespace ModuleParams
             for (int k = 0; k < polisher::kStems; ++k) stemGain[static_cast<size_t> (k)] = get (stemIds[k]);
             dynOn = get ("dynOn");
             dynAdaptive = get ("dynAdaptive");
+            dynChannels = get ("dynChannels");
             for (int x = 0; x < polisher::kDynBands - 1; ++x) dynX[static_cast<size_t> (x)] = get (band ("dynX", x));
             for (int b = 0; b < polisher::kDynBands; ++b)
             {
@@ -192,6 +198,7 @@ namespace ModuleParams
             satFocus = get ("satFocus");
             satDrive = get ("satDrive");
             satMix = get ("satMix");
+            satChannels = get ("satChannels");
             imgOn = get ("imgOn");
             imgLow = get ("imgLow");
             imgMid = get ("imgMid");
@@ -244,6 +251,7 @@ namespace ModuleParams
             polisher::DynamicsParams p;
             p.enabled = dynOn->load() > 0.5f && ! bypassed;
             p.adaptiveRelease = dynAdaptive->load() > 0.5f;
+            p.channels = static_cast<polisher::DynChannels> (juce::jlimit (0, 2, juce::roundToInt (dynChannels->load())));
             for (size_t x = 0; x < dynX.size(); ++x) p.crossoverHz[x] = dynX[x]->load();
             for (size_t b = 0; b < thr.size(); ++b)
                 p.bands[b] = { thr[b]->load(), ratio[b]->load(), atk[b]->load(), rel[b]->load(), gain[b]->load(), impact[b]->load(), sustain[b]->load() };
@@ -258,6 +266,7 @@ namespace ModuleParams
             p.driveDb = satDrive->load();
             p.mix = satMix->load();
             p.focus = static_cast<polisher::SaturationFocus> (juce::jlimit (0, 3, juce::roundToInt (satFocus->load())));
+            p.channels = static_cast<polisher::SaturationChannels> (juce::jlimit (0, 2, juce::roundToInt (satChannels->load())));
             return p;
         }
 
@@ -281,11 +290,13 @@ namespace ModuleParams
         std::array<std::atomic<float>*, polisher::kStems> stemGain {};
         std::atomic<float>* dynOn = nullptr;
         std::atomic<float>* dynAdaptive = nullptr;
+        std::atomic<float>* dynChannels = nullptr;
         std::array<std::atomic<float>*, polisher::kDynBands - 1> dynX {};
         std::array<std::atomic<float>*, polisher::kDynBands> thr {}, ratio {}, atk {}, rel {}, gain {}, impact {}, sustain {};
         std::atomic<float>* satOn = nullptr;
         std::atomic<float>* satMode = nullptr;
         std::atomic<float>* satFocus = nullptr;
+        std::atomic<float>* satChannels = nullptr;
         std::atomic<float>* satDrive = nullptr;
         std::atomic<float>* satMix = nullptr;
         std::atomic<float>* imgOn = nullptr;

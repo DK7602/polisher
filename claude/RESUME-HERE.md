@@ -1,7 +1,7 @@
-# Polisher — resume here (updated 2026-10-10)
+# Polisher — resume here (updated 2026-10-12)
 
 Read this first in a new chat. Code: github.com/DK7602/polisher. Newest work: branch
-`claude/eloquent-einstein-sscadx` (v0.15.0, 2026-10-10 sessions below; it fast-forwarded from
+`claude/eloquent-einstein-sscadx` (v0.22.0, 2026-10-12 sessions below; it fast-forwarded from
 `claude/gracious-wright-tgs0no`, which is older). Merge to `main` when ready. Every push builds Mac + Windows; download Polisher-Windows from the
 latest green Actions run.
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
@@ -22,12 +22,30 @@ genre target line. Remaining, in order:
    ceiling covers the clipping risk) - offer only if asked.
 5. Multiband saturation -> Saturation Focus Highs only + Bass + Highs - DONE v0.21.0 (Bass only already existed;
    no per-band Drive/Mode: one Drive, the bands bend at their own offsets - offer per-band amounts only if asked).
-6. Mid/side on more modules (Dynamics, Saturation, ...).
+6. Mid/side on more modules -> Dynamics Channels + Saturation Channels - DONE v0.22.0 (below). Skipped as
+   redundant: Imager is already M/S, Tonal EQ has it per band (v0.19), Maximizer / Clipper must stay linked
+   (M/S limiting moves the image), Resonance Tamer / Tone Steady - offer only if asked.
 7. Vintage-style modules (tape / compressor / EQ / limiter flavours) - lowest value.
 8. Blind loudness-matched shoot-out (tools/blindtest exists) vs TDR Limiter 6 GE / LoudMax / Ozone trial.
 Optional: Listen (delta) on the 6 modules without it - a version for all 11 exists as a stash/patch from
 the older branch (claude session 2026-10-12), only if the user asks.
 Also open: validation steps 2-3, Auto-Master turning a too-hot mix down, Auto-Master rule for Impact.
+
+## Mid / side: Dynamics + Saturation Channels (v0.22.0, 2026-10-12)
+New params (hint 12): dynChannels, satChannels {Stereo, Mid, Side}; Auto-Master sets both Stereo. Saturation:
+SaturationParams::channels is part of the slot key (Slot::is(focus, mode, channels)), so a change cross-fades like
+Focus / Mode; slotWetFrame runs the curve on (L+R)/2 or (L-R)/2 (channelState[0]'s slot state) and puts the
+residual back (mid: +w on both; side: +w / -w); one-channel input + Side = no harmonics. Dynamics: the split runs
+on M / S (xin converted per sample, toLR after); only the worked part is detected / compressed / Impact / Sustain,
+the other gets unity gains (still through the split's all-pass, so it stays in phase). Domain change: compGoal 0,
+when comp reaches 0 switchDomain() converts every Split biquad's z1 / z2 (linear: (p+q)/2, (p-q)/2 and back),
+then fades back in (2 x 20 ms). Detectors are NOT reset (review find: a fresh start re-attacked from 0 = an
+8.7 dB swell after the fade-in): both channels' RMS / Impact power are set to the louder one, grDb / loudness
+keeping carry on; only Impact / Sustain warm up again (up to ~0.2 s). Mono input: domain stays stereo. Solo = whole band (worked part
+with its gain); Listen = only what is taken off the worked part. UI: Saturation gets a Channels segCell (6 cells),
+Dynamics a pill under the band picker (STEREO / MID ONLY / SIDE ONLY, all bands). Tests [saturation][ms],
+[dynamics][ms] (incl. a no-swell check, mono, Solo sum on MID ONLY). UI paramValue() now also knows satChannels /
+dynChannels / eqMode / dynImpact / dynSustain / maxBassFirst (Auto-Master's "kept" readouts were blind to them).
 
 ## Saturation Highs only / Bass + Highs (v0.21.0, 2026-10-12)
 SaturationFocus highs = 2, bassHighs = 3 (satFocus choices appended: saved state indexes keep their meaning;

@@ -566,3 +566,172 @@ TEST_CASE ("Sustain makes tails longer or shorter at the same loudness", "[dynam
     CHECK (std::abs (lufsAfter (longer) - inL) < 1.0);
     CHECK (std::abs (lufsAfter (shorter) - inL) < 1.0);
 }
+
+namespace {
+// A centred 100 Hz tone (mid) and a wide 2 kHz tone (side: opposite on L and R), both loud.
+AudioClip midAndSide (double sr, double seconds)
+{
+    AudioClip c = testsig::silence (sr, 2, seconds);
+    for (int i = 0; i < c.numSamples(); ++i)
+    {
+        const double m = 0.5 * std::sin (2.0 * std::numbers::pi * 100.0 * i / sr), s = 0.5 * std::sin (2.0 * std::numbers::pi * 2000.0 * i / sr);
+        c.channels[0][static_cast<size_t> (i)] = static_cast<float> (m + s);
+        c.channels[1][static_cast<size_t> (i)] = static_cast<float> (m - s);
+    }
+    return c;
+}
+double partDb (const AudioClip& c, double hz, bool side, double from, double to)
+{
+    double re = 0.0, im = 0.0;
+    const int a = static_cast<int> (from * c.sampleRate), b = static_cast<int> (to * c.sampleRate);
+    for (int i = a; i < b; ++i)
+    {
+        const double v = 0.5 * (c.channels[0][static_cast<size_t> (i)] + (side ? -1.0 : 1.0) * c.channels[1][static_cast<size_t> (i)]);
+        const double w = 2.0 * std::numbers::pi * hz * i / c.sampleRate;
+        re += v * std::cos (w);
+        im += v * std::sin (w);
+    }
+    return 20.0 * std::log10 (2.0 * std::hypot (re, im) / (b - a) + 1.0e-12);
+}
+} // namespace
+
+TEST_CASE ("Dynamics Mid compresses only the centre, Side only the edges", "[dynamics][ms]")
+{
+    const double sr = 48000.0;
+    const auto in = midAndSide (sr, 3.0);
+    const double midIn = partDb (in, 100.0, false, 2.0, 3.0), sideIn = partDb (in, 2000.0, true, 2.0, 3.0);
+    for (auto which : { DynChannels::stereo, DynChannels::mid, DynChannels::side })
+    {
+        DynamicsParams p;
+        p.channels = which;
+        for (auto& b : p.bands) { b.ratio = 4.0; b.thresholdDb = -24.0; }
+        MultibandDynamics d;
+        d.prepare (sr, 2);
+        d.setParams (p);
+        d.reset();
+        AudioClip c = in;
+        run (d, c);
+        const double midDrop = partDb (c, 100.0, false, 2.0, 3.0) - midIn, sideDrop = partDb (c, 2000.0, true, 2.0, 3.0) - sideIn;
+        INFO ("channels " << static_cast<int> (which) << ": mid " << midDrop << " dB, side " << sideDrop << " dB");
+        if (which != DynChannels::side) CHECK (midDrop < -6.0); else CHECK_THAT (midDrop, WithinAbs (0.0, 0.05));
+        if (which != DynChannels::mid) CHECK (sideDrop < -6.0); else CHECK_THAT (sideDrop, WithinAbs (0.0, 0.05));
+        // The untouched part also stays in its place: no mid leaks into the side or back.
+        if (which == DynChannels::mid) CHECK (partDb (c, 100.0, true, 2.0, 3.0) < -100.0);
+        if (which == DynChannels::side) CHECK (partDb (c, 2000.0, false, 2.0, 3.0) < -100.0);
+    }
+}
+
+TEST_CASE ("Dynamics Channels switch while compressing without a click", "[dynamics][ms][switching]")
+{
+    const double sr = 48000.0;
+    const auto in = midAndSide (sr, 3.0);
+    const int seg = static_cast<int> (0.6 * sr);
+    const DynChannels order[] = { DynChannels::stereo, DynChannels::mid, DynChannels::side, DynChannels::stereo, DynChannels::mid };
+    auto render = [&] (bool switching, DynChannels steady)
+    {
+        DynamicsParams p;
+        for (auto& b : p.bands) { b.ratio = 4.0; b.thresholdDb = -30.0; b.attackMs = 100.0; }
+        p.channels = switching ? order[0] : steady;
+        MultibandDynamics d;
+        d.prepare (sr, 2);
+        d.setParams (p);
+        d.reset();
+        AudioClip c = in;
+        for (int s = 0, n = c.numSamples(); s < n; s += 64)
+        {
+            if (switching) p.channels = order[std::min (4, s / seg)];
+            d.setParams (p);
+            float* ch[2] = { c.channels[0].data() + s, c.channels[1].data() + s };
+            d.process (ch, 2, std::min (64, n - s));
+        }
+        return c;
+    };
+    // A click is a kink: no bend (second difference) sharper than the steady settings' own.
+    const auto sharpest = [] (const AudioClip& c, int from)
+    {
+        double worst = 0.0;
+        for (size_t k = 0; k < 2; ++k)
+            for (size_t i = static_cast<size_t> (std::max (2, from)); i < c.channels[k].size(); ++i)
+                worst = std::max (worst, std::abs (static_cast<double> (c.channels[k][i]) - 2.0 * c.channels[k][i - 1] + c.channels[k][i - 2]));
+        return worst;
+    };
+    const auto out = render (true, DynChannels::stereo);
+    double limit = 0.0;
+    for (auto ch : { DynChannels::stereo, DynChannels::mid, DynChannels::side })
+        limit = std::max (limit, sharpest (render (false, ch), 4800));
+    INFO ("sharpest bend switching " << sharpest (out, 4800) << ", steady " << limit);
+    CHECK (sharpest (out, 4800) < 1.1 * limit);
+    bool finite = true;
+    for (size_t k = 0; k < 2; ++k)
+        for (float v : out.channels[k]) finite = finite && std::isfinite (v);
+    CHECK (finite);
+
+    // No swell after the change: STEREO -> MID at 2.4 s, the centre (the 100 Hz tone, all in the Low band,
+    // which saw the same level on L / R as on mid) stays held down as on a steady MID ONLY render.
+    const auto steadyMid = render (false, DynChannels::mid);
+    for (double from : { 2.4 + 0.05, 2.4 + 0.15, 2.4 + 0.3 })
+    {
+        const double got = partDb (out, 100.0, false, from, from + 0.05), want = partDb (steadyMid, 100.0, false, from, from + 0.05);
+        INFO ("centre " << (from - 2.4) * 1000.0 << " ms after the change: " << got << " dB, steady MID ONLY " << want << " dB");
+        CHECK (std::abs (got - want) < 0.5);
+    }
+}
+
+TEST_CASE ("Dynamics Channels: mono input works as Stereo, Solo on MID ONLY adds up to the output", "[dynamics][ms]")
+{
+    const double sr = 48000.0;
+    DynamicsParams p;
+    for (auto& b : p.bands) { b.ratio = 4.0; b.thresholdDb = -30.0; }
+    auto mono = [&] (DynChannels ch)
+    {
+        auto q = p;
+        q.channels = ch;
+        MultibandDynamics d;
+        d.prepare (sr, 1);
+        d.setParams (q);
+        d.reset();
+        AudioClip c = testsig::musicLike (sr, 1.0, -12.0);
+        c.channels.resize (1);
+        float* chs[1] = { c.channels[0].data() };
+        d.process (chs, 1, c.numSamples());
+        return c;
+    };
+    const auto st = mono (DynChannels::stereo);
+    for (auto ch : { DynChannels::mid, DynChannels::side })
+    {
+        const auto m = mono (ch);
+        double diff = 0.0;
+        for (size_t i = 0; i < st.channels[0].size(); ++i) diff = std::max (diff, std::abs (static_cast<double> (m.channels[0][i]) - st.channels[0][i]));
+        CHECK (diff == 0.0);
+    }
+
+    // Stereo input on MID ONLY: the four solos still add up to the output.
+    p.channels = DynChannels::mid;
+    const auto in = midAndSide (sr, 1.5);
+    AudioClip out = in;
+    std::vector<std::vector<double>> sum (2, std::vector<double> (in.channels[0].size(), 0.0));
+    for (int band = -1; band < kDynBands; ++band)
+    {
+        MultibandDynamics d;
+        d.prepare (sr, 2);
+        d.setParams (p);
+        d.reset();
+        d.setMonitorBand (band, false);
+        AudioClip c = in;
+        std::vector<double> m0 (in.channels[0].size()), m1 (in.channels[0].size());
+        for (int s = 0, n = c.numSamples(); s < n; s += 256)
+        {
+            const int len = std::min (256, n - s);
+            float* ch[2] = { c.channels[0].data() + s, c.channels[1].data() + s };
+            double* mon[2] = { m0.data() + s, m1.data() + s };
+            d.process (ch, 2, len, mon);
+        }
+        if (band < 0) { out = c; continue; }
+        for (size_t i = 0; i < m0.size(); ++i) { sum[0][i] += m0[i]; sum[1][i] += m1[i]; }
+    }
+    double err = 0.0;
+    for (size_t k = 0; k < 2; ++k)
+        for (size_t i = 0; i < sum[k].size(); ++i) err = std::max (err, std::abs (sum[k][i] - out.channels[k][i]));
+    INFO ("sum of the solos - output: " << err);
+    CHECK (err < 1.0e-5);
+}

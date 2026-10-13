@@ -1,6 +1,6 @@
 # Polisher User Manual
 
-Version 0.21.0 · October 2026
+Version 0.22.0 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
@@ -8,7 +8,7 @@ Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d7
 
 Polisher is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds eleven modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.21.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.22.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 
@@ -282,6 +282,7 @@ Four-band compression. Click a band button (LOW, LO-MID, HI-MID, HIGH) to edit i
 | Impact | −100 to +100 % (0 = off) | Punch of the hits in this band. **+** makes the start of each hit harder (kick thump, snare crack); **−** softens it (spiky hats, a poking snare). The steady sound in between isn't touched and the band's loudness is kept, so you hear punch, not volume. |
 | Sustain | −100 to +100 % (0 = off) | Length of the tails in this band. **+** lifts each sound as it dies away (longer, fuller 808s; longer cymbals and reverb); **−** pulls tails down faster (tighter 808s that don't blur into the next note; drier hats). The band's loudness is kept, so the hits trade places with the tails a little. |
 | Adaptive release | on | Lets go quickly after short hits, slower on long notes. |
+| Channels (pill under the bands) | STEREO, MID ONLY, SIDE ONLY (STEREO) | What every band works on: both channels, only the centre (vocal, kick, 808, snare) or only the stereo edges (wide synths, reverbs, wide hats). The other part passes through untouched. |
 
 How to set a band: raise Ratio to 2:1, then lower Threshold until the band button shows 1–3 dB on the loud hits.
 
@@ -293,6 +294,15 @@ How to use Impact: for a kick that doesn't hit, set the **Low** band's Impact to
 - Punchier hits mean taller peaks, so the Maximizer works a little harder. If its GR jumps on every kick, turn Impact down or use the Soft Clipper.
 - Loudness keeping settles over about 2 seconds after you move the knob.
 - Auto-Master doesn't use Impact or Sustain yet: it sets both to 0 % (off) on every band, so its loudness plan stays right. Add them after Auto-Master, then check Short-term and adjust Drive if needed. The undo arrow brings back your earlier settings.
+
+**Mid only and Side only.** Click the **STEREO** pill under the band buttons to step through STEREO, MID ONLY and SIDE ONLY. It applies to all four bands at once (and to Impact and Sustain).
+
+- **MID ONLY:** compresses only the centre. The width (reverbs, wide synths and hats) is left alone, so glue on the vocal and drums doesn't pull the stereo image in.
+- **SIDE ONLY:** compresses only the stereo edges. The vocal, kick and 808 are left alone. Good for wide hats that are too harsh (High band) or a reverb that pumps. The edges are quieter than the full mix, so the same Threshold catches less: set it a few dB lower.
+- Changing it while compressing never clicks: the compression fades out and back in (about 40 ms), then each band moves to the new part's level at its Attack and Release speed. Impact and Sustain pause for up to about 0.2 s while they settle on the new part.
+- Solo still plays the whole band; Listen plays only what is taken off the centre (or the edges).
+- On a one-channel (mono) track the pill has no effect: Dynamics works on the whole sound, as on STEREO.
+- Auto-Master always sets STEREO.
 
 ### 08 Stereo Imager
 
@@ -313,6 +323,7 @@ Adds harmonics so bass translates on small speakers and the master feels denser.
 | --- | --- | --- |
 | Mode | Tape, Tube, Clip (Tape) | Tape = smooth and warm. Tube = rich, fuller bass. Clip = firm and bright. Changing it while playing fades over in about 0.1 s. |
 | Focus | Full, Bass only, Highs only, Bass + Highs (Full) | Full = the whole mix gets harmonics. Bass only = only the low end (below about 150 Hz: 808 and kick). Highs only = only the top (above about 4 kHz: hats, cymbals, air). Bass + Highs = both, with the middle (the vocal) left clean. |
+| Channels | Stereo, Mid, Side (Stereo) | Which part of the stereo image gets the harmonics. Stereo = both channels alike. Mid = only the centre (vocal, kick, 808, snare): the wide parts stay clean. Side = only the stereo edges (wide synths, reverbs, wide hats): adds width and air around a clean centre. Works together with Focus (for example Bass only + Mid = only the 808 in the centre). |
 | Drive | 0–18 dB (0) | How many harmonics. 0 = off. |
 | Mix | 0–100 % (100) | Blend with the clean sound. |
 | Harmonics meter | −60 to −10 dB | What was added. Aim for about −25 to −35 dB. |
@@ -324,6 +335,8 @@ Try it: Bass only, Tube, Drive +9. Play the song on your phone or laptop speaker
 **Highs only ("sheen").** Saturation adds harmonics only to the top of the mix (above about 4 kHz): dull hats and cymbals get sheen and sparkle, while the vocal's body, the snare and the 808 stay clean. Only the new harmonics are added (the hats themselves keep their exact level), and they are kept above about 3 kHz, so they never muddy the middle. The top is much quieter than the whole mix, so the Harmonics meter reads lower here: about −40 to −50 dB is already a clear sheen. Try Tape, Drive +9 to +12; if the hats turn fizzy, lower Drive or Mix.
 
 **Bass + Highs.** Both at once, each on its own: the 808 gets harmonics for phones and the hats get sheen, while the middle, where the vocal lives, stays clean. The meter reads about like Bass only (the 808's harmonics are the louder part). Try Tube, Drive +9.
+
+**Channels Mid / Side.** Mid keeps the harmonics in the centre, so a wide mix stays exactly as wide and clean at the edges. Side adds harmonics only to the stereo edges: wide synths and reverbs get thicker and the mix sounds a little wider, while the vocal and 808 stay clean. With Side, check MONO now and then: what Side adds disappears in mono (that's normal), but the centre must still sound right. On a mono track Side does nothing. The Harmonics meter reads lower on Side (the edges are quieter than the centre) and a little lower on Mid. Switching Channels is click-free. Auto-Master always sets Stereo.
 
 Switching between all four Focus settings is click-free. Auto-Master picks only Full or Bass only. If you drew automation for Focus in Cubase with an older Polisher, check that lane: with four choices, a lane that used to mean Bass only now reads as Bass + Highs. Saved songs themselves open with the Focus they had.
 

@@ -23,9 +23,14 @@ struct DynBandParams
     double sustain = 0.0;       // -100 ... +100 %: tails in this band ring longer (+) or shorter (-); 0 = off
 };
 
+/** Which part of the stereo image Dynamics works on: both channels (linked), only the centre (mid,
+    (L + R) / 2) or only the edges (side, (L - R) / 2); the other part passes through untouched. */
+enum class DynChannels { stereo = 0, mid = 1, side = 2 };
+
 struct DynamicsParams
 {
     bool enabled = true;
+    DynChannels channels = DynChannels::stereo;
     std::array<double, kDynBands - 1> crossoverHz { 120.0, 1000.0, 6000.0 };
     std::array<DynBandParams, kDynBands> bands {
         DynBandParams { 0.0, 1.0, 30.0, 200.0, 0.0 },
@@ -78,6 +83,11 @@ inline constexpr std::array<std::array<double, 2>, kDynBands - 1> kDynCrossoverR
       band gains fade out (20 ms), the crossovers glide up, the split blends out. While a band is
       soloed the crossovers stay in place (the solo is what is heard). Makeup and crossover changes
       glide.
+    - Channels Mid / Side (stereo input only): the split runs on mid and side instead of L and R; only the
+      chosen part is detected, compressed and shaped, the other part passes through the split's all-pass
+      untouched, and L / R are rebuilt. A change fades the compression and band gains out, converts the
+      filters' states to the new pair (they are linear, so nothing jumps), then fades them back in; the
+      detectors keep their level (no fresh attack), Impact and Sustain warm up again.
 
     process() never allocates. Processes the first two channels (stereo) or one (mono). */
 class MultibandDynamics
@@ -139,11 +149,26 @@ public:
             }
 
             std::array<std::array<double, kDynBands>, 2> band {};
-            std::array<double, 2> dry {};
+            std::array<double, 2> dry {}, xin {};
+            for (int c = 0; c < nch; ++c) xin[static_cast<size_t> (c)] = static_cast<double> (ch[c][i]);
+            const int tgt = nch == 2 ? msTarget() : -1;   // mid / side: the channel (0 = mid, 1 = side) worked on
+            if (tgt >= 0)
+            {
+                const double l = xin[0], r = xin[1];
+                xin[0] = 0.5 * (l + r);
+                xin[1] = 0.5 * (l - r);
+            }
+            const auto toLR = [tgt] (double& a, double& b) noexcept
+            {
+                if (tgt < 0) return;
+                const double m = a, s = b;
+                a = m + s;
+                b = m - s;
+            };
             for (int c = 0; c < nch; ++c)
             {
                 auto& s = chan[static_cast<size_t> (c)];
-                const double x = static_cast<double> (ch[c][i]);
+                const double x = xin[static_cast<size_t> (c)];
                 dry[static_cast<size_t> (c)] = x;
                 double lo = s.x2lp[1].process (s.x2lp[0].process (x));
                 double hi = s.x2hp[1].process (s.x2hp[0].process (x));
@@ -160,8 +185,13 @@ public:
             {
                 // Neutral or off, split only for a solo: the plain band; the output stays untouched.
                 if (monitorOut != nullptr)
+                {
+                    std::array<double, 2> mon {};
                     for (int c = 0; c < nch; ++c)
-                        monitorOut[c][i] = monitoring && ! monitorRemoved ? band[static_cast<size_t> (c)][static_cast<size_t> (monitorBand)] : 0.0;
+                        mon[static_cast<size_t> (c)] = monitoring && ! monitorRemoved ? band[static_cast<size_t> (c)][static_cast<size_t> (monitorBand)] : 0.0;
+                    toLR (mon[0], mon[1]);
+                    for (int c = 0; c < nch; ++c) monitorOut[c][i] = mon[static_cast<size_t> (c)];
+                }
                 continue;
             }
 
@@ -192,6 +222,7 @@ public:
                 d.meanSquare = 0.0;
                 for (int c = 0; c < nch; ++c)
                 {
+                    if (tgt >= 0 && c != tgt) continue;   // mid / side: only the part worked on is heard
                     const double v = detected[static_cast<size_t> (c)][k];
                     double& ms = d.channelMeanSquare[static_cast<size_t> (c)];
                     ms += (v * v - ms) * d.rmsCoeff;
@@ -215,6 +246,7 @@ public:
                 double p = 0.0;
                 for (int c = 0; c < nch; ++c)
                 {
+                    if (tgt >= 0 && c != tgt) continue;
                     const double v = detected[static_cast<size_t> (c)][k];
                     double& ms = d.impactPow[static_cast<size_t> (c)];
                     ms += (v * v - ms) * d.impactRmsCoeff;
@@ -314,15 +346,20 @@ public:
                 bands = bandsGoal > bands ? std::min (bandsGoal, bands + fadeStep) : std::max (bandsGoal, bands - fadeStep);
                 bandsWeight = ParkGlide::fadeWeight (bands);
             }
+            std::array<double, 2> out {};
             for (int c = 0; c < nch; ++c)
             {
+                // (Mid / side: the other part keeps unity gains: only the split's all-pass.)
+                const bool worked = tgt < 0 || c == tgt;
                 const auto& b = band[static_cast<size_t> (c)];
                 double wet = 0.0;
                 for (size_t k = 0; k < kDynBands; ++k)
-                    wet += b[k] * gain[k];
-                const double x = mix < 1.0 ? dry[static_cast<size_t> (c)] * dryGain : dry[static_cast<size_t> (c)];
-                ch[c][i] = static_cast<Sample> (x + (wet - x) * mix);
+                    wet += worked ? b[k] * gain[k] : b[k];
+                const double x = mix < 1.0 && worked ? dry[static_cast<size_t> (c)] * dryGain : dry[static_cast<size_t> (c)];
+                out[static_cast<size_t> (c)] = x + (wet - x) * mix;
             }
+            toLR (out[0], out[1]);
+            for (int c = 0; c < nch; ++c) ch[c][i] = static_cast<Sample> (out[static_cast<size_t> (c)]);
             if (monitorOut != nullptr)
             {
                 // Solo: the band as it is inside the output (the four solos add up to the output once
@@ -331,8 +368,14 @@ public:
                 const double g = ! monitoring ? 0.0
                                : monitorRemoved ? (1.0 - std::pow (10.0, det[k].grDb * compWeight / 20.0)) * mix
                                                 : 1.0 + (gain[k] - 1.0) * mix;
+                std::array<double, 2> mon {};
                 for (int c = 0; c < nch; ++c)
-                    monitorOut[c][i] = band[static_cast<size_t> (c)][k] * g;
+                {
+                    const bool worked = tgt < 0 || c == tgt;
+                    mon[static_cast<size_t> (c)] = band[static_cast<size_t> (c)][k] * (worked ? g : ! monitoring ? 0.0 : monitorRemoved ? 0.0 : 1.0);
+                }
+                toLR (mon[0], mon[1]);
+                for (int c = 0; c < nch; ++c) monitorOut[c][i] = mon[static_cast<size_t> (c)];
             }
         }
     }
@@ -419,6 +462,8 @@ private:
     }
 
     void update() noexcept;
+    void switchDomain (DynChannels to) noexcept;
+    int msTarget() const noexcept { return domain == DynChannels::mid ? 0 : domain == DynChannels::side ? 1 : -1; }
     void applyCrossovers() noexcept;
     void applyAuxCrossovers() noexcept;
     void resetFilters() noexcept;
@@ -433,6 +478,7 @@ private:
     bool engaged = false;    // crossovers in place after switching on: compression and band gains apply
     int monitorBand = -1;
     bool monitorRemoved = false;
+    DynChannels domain = DynChannels::stereo;   // what the split and the gains work on right now
     double mix = 0.0, fade = 0.0, fadeGoal = 0.0, fadeStep = 0.0;     // plain -> split blend (at the park)
     double compWeight = 0.0, comp = 0.0, compGoal = 0.0;              // how much of the band gains applies
     double bandsWeight = 1.0, bands = 1.0, bandsGoal = 1.0;           // 0 = as one wideband gain, 1 = per band

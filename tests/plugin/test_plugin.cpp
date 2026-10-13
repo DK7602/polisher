@@ -2782,6 +2782,40 @@ TEST_CASE ("Plug-in: flipping A / B with Mono Below, Dynamics, the Imager and Sa
     }
 }
 
+TEST_CASE ("Plug-in: Saturation and Dynamics Channels reach the engine (a centred tone is left alone on Side)", "[plugin][saturation][dynamics]")
+{
+    const double sr = 48000.0;
+    const int settled = 9600;
+    const auto voice = testsig::sine (sr, 2, 1000.0, -6.0, 1.0);   // the same on L and R: all centre, no side
+    auto sat = [&] (float drive, float channels)
+    {
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "satDrive", drive);
+        set (*p, "satChannels", channels);
+        p->prepareToPlay (sr, 512);
+        return renderFixed (*p, voice, 512);
+    };
+    const auto clean = sat (0.0f, 0.0f);
+    CHECK (maxAbsDiff (sat (18.0f, 2.0f), clean, settled) < 1.0e-5);   // Side: nothing to saturate
+    CHECK (maxAbsDiff (sat (18.0f, 1.0f), clean, settled) > 1.0e-2);   // Mid: the centre gets harmonics
+
+    const auto kick = testsig::sine (sr, 2, 60.0, -6.0, 1.5);
+    auto dyn = [&] (float ratio, float thr, float channels)
+    {
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "ceiling", 0.0f);
+        set (*p, "dynRatio1", ratio);
+        set (*p, "dynThr1", thr);
+        set (*p, "dynChannels", channels);
+        p->prepareToPlay (sr, 512);
+        return peakFrom (renderFixed (*p, kick, 512), 48000);
+    };
+    const double open = dyn (1.01f, 0.0f, 0.0f), side = dyn (10.0f, -40.0f, 2.0f), stereo = dyn (10.0f, -40.0f, 0.0f);   // open: running, not compressing
+    INFO ("peak: running uncompressed " << open << ", Side 10:1 " << side << ", Stereo 10:1 " << stereo);
+    CHECK (std::abs (side - open) < 1.0e-3 * open);   // Side: the centred low band isn't compressed
+    CHECK (stereo < 0.5 * open);                       // Stereo: it is
+}
+
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:
 // a function-local static would be torn down after JUCE's own shutdown objects and crash on exit.
 int main (int argc, char* argv[])

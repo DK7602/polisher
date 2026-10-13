@@ -138,7 +138,7 @@ void Saturation::prepare (double newSampleRate, int numChannels)
     reset();
 }
 
-void Saturation::startSlot (int index, SaturationFocus focus, SaturationMode mode, int warmSamples) noexcept
+void Saturation::startSlot (int index, SaturationFocus focus, SaturationMode mode, SaturationChannels channels, int warmSamples) noexcept
 {
     stopSlot (index);   // from a clean state
     auto& slot = slots[static_cast<size_t> (index)];
@@ -146,6 +146,7 @@ void Saturation::startSlot (int index, SaturationFocus focus, SaturationMode mod
     slot.warm = warmSamples;
     slot.focus = focus;
     slot.mode = mode;
+    slot.channels = channels;
 }
 
 void Saturation::stopSlot (int index) noexcept
@@ -188,7 +189,7 @@ void Saturation::reset() noexcept
     mix = effectiveMix (params);
     if (running)
     {
-        startSlot (0, params.focus, params.mode, 0);
+        startSlot (0, params.focus, params.mode, params.channels, 0);
         slots[0].dcHz = kDcStartHz;
     }
     resEnergy = sigEnergy = 0.0;
@@ -270,6 +271,30 @@ double Saturation::slotWet (const Slot& slot, SlotState& st, double x, double dc
     return st.hpY;
 }
 
+void Saturation::slotWetFrame (int index, const double* x, int nch, double* wet, double dcWeight, bool measuringDc, bool seedDc, double dcCoeff) noexcept
+{
+    const auto& slot = slots[static_cast<size_t> (index)];
+    const auto k = static_cast<size_t> (index);
+    if (slot.channels == SaturationChannels::stereo || nch < 2)
+    {
+        if (slot.channels == SaturationChannels::side && nch < 2)
+        {
+            for (int c = 0; c < nch; ++c) wet[c] = 0.0;   // mono: no side
+            return;
+        }
+        for (int c = 0; c < nch; ++c)
+            wet[c] = slotWet (slot, channelState[static_cast<size_t> (c)].slot[k], x[c], dcWeight, measuringDc, seedDc, dcCoeff);
+        return;
+    }
+    // Mid or side: the curve hears that part alone (channel 0's filters); what it adds goes back onto it.
+    const bool mid = slot.channels == SaturationChannels::mid;
+    const double part = mid ? 0.5 * (x[0] + x[1]) : 0.5 * (x[0] - x[1]);
+    const double w = slotWet (slot, channelState[0].slot[k], part, dcWeight, measuringDc, seedDc, dcCoeff);
+    wet[0] = w;
+    wet[1] = mid ? w : -w;
+    for (int c = 2; c < nch; ++c) wet[c] = 0.0;
+}
+
 void Saturation::processFrame (double* frame, int numChannels) noexcept
 {
     const int nch = std::min (numChannels, channelCount);
@@ -294,15 +319,15 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
     }
     else
     {
-        const bool curWanted = cur.is (params.focus, params.mode), otherWanted = other.is (params.focus, params.mode);
+        const bool curWanted = wanted (cur), otherWanted = wanted (other);
         if (! running)
         {
             running = true;
-            startSlot (heard, params.focus, params.mode, warmSamples);
+            startSlot (heard, params.focus, params.mode, params.channels, warmSamples);
             bend = bendTarget;
         }
         else if (! curWanted && ! otherWanted && blend == 0.0)
-            startSlot (1 - heard, params.focus, params.mode, warmSamples);   // Focus or Mode changed: warm the new one up next to this one
+            startSlot (1 - heard, params.focus, params.mode, params.channels, warmSamples);   // Focus, Mode or Channels changed: warm the new one up next to this one
         // (A change during a cross-fade lets it finish; the next one starts from there.)
 
         // Mix waits while a slot that is heard warms up (only at the start); the cross-fade waits for the
@@ -315,7 +340,7 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
             mix += (mixTarget - mix) * mixCoeff;
         if (other.active && other.warm == 0)
         {
-            const double goal = cur.is (params.focus, params.mode) ? 0.0 : 1.0;
+            const double goal = wanted (cur) ? 0.0 : 1.0;
             blend = goal > blend ? std::min (goal, blend + blendStep) : std::max (goal, blend - blendStep);
         }
         if (blend >= 1.0)
@@ -324,7 +349,7 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
             heard = 1 - heard;
             blend = 0.0;
         }
-        else if (blend <= 0.0 && other.active && cur.is (params.focus, params.mode))
+        else if (blend <= 0.0 && other.active && wanted (cur))
             stopSlot (1 - heard);   // faded back (or switched back before it was heard)
         bend += (bendTarget - bend) * glideCoeff;
     }
@@ -332,7 +357,6 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
     // The 1 Hz DC filter would need ~0.5 s to settle from cold and let the DC out as a slow thump;
     // instead it starts from the DC measured during the warm-up, as if it had been running all along.
     // Started by reset() there is no warm-up: it starts at kDcStartHz and glides down to 1 Hz.
-    const Slot& a = slots[static_cast<size_t> (heard)];
     const Slot& b = slots[static_cast<size_t> (1 - heard)];
     std::array<bool, 2> measuringDc {}, seedDc {};
     std::array<double, 2> dcWeight {}, dcCoeff {};
@@ -357,6 +381,16 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
     const double weight = blend > 0.0 && blend < 1.0 ? 0.5 - 0.5 * std::cos (std::numbers::pi * blend) : blend;
     const auto h = static_cast<size_t> (heard), o = static_cast<size_t> (1 - heard);
 
+    // What each slot adds, per channel (a mid / side slot works on that part and puts it back on L and R).
+    std::array<double, kMaxChannels> in {}, wetA {}, wetB {};
+    for (int c = 0; c < nch; ++c) in[static_cast<size_t> (c)] = frame[c];
+    if (! idle)
+    {
+        slotWetFrame (static_cast<int> (h), in.data(), nch, wetA.data(), dcWeight[h], measuringDc[h], seedDc[h], dcCoeff[h]);
+        if (b.active)
+            slotWetFrame (static_cast<int> (o), in.data(), nch, wetB.data(), dcWeight[o], measuringDc[o], seedDc[o], dcCoeff[o]);
+    }
+
     for (int c = 0; c < nch; ++c)
     {
         auto& ch = channelState[static_cast<size_t> (c)];
@@ -374,12 +408,11 @@ void Saturation::processFrame (double* frame, int numChannels) noexcept
             continue;
         }
 
-        double wet = slotWet (a, ch.slot[h], x, dcWeight[h], measuringDc[h], seedDc[h], dcCoeff[h]);
-        if (b.active)
+        double wet = wetA[static_cast<size_t> (c)];
+        if (b.active && weight > 0.0)
         {
-            const double next = slotWet (b, ch.slot[o], x, dcWeight[o], measuringDc[o], seedDc[o], dcCoeff[o]);
-            if (weight > 0.0)
-                wet = weight >= 1.0 ? next : (1.0 - weight) * wet + weight * next;
+            const double next = wetB[static_cast<size_t> (c)];
+            wet = weight >= 1.0 ? next : (1.0 - weight) * wet + weight * next;
         }
 
         resEnergy += mix * mix * wet * wet;   // what is actually added at this Mix
