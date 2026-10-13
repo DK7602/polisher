@@ -396,6 +396,9 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         set ("bassMono", static_cast<float> (c.bass.monoHz >= polisher::kBassMonoOffHz ? c.bass.monoHz : 0.0));
         set ("bassTame", static_cast<float> (c.bass.tame * 100.0));
         set ("bassPunch", static_cast<float> (c.bass.punch * 100.0));
+        // Glue: off (1:1, 0 dB). Auto-Master plans the chain without it, so its loudness plan stays right.
+        set ("glueRatio", 1.0f);
+        set ("glueGain", 0.0f);
         set ("dynOn", 1.0f);
         set ("dynAdaptive", c.dynamics.adaptiveRelease ? 1.0f : 0.0f);
         set ("dynChannels", static_cast<float> (static_cast<int> (c.dynamics.channels)));   // Stereo: Auto-Master plans on both

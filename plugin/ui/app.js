@@ -67,6 +67,16 @@ const P = {
   satFocus: Juce.getComboBoxState("satFocus"),
   satChannels: Juce.getComboBoxState("satChannels"),
   dynChannels: Juce.getComboBoxState("dynChannels"),
+  glueOn: Juce.getToggleState("glueOn"),
+  glueChar: Juce.getComboBoxState("glueChar"),
+  glueThr: Juce.getSliderState("glueThr"),
+  glueRatio: Juce.getSliderState("glueRatio"),
+  glueAtk: Juce.getSliderState("glueAtk"),
+  glueRel: Juce.getSliderState("glueRel"),
+  glueAuto: Juce.getToggleState("glueAuto"),
+  glueSc: Juce.getSliderState("glueSc"),
+  glueMix: Juce.getSliderState("glueMix"),
+  glueGain: Juce.getSliderState("glueGain"),
   satDrive: Juce.getSliderState("satDrive"),
   satMix: Juce.getSliderState("satMix"),
   ulOn: Juce.getToggleState("ulOn"),
@@ -120,7 +130,7 @@ const M = {
   // How far the music playing sits from that stored tone (dB, -1 unknown), and whether far for long (another song's?).
   tsFar: false, tsDist: -1,
   undo: "", redo: "", snaps: [{}, {}, {}, {}], snapActive: -1, snapModified: false,
-  dynGr: [0, 0, 0, 0], dynImpact: [0, 0, 0, 0], dynSustain: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], stemKeep: 0, rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
+  glueGr: 0, dynGr: [0, 0, 0, 0], dynImpact: [0, 0, 0, 0], dynSustain: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], stemKeep: 0, rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
   ulBoost: 0, ulSquash: 0, refVersion: 0, refState: 0,
   listen: 0, mono: false, phone: false, listenNow: 0, listenGain: 0, listenUnder: -100,
 };
@@ -172,6 +182,13 @@ const modules = [
     controls: [["Mono Below", "Stereo sub wastes headroom and collapses on club systems and phones."],
                ["Sub Tame", "Evens out 808 slides so the limiter doesn't grab the whole mix on long notes."],
                ["Punch", "Adds attack to the start of the kick (found by its click) without turning the 808 up."]] },
+  { id: "glue", name: "Glue", live: true, soon: "",
+    what: "One compressor for the whole mix, in three classic bus-compressor flavours: the parts move together, so the beat and the vocal sit as one.",
+    cells: [["Character", "flavour", "Bus", .5], ["Threshold", "starts at", "-20 dB", .5], ["Ratio", "how firm", "off", 0], ["Mix", "parallel", "100 %", 1]],
+    controls: [["Character", "Bus = clean, firm glue. Opto = smooth and slow. Tube = the softest."], ["Threshold", "Where it starts holding the mix down."],
+               ["Ratio", "How firmly. 2:1 is classic glue; 1:1 = off."], ["Attack", "Slow (10-30 ms) keeps the drums' punch."],
+               ["Release", "How fast it lets go; AUTO follows the music."], ["Ignore Lows", "It hears much less of the 808 below this, so the 808 doesn't pump the vocal."],
+               ["Mix", "Blend with the uncompressed mix (parallel compression)."], ["Gain", "Level after the Glue."]] },
   { id: "dyn", name: "Dynamics", live: true, soon: "",
     what: "Four-band compression: steadies the low end without ducking the vocal, and evens out section jumps gently.",
     cells: [["Crossovers", "3 splits", "120/1k/6k", .5], ["Low Ratio", "low band", "1:1", 0], ["Mid Attack", "mid band", "30 ms", .45], ["Release", "all bands", "Auto", .5]],
@@ -725,6 +742,47 @@ function dynBandCells(b) {
 const dynCellsByBand = [0, 1, 2, 3].map(dynBandCells);
 const dynCells = () => [dynPicker, ...dynCellsByBand[dynBand]];
 function dynChannelsAt() { return clamp(Math.round(P.dynChannels.value * 2), 0, 2); }
+
+// Glue cells: one bus compressor for the whole mix.
+const GLUE_CHARS = ["Bus", "Opto", "Tube"];
+const glueCharAt = () => clamp(Math.round(P.glueChar.value * 2), 0, 2);
+const glueRatioAt = () => P.glueRatio.getScaledValue();
+const glueGainAt = () => P.glueGain.getScaledValue();
+const glueIsNeutral = () => glueRatioAt() <= 1.005 && Math.abs(glueGainAt()) < 0.05;
+const fmtIgnore = (v) => (v <= 20.5 ? "off" : `${Math.round(v)} Hz`);
+function glueReleaseCell() {
+  const cell = liveKnobCell({ label: "Release", sub: "let go", state: P.glueRel, def: 300, minText: "50", maxText: "1200", fmt: fmtMs });
+  cell.classList.add("glue-rel");
+  const pill = document.createElement("button");
+  pill.type = "button";
+  pill.className = "pill mono ms-btn glue-auto";
+  const pillRefresh = () => {
+    const on = !!P.glueAuto.getValue();
+    pill.textContent = on ? "AUTO" : "FIXED";
+    pill.classList.toggle("pill-red", on);
+    pill.classList.toggle("pill-blue", !on);
+    pill.title = on ? "Auto: lets go quickly after short peaks, at the Release time on long loud passages. Click for Fixed."
+                    : "Fixed: always lets go at the Release time. Click for Auto.";
+  };
+  pill.addEventListener("click", () => { P.glueAuto.setValue(!P.glueAuto.getValue()); pillRefresh(); onParamsChanged(); userEdited(); renderLearn(); });
+  P.glueAuto.valueChangedEvent.addListener(pillRefresh);
+  pillRefresh();
+  cell.appendChild(pill);
+  const knobRefresh = cell.refresh;
+  cell.refresh = () => { knobRefresh(); pillRefresh(); };
+  return cell;
+}
+const glueCells = [
+  segCell({ label: "Character", sub: "flavour", state: P.glueChar, labels: GLUE_CHARS, notes: ["clean · firm", "smooth · slow", "softest · round"] }),
+  liveKnobCell({ label: "Threshold", sub: "starts at", state: P.glueThr, def: -20, minText: `${MINUS}40`, maxText: "0", fmt: (v) => `${fmtNum(v, 1)} dB` }),
+  liveKnobCell({ label: "Ratio", sub: "how firm", state: P.glueRatio, def: 1, minText: "1:1", maxText: "10:1", fmt: (v) => (v <= 1.005 ? "off" : `${v.toFixed(1)}:1`) }),
+  liveKnobCell({ label: "Attack", sub: "grab speed", state: P.glueAtk, def: 10, minText: "0.1", maxText: "30", fmt: fmtMs }),
+  glueReleaseCell(),
+  liveKnobCell({ label: "Ignore Lows", sub: "keeps 808 out", state: P.glueSc, def: 90, minText: "off", maxText: "250", fmt: fmtIgnore }),
+  liveKnobCell({ label: "Mix", sub: "parallel", state: P.glueMix, def: 100, minText: "dry", maxText: "wet", fmt: (v) => `${Math.round(v)} %` }),
+  liveKnobCell({ label: "Gain", sub: "after glue", state: P.glueGain, def: 0, minText: `${MINUS}12`, maxText: "+12", fmt: fmtSigned }),
+  barCell({ label: "Reduction", sub: "glue amount", minText: "0", maxText: `${MINUS}12 dB`, id: "gluemeter" }),
+];
 function satChannelsAt() { return clamp(Math.round(P.satChannels.value * 2), 0, 2); }
 
 // Saturation cells
@@ -915,12 +973,13 @@ function renderModule() {
   const row = $("knob-row");
   row.innerHTML = "";
   row.classList.toggle("dyn", m.id === "dyn");
+  row.classList.toggle("glue", m.id === "glue");
   $("module-name").textContent = m.name.toUpperCase();
   $("soon-badge").hidden = !!m.live;
   $("btn-bypass").hidden = !m.live;
   if (m.live) {
     row.classList.remove("soon");
-    ({ ul: ulCells, clip: clipperCells, eq: eqCells, stem: stemCells, ts: tsCells, rt: rtCells, bass: bassCells, dyn: dynCells(), img: imagerCells, sat: satCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
+    ({ ul: ulCells, clip: clipperCells, eq: eqCells, stem: stemCells, ts: tsCells, rt: rtCells, bass: bassCells, glue: glueCells, dyn: dynCells(), img: imagerCells, sat: satCells, max: maximizerCells })[m.id].forEach((c) => row.appendChild(c));
     $("module-note").textContent = "Live · drag · dbl-click number = type";
     refreshHeadButton();
   } else {
@@ -1131,6 +1190,7 @@ function renderLearnBody() {
   if (m.id === "eq") { renderEqLearn(body); liftWarning(body); prependAmSection(body, "eq"); return; }
   if (m.id === "bass") { renderBassLearn(body); liftWarning(body); prependAmSection(body, "bass"); return; }
   if (m.id === "img") { renderImagerLearn(body); liftWarning(body); prependAmSection(body, "img"); return; }
+  if (m.id === "glue") { renderGlueLearn(body); liftWarning(body); prependAmSection(body, "glue"); return; }
   if (m.id === "dyn") { renderDynLearn(body); liftWarning(body); prependAmSection(body, "dyn"); return; }
   if (m.id === "sat") { renderSatLearn(body); liftWarning(body); prependAmSection(body, "sat"); return; }
   if (m.id === "ul") { renderUlLearn(body); liftWarning(body); prependAmSection(body, "ul"); return; }
@@ -1183,7 +1243,7 @@ function renderLearnBody() {
   body.appendChild(item("Input Trim", `${fmtNum(trim, 1)} dB`,
     trim > -0.05
       ? "Your mix goes into the chain as it is. Auto-Master turns this down only when the master would otherwise land above your target."
-      : `Turns your mix down ${fmtNum(-trim, 1)} dB before the whole chain (all 11 modules). Drive can only push up; this is how Polisher masters a mix that would otherwise land above your target. A (bypass) ignores it.`));
+      : `Turns your mix down ${fmtNum(-trim, 1)} dB before the whole chain (all 12 modules). Drive can only push up; this is how Polisher masters a mix that would otherwise land above your target. A (bypass) ignores it.`));
   body.appendChild(item("Ceiling", `${fmtNum(ceiling, 1)} dBTP`,
     `Nothing leaves Polisher above ${fmtNum(ceiling, 1)} dBTP on the true-peak meter streaming services use (it counts peaks between samples too). ` +
     (ceiling > -0.95 ? "Above −1 dBTP, the MP3/AAC versions streaming services make are likely to clip. −1.0 is the usual choice; for loud masters (around −9 LUFS and louder) −1.5 (what Auto-Master sets for Loud and Club) to −2 (Spotify's advice) is safer."
@@ -1449,6 +1509,49 @@ function renderDynLearn(body) {
     body.appendChild(tip("TRY THIS", "Kick not hitting? On the LOW band, set Impact to +30 % and compare with MATCH: the kick's thump gets harder without making the beat louder. 808s blurring together? LOW band Sustain −30 % tightens them; +30 % makes them longer and fuller.", true));
   else
     body.appendChild(tip("TRY THIS", "On the LOW band: Ratio 2:1, Attack 30 ms, then lower the Threshold until the band pulls 1 to 2 dB on the kick and 808. The low end gets steadier without ducking the vocal. Compare with MATCH on.", true));
+}
+
+function renderGlueLearn(body) {
+  const on = !!P.glueOn.getValue(), bypassed = !!P.bypass.getValue();
+  const playing = performance.now() - lastAudioTime < 1500;
+  const ci = glueCharAt(), ratio = glueRatioAt(), thr = P.glueThr.getScaledValue(), atk = P.glueAtk.getScaledValue(), rel = P.glueRel.getScaledValue();
+  const auto = !!P.glueAuto.getValue(), sc = P.glueSc.getScaledValue(), mix = P.glueMix.getScaledValue(), gain = glueGainAt(), gr = M.glueGr || 0;
+  // The times the character really uses (dsp GlueCompressor kVoices): Opto grabs no faster than 10 ms and lets
+  // go 1.5x slower; Tube grabs 1.5x slower (at least 1 ms) and lets go 1.3x slower.
+  const atkReal = [Math.max(0.1, atk), Math.max(10, atk), Math.max(1, atk * 1.5)][ci], relReal = rel * [1, 1.5, 1.3][ci];
+  body.appendChild(head("WHAT'S HAPPENING"));
+  body.appendChild(para("l-p", bypassed ? "You're on A: the original mix, untouched. Switch to B to hear the chain."
+    : !on ? "Glue is off, so the mix passes through untouched."
+    : ratio <= 1.005 ? (Math.abs(gain) >= 0.05 ? `Ratio is 1:1, so Glue only changes the level (${fmtSigned(gain)}). Set Ratio to 2:1 to start gluing.`
+                                                : "Ratio is 1:1, so Glue isn't touching the sound. Set Ratio to 2:1, then lower Threshold until the Reduction meter shows 1–2 dB on the loudest parts.")
+    : !playing ? "Press play to see how much Glue is holding the mix down."
+    : gr > -0.3 ? "The mix is under the threshold right now, so Glue is barely working. Lower Threshold until the meter shows 1–2 dB on the loud parts."
+    : `Glue is holding the mix down by ${fmtNum(-gr, 1)} dB${gr < -4 ? ": a lot for glue, the beat may lose its bounce (1–2 dB is the usual amount)" : gr < -2.5 ? ": firm glue, check with MATCH that the kick still punches" : ": gentle glue, the usual amount"}.`));
+  body.appendChild(sep());
+  body.appendChild(head("WHAT EACH CONTROL IS DOING"));
+  body.appendChild(item("Character", GLUE_CHARS[ci], ["Bus: a clean, firm bus compressor, the classic glue on a hip-hop mix. It pulls the drums and the vocal together without colouring them.",
+    "Opto: smooth and slow. It never grabs faster than about 10 ms and lets go gently, so it evens out the level and leaves the hits mostly alone.",
+    "Tube: the softest. It starts working well under the threshold and firms up gently as the music gets louder: the most transparent way to add a little density."][ci]));
+  body.appendChild(item("Threshold", `${fmtNum(thr, 1)} dB`, "Where it starts holding the mix down. Lower = more of the music is compressed."));
+  body.appendChild(item("Ratio", ratio <= 1.005 ? "off" : `${ratio.toFixed(1)}:1`, ratio <= 1.005 ? "1:1: no compression."
+    : ratio <= 2.5 ? "Classic glue: the mix moves as one without being flattened."
+    : ratio <= 4.5 ? "Firm: the mix gets noticeably denser. Keep Attack slow so the drums still punch."
+    : "Heavy for a whole mix: it will sound squashed unless Mix is low (parallel compression)."));
+  body.appendChild(item("Attack", fmtMs(atk), (Math.abs(atkReal - atk) > 0.05 ? `${GLUE_CHARS[ci]} works this like ${fmtMs(atkReal)}${ci === 1 ? " (it never grabs faster than about 10 ms)" : ""}. ` : "")
+    + (atkReal >= 10 ? "Slow: the start of each kick and snare gets through before Glue grabs, so the drums keep their punch."
+      : atkReal >= 3 ? "Medium: catches part of each hit." : "Fast: grabs the hits themselves; smoother but less punchy, and it can roughen the 808.")));
+  body.appendChild(item("Release", auto ? `${fmtMs(rel)} · auto` : fmtMs(rel), (ci > 0 ? `${GLUE_CHARS[ci]} lets go a little slower, about ${fmtMs(relReal)}. ` : "")
+    + (auto ? "Auto: lets go quickly after a short peak, at the Release time on long loud passages. " : "")
+    + (relReal <= 150 ? "Fast: recovers between beats; it can pump audibly." : relReal <= 500 ? "Medium: breathes with the beat, the usual glue setting." : "Slow: steady, evens out whole sections.")));
+  body.appendChild(item("Ignore Lows", fmtIgnore(sc), sc <= 20.5 ? "Off: the 808 and kick drive the compressor, so every 808 note can pull the vocal and hats down (pumping). Try 90 Hz."
+    : sc < 60 ? `Low: only the deepest sub (under ${Math.round(sc)} Hz) is kept out, so a loud 808 can still pump the vocal. 80–120 Hz keeps the 808 out.`
+    : `The compressor hears the lows under ${Math.round(sc)} Hz much quieter (24 dB per octave), so the 808 and kick don't pump the rest of the mix. They are still turned down along with everything else.`));
+  body.appendChild(item("Mix", `${Math.round(mix)} %`, mix >= 99.5 ? "Fully compressed sound."
+    : `Parallel compression: ${Math.round(mix)} % compressed blended with the uncompressed mix, so the hits stay sharp while the quieter parts come up.`));
+  body.appendChild(item("Gain", fmtSigned(gain), Math.abs(gain) < 0.05 ? "No level change. Compressing makes the mix a little quieter: raise the Maximizer's Drive by about the reduction to keep your loudness."
+    : gain > 0 ? "Turns the mix up after Glue. Compare with MATCH: louder always sounds better." : "Turns the mix down after Glue."));
+  if (on && !bypassed && ratio > 1.005)
+    body.appendChild(tip("TRY THIS", "Bus, Ratio 2:1, Attack 10 ms, Release AUTO, Ignore Lows 90 Hz: lower Threshold until the meter shows 1–2 dB on the hook. Compare with MATCH: B should sound more together, not smaller.", true));
 }
 
 function renderSatLearn(body) {
@@ -2059,7 +2162,7 @@ function refreshAB() {
 // bypass (A). Every live module except the Maximizer must be listed here.
 const HEAD_POWER = { ul: [P.ulOn, "UNLIMITER"], eq: [P.eqOn, "EQ"], stem: [P.stemOn, "STEM EQ"], ts: [P.tsOn, "TONE STEADY"],
                      rt: [P.rtOn, "TAMER"], bass: [P.bassOn, "BASS"], dyn: [P.dynOn, "DYNAMICS"], img: [P.imgOn, "IMAGER"],
-                     sat: [P.satOn, "SAT"], clip: [P.clipOn, "CLIPPER"] };
+                     sat: [P.satOn, "SAT"], clip: [P.clipOn, "CLIPPER"], glue: [P.glueOn, "GLUE"] };
 function refreshHeadButton() {
   const bp = $("btn-bypass");
   const power = HEAD_POWER[selected];
@@ -2467,7 +2570,7 @@ async function fetchReport(openIt) {
 }
 // Knobs show values pushed by the plug-in; after Auto-Master or Undo, redraw them all.
 function refreshAllCells() {
-  for (const c of [...maximizerCells, ...clipperCells, ...eqCells, ...bassCells, ...imagerCells, dynPicker, ...dynCellsByBand.flat(), ...satCells]) if (c.refresh) c.refresh();
+  for (const c of [...maximizerCells, ...clipperCells, ...eqCells, ...bassCells, ...imagerCells, dynPicker, ...dynCellsByBand.flat(), ...satCells, ...glueCells]) if (c.refresh) c.refresh();
   onParamsChanged();
 }
 
@@ -2905,7 +3008,7 @@ function renderSnapLearn(body) {
   body.appendChild(para("l-p", `The arrows at the top step back and forward through your changes, one at a time: a knob move, a switch, a typed value, an Auto-Master run, Apply, a snapshot. Point at an arrow to see what it will undo. ${IS_MAC ? "⌘Z undoes, ⇧⌘Z redoes" : "Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes"} (click inside Polisher first, or Cubase takes the keys). The last 100 steps are kept while Polisher's window is closed, but not when you close the project. Automation from Cubase is never in the list.`));
 }
 
-const AM_MODULES = [["ul", "UNLIMITER"], ["eq", "TONAL EQ"], ["stem", "STEM EQ"], ["ts", "TONE STEADY"], ["rt", "RESONANCE TAMER"], ["bass", "BASS CONTROL"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
+const AM_MODULES = [["ul", "UNLIMITER"], ["eq", "TONAL EQ"], ["stem", "STEM EQ"], ["ts", "TONE STEADY"], ["rt", "RESONANCE TAMER"], ["bass", "BASS CONTROL"], ["glue", "GLUE"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
 function notesAsTips(body) {
   for (const raw of amReport.notes || []) {
     // "TITLE: text" plus optional lines "NEED: …" and "STEP: …" (the plan).
@@ -2976,6 +3079,7 @@ function paramValue(id) {
   const map = { drive: P.drive, inTrim: P.inTrim, ceiling: P.ceiling, release: P.release, clipLevel: P.clipLevel, clipSoftness: P.clipSoftness,
                 bassMono: P.bassMono, bassTame: P.bassTame, bassPunch: P.bassPunch,
                 imgLow: P.imgLow, imgMid: P.imgMid, imgHigh: P.imgHigh, satDrive: P.satDrive, satMix: P.satMix, maxBassFirst: P.maxBassFirst,
+                glueThr: P.glueThr, glueRatio: P.glueRatio, glueAtk: P.glueAtk, glueRel: P.glueRel, glueSc: P.glueSc, glueMix: P.glueMix, glueGain: P.glueGain,
                 ulAmount: P.ulAmount, ulLength: P.ulLength, tsAmount: P.tsAmount, tsRange: P.tsRange, rtAmount: P.rtAmount, rtSens: P.rtSens, rtRelease: P.rtRelease,
                 stemVoc: P.stemGain[0], stemDrums: P.stemGain[1], stemBass: P.stemGain[2], stemOther: P.stemGain[3] };
   const band = /^dyn(X|Thr|Ratio|Atk|Rel|Gain|Impact|Sustain)(\d)$/.exec(id);
@@ -2983,18 +3087,20 @@ function paramValue(id) {
   if (id === "satMode") return satModeIndex();
   if (id === "satFocus") return satFocusIndex();
   if (id === "satChannels") return satChannelsAt();
+  if (id === "glueChar") return glueCharAt();
   if (id === "dynChannels") return dynChannelsAt();
   if (id === "tsSpeed") return comboIndex(P.tsSpeed);
   if (id === "ulFocus") return comboIndex(P.ulFocus);
   if (id === "rtFocus") return comboIndex(P.rtFocus);
   if (map[id]) return map[id].getScaledValue();
   const toggles = { eqOn: P.eqOn, bassOn: P.bassOn, clipOn: P.clipOn, adaptive: P.adaptive, bypass: P.bypass,
-                    dynOn: P.dynOn, dynAdaptive: P.dynAdaptive, imgOn: P.imgOn, satOn: P.satOn, tsOn: P.tsOn, rtOn: P.rtOn, ulOn: P.ulOn };
+                    dynOn: P.dynOn, dynAdaptive: P.dynAdaptive, imgOn: P.imgOn, satOn: P.satOn, tsOn: P.tsOn, rtOn: P.rtOn, ulOn: P.ulOn,
+                    glueOn: P.glueOn, glueAuto: P.glueAuto };
   if (toggles[id]) return toggles[id].getValue() ? 1 : 0;
   if (id === "clipOversampling") return osIndex();
   return null;
 }
-const MODULE_PARAMS = { ul: /^ul/, stem: /^stem/, ts: /^ts/, rt: /^rt/, eq: /^eq/, bass: /^bass/, dyn: /^dyn/, img: /^img/, sat: /^sat/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive|inTrim|maxBassFirst)$/ };
+const MODULE_PARAMS = { ul: /^ul/, stem: /^stem/, ts: /^ts/, rt: /^rt/, eq: /^eq/, bass: /^bass/, glue: /^glue/, dyn: /^dyn/, img: /^img/, sat: /^sat/, clip: /^clip/, max: /^(drive|ceiling|release|adaptive|inTrim|maxBassFirst)$/ };
 function moduleUnchanged(module) {
   const values = (amReport && amReport.values) || {};
   return Object.entries(values).every(([id, v]) => {
@@ -3129,6 +3235,8 @@ function updateLiveReadouts() {
                    : selected === "eq" ? (!eqEnabled() ? "OFF" : eqIsFlat() ? "FLAT" : "SHAPING")
  : selected === "img" ? (!P.imgOn.getValue() ? "OFF" : `CORR ${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`)
                    : selected === "dyn" ? (!P.dynOn.getValue() ? "OFF" : dynIsNeutral() ? "1:1" : `GR ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`)
+                   : selected === "glue" ? (!P.glueOn.getValue() ? "OFF" : glueIsNeutral() ? "1:1" : glueRatioAt() <= 1.005 ? `GAIN ${fmtSigned(glueGainAt())}`
+                                            : `GR ${(M.glueGr || 0) > -0.05 ? "0.0" : fmtNum(M.glueGr)} dB`)
                    : selected === "sat" ? (!P.satOn.getValue() ? "OFF" : satIsNeutral() ? "CLEAN" : SAT_MODES[satModeIndex()].toUpperCase() + SAT_FOCUS_TAG[satFocusIndex()])
                    : selected === "ul" ? (!P.ulOn.getValue() ? "OFF" : ulIsNeutral() ? "IDLE" : !M.ulSquash ? "LISTENING" : (M.ulBoost || 0) < 0.3 ? "RESTING" : `LIFT +${fmtNum(M.ulBoost)} dB`)
                    : selected === "ts" ? (!P.tsOn.getValue() ? "OFF" : tsIsNeutral() ? "IDLE" : Math.abs(M.tsDb || 0) < 0.3 ? "RESTING" : `STEADY ${fmtNum(M.tsDb)} dB`)
@@ -3168,6 +3276,16 @@ function updateLiveReadouts() {
   if (rd) rd.textContent = P.bypass.getValue() ? "Bypassed" : !P.dynOn.getValue() ? "Off" : dynIsNeutral() ? neutralText("dyn")
     : `${[0, 1, 2, 3].filter(dynBandActive).length} band${[0, 1, 2, 3].filter(dynBandActive).length > 1 ? "s" : ""} \u00b7 ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB${["", " \u00b7 mid", " \u00b7 side"][dynChannelsAt()]}`;
   if (selected === "dyn") dynPicker.refresh();
+  const rg = $("read-glue");
+  if (rg) rg.textContent = P.bypass.getValue() ? "Bypassed" : !P.glueOn.getValue() ? "Off" : glueIsNeutral() ? neutralText("glue")
+    : glueRatioAt() <= 1.005 ? `Level ${fmtSigned(glueGainAt())}` : `${GLUE_CHARS[glueCharAt()]} ${glueRatioAt().toFixed(1)}:1 \u00b7 ${(M.glueGr || 0) > -0.05 ? "0.0" : fmtNum(M.glueGr)} dB`;
+  const gf = $("gluemeter-fill");
+  if (gf) {
+    const active = P.glueOn.getValue() && !glueIsNeutral() && !P.bypass.getValue();
+    const g = active ? Math.min(0, M.glueGr || 0) : 0;
+    gf.style.width = (clamp(-g / 12, 0, 1) * 100).toFixed(1) + "%";
+    $("gluemeter-val").textContent = !active ? "off" : g > -0.05 ? "0.0 dB" : `${fmtNum(g, 1)} dB`;
+  }
   const rul = $("read-ul");
   if (rul) rul.textContent = P.bypass.getValue() ? "Bypassed" : !P.ulOn.getValue() ? "Off" : ulIsNeutral() ? neutralText("ul")
     : `${Math.round(ulAmountAt())} % \u00b7 ${UL_FOCUS[comboIndex(P.ulFocus)]}`;
@@ -3283,7 +3401,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   $("sp-master").setAttribute("d", master);
   $("sp-master-glow").setAttribute("d", master);
 });
-setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "dyn", "sat", "stem", "ts", "rt", "ul"].includes(selected)) renderLearn(); }, 1000);
+setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "glue", "dyn", "sat", "stem", "ts", "rt", "ul"].includes(selected)) renderLearn(); }, 1000);
 // The history's Learn page follows the graph, but only as often as a new point can change it.
 let histLearnAt = 0;
 function scheduleHistLearn() { const now = performance.now(); if (now - histLearnAt > 1000) { histLearnAt = now; renderLearn(); } }

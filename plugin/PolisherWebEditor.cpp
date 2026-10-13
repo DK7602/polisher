@@ -471,6 +471,11 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("refVersion", audioProcessor.reference.getVersion());
     frame->setProperty ("refState",   static_cast<int> (audioProcessor.reference.getState()));
     frame->setProperty ("corr",       roundTo (m.correlation.load(), 0.01f));
+    {
+        const float g = m.glueGr.exchange (0.0f);
+        glueHold = g < glueHold ? g : glueHold * 0.8f + g * 0.2f;
+        frame->setProperty ("glueGr", roundTo (glueHold, 0.1f));
+    }
     juce::Array<juce::var> dynGr;
     for (size_t b = 0; b < dynHold.size(); ++b)
     {

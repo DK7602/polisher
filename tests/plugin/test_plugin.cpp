@@ -1,4 +1,4 @@
-// Plug-in-level checks: the real PolisherAudioProcessor (all eleven modules, parameters, MATCH,
+// Plug-in-level checks: the real PolisherAudioProcessor (all twelve modules, parameters, MATCH,
 // latency reporting, state) driven the way a DAW drives it. The engine tests check each module on
 // its own; these check what only shows up in the assembled plug-in: block sizes, offline export,
 // host delay compensation, sample-rate changes, allocation on the audio thread, saved state.
@@ -864,6 +864,13 @@ TEST_CASE ("Listen: each delta lines up with the master to the sample, and is si
         CHECK (err < 1.0e-5);
         CHECK (peakFrom (l1, settle) > 0.01);
         CHECK (peakFrom (heard (mix, L::tamerRemoved, nullptr), settle) == 0.0);   // Amount 0: nothing cut
+        // Glue comes after the tamer: its gain reaches the cut as it reaches the master (here a plain -6 dB).
+        const Setup glued = [] (auto& p) { set (p, "rtAmount", 100.0f); set (p, "glueGain", -6.0f); };
+        const auto m2 = masterOf (mix, glued), l2 = heard (mix, L::tamerRemoved, glued);
+        const double g = std::pow (10.0, -6.0 / 20.0);
+        const double err2 = worstError (l2, 1.0, m2, settle, [&] (int c, int i) { return i >= latency ? g * mix.channels[(size_t) c][(size_t) (i - latency)] : 0.0; });
+        INFO ("with Glue -6 dB: listen + master - mix at -6 dB: " << err2);
+        CHECK (err2 < 1.0e-5);
     }
     SECTION ("Maximizer: removed = aligned limiter input minus output")
     {
@@ -2814,6 +2821,37 @@ TEST_CASE ("Plug-in: Saturation and Dynamics Channels reach the engine (a centre
     INFO ("peak: running uncompressed " << open << ", Side 10:1 " << side << ", Stereo 10:1 " << stereo);
     CHECK (std::abs (side - open) < 1.0e-3 * open);   // Side: the centred low band isn't compressed
     CHECK (stereo < 0.5 * open);                       // Stereo: it is
+}
+
+TEST_CASE ("Plug-in: Glue reaches the engine (compresses, ignores the lows when told, off and A leave the sound alone)", "[plugin][glue]")
+{
+    const double sr = 48000.0;
+    auto peakAfter = [&] (const AudioClip& in, std::function<void (PolisherAudioProcessor&)> setup)
+    {
+        auto p = makeProcessor (sr, 512, false);
+        set (*p, "ceiling", 0.0f);
+        setup (*p);
+        p->prepareToPlay (sr, 512);
+        return peakFrom (renderFixed (*p, in, 512), 48000);
+    };
+    const auto vocal = testsig::sine (sr, 2, 1000.0, -6.0, 1.5);
+    const double open = peakAfter (vocal, [] (auto&) {});
+    const double squeezed = peakAfter (vocal, [] (auto& p) { set (p, "glueRatio", 4.0f); set (p, "glueThr", -30.0f); });
+    const double off = peakAfter (vocal, [] (auto& p) { set (p, "glueRatio", 4.0f); set (p, "glueThr", -30.0f); set (p, "glueOn", 0.0f); });
+    const double onA = peakAfter (vocal, [] (auto& p) { set (p, "glueRatio", 4.0f); set (p, "glueThr", -30.0f); set (p, "bypass", 1.0f); });
+    INFO ("peak: open " << open << ", Glue 4:1 at -30 " << squeezed << ", Glue off " << off << ", on A " << onA);
+    CHECK (squeezed < 0.2 * open);   // ~18 dB of reduction
+    CHECK (off == open);
+    CHECK (onA == open);
+
+    // Ignore Lows at its default (90 Hz): a 50 Hz 808 alone barely moves it; with Ignore Lows off it is squeezed.
+    const auto sub = testsig::sine (sr, 2, 50.0, -6.0, 1.5);
+    const double subOpen = peakAfter (sub, [] (auto&) {});
+    const double ignored = peakAfter (sub, [] (auto& p) { set (p, "glueRatio", 4.0f); set (p, "glueThr", -20.0f); });
+    const double heard = peakAfter (sub, [] (auto& p) { set (p, "glueRatio", 4.0f); set (p, "glueThr", -20.0f); set (p, "glueSc", 20.0f); });
+    INFO ("808 peak: open " << subOpen << ", ignoring lows " << ignored << ", hearing them " << heard);
+    CHECK (ignored > 0.85 * subOpen);
+    CHECK (heard < 0.5 * subOpen);
 }
 
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:

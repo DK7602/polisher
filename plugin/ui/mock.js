@@ -37,6 +37,13 @@
   sliders.maxBassFirst = { start: 0, end: 100, skew: 1, interval: 1, value: 0, label: "%" };
   sliders.satDrive = { start: 0, end: 18, skew: 1, interval: 0.1, value: 0, label: "dB" };
   sliders.satMix = { start: 0, end: 100, skew: 1, interval: 0.1, value: 100, label: "%" };
+  sliders.glueThr = { start: -40, end: 0, skew: 1, interval: 0.1, value: -20, label: "dB" };
+  sliders.glueRatio = { start: 1, end: 10, skew: 0.5, interval: 0.01, value: 1, label: "" };
+  sliders.glueAtk = { start: 0.1, end: 30, skew: 0.4, interval: 0.1, value: 10, label: "ms" };
+  sliders.glueRel = { start: 50, end: 1200, skew: 0.5, interval: 1, value: 300, label: "ms" };
+  sliders.glueSc = { start: 20, end: 250, skew: 0.58, interval: 1, value: 90, label: "Hz" };
+  sliders.glueMix = { start: 0, end: 100, skew: 1, interval: 0.1, value: 100, label: "%" };
+  sliders.glueGain = { start: -12, end: 12, skew: 1, interval: 0.1, value: 0, label: "dB" };
   sliders.bassMono = { start: 0, end: 250, skew: 1, interval: 1, value: 0, label: "Hz" };
   sliders.bassTame = { start: 0, end: 100, skew: 1, interval: 0.1, value: 0, label: "%" };
   sliders.bassPunch = { start: 0, end: 100, skew: 1, interval: 0.1, value: 0, label: "%" };
@@ -48,7 +55,7 @@
   sliders.rtSens = { start: 0, end: 100, skew: 1, interval: 0.1, value: 50, label: "%" };
   sliders.rtRelease = { start: 20, end: 300, skew: 0.5, interval: 1, value: 80, label: "ms" };
   for (const k of ["stemVoc", "stemDrums", "stemBass", "stemOther"]) sliders[k] = { start: -12, end: 12, skew: 1, interval: 0.1, value: 0, label: "dB" };
-  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true, eqOn: true, bassOn: true, levelMatch: false, imgOn: true, dynOn: true, dynAdaptive: true, satOn: true, stemOn: true, stemKeep: true, tsOn: true, rtOn: true, ulOn: true };
+  const toggles = { adaptive: true, bypass: false, autoreset: true, clipOn: true, resetOnChange: true, eqOn: true, bassOn: true, levelMatch: false, imgOn: true, dynOn: true, dynAdaptive: true, satOn: true, stemOn: true, stemKeep: true, tsOn: true, rtOn: true, ulOn: true, glueOn: true, glueAuto: true };
   const combos = {
     clipOversampling: { choices: ["1x", "2x", "4x", "8x"], value: 2 / 3 },
     satMode: { choices: ["Tape", "Tube", "Clip"], value: 0 },
@@ -59,6 +66,7 @@
     maxDither: { choices: ["Off", "16-bit", "24-bit"], value: 0 },
     satChannels: { choices: ["Stereo", "Mid", "Side"], value: 0 },
     dynChannels: { choices: ["Stereo", "Mid", "Side"], value: 0 },
+    glueChar: { choices: ["Bus", "Opto", "Tube"], value: 0 },
     ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map((b) => ["eqMode" + b, { choices: ["Stereo", "Mid", "Side"], value: 0 }])),
     amGenre: { choices: ["Trap / Hip-Hop", "R&B", "Pop", "EDM", "Rock", "Acoustic"], value: 0 },
     amIntensity: { choices: ["Gentle", "Balanced", "Punchy"], value: 0.5 },
@@ -139,6 +147,8 @@
   const NAMES = { drive: "Drive", ceiling: "Ceiling", release: "Release", inTrim: "Input Trim", adaptive: "Adaptive Release",
                   clipOn: "Clipper On", clipLevel: "Clip Level", clipSoftness: "Clipper Softness", clipOversampling: "Clipper Oversampling",
                   satOn: "Saturation On", satMode: "Saturation Mode", satFocus: "Saturation Focus", satDrive: "Saturation Drive", satMix: "Saturation Mix", maxBassFirst: "Bass First", maxDither: "Dither", satChannels: "Saturation Channels", dynChannels: "Dynamics Channels",
+                  glueOn: "Glue On", glueChar: "Glue Character", glueThr: "Glue Threshold", glueRatio: "Glue Ratio", glueAtk: "Glue Attack", glueRel: "Glue Release",
+                  glueAuto: "Glue Auto Release", glueSc: "Glue Ignore Lows", glueMix: "Glue Mix", glueGain: "Glue Gain",
                   stemOn: "Stem EQ On", stemKeep: "Stem EQ Keep Loudness", stemVoc: "Stem EQ Vocals", stemDrums: "Stem EQ Drums", stemBass: "Stem EQ Bass", stemOther: "Stem EQ Other",
                   bassOn: "Bass On", bassMono: "Bass Mono Below", bassTame: "Bass Sub Tame", bassPunch: "Bass Punch", eqOn: "EQ On", imgOn: "Imager On",
                   imgLow: "Imager Low Width", imgMid: "Imager Mid Width", imgHigh: "Imager High Width", ulOn: "Unlimiter On", dynOn: "Dynamics On", tsOn: "Tone Steady On", rtOn: "Resonance Tamer On" };
@@ -433,6 +443,8 @@
       undo: undoLabel(), redo: redoLabel(), ...snapStatus(),
       refVersion: ref.version, refState: ref.state,
       clip: toggles.clipOn && !bypass ? +(-Math.max(0, drive - 1.5 + sliders.clipLevel.value * -0.5) * 0.5 * (0.3 + 0.7 * beat)).toFixed(1) : 0,
+      glueGr: toggles.glueOn && !bypass && sliders.glueRatio.value > 1.005
+        ? +(-Math.max(0, base + 6 + 4 * beat - sliders.glueThr.value) * (1 - 1 / sliders.glueRatio.value) * 0.4).toFixed(1) : 0,
       dynGr: [1, 2, 3, 4].map((b) => {
         const r = sliders["dynRatio" + b].value;
         const over = Math.max(0, base + 8 + 6 * beat - sliders["dynThr" + b].value - 6 * b);

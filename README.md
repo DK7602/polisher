@@ -12,7 +12,7 @@ meters only) with a button to Microsoft's free download page; install it and reo
 
 User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (also inside the plug-in: Quick Help > Open the full manual).
 
-## Status — v0.23.0
+## Status — v0.24.0
 
 | Piece | State |
 | --- | --- |
@@ -32,6 +32,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | MATCH never boosts (the louder side is turned down) and gives a clipping original headroom, so A doesn't distort the interface | Done (v0.8.2) |
 | Dynamics: 4-band compressor (LR4 splits, zero latency, per-band threshold / ratio / attack / release / gain, program-dependent release, per-band reduction meters, Learn) | Done (v0.9) |
 | Dynamics Impact: per-band transient shaping (−100…+100 %), loudness kept per band, steady sound untouched | Done (v0.17) |
+| Glue (module 07): one bus compressor for the whole mix in three vintage flavours (Bus / Opto / Tube: knee, detector, timing), Ignore Lows sidechain high-pass, Auto release, parallel Mix, Gain, zero latency, exact pass-through at 1:1 | Done (v0.24) |
 | Shoot-out kit: Blind Test checks the masters were made at the same loudness (names the one to push and by how much) and and the same ceiling (names the file to change and by how much, matched to polisher.wav), and adds measurements to the answer key (kick / snare punch, range, width, bass width, 6-band tone balance); manual guide for Polisher vs Ozone 12 / TDR Limiter 6 GE / LoudMax | Done (v0.23) |
 | Mid / side on Dynamics (Channels: Stereo / Mid only / Side only, all bands, click-free switch) and Saturation (Channels: Stereo / Mid / Side, works with Focus) | Done (v0.22) |
 | Saturation Focus Highs only (sheen above 4 kHz) and Bass + Highs (808 + hats, mids clean), each with its own split and oversampling | Done (v0.21) |

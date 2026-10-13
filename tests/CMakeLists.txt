@@ -16,6 +16,7 @@ add_executable(polisher_tests
     test_automaster.cpp
     test_imager.cpp
     test_dynamics.cpp
+    test_glue.cpp
     test_levelmatch.cpp
     test_saturation.cpp
     test_stemeq.cpp

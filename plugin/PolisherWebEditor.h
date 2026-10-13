@@ -113,6 +113,7 @@ private:
     Analyser mixAnalyser, masterAnalyser;
     float grHold = 0.0f, clipHold = 0.0f, tameHold = 0.0f, punchHold = 0.0f, bassCutHold = 0.0f;
     std::array<float, polisher::kDynBands> dynHold {}, impactHold {}, sustainHold {};
+    float glueHold = 0.0f;
     double satResHold = 0.0, satSigHold = 0.0;
     std::array<double, polisher::kStems> stemHold {};
     float rtHold = 0.0f, rtHzHold = 0.0f, tsHold = 0.0f, tsHzHold = 0.0f, ulHold = 0.0f;

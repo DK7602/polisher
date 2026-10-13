@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "polisher/GlueCompressor.h"
 #include "polisher/LoudnessTargeting.h"
 #include "polisher/MultibandDynamics.h"
 #include "polisher/Saturation.h"
@@ -32,12 +33,13 @@ namespace ModuleParams
         ids.add ("maxBassFirst");   // (defined with the Maximizer in PluginProcessor)
         ids.add ("satDrive");
         ids.add ("satMix");
+        for (const char* id : { "glueThr", "glueRatio", "glueAtk", "glueRel", "glueSc", "glueMix", "glueGain" }) ids.add (id);
         return ids;
     }
-    inline juce::StringArray toggleIds() { return { "ulOn", "stemOn", "stemKeep", "tsOn", "rtOn", "dynOn", "dynAdaptive", "satOn" }; }
+    inline juce::StringArray toggleIds() { return { "ulOn", "stemOn", "stemKeep", "tsOn", "rtOn", "dynOn", "dynAdaptive", "satOn", "glueOn", "glueAuto" }; }
     inline juce::StringArray comboIds()
     {
-        juce::StringArray ids { "satMode", "satFocus", "tsSpeed", "rtFocus", "ulFocus", "maxDither", "satChannels", "dynChannels" };
+        juce::StringArray ids { "satMode", "satFocus", "tsSpeed", "rtFocus", "ulFocus", "maxDither", "satChannels", "dynChannels", "glueChar" };
         for (int b = 1; b <= polisher::kEqBands; ++b) ids.add ("eqMode" + juce::String (b));   // EQ band channels (defined with the EQ)
         return ids;
     }
@@ -99,7 +101,37 @@ namespace ModuleParams
                                                            AudioParameterFloatAttributes().withLabel ("ms").withStringFromValueFunction (msText)));
         layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "rtFocus", 2 }, "Resonance Tamer Focus", StringArray { "Full", "Boxiness", "Harshness" }, 0));
 
-        // Dynamics (after Bass Control): four bands, 1:1 = untouched.
+        // Glue (after Bass Control, before Dynamics; version hint 13): one bus compressor for the whole mix.
+        // Ratio 1:1 and Gain 0 dB = untouched, which is also what a state saved before it existed loads as.
+        layout.add (std::make_unique<AudioParameterBool> (ParameterID { "glueOn", 13 }, "Glue On", true));
+        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { "glueChar", 13 }, "Glue Character", StringArray { "Bus", "Opto", "Tube" }, 0));
+        {
+            const polisher::GlueParams g;
+            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "glueThr", 13 }, "Glue Threshold",
+                                                               NormalisableRange<float> (-40.0f, 0.0f, 0.1f), static_cast<float> (g.thresholdDb),
+                                                               AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction (dbText)));
+            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "glueRatio", 13 }, "Glue Ratio",
+                                                               NormalisableRange<float> (1.0f, 10.0f, 0.01f, 0.5f), 1.0f,
+                                                               AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 1) + ":1"; })));
+            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "glueAtk", 13 }, "Glue Attack",
+                                                               NormalisableRange<float> (0.1f, 30.0f, 0.1f, 0.4f), static_cast<float> (g.attackMs),
+                                                               AudioParameterFloatAttributes().withLabel ("ms").withStringFromValueFunction (msText)));
+            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "glueRel", 13 }, "Glue Release",
+                                                               NormalisableRange<float> (50.0f, 1200.0f, 1.0f, 0.5f), static_cast<float> (g.releaseMs),
+                                                               AudioParameterFloatAttributes().withLabel ("ms").withStringFromValueFunction (msText)));
+            layout.add (std::make_unique<AudioParameterBool> (ParameterID { "glueAuto", 13 }, "Glue Auto Release", g.autoRelease));
+            NormalisableRange<float> sc (20.0f, 250.0f, 1.0f);
+            sc.setSkewForCentre (90.0f);
+            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "glueSc", 13 }, "Glue Ignore Lows", sc, static_cast<float> (g.sidechainHz),
+                                                               AudioParameterFloatAttributes().withLabel ("Hz").withStringFromValueFunction (
+                                                                   [] (float v, int) { return v <= polisher::kGlueSidechainOffHz ? String ("Off") : String (roundToInt (v)) + " Hz"; })));
+            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "glueMix", 13 }, "Glue Mix", NormalisableRange<float> (0.0f, 100.0f, 0.1f), 100.0f,
+                                                               AudioParameterFloatAttributes().withLabel ("%").withStringFromValueFunction (pctText0)));
+            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { "glueGain", 13 }, "Glue Gain", NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f,
+                                                               AudioParameterFloatAttributes().withLabel ("dB").withStringFromValueFunction (dbText)));
+        }
+
+        // Dynamics (after Glue): four bands, 1:1 = untouched.
         layout.add (std::make_unique<AudioParameterBool> (ParameterID { "dynOn", 1 }, "Dynamics On", true));
         layout.add (std::make_unique<AudioParameterBool> (ParameterID { "dynAdaptive", 1 }, "Dynamics Adaptive Release", true));
         // Which part of the stereo image Dynamics works on (version hint 12). Stereo, the default, is also what
@@ -199,6 +231,9 @@ namespace ModuleParams
             satDrive = get ("satDrive");
             satMix = get ("satMix");
             satChannels = get ("satChannels");
+            glueOn = get ("glueOn"); glueChar = get ("glueChar"); glueThr = get ("glueThr"); glueRatio = get ("glueRatio");
+            glueAtk = get ("glueAtk"); glueRel = get ("glueRel"); glueAuto = get ("glueAuto"); glueSc = get ("glueSc");
+            glueMix = get ("glueMix"); glueGain = get ("glueGain");
             imgOn = get ("imgOn");
             imgLow = get ("imgLow");
             imgMid = get ("imgMid");
@@ -270,6 +305,22 @@ namespace ModuleParams
             return p;
         }
 
+        polisher::GlueParams glue (bool bypassed) const noexcept
+        {
+            polisher::GlueParams p;
+            p.enabled = glueOn->load() > 0.5f && ! bypassed;
+            p.character = static_cast<polisher::GlueCharacter> (juce::jlimit (0, 2, juce::roundToInt (glueChar->load())));
+            p.thresholdDb = glueThr->load();
+            p.ratio = glueRatio->load();
+            p.attackMs = glueAtk->load();
+            p.releaseMs = glueRel->load();
+            p.autoRelease = glueAuto->load() > 0.5f;
+            p.sidechainHz = glueSc->load();
+            p.mix = glueMix->load() / 100.0;
+            p.gainDb = glueGain->load();
+            return p;
+        }
+
         polisher::ImagerParams imager (bool bypassed) const noexcept
         {
             polisher::ImagerParams p;
@@ -299,6 +350,10 @@ namespace ModuleParams
         std::atomic<float>* satChannels = nullptr;
         std::atomic<float>* satDrive = nullptr;
         std::atomic<float>* satMix = nullptr;
+        std::atomic<float>* glueOn = nullptr; std::atomic<float>* glueChar = nullptr; std::atomic<float>* glueThr = nullptr;
+        std::atomic<float>* glueRatio = nullptr; std::atomic<float>* glueAtk = nullptr; std::atomic<float>* glueRel = nullptr;
+        std::atomic<float>* glueAuto = nullptr; std::atomic<float>* glueSc = nullptr; std::atomic<float>* glueMix = nullptr;
+        std::atomic<float>* glueGain = nullptr;
         std::atomic<float>* imgOn = nullptr;
         std::atomic<float>* imgLow = nullptr;
         std::atomic<float>* imgMid = nullptr;

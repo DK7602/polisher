@@ -1,7 +1,7 @@
 # Polisher — resume here (updated 2026-10-13)
 
 Read this first in a new chat. Code: github.com/DK7602/polisher. Newest work: branch
-`claude/eloquent-einstein-sscadx` (v0.23.0, 2026-10-13 sessions below; it fast-forwarded from
+`claude/eloquent-einstein-sscadx` (v0.24.0, 2026-10-13 sessions below; it fast-forwarded from
 `claude/gracious-wright-tgs0no`, which is older). Merge to `main` when ready. Every push builds Mac + Windows; download Polisher-Windows from the
 latest green Actions run.
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
@@ -25,13 +25,35 @@ genre target line. Remaining, in order:
 6. Mid/side on more modules -> Dynamics Channels + Saturation Channels - DONE v0.22.0 (below). Skipped as
    redundant: Imager is already M/S, Tonal EQ has it per band (v0.19), Maximizer / Clipper must stay linked
    (M/S limiting moves the image), Resonance Tamer / Tone Steady - offer only if asked.
-7. Vintage-style modules (tape / compressor / EQ / limiter flavours) - lowest value.
+7. Vintage-style modules -> built as Glue (module 07, vintage bus compressor: Bus / Opto / Tube) - DONE v0.24.0
+   (below). Skipped as redundant (user rule): vintage tape (Saturation Tape), Pultec low trick (Tonal EQ Low End +
+   Bass cut), vintage limiter (Maximizer) - offer only if asked.
 8. Blind loudness-matched shoot-out vs TDR Limiter 6 GE / LoudMax / Ozone trial - KIT DONE v0.23.0 (user asked
    to do this before 7): Blind Test fairness check + measurements, manual "Shoot-out" (2 rounds). WAITING on the
    user's listening: they send Score sheet + Answer key; then fix what loses (the measurements say why).
 Optional: Listen (delta) on the 6 modules without it - a version for all 11 exists as a stash/patch from
 the older branch (claude session 2026-10-12), only if the user asks.
 Also open: validation steps 2-3, Auto-Master turning a too-hot mix down, Auto-Master rule for Impact.
+
+## Glue (v0.24.0, 2026-10-13)
+dsp GlueCompressor (zero latency): stereo-linked feed-forward, detector = per channel sidechain HP (4th order =
+two Butterworths, 24 dB/oct; review find: 12 dB/oct at the 90 Hz default still let a 50-60 Hz 808 duck the vocal
+3.7-5.6 dB; glueSc, <= 20.5 Hz off) -> mean square over the character's RMS time, level = louder channel, 10log10(2 ms)
+(a sine reads its peak, as Dynamics). Static curve with knee per character; gain smoothed in dB (attack /
+release scaled per character; Auto = 60 ms release while gr < ~1 s average - 1 dB, like Dynamics adaptive).
+Characters (kVoices): Bus knee 4 dB, RMS 3 ms; Opto knee 10, RMS 10 ms, attack >= 10 ms, release x1.5; Tube knee
+18, RMS 20 ms, attack x1.5, release x1.3. No tube harmonics on purpose (would need oversampling = latency;
+Saturation covers colour). Output = x * (1 + (g - 1) * mix) * gain; mix / gain glide 20 ms; the whole effect fades
+(weight) 20 ms; neutral (ratio <= 1.005 and |gain| < 0.05) or off -> fades out, then running = false = exact
+pass-through; starting again = fresh detector. Params hint 13: glueOn, glueChar, glueThr, glueRatio, glueAtk,
+glueRel, glueAuto, glueSc, glueMix, glueGain. Chain: after Bass Control, before Dynamics (modules renumbered:
+07 Glue ... 12 Maximizer). Meter glueGr (editor hold like dynGr). Auto-Master sets glueRatio 1, glueGain 0.
+UI: 9 cells (.knob-row.glue compact), AUTO pill under Release, Learn, chip "GR x dB", chain readout. Tests [glue]
+(10 engine + plug-in; the click test uses a 200 Hz tone and proves an unfaded splice is caught - review find:
+on trapLike it could not fail). Resonance Tamer Listen (formed before Glue) gets Glue's per-sample gain
+(process(..., gainOut) -> monGlueGain; plug-in test: with Glue at -6 dB, listen + master = mix at -6 dB). Learn
+classifies the times the character really uses (Opto attack >= 10 ms, release x1.5; Tube attack x1.5, release
+x1.3). No Listen for Glue itself (offer if asked).
 
 ## Shoot-out kit (v0.23.0, 2026-10-13)
 Claude can't run Ozone / TDR / LoudMax (Windows/Mac plug-ins), so the user listens. tools/blindtest:

@@ -237,7 +237,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
 {
     const int channels = juce::jmax (1, getTotalNumOutputChannels());
     // Every module gets its current settings before it is prepared, so it starts in the saved state.
-    // Set afterwards, Bass Control, Dynamics, the Imager and the spectral stage would fade in from
+    // Set afterwards, Bass Control, Glue, Dynamics, the Imager and the spectral stage would fade in from
     // neutral over the first ~0.3 s of playback (and of an export that starts at bar 1). The EQ is handed
     // its settings even when they equal its defaults (updateLimiterParams skips unchanged ones), so it
     // knows it is configured and glides on the next change instead of jumping.
@@ -250,6 +250,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     eq.prepare (sampleRate, channels);
     stemEq.prepare (sampleRate, channels);
     bass.prepare (sampleRate, channels);
+    glue.prepare (sampleRate, channels);
     dynamics.prepare (sampleRate, channels);
     imager.prepare (sampleRate);
     saturation.prepare (sampleRate, channels);
@@ -272,6 +273,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     for (auto* v : { &monPre, &monSig, &monAux })
         for (auto& ch : *v) ch.assign (static_cast<size_t> (monCapacity), 0.0);
     monLimGain.assign (static_cast<size_t> (monCapacity), 1.0);
+    monGlueGain.assign (static_cast<size_t> (monCapacity), 1.0);
     monClipGain.assign (static_cast<size_t> (monCapacity), 1.0);
     const int longest = polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples() + limiter.latencySamples();
     monForm.prepare (longest);
@@ -394,6 +396,7 @@ void PolisherAudioProcessor::updateLimiterParams()
     steady.target = stageTone;
     stemEq.setToneSteady (steady);
     stemEq.setResonance (moduleParams.resonance (p.bypassed));
+    glue.setParams (moduleParams.glue (p.bypassed));
     dynamics.setParams (moduleParams.dynamics (p.bypassed));
     saturation.setParams (moduleParams.saturation (p.bypassed));
 
@@ -527,6 +530,16 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     else
         stemEq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     bass.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+    if (lm == L::tamerRemoved)
+    {
+        // The tamer's cut was formed before the Glue: it gets the Glue's gain, sample for sample, as the
+        // master does (one broadband gain, no latency).
+        glue.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, monGlueGain.data());
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < numSamples; ++i) aux[c][i] *= monGlueGain[static_cast<size_t> (i)];
+    }
+    else
+        glue.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     if (L::isDynamics (lm))
         dynamics.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, aux);  // + the monitored band
     else
@@ -848,6 +861,9 @@ void PolisherAudioProcessor::publishMeters()
         meters.bassPunch.store (punch);
     meters.bassWidth.store (static_cast<float> (bass.bassWidthPercent()));
 
+    const float glueGr = static_cast<float> (glue.takeMaxReductionDb());
+    if (glueGr < meters.glueGr.load())
+        meters.glueGr.store (glueGr);
     for (int b = 0; b < polisher::kDynBands; ++b)
     {
         const float d = static_cast<float> (dynamics.takeMaxGrDb (b));

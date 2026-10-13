@@ -436,6 +436,14 @@ body.theme-mono .sw-ref { border-top-color: #E6E6E6; }
 .knob-row.dyn .knob { zoom: .86; }
 .knob-row.dyn .minmax { width: 80px; font-size: 9px; }
 .knob-row.dyn .cell-label { font-size: 11px; letter-spacing: .03em; }
+.knob-row.glue .cell { width: 86px; }   /* nine cells: Character + seven knobs + the meter */
+.knob-row.glue .knob { zoom: .86; }
+.knob-row.glue .minmax { width: 80px; font-size: 9px; }
+.knob-row.glue .cell-label { font-size: 11px; letter-spacing: .03em; }
+.knob-row.glue .clipmeter { width: 80px; }
+.knob-row.glue .seg-v button { width: 80px; }
+.knob-row.glue .cell.glue-rel { position: relative; }
+.knob-row.glue .glue-auto { position: absolute; top: 100%; }   /* under the value, without making the cell taller */
 .band-pick .band-row { display: flex; gap: 4px; }
 .band-pick .band-row .solo { width: 30px; padding: 0; font-size: 11px; }
 .band-pick .band-row .solo.on { box-shadow: 0 0 0 1.5px #FFB3B7, 0 0 10px rgba(255,40,50,.8); }

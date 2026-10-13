@@ -17,11 +17,11 @@ namespace
 
    #if JUCE_WINDOWS
     const char* const noticeText = "BASIC VIEW: Polisher's full screen needs the Microsoft Edge WebView2 Runtime. Click GET WEBVIEW2, "
-                                   "install it (free), then reopen Polisher. All 11 modules keep working meanwhile; Auto-Master and "
+                                   "install it (free), then reopen Polisher. All 12 modules keep working meanwhile; Auto-Master and "
                                    "Learn need the full screen.";
    #else
     const char* const noticeText = "BASIC VIEW: Polisher's full screen couldn't start because this system has no web view. "
-                                   "All 11 modules keep working with their saved settings; Auto-Master and Learn need the full screen.";
+                                   "All 12 modules keep working with their saved settings; Auto-Master and Learn need the full screen.";
    #endif
 
     juce::String formatLufs (float v, const char* unit)

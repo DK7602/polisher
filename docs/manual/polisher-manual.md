@@ -1,14 +1,14 @@
 # Polisher User Manual
 
-Version 0.23.0 · October 2026
+Version 0.24.0 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
 ## What Polisher is
 
-Polisher is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds eleven modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
+Polisher is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds twelve modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.23.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.24.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 
@@ -71,7 +71,7 @@ The order is fixed, from repair to loudness: fix the mix's dynamics first, then 
 
 ```
 Input Trim -> 01 Unlimiter -> 02 Tonal EQ -> [03 Stem EQ / 04 Tone Steady / 05 Resonance Tamer] -> 06 Bass Control
--> 07 Dynamics -> 08 Stereo Imager -> 09 Saturation -> Drive -> 10 Soft Clipper -> 11 Maximizer -> your master
+-> 07 Glue -> 08 Dynamics -> 09 Stereo Imager -> 10 Saturation -> Drive -> 11 Soft Clipper -> 12 Maximizer -> your master
 (03-05 share one stage, ~40 ms; MATCH, Listen / Solo and the MONO / PHONE checks sit at the very end, for listening only)
 ```
 
@@ -79,7 +79,7 @@ The Maximizer's **Drive** sits just before the Soft Clipper, so the clipper and 
 
 ## Auto-Master
 
-Auto-Master listens to your whole song as it plays, finds its **loudest part** by itself (the 12 seconds that measure loudest, usually the hook or drop), then sets every module except Stem EQ for that part and explains each choice. It skips silence and stops while it listens. While it listens it also learns your song's overall tone for **Tone Steady**, and measures the whole song's loudness for the report.
+Auto-Master listens to your whole song as it plays, finds its **loudest part** by itself (the 12 seconds that measure loudest, usually the hook or drop), then sets every module except Stem EQ for that part and explains each choice (Glue it switches to 1:1 for now, see Glue). It skips silence and stops while it listens. While it listens it also learns your song's overall tone for **Tone Steady**, and measures the whole song's loudness for the report.
 
 ### The three choices
 
@@ -260,7 +260,29 @@ Keeps the low end solid on every system.
 | Taming meter | 0 to −12 dB | How much Sub Tame is cutting. |
 | Bass Width meter | mono … wide | How stereo your mix is below 150 Hz. |
 
-### 07 Dynamics
+### 07 Glue
+
+One compressor for the whole mix: the drums, the 808 and the vocal move together, so the beat sits as one ("glue"). Dynamics (next) works band by band; Glue works on everything at once, the way a bus compressor on a mixing console does. It's off (Ratio 1:1) until you set it.
+
+| Control | Range (default) | What it does |
+| --- | --- | --- |
+| Character | Bus, Opto, Tube (Bus) | The flavour, after classic bus compressors. **Bus**: clean and firm, the classic glue on a hip-hop mix. **Opto**: smooth and slow; it never grabs faster than about 10 ms and lets go gently. **Tube**: the softest; it starts working well under the threshold and firms up gently as the music gets louder. |
+| Threshold | −40 to 0 dB (−20) | Where it starts holding the mix down. |
+| Ratio | 1:1–10:1 (1:1 = off) | How firmly. 2:1 is classic glue, 4:1 is firm. |
+| Attack | 0.1–30 ms (10) | How fast it grabs. 10–30 ms lets the start of each kick and snare through (punch); under 3 ms smooths the hits and can roughen the 808. |
+| Release | 50–1200 ms (300), AUTO on | How fast it lets go (Opto lets go 1.5x and Tube 1.3x slower than the knob says). **AUTO** (the button under the knob) lets go quickly after a short peak and at the Release time on long loud passages, so it doesn't pump. |
+| Ignore Lows | off (all the way left), 21–250 Hz (90) | The compressor hears the low end below this much quieter (24 dB per octave), so the 808 doesn't pull the vocal and hats down with every note (pumping). The low end is still turned down along with everything else. Below about 60 Hz it only keeps the deepest sub out. |
+| Mix | 0–100 % (100) | Blend with the uncompressed mix. Lower = parallel ("New York") compression: the hits stay sharp while the quieter parts come up. |
+| Gain | ±12 dB (0) | Level after the Glue. Compressing makes the mix a little quieter; you can leave this at 0 and let the Maximizer's Drive make it up. |
+| Reduction | meter, 0 to −12 dB | How much Glue is holding the mix down. 1–2 dB is classic glue. |
+
+How to set it: Bus, Ratio 2:1, Attack 10 ms, Release AUTO, Ignore Lows 90 Hz. Play the hook and lower Threshold until the Reduction meter shows 1–2 dB. Compare with MATCH: B should sound more together, not smaller or flatter. At 4 dB or more the beat starts to lose its bounce.
+
+- Turning Glue on or off, or Ratio up from 1:1, fades in over 20 ms: no click. Off, or at 1:1 with Gain 0 dB, the sound passes through untouched.
+- No added latency.
+- Auto-Master doesn't use Glue yet: it sets Ratio 1:1 and Gain 0 dB, so its loudness plan stays right. Add Glue after Auto-Master; it makes the mix a little quieter, so raise Drive by about the Reduction reading to keep your loudness (check Short-term).
+
+### 08 Dynamics
 
 Four-band compression. Click a band button (LOW, LO-MID, HI-MID, HIGH) to edit it; each button shows that band's gain reduction.
 
@@ -304,7 +326,7 @@ How to use Impact: for a kick that doesn't hit, set the **Low** band's Impact to
 - On a one-channel (mono) track the pill has no effect: Dynamics works on the whole sound, as on STEREO.
 - Auto-Master always sets STEREO.
 
-### 08 Stereo Imager
+### 09 Stereo Imager
 
 Sets the width of lows, mids and highs. Only the stereo (side) part changes; the centre (vocal, kick, 808) keeps its level and its place.
 
@@ -315,7 +337,7 @@ Sets the width of lows, mids and highs. Only the stereo (side) part changes; the
 | Highs | above 5 kHz, 0–200 % (100) | Hats, reverbs, ad-libs. Try 110–115 %. |
 | Correlation meter | −1 to +1 | Mono safety. +1 = mono, 0 = wide, below 0 = out of phase. Keep it above +0.3. |
 
-### 09 Saturation
+### 10 Saturation
 
 Adds harmonics so bass translates on small speakers and the master feels denser. Quiet parts pass untouched; the level stays put as you add Drive.
 
@@ -340,7 +362,7 @@ Try it: Bass only, Tube, Drive +9. Play the song on your phone or laptop speaker
 
 Switching between all four Focus settings is click-free. Auto-Master picks only Full or Bass only. If you drew automation for Focus in Cubase with an older Polisher, check that lane: with four choices, a lane that used to mean Bass only now reads as Bass + Highs. Saved songs themselves open with the Focus they had.
 
-### 10 Soft Clipper
+### 11 Soft Clipper
 
 Shaves the tallest drum peaks before the Maximizer, so the limiter works less. This is how loud modern masters stay punchy. It's off until you turn it on.
 
@@ -351,7 +373,7 @@ Shaves the tallest drum peaks before the Maximizer, so the limiter works less. T
 | Oversampling | 1x, 2x, 4x, 8x (4x) | Cuts down harsh aliasing. 4x is the mastering default; 8x is cleanest. |
 | Clipping meter | 0 to −6 dB | Peak reduction. Aim for 1–3 dB on the drums. |
 
-### 11 Maximizer
+### 12 Maximizer
 
 The final true-peak limiter. It makes the master loud and keeps every peak at or under the ceiling, measured the way streaming services measure true peak (ITU BS.1770, peaks between samples included).
 

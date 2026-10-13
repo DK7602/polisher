@@ -30,14 +30,14 @@ const pick = (name) => page.evaluate((n) => [...document.querySelectorAll('.row-
 // The parameter each module's header button must switch (read from JUCE's own state, so a wrong id
 // in the UI's table fails here even if the button's label looks right).
 const SWITCH = { 'Unlimiter': 'ulOn', 'Tonal EQ': 'eqOn', 'Stem EQ': 'stemOn', 'Tone Steady': 'tsOn', 'Resonance Tamer': 'rtOn',
-                 'Bass Control': 'bassOn', 'Dynamics': 'dynOn', 'Stereo Imager': 'imgOn', 'Saturation': 'satOn',
+                 'Bass Control': 'bassOn', 'Glue': 'glueOn', 'Dynamics': 'dynOn', 'Stereo Imager': 'imgOn', 'Saturation': 'satOn',
                  'Soft Clipper': 'clipOn', 'Maximizer': 'bypass' };
 const toggles = () => page.evaluate(async (ids) => {
   const juce = await import('./juce/index.js');
   return Object.fromEntries(ids.map((id) => [id, !!juce.getToggleState(id).getValue()]));
 }, Object.values(SWITCH));
 const names = await page.evaluate(() => [...document.querySelectorAll('.row-btn .row-name')].map((x) => x.textContent));
-check(names.length === 11, `signal chain lists 11 modules (${names.length})`);
+check(names.length === 12, `signal chain lists 12 modules (${names.length})`);
 
 for (const name of names) {
   await pick(name);

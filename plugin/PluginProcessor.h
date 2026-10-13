@@ -7,6 +7,7 @@
 #include "polisher/SoftClipper.h"
 #include "polisher/TonalEQ.h"
 #include "polisher/BassControl.h"
+#include "polisher/GlueCompressor.h"
 #include "polisher/StereoImager.h"
 #include "polisher/LevelMatch.h"
 #include "polisher/MultibandDynamics.h"
@@ -25,7 +26,7 @@
 #include <array>
 #include <atomic>
 
-/** Polisher: Input Trim -> Unlimiter -> Tonal EQ -> Stem EQ -> Bass Control -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
+/** Polisher: Input Trim -> Unlimiter -> Tonal EQ -> Stem EQ -> Bass Control -> Glue -> Dynamics -> Stereo Imager -> Saturation -> Drive -> Soft Clipper
     -> Maximizer (true-peak limiter), plus EBU R128
     meters, spectrum taps and Auto-Master (which listens to the incoming mix and sets the chain). After the
     meters, for listening only: Listen / Solo (setListenMode), MATCH, then the MONO / PHONE checks. */
@@ -91,6 +92,7 @@ public:
         std::atomic<float> correlation { 1.0f };      // output L/R correlation (+1 mono ... -1 out of phase)
         std::array<std::atomic<float>, polisher::kDynBands> dynImpact {};   // largest Impact move per band since read (dB, signed)
         std::array<std::atomic<float>, polisher::kDynBands> dynSustain {};  // largest Sustain move per band since read (dB, signed)
+        std::atomic<float> glueGr { 0.0f };          // deepest Glue gain reduction since read (dB, <= 0)
         std::array<std::atomic<float>, polisher::kDynBands> dynGr {};   // deepest Dynamics gain reduction per band since read (dB, <= 0)
         std::atomic<float> satResidual { 0.0f }, satSignal { 0.0f };   // Saturation energies since read (harmonics, signal)
         std::array<std::atomic<float>, polisher::kStems> stemEnergy {};   // K-weighted energy the Stem EQ model credited to each stem since read
@@ -191,6 +193,7 @@ private:
     polisher::TonalEQ eq;
     polisher::StemEQ stemEq;
     polisher::BassControl bass;
+    polisher::GlueCompressor glue;
     polisher::MultibandDynamics dynamics;
     polisher::StereoImager imager;
     polisher::Saturation saturation;
@@ -268,7 +271,7 @@ private:
     polisher::MonitorDelay monForm, monOut;
     polisher::MonitorDelay monClipDelay;   // the Soft Clipper's clean gain, carried on past the limiter's look-ahead
     std::array<std::vector<double>, 2> monPre, monSig, monAux;
-    std::vector<double> monLimGain, monClipGain;
+    std::vector<double> monLimGain, monClipGain, monGlueGain;
     int monCapacity = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherAudioProcessor)
