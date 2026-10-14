@@ -739,6 +739,26 @@ await restarts('an Auto-Master run', async () => {
   await page.waitForFunction((x) => window.__mockAm.version > x && window.__mockAm.state === 0, v, { timeout: 5000 });
 }, 1300);
 
+// The suite link: Mixology's hand-off shows in Learn; a different style offers its genre; mono / limiter warn.
+await pick('Maximizer');
+await page.waitForTimeout(150);
+await page.evaluate(() => window.__polisherMock.setMixology({ style: 'R&B & Soul - Modern', genre: 1, peak: -5.8, lufs: -16.2, analysed: true, mono: false, limited: false, tone: [0.4, 2.6, -0.5, -3.1] }));
+check(await waitForLearn(/FROM MIXOLOGY/), 'Learn shows Mixology\'s hand-off');
+const hand = await page.evaluate(() => ({ learn: document.getElementById('learn-body').textContent,
+  button: [...document.querySelectorAll('#learn-body button')].map((b) => b.textContent).find((t) => /MIXOLOGY'S STYLE/.test(t)) || '' }));
+check(/mixed this song as R&B & Soul - Modern/.test(hand.learn) && /more low mids \(\+2\.6 dB\) and less air \(−3\.1 dB\)/.test(hand.learn), 'it names the style and the tone Mixology heard');
+check(/USE R&B/.test(hand.button), `it offers Mixology's genre ("${hand.button}")`);
+await page.evaluate(() => [...document.querySelectorAll('#learn-body button')].find((b) => /MIXOLOGY'S STYLE/.test(b.textContent)).click());
+await page.waitForTimeout(200);
+const genreNow = await page.evaluate(async () => (await import('./juce/index.js')).getComboBoxState('amGenre').getChoiceIndex());
+check(genreNow === 1, `the button sets Auto-Master's genre (now ${genreNow})`);
+check(await page.evaluate(() => ![...document.querySelectorAll('#learn-body button')].some((b) => /MIXOLOGY'S STYLE/.test(b.textContent))), 'the offer goes once the genre matches');
+await page.evaluate(() => window.__polisherMock.setMixology({ style: 'R&B & Soul - Modern', genre: 1, peak: -0.4, lufs: -9.1, analysed: false, mono: true, limited: true, tone: [0, 0, 0, 0] }));
+check(await waitForLearn(/YOUR MIX IS MONO/) && /MIXOLOGY'S LIMITER IS ON/.test(await learnText()) && /almost no room left/.test(await learnText()), 'a mono mix, Mixology\'s limiter and no headroom are flagged');
+await page.evaluate(() => window.__polisherMock.setMixology(null));
+check(await waitForLearn(/^(?![\s\S]*FROM MIXOLOGY)/), 'without Mixology the note goes');
+await page.evaluate(async () => (await import('./juce/index.js')).getComboBoxState('amGenre').setChoiceIndex(0));
+
 check(errors.length === 0, `no script errors (${errors.join(' | ')})`);
 await browser.close();
 

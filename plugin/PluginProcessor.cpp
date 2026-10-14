@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "polisher/MixHandoff.h"
 #if ! POLISHER_HEADLESS                 // the plug-in-level tests build the processor without its editors
  #include "PluginEditor.h"
  #include "PolisherWebEditor.h"
@@ -97,6 +98,50 @@ PolisherAudioProcessor::PolisherAudioProcessor()
         matchForgetRequest.fetch_or (1 << slot);
         markStateChanged();   // the slots are saved with the project, but they are not parameters
     };
+
+    // The suite link: Mixology (in the same project) sees what this Masterology aims for, and hands it the mix.
+    suiteId = static_cast<std::uint64_t> (juce::Random::getSystemRandom().nextInt64()) ^ reinterpret_cast<std::uintptr_t> (this);
+    if (suiteId == 0) suiteId = 1;
+    startTimerHz (4);
+}
+
+PolisherAudioProcessor::~PolisherAudioProcessor()
+{
+    stopTimer();
+    suite::Link::process().releaseMaster (suiteSlot, suiteId);
+}
+
+void PolisherAudioProcessor::updateSuite()
+{
+    auto& link = suite::Link::process();
+    const auto now = suite::nowMs();
+    hasHandoff = link.readMix (handoff, now);
+    if (suiteSlot < 0) suiteSlot = link.claimMaster (suiteId, now);
+    if (suiteSlot < 0) return;   // four Masterologys already
+
+    suite::MasterInfo g;
+    const int target = juce::jlimit (0, 2, juce::roundToInt (parameters.getRawParameterValue ("amTarget")->load()));
+    const int genre = juce::jlimit (0, polisher::kNumGenres - 1, juce::roundToInt (parameters.getRawParameterValue ("amGenre")->load()));
+    if (reference.getVersion() != suiteRefVersion)   // a reference sets the loudness instead of the target
+    {
+        suiteRefVersion = reference.getVersion();
+        suiteRef = reference.getState() == ReferenceTrack::loaded ? reference.getProfile() : polisher::ReferenceProfile {};
+    }
+    if (suiteRef.valid)
+    {
+        g.goalName = "Matching " + suiteRef.name;
+        g.targetLufs = static_cast<float> (std::clamp (polisher::referenceLoudness (suiteRef), polisher::kRefMinLufs, polisher::kRefMaxLufs));
+    }
+    else
+    {
+        g.goalName = polisher::handoff::targetName (target);
+        g.targetLufs = static_cast<float> (polisher::targetLufs (static_cast<polisher::LoudnessTarget> (target)));
+    }
+    g.genreName = polisher::genreName (static_cast<polisher::Genre> (genre));
+    g.ceilingDbtp = ceilingParam->load();
+    g.inputLufs = meters.inputIntegrated.load();
+    g.version = static_cast<std::uint32_t> (JucePlugin_VersionCode);
+    if (! link.publishMaster (suiteSlot, suiteId, g, now)) suiteSlot = -1;   // taken over while silent: claim again
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::createParameterLayout()

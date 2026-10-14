@@ -2854,6 +2854,47 @@ TEST_CASE ("Plug-in: Glue reaches the engine (compresses, ignores the lows when 
     CHECK (heard < 0.5 * subOpen);
 }
 
+TEST_CASE ("Plug-in: the suite link (Masterology's goal reaches Mixology, Mixology's hand-off reaches Masterology)", "[plugin][suite]")
+{
+    auto p = makeProcessor (48000.0, 512, false);
+    auto& link = suite::Link::process();
+    suite::MixInfo got;
+    p->updateSuite();
+    CHECK_FALSE (p->mixologyHandoff (got));   // no Mixology yet
+    auto goals = link.masters (suite::nowMs());
+    REQUIRE (goals.size() == 1);
+    CHECK (goals[0].goalName == "Loud release");   // Auto-Master's default target
+    CHECK (goals[0].targetLufs == -9.0f);
+    CHECK (goals[0].genreName == "Trap / Hip-Hop");
+    CHECK (goals[0].version != 0);
+
+    set (*p, "amTarget", 0.0f);   // Stream -14
+    set (*p, "ceiling", -1.5f);
+    p->updateSuite();
+    goals = link.masters (suite::nowMs());
+    REQUIRE (goals.size() == 1);
+    CHECK (goals[0].goalName == "Streaming");
+    CHECK (goals[0].targetLufs == -14.0f);
+    CHECK (goals[0].ceilingDbtp == -1.5f);
+
+    // Mixology publishes its hand-off (it lives in another plug-in file; here, the same memory).
+    suite::MixInfo m;
+    m.styleKey = "rnb.modern";
+    m.styleName = "R&B & Soul - Modern";
+    m.flags = suite::MixInfo::analysed | suite::MixInfo::monoMix;
+    m.peakDbtp = -5.5f;
+    m.version = 1;
+    link.publishMix (m, suite::nowMs());
+    p->updateSuite();
+    REQUIRE (p->mixologyHandoff (got));
+    CHECK (got.styleName == "R&B & Soul - Modern");
+    CHECK ((got.flags & suite::MixInfo::monoMix) != 0);
+    CHECK (got.peakDbtp == -5.5f);
+
+    p.reset();   // removed: its goal goes with it
+    CHECK (link.masters (suite::nowMs()).empty());
+}
+
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:
 // a function-local static would be torn down after JUCE's own shutdown objects and crash on exit.
 int main (int argc, char* argv[])

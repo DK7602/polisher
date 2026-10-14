@@ -108,7 +108,9 @@
   // Meter restarts the UI asked for: "stats" (Integrated after a change) or a full RESET. For the smoke test.
   const resets = { stats: 0, full: 0 };
   window.__mockResets = resets;
-  window.__polisherMock = { setPlaying: (on) => { transport.playing = !!on; } };
+  // The suite link: Mixology's hand-off for the song (null = no Mixology in the project). The smoke test sets it.
+  let fromMixology = null;
+  window.__polisherMock = { setPlaying: (on) => { transport.playing = !!on; }, setMixology: (h) => { fromMixology = h; } };
   // Simulated Auto-Master: it "listens" to a 2:30 song 30x faster than real time (its loudest part at
   // 0:54), finishes by itself at the song's end (or on FINISH from 12 s of music on), then thinks for
   // 0.9 s. Mode 1 is Tone Steady's LEARN: it only stores the song's tone (toneTarget: seconds heard),
@@ -430,7 +432,7 @@
       peakL: +(-7 + drive * 0.5 + 5 * beat).toFixed(1),
       peakR: +(-7.5 + drive * 0.5 + 5 * beat).toFixed(1),
       gr: +(toggles.clipOn ? gr * 0.55 : gr).toFixed(1),
-      inShort: +base.toFixed(1), inIntegrated: -16.5, sr: 48000, playing: transport.playing,
+      inShort: +base.toFixed(1), inIntegrated: -16.5, sr: 48000, playing: transport.playing, fromMixology,
       tame: toggles.bassOn && sliders.bassTame.value > 0 ? +(-sliders.bassTame.value / 100 * 5 * beat).toFixed(1) : 0,
       punch: toggles.bassOn && sliders.bassPunch.value > 0 ? +(sliders.bassPunch.value / 100 * 4 * beat).toFixed(1) : 0,
       bassWidth: 42, corr: +(0.55 - (sliders.imgMid.value + sliders.imgHigh.value - 200) / 400).toFixed(2), matchDb: +(-(11 * (1 - Math.exp(-drive / 11)))).toFixed(1),

@@ -132,6 +132,8 @@ const M = {
   undo: "", redo: "", snaps: [{}, {}, {}, {}], snapActive: -1, snapModified: false,
   glueGr: 0, dynGr: [0, 0, 0, 0], dynImpact: [0, 0, 0, 0], dynSustain: [0, 0, 0, 0], satHarm: -100, stemShare: [0, 0, 0, 0], stemKeep: 0, rtCut: 0, rtHz: 0, tsDb: 0, tsHz: 0,
   ulBoost: 0, ulSquash: 0, refVersion: 0, refState: 0,
+  // The suite link: Mixology's hand-off for this song ({ style, genre, peak, lufs, analysed, mono, limited, tone }) or null.
+  fromMixology: null,
   listen: 0, mono: false, phone: false, listenNow: 0, listenGain: 0, listenUnder: -100,
 };
 // Listening aids (Listen / Solo, MONO, PHONE): monitoring only. The plug-in keeps them out of the saved
@@ -1146,6 +1148,7 @@ function avgGrRecent() { return grWindow.length ? grWindow.reduce((a, b) => a + 
 function renderLearn() {
   renderLearnBody();
   if (learnOn && learnView === "module") addMonitorLearn($("learn-body"));
+  if (learnOn && learnView === "module") addMixologyLearn($("learn-body"));
   if (learnOn && learnView === "module" && M.amState === 1) {
     // Still listening while you look at a module: a way back to the listening view.
     const link = document.createElement("button");
@@ -2127,6 +2130,54 @@ function listenTip(m) {
     { need: "Only if you hear the band most of the time, or the 808 pumping. Short bumps on the loudest hits are normal.",
       steps: ["Raise this band's Threshold, or lower its Ratio to 2:1.", "Aim for 1–3 dB on the band's button."] });
 }
+// The suite link: what Mixology (mixing this song in the same project) hands over. At the top when there's
+// something to do (another genre, a mono mix, Mixology's limiter on), else at the bottom, for information.
+function mixologyKey() {
+  const h = M.fromMixology;
+  return h ? [h.style, h.genre, h.analysed, h.mono, h.limited, comboIndex(P.amGenre)].join("|") : "";
+}
+function addMixologyLearn(body) {
+  const h = M.fromMixology;
+  if (!h) return;
+  const g = comboIndex(P.amGenre);
+  const otherGenre = h.genre >= 0 && h.genre !== g;
+  const frag = document.createDocumentFragment();
+  const peak = h.peak > -99 ? `peaks at ${fmtNum(h.peak)} dBTP` : "no peaks yet";
+  const room = h.peak <= -99 ? "" : h.peak > -1 ? ": almost no room left, so turn the mix down in Mixology (or Input Trim here) first" : h.peak <= -3 ? ": good room for mastering" : "";
+  const level = h.lufs > -99 ? `${fmtNum(h.lufs)} LUFS with ` : "";
+  let text = `Mixology mixed this song as ${h.style || "your style"}. Your mix comes in at ${level}${peak}${room}.`;
+  if (h.analysed && h.tone) {
+    const names = ["low end", "low mids", "presence", "air"];
+    const off = h.tone.map((d, i) => [d, names[i]]).filter(([d]) => Math.abs(d) >= 2);
+    text += off.length
+      ? ` Against that style, Mixology heard ${off.map(([d, n]) => `${d > 0 ? "more" : "less"} ${n} (${fmtSigned(d)})`).join(" and ")}: Auto-Master's EQ evens out what's left.`
+      : " Its tone sits close to that style.";
+  }
+  frag.appendChild(tip("FROM MIXOLOGY", text, true));
+  if (otherGenre) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "pill pill-red stem-apply";
+    b.textContent = `USE ${GENRES[h.genre].toUpperCase()} (MIXOLOGY'S STYLE)`;
+    b.title = `Auto-Master compares your mix with ${GENRES[g]} now; Mixology mixed it as ${h.style}.`;
+    b.addEventListener("click", () => {
+      P.amGenre.setChoiceIndex(h.genre);
+      refreshAmChoices();
+      toast(`Genre set to ${GENRES[h.genre]}, the style Mixology mixed in. Run Auto-Master to master for it.`);
+      renderLearn();
+    });
+    frag.appendChild(b);
+  }
+  if (h.mono)
+    frag.appendChild(tip("YOUR MIX IS MONO", "Mixology heard the same thing on the left and the right at the Stereo Out: every pan and stereo effect is lost.", false,
+      { need: "Yes, unless the song is meant to be mono.", steps: ["In Cubase, check the output of your groups and the Stereo Out (a mono group or output folds everything to the middle).", "Mixology's Stereo page shows when it's fixed."] }));
+  if (h.limited)
+    frag.appendChild(tip("MIXOLOGY'S LIMITER IS ON", "Two limiters in a row squash the mix twice: Masterology's Maximizer is the one that should set the final loudness.", false,
+      { need: "Usually yes.", steps: ["Open Mixology on the Stereo Out, go to the Dynamics page and switch the Limiter off (or keep it only as a safety that never touches the music)."] }));
+  if (otherGenre || h.mono || h.limited) body.prepend(frag);
+  else { body.appendChild(sep()); body.appendChild(frag); }
+}
+
 function addMonitorLearn(body) {
   if (MON.listen || MON.mono || MON.phone) {
     const frag = document.createDocumentFragment();
@@ -3355,8 +3406,9 @@ function updateLiveReadouts() {
 // Meter events from the plug-in (30 per second).
 window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   const srChanged = frame.sr && frame.sr !== M.sr;
-  const wasAm = M.amState, wasTarget = M.tsTarget, wasFail = M.tsLearnFail, wasFar = M.tsFar;
+  const wasAm = M.amState, wasTarget = M.tsTarget, wasFail = M.tsLearnFail, wasFar = M.tsFar, wasMixology = mixologyKey();
   Object.assign(M, frame);
+  if (mixologyKey() !== wasMixology && learnView === "module") renderLearn();   // Mixology came, went, or changed
   if (M.amState === 2 && wasAm !== 2) amThinkSince = performance.now();   // the analysis started: time it
   else if (M.amState !== 2) amThinkSince = 0;
   watchListening(wasAm, wasTarget, wasFail, wasFar);

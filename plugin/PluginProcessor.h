@@ -22,6 +22,7 @@
 #include "ReferenceTrack.h"
 #include "ToneTargetStore.h"
 #include "SettingsHistory.h"
+#include "suite/SuiteLink.h"
 
 #include <array>
 #include <atomic>
@@ -30,11 +31,12 @@
     -> Maximizer (true-peak limiter), plus EBU R128
     meters, spectrum taps and Auto-Master (which listens to the incoming mix and sets the chain). After the
     meters, for listening only: Listen / Solo (setListenMode), MATCH, then the MONO / PHONE checks. */
-class PolisherAudioProcessor final : public juce::AudioProcessor
+class PolisherAudioProcessor final : public juce::AudioProcessor,
+                                     private juce::Timer
 {
 public:
     PolisherAudioProcessor();
-    ~PolisherAudioProcessor() override = default;
+    ~PolisherAudioProcessor() override;
 
     // AudioProcessor
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -142,6 +144,14 @@ public:
     /** Recent audio before (mix) and after (master) processing, for the spectrum display. */
     SpectrumTap inputTap, outputTap;
 
+    // --- The suite link (Voxology, Mixology, Masterology) --------------------------------------------
+    /** Tells Mixology what this Masterology aims for (target loudness, ceiling, genre) and reads Mixology's
+        hand-off for the song. Message thread; the plug-in's timer calls it four times a second. */
+    void updateSuite();
+    /** Mixology's hand-off (the style it mixed in, the mix's peaks and loudness, its tone), when a Mixology
+        is in this project. Message thread. */
+    bool mixologyHandoff (suite::MixInfo& out) const { if (! hasHandoff) return false; out = handoff; return true; }
+
     /** The reference song for Match ref (its measurements only), saved with the state. */
     ReferenceTrack reference;
     /** Match ref from the window: read and measure a song / forget it. Both mark the project as changed
@@ -176,6 +186,14 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
 private:
+    void timerCallback() override { updateSuite(); }
+    int suiteSlot = -1;
+    std::uint64_t suiteId = 0;
+    suite::MixInfo handoff;
+    bool hasHandoff = false;
+    int suiteRefVersion = -1;
+    polisher::ReferenceProfile suiteRef;
+
     template <typename Sample>
     void processInChunks (juce::AudioBuffer<Sample>& buffer);
     template <typename Sample>

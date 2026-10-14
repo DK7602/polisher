@@ -15,7 +15,8 @@ add_library(polisher_dsp STATIC
     src/StemEQ.cpp
     src/Unlimiter.cpp
     src/Monitoring.cpp
-    src/SongListener.cpp)
+    src/SongListener.cpp
+    src/SuiteLink.cpp)
 
 target_include_directories(polisher_dsp PUBLIC include)
 target_compile_features(polisher_dsp PUBLIC cxx_std_20)

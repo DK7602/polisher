@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.25.0 · October 2026
+Version 0.26.0 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
@@ -8,7 +8,7 @@ Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d7
 
 Masterology (called **Polisher** before version 0.25.0) is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds twelve modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.25.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.26.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 
@@ -588,6 +588,15 @@ The footer meters always measure the **master** (what leaves Masterology), using
 
 Spotify and YouTube turn every song to about −14 LUFS. Going louder than that buys density and attitude, not more volume on streaming.
 
+## With Voxology and Mixology
+
+**Voxology** makes each vocal sound great, **Mixology** makes all your tracks work together, **Masterology** turns the finished mix into the master. In the same Cubase project they tell each other what they do. Nothing to set up: use Masterology 0.26, Mixology 0.8 and Voxology 0.47 (or newer), with Mixology on the Stereo Out before Masterology.
+
+- **From Mixology** (in Learn): Mixology tells Masterology the mix style you picked there, how loud the mix comes in and how high its peaks are, and, after Mixology's Analyze Mix, how its tone sits against that style. Learn shows it as **FROM MIXOLOGY** at the bottom of the panel.
+- **Use Mixology's genre**: when Mixology's style points to another Auto-Master genre than the one at the top (for example Mixology mixed it as R&B and the genre says Trap / Hip-Hop), Learn shows the note at the top with a button, **USE R&B (MIXOLOGY'S STYLE)**. One click sets the genre; run Auto-Master after.
+- **Warnings from the mix**: Learn also says when Mixology heard a **mono mix** at the Stereo Out (left = right), when **Mixology's Limiter** is on (two limiters squash the mix twice: switch Mixology's off), and when the mix leaves almost no room (peaks above −1 dBTP).
+- **Masterology's goal in Mixology**: Mixology's Master page shows what Masterology aims for (for example "Masterology: −9 LUFS · −1.0 dBTP": the target, or a reference's loudness while Match ref is on, and the Maximizer's ceiling).
+
 ## Troubleshooting
 
 | Problem | Likely cause | Fix |
@@ -598,6 +607,7 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Auto-Master keeps listening | It waits for the song to end (4 seconds without music after at least 30 s of it), or Cycle is on and the loop keeps playing | Let the song play to its end, or click Auto-Master again (or FINISH NOW in Learn) any time after 12 s of music |
 | Auto-Master finished while you only paused | After 30 s of music, 4 seconds without music count as the song's end | Fine if it heard the hook. Otherwise run it again and keep the song playing |
 | The report says playback jumped | A cycle loop or a playhead move while it listened | Turn Cycle off on the transport bar and play the song once from start to end |
+| Learn never shows FROM MIXOLOGY | No Mixology 0.8+ in the same project, or it isn't on the Stereo Out | Put Mixology on the Stereo Out before Masterology and open its window once (it then knows your mix style) |
 | Auto-Master says it heard too little | Playback stopped or was mostly silence | Click Auto-Master, play the song from the start and let it play (it needs at least 12 s of music) |
 | Tone Steady's Target says "following the music" | No song tone learned yet (or CLEAR was pressed, or the song was saved before targets existed) | Press LEARN in Tone Steady (or run Auto-Master) and play the whole song |
 | Master lands quieter than the target | Auto-Master protected the drums within the intensity's limit | Fine as it is. To go louder, choose Punchy, or tame the drum peaks in the mix |

@@ -1,4 +1,5 @@
 #include "PolisherWebEditor.h"
+#include "polisher/MixHandoff.h"
 
 #include "PolisherUIData.h"
 
@@ -550,6 +551,24 @@ void PolisherWebEditor::timerCallback()
     const int transport = m.transport.load();
     const bool running = nowMs - lastSoundMs < 1000;
     frame->setProperty ("playing",    running && (transport == 1 || (transport < 0 && m.momentary.load() > -70.0f)));
+    // The suite link: Mixology's hand-off for this song (null without a Mixology in the project).
+    if (suite::MixInfo h; audioProcessor.mixologyHandoff (h))
+    {
+        auto* mo = new juce::DynamicObject();
+        mo->setProperty ("style", juce::String::fromUTF8 (h.styleName.c_str()));
+        mo->setProperty ("genre", polisher::handoff::genreForMixStyle (h.styleKey));
+        mo->setProperty ("peak", roundTo (h.peakDbtp, 0.1f));
+        mo->setProperty ("lufs", roundTo (h.integratedLufs, 0.1f));
+        mo->setProperty ("analysed", (h.flags & suite::MixInfo::analysed) != 0);
+        mo->setProperty ("mono", (h.flags & suite::MixInfo::monoMix) != 0);
+        mo->setProperty ("limited", (h.flags & suite::MixInfo::limited) != 0);
+        juce::Array<juce::var> tone;   // low, low mids, presence, air against the style (dB)
+        for (float d : { h.lowDb, h.lowMidDb, h.presenceDb, h.airDb }) tone.add (roundTo (d, 0.1f));
+        mo->setProperty ("tone", tone);
+        frame->setProperty ("fromMixology", juce::var (mo));
+    }
+    else
+        frame->setProperty ("fromMixology", juce::var());
     frame->setProperty ("mix",        makeSpectrum (audioProcessor.inputTap, mixAnalyser));
     frame->setProperty ("master",     makeSpectrum (audioProcessor.outputTap, masterAnalyser));
 

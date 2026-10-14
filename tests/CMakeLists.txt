@@ -27,7 +27,9 @@ add_executable(polisher_tests
     test_reference.cpp
     test_monitoring.cpp
     test_songlistener.cpp
-    test_genrecurve.cpp)
+    test_genrecurve.cpp
+    test_suite.cpp
+    test_handoff.cpp)
 
 target_link_libraries(polisher_tests PRIVATE polisher_dsp Catch2::Catch2WithMain)
 set_target_properties(polisher_tests PROPERTIES FOLDER "Masterology")
@@ -38,6 +40,8 @@ catch_discover_tests(polisher_tests)
 # Plug-in-level tests: the real processor (all modules, parameters, MATCH, latency, state) as a DAW
 # drives it. Built from the plug-in's processor sources without its editors (POLISHER_HEADLESS).
 if(POLISHER_BUILD_PLUGIN)
+    # The plug-in's version as JUCE packs it (major << 16 | minor << 8 | patch): the suite link publishes it.
+    math(EXPR POLISHER_VERSION_CODE "(${PROJECT_VERSION_MAJOR} << 16) | (${PROJECT_VERSION_MINOR} << 8) | ${PROJECT_VERSION_PATCH}" OUTPUT_FORMAT HEXADECIMAL)
     juce_add_console_app(polisher_plugin_tests PRODUCT_NAME "Masterology Plugin Tests")
     target_sources(polisher_plugin_tests PRIVATE
         plugin/test_plugin.cpp
@@ -49,6 +53,7 @@ if(POLISHER_BUILD_PLUGIN)
     target_compile_definitions(polisher_plugin_tests PRIVATE
         POLISHER_HEADLESS=1
         JucePlugin_Name="Masterology"
+        JucePlugin_VersionCode=${POLISHER_VERSION_CODE}
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_USE_MP3AUDIOFORMAT=1

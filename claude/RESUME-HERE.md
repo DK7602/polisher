@@ -550,3 +550,23 @@ Resume here with validation step 2 (EBU 3341/3342 + true-peak tests), then step 
 offline-vs-realtime). Open questions for the user: Unlimiter listening test on a squashed beat; Squash
 readings on their own mix and a released song; A/B Addie for the Tone Steady fix.
 A separate UI thread was started (2026-10-03) for UI work on the same branch: pull before pushing.
+
+## v0.26.0 The suite link: Mixology hands over the mix, sees Masterology's goal (2026-10-14)
+- The user asked whether Voxology, Mixology and Masterology talk; Mixology's M6 adds it. One named shared block per host
+  process, "VoxMixMasterSuite.v1.<pid>": `dsp/include/suite/SuiteLink.h` + `dsp/src/SuiteLink.cpp`, THE SAME FILES in all
+  three repos (Mixology, DK7602/mixology, is the master copy: change there, copy here; bump kLayout if the memory changes).
+- The processor now has a 4 Hz juce::Timer -> updateSuite() (public, the plug-in tests call it): claims a master slot,
+  publishes goalName (handoff::targetName: Streaming / Loud release / Club, or "Matching <ref>" with referenceLoudness
+  clamped to kRefMin/MaxLufs while Match ref is loaded), targetLufs, genreName, ceiling, input integrated LUFS, version
+  (JucePlugin_VersionCode; the headless tests get POLISHER_VERSION_CODE from tests/CMakeLists.txt). Reads Mixology's
+  MixInfo (style key / name, peaks, LUFS, tone low / low-mid / presence / air vs the style, flags analysed / mono / limited).
+- polisher/MixHandoff.h: genreForMixStyle (Mixology genre key -> amGenre: hiphop/trap 0, rnb/gospel 1,
+  pop/worship/latin/afro 2, electronic 3, rock 4, folk/country/jazz/cinematic 5, else -1), targetName.
+- UI: frame.fromMixology -> M.fromMixology; Learn (module view) adds FROM MIXOLOGY (bottom), or at the top when there is
+  something to do: a different genre (button USE <GENRE> (MIXOLOGY'S STYLE) sets amGenre), mono mix, Mixology's limiter.
+  mock: window.__polisherMock.setMixology(h); ui_smoke checks it.
+- Local Linux builds need NEEDS_WEB_BROWSER TRUE in plugin/CMakeLists.txt (gtk headers); not committed (CI is Windows/mac).
+- Checked with the real plug-ins: Mixology's linkcheck (4th argument Masterology.vst3) sees "Loud release, -9 LUFS,
+  ceiling -1", follows a target change to Streaming -14, and nothing after removal.
+- Live manual copy (Claude Docs 3bf99dd7...): add the same "With Voxology and Mixology" section and the version line.
+- Local note: under ctest -j8 on a busy machine "closing the plug-in while it analyses" once took > 2 s (passes alone and at -j3).
