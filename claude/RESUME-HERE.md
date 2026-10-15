@@ -570,3 +570,4 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   ceiling -1", follows a target change to Streaming -14, and nothing after removal.
 - Live manual copy (Claude Docs 3bf99dd7...): add the same "With Voxology and Mixology" section and the version line.
 - Local note: under ctest -j8 on a busy machine "closing the plug-in while it analyses" once took > 2 s (passes alone and at -j3).
+- v0.26.0 CI green: run 38657259925 (Windows + UI smoke).
