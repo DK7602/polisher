@@ -1,10 +1,11 @@
-# Masterology (formerly Polisher) — resume here (updated 2026-10-15, v0.28.0)
+# Masterology (formerly Polisher) — resume here (updated 2026-10-15, v0.29.1)
 
 Read this first in a new chat. Code: github.com/DK7602/polisher. Newest work: branch
-`claude/eloquent-einstein-sscadx` (v0.28.0 = one song style shared with Voxology / Mixology, 2026-10-15;
+`claude/eloquent-einstein-sscadx` (v0.29.1 = Cakewalk in the DAW list; v0.29.0 = your DAW shared by the trio;
+v0.28.0 = one song style shared with Voxology / Mixology, 2026-10-15;
 v0.27.0 = Auto Analyze, 2026-10-15; v0.26.0 = the suite link with Voxology /
 Mixology; v0.25.0 = the rename to Masterology). Merge to `main` when ready. Download Masterology-Windows from the latest
-green Actions run (v0.27.0: run 38756168366; v0.26.0: 38657259925). The newest thread is "Masterology Auto
+green Actions run (v0.29.1: run 38806354435; v0.27.0: 38756168366; v0.26.0: 38657259925). The newest thread is "Masterology Auto
 Edit" (started 2026-10-15).
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
@@ -70,6 +71,7 @@ analyze option as well. it could then give option to edit in the learn window as
 ## v0.29.1: Cakewalk (BandLab) in the DAW list (2026-10-15, from Mixology's thread)
 - v0.29.0 = your DAW shared by the trio (Settings > DAW, daws.js, {daw:...} tokens in AutoMaster.cpp, suite link
   layout 3). v0.29.1 adds "cakewalk" (Cakewalk by BandLab, Sonar): BandLab's web studio can't host plug-ins.
+- CI green: v0.29.1 run 38806354435 (6c75144), v0.29.0 run 38802562687 (bb1a64c). Live manual doc updated to 0.29.1.
 
 ## v0.28.0: one song style for the trio (2026-10-15, done from the "Mixology part 2" thread, on top of v0.27.0)
 - User (in the Mixology thread): one style list for all three, Mixology's (14 genres, 75 styles), a pop-up picker in
