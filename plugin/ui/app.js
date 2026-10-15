@@ -2,6 +2,7 @@
 // Talks to the plug-in through JUCE's web relays (parameters) and the "polisherMeters" event.
 
 import * as Juce from "./juce/index.js";
+import { GENRES as STYLE_GENRES, STYLES as SONG_STYLES } from "./mixstyles.js";
 
 const $ = (id) => document.getElementById(id);
 const MINUS = "−";
@@ -2393,9 +2394,35 @@ function toast(text) {
 // Auto-Master: genre / intensity / target, the listen -> analyse -> apply flow, the report, undo.
 const comboIndex = (st) => { const n = st.properties.choices.length || 3; return clamp(Math.round(st.getChoiceIndex ? st.getChoiceIndex() : st.value * (n - 1)), 0, n - 1); };
 const GENRES = ["Trap / Hip-Hop", "R&B", "Pop", "EDM", "Rock", "Acoustic"];
+// The song's style: Mixology's list of 75 (mixstyles.js, the same file in all three plug-ins), shared through the
+// suite link: pick it here, in Mixology or in Voxology, and all three follow. It sets Auto-Master's genre (the six
+// above are what the styles belong to); nothing else changes until you run Auto-Master.
+const SONG = { key: "", name: "", version: -1 };
+const AM_FIRST_STYLE = ["hiphop.modern", "rnb.smooth", "pop.modern", "electronic.edm", "rock.alternative", "folk.songwriter"];
+const pickStyleNative = Juce.getNativeFunction("pickStyle");
+// The Auto-Master genre a style belongs to (the same as MixHandoff.h's genreForMixStyle, which the plug-in uses).
+const AM_GENRE_OF = { hiphop: 0, trap: 0, rnb: 1, gospel: 1, pop: 2, worship: 2, latin: 2, afro: 2, electronic: 3, rock: 4, folk: 5, country: 5, jazz: 5, cinematic: 5 };
+const amGenreFor = (key) => AM_GENRE_OF[String(key).split(".")[0]] ?? comboIndex(P.amGenre);
+function pickSongStyle(key) {
+  const st = SONG_STYLES.find((s) => s.key === key);
+  if (!st) return;
+  SONG.key = st.key;
+  SONG.name = st.fullName;
+  pickStyleNative(st.key, st.fullName);
+  refreshAmChoices();
+}
 function refreshAmChoices() {
   const g = comboIndex(P.amGenre);
-  $("genre-name").textContent = (P.amGenre.properties.choices[g]) || GENRES[g];
+  const genreName = (P.amGenre.properties.choices[g]) || GENRES[g];
+  const st = SONG.key ? SONG_STYLES.find((s) => s.key === SONG.key) : null;
+  const nameEl = $("genre-name");
+  if (st) {
+    nameEl.innerHTML = `<small>${st.genre.name}</small>${st.name}`;
+    nameEl.title = `${st.fullName}: ${st.about} Auto-Master masters it as ${genreName}. Click for every style (the same in Mixology and Voxology).`;
+  } else {
+    nameEl.textContent = genreName;
+    nameEl.title = "Click to pick your song's style (the same list as Mixology and Voxology)";
+  }
   for (const [rowId, st] of [["row-intensity", P.amIntensity], ["row-target", P.amTarget]]) {
     const idx = comboIndex(st);
     const refSets = rowId === "row-target" && !!refInfo.profile;   // a reference sets the loudness instead
@@ -2408,10 +2435,59 @@ function refreshAmChoices() {
   fetchGenreCurve();   // the dotted line follows the genre (no-op when it already shows this one)
 }
 function stepGenre(d) {
-  const n = P.amGenre.properties.choices.length || GENRES.length;
-  P.amGenre.setChoiceIndex((comboIndex(P.amGenre) + d + n) % n);
-  refreshAmChoices();
+  // The arrows step through the styles of the song's genre (as in Mixology); from the genre's first style when
+  // none is chosen yet.
+  const st = SONG_STYLES.find((s) => s.key === (SONG.key || AM_FIRST_STYLE[comboIndex(P.amGenre)])) || SONG_STYLES[0];
+  const list = st.genre.styles;
+  const i = list.findIndex((s) => s.id === st.id);
+  pickSongStyle(`${st.genre.id}.${list[(i + d + list.length) % list.length].id}`);
 }
+// The picker: every genre, then its styles.
+function openStylePicker() {
+  let box = $("style-picker");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "style-picker";
+    box.className = "style-picker";
+    box.setAttribute("role", "dialog");
+    box.innerHTML = `<div class="manual-head"><span class="wm">SONG STYLE</span>
+        <span class="stp-note">The same list as Mixology and Voxology: pick it in any of them and all three follow.</span>
+        <button type="button" class="manual-close" aria-label="Close" title="Close (Esc)">&times;</button></div>
+      <div class="stp-cols"><nav class="stp-genres"></nav><div class="stp-styles"></div></div>`;
+    $("stage").appendChild(box);
+    box.querySelector(".manual-close").addEventListener("click", () => (box.hidden = true));
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !box.hidden) box.hidden = true; });
+  }
+  const now = SONG_STYLES.find((s) => s.key === (SONG.key || AM_FIRST_STYLE[comboIndex(P.amGenre)])) || SONG_STYLES[0];
+  let shownGenre = now.genre;
+  const genres = box.querySelector(".stp-genres"), styles = box.querySelector(".stp-styles");
+  const draw = () => {
+    genres.replaceChildren(...STYLE_GENRES.map((gn) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "stp-genre" + (gn === shownGenre ? " sel" : "") + (gn === now.genre ? " cur" : "");
+      b.innerHTML = `<i style="background:${gn.colour}"></i>${gn.name}`;
+      b.addEventListener("click", () => { shownGenre = gn; draw(); });
+      return b;
+    }));
+    styles.replaceChildren(...shownGenre.styles.map((s) => {
+      const key = `${shownGenre.id}.${s.id}`;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "stp-style" + (key === SONG.key ? " sel" : "");
+      b.innerHTML = `<b>${s.name}</b><span>${s.about}</span>`;
+      b.addEventListener("click", () => {
+        pickSongStyle(key);
+        box.hidden = true;
+        toast(`Style: ${shownGenre.name} - ${s.name}. Auto-Master masters it as ${GENRES[amGenreFor(key)]}; Mixology and Voxology follow.`);
+      });
+      return b;
+    }));
+  };
+  draw();
+  box.hidden = false;
+}
+$("genre-name").addEventListener("click", openStylePicker);
 $("genre-prev").addEventListener("click", () => stepGenre(-1));
 $("genre-next").addEventListener("click", () => stepGenre(1));
 for (const [rowId, st] of [["row-intensity", P.amIntensity], ["row-target", P.amTarget]])
@@ -3623,6 +3699,18 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   const wasAa = M.aaOn, wasAaHeard = M.aaHeard;
   Object.assign(M, frame);
   if (mixologyKey() !== wasMixology && learnView === "module") renderLearn();   // Mixology came, went, or changed
+  // The song's style: this project's, or one just picked in Mixology or Voxology.
+  if (frame.songStyle && frame.songStyle.version !== SONG.version) {
+    const first = SONG.version === -1, ss = frame.songStyle;
+    SONG.version = ss.version;
+    if (ss.key !== SONG.key) {
+      SONG.key = ss.key;
+      SONG.name = ss.name;
+      refreshAmChoices();
+      if (!first && ss.key && ss.from !== 3)
+        toast(`Style: ${ss.name}, picked in ${ss.from === 2 ? "Mixology" : "Voxology"}. Auto-Master masters it as ${GENRES[amGenreFor(ss.key)]}.`);
+    }
+  }
   if (M.amState === 2 && wasAm !== 2) amThinkSince = performance.now();   // the analysis started: time it
   else if (M.amState !== 2) amThinkSince = 0;
   watchListening(wasAm, wasTarget, wasFail, wasFar);

@@ -72,6 +72,8 @@
     amIntensity: { choices: ["Gentle", "Balanced", "Punchy"], value: 0.5 },
     amTarget: { choices: ["Stream -14", "Loud -9", "Club -7"], value: 0.5 },
   };
+  // The song's style, shared with Voxology and Mixology (none chosen yet: the picker shows the genre).
+  const song = { key: "", name: "", from: 0, version: 0 };
   // Simulated Match ref: starts with a reference loaded, so the preview and the smoke test show the pill,
   // the dashed curve and the comparison. "Loading" another file takes 0.6 s and loads a second song.
   const refCurve = (tilt) => Array.from({ length: 96 }, (_, i) => {
@@ -367,7 +369,7 @@
       __juce__functions: ["resetMeter", "startAutoMaster", "finishAutoMaster", "cancelAutoMaster", "getAutoMasterReport", "clearToneTarget",
                           "setAutoAnalyze", "getAutoAnalyze", "applyAutoEdit", "keepAutoEdit",
                           "loadReference", "clearReference", "getReference", "setMonitor",
-                          "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve"],
+                          "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve", "pickStyle"],
       __juce__registeredGlobalEventIds: [],
       __juce__sliders: Object.keys(sliders),
       __juce__toggles: Object.keys(toggles),
@@ -442,6 +444,12 @@
         if (payload.name === "historyGroup") {
           const [begin, label] = payload.params || [];
           if (begin) beginGroup(label || "Changes"); else endGroup();
+        }
+        if (payload.name === "pickStyle") {   // the song's style (the plug-in also sets Auto-Master's genre from it)
+          const [key, name] = payload.params || [];
+          Object.assign(song, { key, name, from: 3, version: song.version + 1 });
+          const genre = { hiphop: 0, trap: 0, rnb: 1, gospel: 1, pop: 2, worship: 2, latin: 2, afro: 2, electronic: 3, rock: 4 }[String(key).split(".")[0]];
+          combos.amGenre.value = (genre === undefined ? 5 : genre) / 5;
         }
         if (payload.name === "snapshotStore") snapStore((payload.params || [])[0]);
         if (payload.name === "snapshotRecall") result = snapRecall((payload.params || [])[0]);
@@ -520,7 +528,7 @@
         ? +(-62 + sliders.satDrive.value * 2.4 + 20 * Math.log10(sliders.satMix.value / 100 + 1e-3) + 3 * beat).toFixed(1) : -100,
       listen: mon.listen, mono: mon.mono, phone: mon.phone, listenNow: mon.listen,
       listenGain: mon.listen && !bypass ? monGain[mon.listen] : 0, listenUnder: mon.listen && !bypass ? monUnder[mon.listen] : -100,
-      mix, master,
+      mix, master, songStyle: song,
     };
     window.__JUCE__.backend && window.__JUCE__.backend.emitByBackend("polisherMeters", JSON.stringify(frame));
   }, 1000 / 30);

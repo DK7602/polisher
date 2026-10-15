@@ -13,9 +13,12 @@
 //              its tone against the style, a mono mix), so Masterology can start from the right place.
 //   - masters: each Masterology publishes its goal (loudness target, true-peak ceiling, genre), so Mixology's
 //              hand-off check uses Masterology's real numbers.
+//   - style:   the song's style (Mixology's list of 75, "genre.style"), the same in all three: pick it in any of them
+//              and the others follow. The newest choice wins (each saves the time you picked it with the project).
 // Framework-free C++17, lock-free (atomics and sequence counters), no allocation on the audio thread (the
 // publishers call it from their message thread anyway). Zero-filled memory is a valid, empty block.
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -25,7 +28,7 @@
 
 namespace suite
 {
-    constexpr std::uint32_t kLayout = 1;
+    constexpr std::uint32_t kLayout = 2;   // 2: the shared song style
     constexpr int kMaxVocals = 64;
     constexpr int kMaxMasters = 4;
     constexpr std::size_t kTextBytes = 64;
@@ -35,6 +38,9 @@ namespace suite
     std::uint32_t nameHash (const std::string& utf8);
     /** Milliseconds on a clock all libraries in the process share (steady; never 0). */
     std::uint64_t nowMs();
+    /** The wall clock in milliseconds since 1970: when you picked a style (kept with the project, so it outlives
+        the process; nowMs() doesn't). */
+    std::uint64_t wallMs();
     /** major.minor.patch packed as major << 16 | minor << 8 | patch. */
     constexpr std::uint32_t packVersion (int major, int minor, int patch)
     {
@@ -113,6 +119,18 @@ namespace suite
         std::uint64_t instanceId = 0;
     };
 
+    /** The song's style, shared by Voxology, Mixology and Masterology. */
+    struct StyleInfo
+    {
+        enum class From : std::uint32_t { none = 0, voxology, mixology, masterology };
+        std::string key;              // "hiphop.modern" ("" = none)
+        std::string name;             // "Hip Hop - Modern Clean"
+        std::uint64_t pickedAt = 0;   // when you picked it (wallMs; 0 = never picked: follows the others)
+        From from = From::none;       // the plug-in you picked it in
+        bool operator== (const StyleInfo& o) const { return key == o.key && pickedAt == o.pickedAt; }
+        bool operator!= (const StyleInfo& o) const { return ! (*this == o); }
+    };
+
     // ---- the shared memory ------------------------------------------------------------------------------
 
     template <std::size_t N> using Text = std::array<std::atomic<char>, N>;
@@ -150,10 +168,21 @@ namespace suite
         Text<kTextBytes> goalName, genreName;
     };
 
+    struct alignas (64) StyleSlot
+    {
+        std::atomic<std::uint32_t> seq;          // odd while written; writers take it with a compare-exchange
+        std::atomic<std::uint64_t> heartbeatMs;  // refreshed by the plug-ins that hold this style (0 = none)
+        std::atomic<std::uint64_t> holder;       // the instance that refreshed it last
+        std::atomic<std::uint64_t> pickedAt;
+        std::atomic<std::uint32_t> from;
+        Text<kTextBytes> key, name;
+    };
+
     struct Block
     {
         std::atomic<std::uint32_t> layout;
         MixSlot mix;
+        StyleSlot style;
         std::array<VocalSlot, kMaxVocals> vocals;
         std::array<MasterSlot, kMaxMasters> masters;
     };
@@ -193,7 +222,76 @@ namespace suite
         // ---- Mixology reads the masters -----------------------------------------------------------------
         std::vector<MasterInfo> masters (std::uint64_t nowMs) const;
 
+        // ---- all three: the song's style ---------------------------------------------------------------
+        /** Offer this instance's style, a few times a second (message thread). It goes in when it is newer than the
+            one there, or when no live plug-in holds the one there; holding the same one refreshes it. Returns the
+            style everyone should use now (yours, or a newer one: adopt it). Never-picked styles (pickedAt 0) are
+            never offered: they just get the shared one, if any (else they come back as they are). */
+        StyleInfo shareStyle (const StyleInfo& mine, std::uint64_t instanceId, std::uint64_t nowMs);
+        /** The shared style, if a live plug-in holds one. */
+        bool readStyle (StyleInfo&, std::uint64_t nowMs) const;
+        /** Closing: if this instance refreshed the shared style last, it lapses straight away (so a project opened
+            next in the same host doesn't take the closed project's style). */
+        void leaveStyle (std::uint64_t instanceId);
+
     private:
         Block& block;
+    };
+
+    /** One plug-in's side of the song's style (message thread): what it saves with the project and what it uses. */
+    class SongStyle
+    {
+    public:
+        explicit SongStyle (StyleInfo::From plugIn) : who (plugIn) {}
+
+        /** You picked a style in this plug-in: the others follow at their next sync. */
+        void pick (const std::string& key, const std::string& name)
+        {
+            const auto after = mine.pickedAt + 1;   // always newer than the style it replaces (clocks can step back)
+            mine.key = key;
+            mine.name = name;
+            mine.pickedAt = std::max (wallMs(), after);
+            mine.from = who;
+        }
+        /** The style this plug-in had before the suite style existed (pickedAt 0: the others' choice wins). */
+        void setUnpicked (const std::string& key, const std::string& name) { mine = StyleInfo {}; mine.key = key; mine.name = name; }
+
+        /** A few times a second. True when another plug-in's newer choice replaced this one's: use style() now. */
+        bool sync (Link& link, std::uint64_t instanceId, std::uint64_t nowMs)
+        {
+            const auto shared = link.shareStyle (mine, instanceId, nowMs);
+            if (shared.key.empty() || (shared == mine && shared.name == mine.name)) return false;
+            mine = shared;
+            return true;
+        }
+        void leave (Link& link, std::uint64_t instanceId) { link.leaveStyle (instanceId); }
+
+        const StyleInfo& style() const { return mine; }
+
+        /** Saved with the project: "key|name|pickedAt|from". */
+        std::string save() const
+        {
+            return mine.key + "|" + mine.name + "|" + std::to_string (mine.pickedAt) + "|" + std::to_string (static_cast<std::uint32_t> (mine.from));
+        }
+        /** False (nothing changed) when the text isn't a saved style (an older project). */
+        bool restore (const std::string& text)
+        {
+            std::vector<std::string> f;
+            std::size_t start = 0;
+            for (std::size_t i = 0; i <= text.size(); ++i)
+                if (i == text.size() || text[i] == '|') { f.push_back (text.substr (start, i - start)); start = i + 1; }
+            if (f.size() != 4 || f[0].empty()) return false;
+            StyleInfo s;
+            s.key = f[0];
+            s.name = f[1];
+            for (char c : f[2]) { if (c < '0' || c > '9') return false; s.pickedAt = s.pickedAt * 10 + static_cast<std::uint64_t> (c - '0'); }
+            s.from = static_cast<StyleInfo::From> (f[3] == "1" ? 1 : f[3] == "2" ? 2 : f[3] == "3" ? 3 : 0);
+            mine = s;
+            return true;
+        }
+
+    private:
+        StyleInfo::From who;
+        StyleInfo mine;
     };
 }

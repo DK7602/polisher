@@ -217,6 +217,12 @@ namespace suite
         return static_cast<std::uint64_t> (duration_cast<milliseconds> (steady_clock::now().time_since_epoch()).count()) + 1;
     }
 
+    std::uint64_t wallMs()
+    {
+        using namespace std::chrono;
+        return static_cast<std::uint64_t> (duration_cast<milliseconds> (system_clock::now().time_since_epoch()).count());
+    }
+
     Link::Link (void* memory) : block (*static_cast<Block*> (memory))
     {
         block.layout.store (kLayout, kRelaxed);
@@ -385,5 +391,76 @@ namespace suite
             out.push_back (std::move (m));
         }
         return out;
+    }
+
+    // ---- the song's style ------------------------------------------------------------------------------
+
+    namespace
+    {
+        bool lockStyle (std::atomic<std::uint32_t>& seq)
+        {
+            for (int attempt = 0; attempt < 1000; ++attempt)
+            {
+                auto v = seq.load (kRelaxed);
+                if ((v & 1u) == 0 && seq.compare_exchange_weak (v, v + 1, std::memory_order_acq_rel)) return true;
+            }
+            return false;   // another writer stuck mid-write (it crashed): try again next time
+        }
+    }
+
+    StyleInfo Link::shareStyle (const StyleInfo& mine, std::uint64_t instanceId, std::uint64_t now)
+    {
+        auto& s = block.style;
+        if (! lockStyle (s.seq)) return mine;
+        std::atomic_thread_fence (kAcquire);
+        StyleInfo there;
+        there.key = loadText (s.key);
+        there.name = loadText (s.name);
+        there.pickedAt = s.pickedAt.load (kRelaxed);
+        there.from = static_cast<StyleInfo::From> (s.from.load (kRelaxed));
+        const bool live = ! there.key.empty() && alive (s.heartbeatMs.load (kRelaxed), now);
+
+        StyleInfo result = live ? there : mine;
+        const bool offer = mine.pickedAt != 0 && ! mine.key.empty();
+        if (offer && (! live || mine.pickedAt > there.pickedAt))
+        {
+            storeText (s.key, mine.key);
+            storeText (s.name, mine.name);
+            s.pickedAt.store (mine.pickedAt, kRelaxed);
+            s.from.store (static_cast<std::uint32_t> (mine.from), kRelaxed);
+            result = mine;
+        }
+        if (offer && result == mine)
+        {
+            s.heartbeatMs.store (now, kRelaxed);
+            s.holder.store (instanceId, kRelaxed);
+        }
+        s.seq.fetch_add (1, kRelease);
+        return result;
+    }
+
+    bool Link::readStyle (StyleInfo& out, std::uint64_t now) const
+    {
+        const auto& s = block.style;
+        StyleInfo r;
+        std::uint64_t beat = 0;
+        const bool ok = readConsistent (s.seq, [&] {
+            r.key = loadText (s.key);
+            r.name = loadText (s.name);
+            r.pickedAt = s.pickedAt.load (kRelaxed);
+            r.from = static_cast<StyleInfo::From> (s.from.load (kRelaxed));
+            beat = s.heartbeatMs.load (kRelaxed);
+        });
+        if (! ok || r.key.empty() || ! alive (beat, now)) return false;
+        out = r;
+        return true;
+    }
+
+    void Link::leaveStyle (std::uint64_t instanceId)
+    {
+        auto& s = block.style;
+        if (! lockStyle (s.seq)) return;
+        if (s.holder.load (kRelaxed) == instanceId) s.heartbeatMs.store (0, kRelaxed);
+        s.seq.fetch_add (1, kRelease);
     }
 }

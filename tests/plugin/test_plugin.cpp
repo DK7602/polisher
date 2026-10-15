@@ -3085,6 +3085,50 @@ TEST_CASE ("Plug-in: the suite link (Masterology's goal reaches Mixology, Mixolo
     CHECK (link.masters (suite::nowMs()).empty());
 }
 
+TEST_CASE ("Plug-in: the song's style is shared (picked here or in Mixology), sets Auto-Master's genre, saved with the song", "[plugin][suite]")
+{
+    auto& link = suite::Link::process();
+    auto a = makeProcessor (48000.0, 512, false);
+    a->updateSuite();
+    CHECK (a->songStyleNow().key.empty());   // none chosen yet
+    CHECK (plainOf (*a, "amGenre") == 0.0f);
+
+    // Picked here: Auto-Master's genre follows (Rock), the style is shared and published as the genre's name.
+    a->pickStyle ("rock.metal", "Rock - Metal");
+    CHECK (plainOf (*a, "amGenre") == 4.0f);
+    suite::StyleInfo shared;
+    REQUIRE (link.readStyle (shared, suite::nowMs()));
+    CHECK (shared.key == "rock.metal");
+    CHECK (shared.from == suite::StyleInfo::From::masterology);
+    auto goals = link.masters (suite::nowMs());
+    REQUIRE (goals.size() == 1);
+    CHECK (goals[0].genreName == "Rock - Metal");
+
+    // Picked in Mixology a moment later (another plug-in file; here, the same memory): this Masterology follows.
+    suite::SongStyle mixology (suite::StyleInfo::From::mixology);
+    REQUIRE (mixology.restore ("electronic.house|Electronic - House|" + std::to_string (shared.pickedAt + 5) + "|2"));
+    mixology.sync (link, 991, suite::nowMs());
+    const auto before = a->songStyleVersion();
+    a->updateSuite();
+    CHECK (a->songStyleNow().key == "electronic.house");
+    CHECK (a->songStyleVersion() != before);
+    CHECK (plainOf (*a, "amGenre") == 3.0f);   // EDM
+
+    // Saved with the song, with when it was picked.
+    juce::MemoryBlock state;
+    a->getStateInformation (state);
+    mixology.leave (link, 991);
+    a.reset();
+    CHECK_FALSE (link.readStyle (shared, suite::nowMs()));   // everyone that held it is gone
+    auto b = makeProcessor (48000.0, 512, false);
+    b->setStateInformation (state.getData(), (int) state.getSize());
+    CHECK (b->songStyleNow().key == "electronic.house");
+    CHECK (b->songStyleNow().from == suite::StyleInfo::From::mixology);
+    b->updateSuite();
+    REQUIRE (link.readStyle (shared, suite::nowMs()));
+    CHECK (shared.key == "electronic.house");
+}
+
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:
 // a function-local static would be torn down after JUCE's own shutdown objects and crash on exit.
 int main (int argc, char* argv[])

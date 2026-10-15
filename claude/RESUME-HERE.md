@@ -1,7 +1,8 @@
-# Masterology (formerly Polisher) — resume here (updated 2026-10-15, v0.27.0)
+# Masterology (formerly Polisher) — resume here (updated 2026-10-15, v0.28.0)
 
 Read this first in a new chat. Code: github.com/DK7602/polisher. Newest work: branch
-`claude/eloquent-einstein-sscadx` (v0.27.0 = Auto Analyze, 2026-10-15; v0.26.0 = the suite link with Voxology /
+`claude/eloquent-einstein-sscadx` (v0.28.0 = one song style shared with Voxology / Mixology, 2026-10-15;
+v0.27.0 = Auto Analyze, 2026-10-15; v0.26.0 = the suite link with Voxology /
 Mixology; v0.25.0 = the rename to Masterology). Merge to `main` when ready. Download Masterology-Windows from the latest
 green Actions run (v0.26.0: run 38657259925; v0.27.0: see the section below). The newest thread is "Masterology Auto
 Edit" (started 2026-10-15).
@@ -64,6 +65,27 @@ analyze option as well. it could then give option to edit in the learn window as
   before committing.
 - NOT YET HEARD / USED by the user. Ask them: run Auto-Master, switch Auto Analyze on, change the mix in Mixology (e.g. 808 +3
   dB), play through the hook, and see whether the cards make sense.
+
+## v0.28.0: one song style for the trio (2026-10-15, done from the "Mixology part 2" thread, on top of v0.27.0)
+- User (in the Mixology thread): one style list for all three, Mixology's (14 genres, 75 styles), a pop-up picker in
+  each, and when two or three are in a project a style change in one changes all. "yes go ahead, do it here".
+  Also a suite rule: Auto Analyze stays on across sessions (v0.27.0 already saves the switch with the project).
+  The style feeds Auto Analyze's mix key through Mixology's hand-off (styleKey), so a style change restarts its listen.
+- suite/SuiteLink.h + .cpp (master copy in DK7602/mixology): kLayout 2 (older builds don't see newer ones: update all
+  three together). StyleSlot (seqlock taken by CAS: several writers) + StyleInfo {key, name, pickedAt (wallMs), from}
+  + SongStyle helper: pick(), sync() a few times a second (true = another plug-in's newer pick replaced ours),
+  save()/restore() "key|name|pickedAt|from", leave() on close (the slot lapses at once when its last holder goes,
+  else after kAliveMs). The newest pick wins, also after reopening (pickedAt is saved). tests/test_suite.cpp has the
+  same new case as Mixology's (same file in Voxology too).
+- plugin/ui/mixstyles.js: Mixology's list, THE SAME FILE IN ALL THREE (keys never change).
+- Processor: songStyle (styleLock), pickStyle(key, name) (from the window), updateSuite() syncs; a change sets
+  amGenre = handoff::genreForMixStyle(key) (only Auto-Master's next run and the dotted line use it); publishMaster's
+  genreName = the style's name when one is chosen; state attribute "songStyle" (absent until one is chosen: an old
+  project follows Mixology's). Editor: native pickStyle, frame.songStyle {key, name, from, version}.
+- UI: genre pill shows the style (genre small above, style below), click = picker (genres left, styles right, the
+  manual's look); arrows step the styles of the song's genre (from AM_FIRST_STYLE[amGenre] when none chosen); toast
+  when another plug-in picked it. mock.js simulates pickStyle. Plug-in test "[plugin][suite]" (the song's style ...).
+- Manual updated (Your first master step 1, With Voxology and Mixology) and its live Claude Docs copy.
 
 ## NAME CHANGE: Polisher -> Masterology (v0.25.0, 2026-10-13)
 User renamed the plug-in Masterology and supplied the logo (chrome crown + red/blue waves + MASTEROLOGY). Older

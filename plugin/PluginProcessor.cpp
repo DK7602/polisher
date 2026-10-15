@@ -109,6 +109,8 @@ PolisherAudioProcessor::~PolisherAudioProcessor()
 {
     stopTimer();
     suite::Link::process().releaseMaster (suiteSlot, suiteId);
+    const juce::ScopedLock sl (styleLock);
+    songStyle.leave (suite::Link::process(), suiteId);
 }
 
 void PolisherAudioProcessor::updateSuite()
@@ -127,6 +129,17 @@ void PolisherAudioProcessor::updateSuite()
             mixIn (static_cast<std::uint64_t> (std::lround (d * 10.0f)));
         mixIn (suite::nameHash (handoff.styleKey));
         autoMaster.setMixKey (key);
+    }
+    // The song's style: the newest choice in Voxology, Mixology or Masterology wins.
+    bool adopted = false;
+    {
+        const juce::ScopedLock sl (styleLock);
+        adopted = songStyle.sync (link, suiteId, now);
+    }
+    if (adopted)
+    {
+        ++styleVersion;
+        applyStyleGenre();
     }
     if (suiteSlot < 0) suiteSlot = link.claimMaster (suiteId, now);
     if (suiteSlot < 0) return;   // four Masterologys already
@@ -150,10 +163,35 @@ void PolisherAudioProcessor::updateSuite()
         g.targetLufs = static_cast<float> (polisher::targetLufs (static_cast<polisher::LoudnessTarget> (target)));
     }
     g.genreName = polisher::genreName (static_cast<polisher::Genre> (genre));
+    if (const auto st = songStyleNow(); ! st.name.empty()) g.genreName = st.name;
     g.ceilingDbtp = ceilingParam->load();
     g.inputLufs = meters.inputIntegrated.load();
     g.version = static_cast<std::uint32_t> (JucePlugin_VersionCode);
     if (! link.publishMaster (suiteSlot, suiteId, g, now)) suiteSlot = -1;   // taken over while silent: claim again
+}
+
+void PolisherAudioProcessor::pickStyle (const std::string& key, const std::string& name)
+{
+    {
+        const juce::ScopedLock sl (styleLock);
+        if (key == songStyle.style().key) return;
+        songStyle.pick (key, name);
+    }
+    ++styleVersion;
+    applyStyleGenre();
+    markStateChanged();
+    updateSuite();   // the others follow at once
+}
+
+void PolisherAudioProcessor::applyStyleGenre()
+{
+    // Auto-Master's genre (6) is what the song's style (75) belongs to. Only Auto-Master's next run and the dotted
+    // target line use it: the sound you have now doesn't change.
+    const int genre = polisher::handoff::genreForMixStyle (songStyleNow().key);
+    if (genre < 0) return;
+    auto* p = parameters.getParameter ("amGenre");
+    const float v = p->convertTo0to1 (static_cast<float> (genre));
+    if (std::abs (p->getValue() - v) > 1e-4f) p->setValueNotifyingHost (v);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::createParameterLayout()
@@ -983,6 +1021,12 @@ void PolisherAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
         xml->setAttribute ("amReport", autoMaster.getReportForSaving());
         if (autoMaster.getAutoAnalyze())
             xml->setAttribute ("autoAnalyze", 1);   // absent: off (also every state saved before it existed)
+        {
+            // The song's style (shared with Voxology and Mixology) and when you picked it. Absent before one was chosen.
+            const juce::ScopedLock sl (styleLock);
+            if (! songStyle.style().key.empty())
+                xml->setAttribute ("songStyle", juce::String::fromUTF8 (songStyle.save().c_str()));
+        }
         // Match ref: the reference song's measurements and name (no audio). Absent when none is loaded.
         if (const auto ref = reference.getJsonForSaving(); ref.isNotEmpty())
             xml->setAttribute ("amReference", ref);
@@ -1009,6 +1053,14 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
             xml->removeAttribute ("amReport");
             xml->removeAttribute ("amReference");
             xml->removeAttribute ("toneTarget");
+            {
+                // The song's style ("" before one was chosen: the project then follows Mixology's or Voxology's).
+                const juce::ScopedLock sl (styleLock);
+                songStyle = suite::SongStyle { suite::StyleInfo::From::masterology };
+                songStyle.restore (xml->getStringAttribute ("songStyle").toStdString());
+                ++styleVersion;
+            }
+            xml->removeAttribute ("songStyle");
             // Snapshots: their own element ("" in states from before snapshots: every slot empty).
             std::unique_ptr<juce::XmlElement> savedSnapshots;
             if (auto* e = xml->getChildByName (SettingsSnapshots::kTag))

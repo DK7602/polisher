@@ -222,6 +222,13 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                                  audioProcessor.setPhoneCheck (args.size() > 2 && static_cast<bool> (args[2]));
                                  complete (true);
                              })
+        // The song's style (Mixology's list, the same in all three plug-ins): pickStyle(key, name). Sets the
+        // Auto-Master genre it belongs to; Voxology and Mixology in the project follow.
+        .withNativeFunction ("pickStyle", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 if (args.size() > 1) audioProcessor.pickStyle (args[0].toString().toStdString(), args[1].toString().toStdString());
+                                 complete (true);
+                             })
         // The spectrum's dotted line: a genre's typical balance (what Auto-Master's EQ aims for) as the
         // display draws it at this sample rate, computed by the engine so the page holds no numbers of
         // its own. getGenreCurve(genreIndex) -> JSON { genre, name, lufs, sr, displayDb }.
@@ -579,6 +586,16 @@ void PolisherWebEditor::timerCallback()
     const int transport = m.transport.load();
     const bool running = nowMs - lastSoundMs < 1000;
     frame->setProperty ("playing",    running && (transport == 1 || (transport < 0 && m.momentary.load() > -70.0f)));
+    {
+        // The song's style, shared with Voxology and Mixology ("" = none chosen yet).
+        const auto st = audioProcessor.songStyleNow();
+        auto* so = new juce::DynamicObject();
+        so->setProperty ("key", juce::String::fromUTF8 (st.key.c_str()));
+        so->setProperty ("name", juce::String::fromUTF8 (st.name.c_str()));
+        so->setProperty ("from", static_cast<int> (st.from));   // 1 Voxology, 2 Mixology, 3 Masterology
+        so->setProperty ("version", static_cast<int> (audioProcessor.songStyleVersion()));
+        frame->setProperty ("songStyle", juce::var (so));
+    }
     // The suite link: Mixology's hand-off for this song (null without a Mixology in the project).
     if (suite::MixInfo h; audioProcessor.mixologyHandoff (h))
     {

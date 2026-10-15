@@ -90,7 +90,7 @@ TEST_CASE ("Suite: Mixology's hand-off reaches Masterology; Masterology's goal r
     g.genreName = "Hip-Hop / Trap";
     g.targetLufs = -9.0f;
     g.ceilingDbtp = -1.0f;
-    g.version = suite::packVersion (0, 26, 0);
+    g.version = suite::packVersion (0, 28, 0);
     master.publishMaster (s, 7, g, 2100);
     const auto ms = mix.masters (2200);
     REQUIRE (ms.size() == 1);
@@ -161,4 +161,62 @@ TEST_CASE ("Suite: this process's block is shared across libraries", "[suite]")
     CHECK (&suite::Link::process() == &suite::Link::process());
     CHECK (suite::Link::processShared());
     CHECK (suite::nowMs() > 0);
+}
+
+TEST_CASE ("Suite: the song's style - the newest choice wins, in any plug-in", "[suite]")
+{
+    Memory mem;
+    suite::Link a (mem.data()), b (mem.data()), c (mem.data());
+    suite::SongStyle mix (suite::StyleInfo::From::mixology), master (suite::StyleInfo::From::masterology), vox (suite::StyleInfo::From::voxology);
+    suite::StyleInfo got;
+    CHECK_FALSE (a.readStyle (got, 100));
+
+    // Never picked anywhere: nothing is shared, everyone keeps their own.
+    master.setUnpicked ("pop.modern", "Pop - Modern");
+    CHECK_FALSE (master.sync (b, 2, 100));
+    CHECK_FALSE (b.readStyle (got, 100));
+
+    // Picked in Mixology: Masterology and Voxology follow.
+    mix.pick ("trap.drill", "Trap & Drill - Drill");
+    CHECK_FALSE (mix.sync (a, 1, 200));
+    REQUIRE (b.readStyle (got, 300));
+    CHECK (got.key == "trap.drill");
+    CHECK (got.from == suite::StyleInfo::From::mixology);
+    CHECK (master.sync (b, 2, 300));
+    CHECK (master.style().key == "trap.drill");
+    CHECK (vox.sync (c, 3, 300));
+    CHECK (vox.style().name == "Trap & Drill - Drill");
+    CHECK_FALSE (vox.sync (c, 3, 400));   // nothing new
+
+    // Then picked in Voxology (later): Mixology follows.
+    vox.pick ("rnb.smooth", "R&B & Soul - Smooth R&B");
+    CHECK_FALSE (vox.sync (c, 3, 500));
+    CHECK (mix.sync (a, 1, 600));
+    CHECK (mix.style().key == "rnb.smooth");
+
+    // An older saved choice (a project reopened) doesn't beat the newer one.
+    suite::SongStyle old (suite::StyleInfo::From::masterology);
+    REQUIRE (old.restore ("pop.kpop|Pop - K-Pop|5|3"));
+    CHECK (old.sync (b, 4, 700));
+    CHECK (old.style().key == "rnb.smooth");
+
+    // Saved text round trip; older projects (no text) restore nothing.
+    suite::SongStyle again (suite::StyleInfo::From::mixology);
+    REQUIRE (again.restore (mix.save()));
+    CHECK (again.style() == mix.style());
+    CHECK (again.style().from == suite::StyleInfo::From::voxology);
+    CHECK_FALSE (again.restore (""));
+    CHECK_FALSE (again.restore ("hiphop.modern"));
+
+    // Everyone that held it closes: it lapses at once, so the next project starts from its own saved choices.
+    mix.leave (a, 1); vox.leave (c, 3); master.leave (b, 2); old.leave (b, 4);
+    CHECK_FALSE (a.readStyle (got, 700));
+    suite::SongStyle next (suite::StyleInfo::From::masterology);
+    REQUIRE (next.restore ("pop.kpop|Pop - K-Pop|5|3"));
+    CHECK_FALSE (next.sync (b, 5, 800));
+    CHECK (next.style().key == "pop.kpop");
+
+    // And when nobody refreshes it, it lapses after kAliveMs.
+    CHECK (a.readStyle (got, 800 + suite::kAliveMs));
+    CHECK_FALSE (a.readStyle (got, 800 + suite::kAliveMs + 1));
 }

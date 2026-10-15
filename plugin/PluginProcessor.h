@@ -152,6 +152,13 @@ public:
         is in this project. Message thread. */
     bool mixologyHandoff (suite::MixInfo& out) const { if (! hasHandoff) return false; out = handoff; return true; }
 
+    /** The song's style (Mixology's list of 75, the same in Voxology and Mixology): you picked it here. Sets the
+        Auto-Master genre it belongs to; the other plug-ins in the project follow. Message thread. */
+    void pickStyle (const std::string& key, const std::string& name);
+    /** The style ("" = none chosen yet) and a counter that goes up whenever it changed (here or in another plug-in). */
+    suite::StyleInfo songStyleNow() const { const juce::ScopedLock sl (styleLock); return songStyle.style(); }
+    std::uint32_t songStyleVersion() const { return styleVersion.load(); }
+
     /** The reference song for Match ref (its measurements only), saved with the state. */
     ReferenceTrack reference;
     /** Match ref from the window: read and measure a song / forget it. Both mark the project as changed
@@ -201,6 +208,10 @@ private:
     std::uint64_t suiteId = 0;
     suite::MixInfo handoff;
     bool hasHandoff = false;
+    mutable juce::CriticalSection styleLock;
+    suite::SongStyle songStyle { suite::StyleInfo::From::masterology };   // under styleLock
+    std::atomic<std::uint32_t> styleVersion { 0 };
+    void applyStyleGenre();   // the Auto-Master genre the song's style belongs to
     int suiteRefVersion = -1;
     polisher::ReferenceProfile suiteRef;
 

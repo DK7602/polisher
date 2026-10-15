@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.27.0 · October 2026
+Version 0.28.0 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
@@ -8,13 +8,13 @@ Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d7
 
 Masterology (called **Polisher** before version 0.25.0) is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds twelve modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.27.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.28.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 
 1. Put Masterology in the **last insert slot of Stereo Out**.
 2. Turn off any other limiter, clipper or mastering chain on Stereo Out.
-3. Pick your genre, an intensity and a target at the top.
+3. Pick your song's style, an intensity and a target at the top.
 4. Press **Auto-Master** and play your whole song from the start. It finds the loudest part by itself and finishes when the song ends.
 5. Turn on **MATCH** and flip **A / B** to check the result at equal loudness.
 6. Read the **Learn** panel on the right: it explains every choice and tells you if anything needs fixing.
@@ -45,7 +45,7 @@ Leave headroom going in. A good input is about **−17 LUFS integrated with peak
 
 ### Your first master
 
-1. Click the genre name at the top and choose yours (Trap / Hip-Hop, R&B, Pop, EDM, Rock, Acoustic).
+1. Click the style name at the top and choose your song's genre, then its style (for example Hip Hop, then G-Funk). It's the same list of 75 styles as Mixology and Voxology, and the three share it (see [With Voxology and Mixology](#with-voxology-and-mixology)). The style sets Auto-Master's genre: Hip Hop and Trap master as **Trap / Hip-Hop**; R&B and Gospel as **R&B**; Pop, Worship, Latin and Afro as **Pop**; Electronic as **EDM**; Rock as **Rock**; Country, Folk, Jazz and Cinematic as **Acoustic**. The small text above the name is the genre, the arrows step through its styles.
 2. Choose **Intensity**: Gentle, Balanced or Punchy. Balanced is the default.
 3. Choose **Target**: Stream −14, Loud −9 or Club −7. Loud −9 is the default.
 4. Click **Auto-Master**, then play your song from the start. It finishes by itself 4 seconds after the song ends (or click it again any time after 12 seconds to use what it heard).
@@ -618,10 +618,12 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 
 ## With Voxology and Mixology
 
-**Voxology** makes each vocal sound great, **Mixology** makes all your tracks work together, **Masterology** turns the finished mix into the master. In the same Cubase project they tell each other what they do. Nothing to set up: use Masterology 0.26, Mixology 0.8 and Voxology 0.47 (or newer), with Mixology on the Stereo Out before Masterology.
+**Voxology** makes each vocal sound great, **Mixology** makes all your tracks work together, **Masterology** turns the finished mix into the master. In the same Cubase project they tell each other what they do. Nothing to set up: use Masterology 0.28, Mixology 0.12 and Voxology 0.49 (or newer; update all three together, older and newer ones don't see each other), with Mixology on the Stereo Out before Masterology.
+
+- **One song style for all three**: pick the style in Masterology, Mixology or Voxology and the others in the project follow within a second (Masterology shows "Style: ..., picked in Mixology"). The newest choice wins, also after you reopen the project. Here it sets Auto-Master's genre; your master doesn't change until you run Auto-Master again.
 
 - **From Mixology** (in Learn): Mixology tells Masterology the mix style you picked there, how loud the mix comes in and how high its peaks are, and, after Mixology's Analyze Mix, how its tone sits against that style. Learn shows it as **FROM MIXOLOGY** at the bottom of the panel.
-- **Use Mixology's genre**: when Mixology's style points to another Auto-Master genre than the one at the top (for example Mixology mixed it as R&B and the genre says Trap / Hip-Hop), Learn shows the note at the top with a button, **USE R&B (MIXOLOGY'S STYLE)**. One click sets the genre; run Auto-Master after.
+- **Use Mixology's genre**: with the shared style the genre follows Mixology's by itself. If you set Auto-Master's genre another way (for example a Cubase automation lane) and it no longer matches Mixology's style, Learn shows the note at the top with a button, **USE R&B (MIXOLOGY'S STYLE)**. One click sets the genre; run Auto-Master after.
 - **Warnings from the mix**: Learn also says when Mixology heard a **mono mix** at the Stereo Out (left = right), when **Mixology's Limiter** is on (two limiters squash the mix twice: switch Mixology's off), and when the mix leaves almost no room (peaks above −1 dBTP).
 - **Auto Analyze with Mixology**: when Mixology's advice on the mix changes (its Analyze Mix or Auto Analyze heard something new), Masterology's Auto Analyze starts listening again, so its edits are about the mix as Mixology left it. Use both: fix the mix in Mixology, then let Masterology's Auto Analyze adjust the master.
 - **Masterology's goal in Mixology**: Mixology's Master page shows what Masterology aims for (for example "Masterology: −9 LUFS · −1.0 dBTP": the target, or a reference's loudness while Match ref is on, and the Maximizer's ceiling).
