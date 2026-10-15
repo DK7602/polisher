@@ -1,9 +1,9 @@
-# Polisher — resume here (updated 2026-10-13)
+# Masterology (formerly Polisher) — resume here (updated 2026-10-15)
 
 Read this first in a new chat. Code: github.com/DK7602/polisher. Newest work: branch
-`claude/eloquent-einstein-sscadx` (v0.24.0, 2026-10-13 sessions below; it fast-forwarded from
-`claude/gracious-wright-tgs0no`, which is older). Merge to `main` when ready. Every push builds Mac + Windows; download Polisher-Windows from the
-latest green Actions run.
+`claude/eloquent-einstein-sscadx` (v0.26.0 = the suite link with Voxology / Mixology, 2026-10-14; v0.25.0 = the
+rename to Masterology). Merge to `main` when ready. Download Masterology-Windows from the latest green Actions run
+(v0.26.0: run 38657259925). The newest thread is "Masterology Auto Edit" (started 2026-10-15).
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
 
