@@ -450,6 +450,7 @@
           Object.assign(song, { key, name, from: 3, version: song.version + 1 });
           const genre = { hiphop: 0, trap: 0, rnb: 1, gospel: 1, pop: 2, worship: 2, latin: 2, afro: 2, electronic: 3, rock: 4 }[String(key).split(".")[0]];
           combos.amGenre.value = (genre === undefined ? 5 : genre) / 5;
+          send("__juce__comboBoxamGenre", { eventType: "valueChanged", value: combos.amGenre.value });   // as the host tells the window
         }
         if (payload.name === "snapshotStore") snapStore((payload.params || [])[0]);
         if (payload.name === "snapshotRecall") result = snapRecall((payload.params || [])[0]);

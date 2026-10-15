@@ -298,20 +298,33 @@ await page.waitForTimeout(200);
 gc = await genre();
 check(gc.pressed === 'true' && gc.points === 96 && gc.inside > 60, `clicking its legend entry draws the genre line (${gc.points} points, ${gc.inside} inside the plot)`);
 const trapD = gc.d;
-await page.click('#genre-next');
-await page.waitForTimeout(300);
+// The song's style (Mixology's list, shared with Voxology and Mixology) sets the genre: pick one in the picker.
+const pickSongStyle = async (genreName, styleName) => {
+  await page.click('#genre-name');
+  await page.waitForTimeout(150);
+  await page.locator('.stp-genre', { hasText: genreName }).first().click();
+  await page.locator('.stp-style', { hasText: styleName }).first().click();
+  await page.waitForTimeout(300);
+};
+check(await page.evaluate(() => document.querySelectorAll('.stp-genre').length === 0), 'the style picker opens only when asked');
+await pickSongStyle('R&B & Soul', 'Smooth R&B');
 gc = await genre();
-check(gc.legend === 'R&B target' && gc.points === 96 && gc.d !== trapD, `the line and its legend follow the genre ("${gc.legend}")`);
-await page.click('#genre-prev');
+check(gc.legend === 'R&B target' && gc.points === 96 && gc.d !== trapD, `the line and its legend follow the song's style ("${gc.legend}")`);
+const pill = await page.evaluate(() => ({ text: document.getElementById('genre-name').textContent, open: !document.getElementById('style-picker').hidden,
+                                           genres: document.querySelectorAll('.stp-genre').length }));
+check(pill.text === 'R&B & SoulSmooth R&B' && !pill.open && pill.genres === 14, `the pill shows the style under its genre, the picker closes (${JSON.stringify(pill)})`);
+await page.click('#genre-next');   // the arrows step the styles of the song's genre
 await page.waitForTimeout(300);
+check((await page.evaluate(() => document.getElementById('genre-name').textContent)) === 'R&B & Soul90s R&B' && (await genre()).legend === 'R&B target',
+      'the arrows step to the next style of the genre');
+await pickSongStyle('Hip Hop', 'Modern Clean');
 check((await genre()).legend === 'Trap target', 'and back to Trap');
 await pick('Tonal EQ');
 await page.waitForTimeout(200);
 const eqLearn = await page.evaluate(() => document.getElementById('learn-body').textContent);
 check(/Dotted line · Trap target/.test(eqLearn) && /above the dotted line/.test(eqLearn), 'EQ Learn explains how to read the dotted line');
 // Everything under the spectrum fits on one line, even with the EQ curve's entry and the longest genre name.
-for (let i = 0; i < 5; i++) await page.click('#genre-next');   // -> Acoustic
-await page.waitForTimeout(300);
+await pickSongStyle('Folk & Acoustic', 'Singer-Songwriter');   // -> Acoustic
 const fit = await page.evaluate(() => {
   const lg = document.querySelector('.legend'), t = document.querySelector('.view-toggle').getBoundingClientRect();
   const screen = document.getElementById('spectrum-screen').getBoundingClientRect();
@@ -319,7 +332,7 @@ const fit = await page.evaluate(() => {
            oneLine: lg.getBoundingClientRect().height < 26 };
 });
 check(fit.over <= 0 && fit.inside && fit.oneLine, `legend fits on one line with "${fit.name}" and the EQ entry (overflow ${fit.over} px)`);
-await page.click('#genre-next');   // -> Trap again
+await pickSongStyle('Hip Hop', 'Modern Clean');   // -> Trap again
 await page.click('#btn-ref-clear');
 await page.waitForTimeout(400);
 gc = await genre();
