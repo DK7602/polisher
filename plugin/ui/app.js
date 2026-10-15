@@ -3151,8 +3151,12 @@ async function fetchAutoAnalyze() {
     if (!first && edits) toast(`Auto Analyze: your mix changed. ${edits === 1 ? "1 edit is" : `${edits} edits are`} ready in Learn.`);
   }
   updateAmButton();
-  if (learnOn && ["module", "report", "auto"].includes(learnView)) renderLearn();
+  // The auto page follows every change; the module pages and the report only when the strip changes.
+  const sig = `${M.aaOn}|${edits}`;
+  if (learnOn && (learnView === "auto" || (["module", "report"].includes(learnView) && sig !== aaStripSig))) renderLearn();
+  aaStripSig = sig;
 }
+let aaStripSig = "";
 function aaTime(iso) { return snapTime(iso); }
 function aaHookText() {
   const L = amReport && amReport.listen;
@@ -3167,10 +3171,10 @@ function aaStatusText() {
   switch (p) {
     case "busy": return "Paused while Auto-Master listens and thinks.";
     case "settings": return "Paused: you changed the genre, intensity, target or reference since Auto-Master ran, so its plan doesn't apply any more.";
-    case "stopped": return `Waiting for the song. Press play: it checks the hook or drop${hook ? ` (${hook})` : ""}, the part Auto-Master set your master from.`;
+    case "stopped": return `Waiting for the song (it starts listening afresh after every stop). Press play: it checks the hook or drop${hook ? ` (${hook})` : ""}, the part Auto-Master set your master from.`;
     case "listening": return `Listening · ${fmtTime(heard)} heard. It checks once it has heard 20 seconds, including the hook or drop${hook ? ` (${hook})` : ""}.`;
     case "hook": return `Listening · ${fmtTime(heard)} heard. Play the hook or drop${hook ? ` (${hook})` : ""}: Auto-Master set your master from that part, so that's where Auto Analyze compares, like with like.`;
-    case "checking": return "Checking the mix you just played (a few seconds)…";
+    case "checking": return "Checking the mix you just played (usually 5–15 seconds; longer at 96 kHz and up)…";
     case "cantJudge": return "It couldn't judge the last part it heard: it didn't sound like a full mix. Play the song with every track on.";
     default: return aa && aa.checked ? `Listening · last checked at ${aaTime(aa.checked)}.` : "Listening.";
   }
@@ -3289,9 +3293,10 @@ function renderAutoLearn(body) {
       { need: "Yes, if you want the master to follow the new choice.",
         steps: ["Click Auto-Master and play your whole song from the start.", "Auto Analyze carries on with the new plan by itself."] }));
 
-  const edits = (M.aaOn && aa && aa.edits) || [];
+  const live = !["settings", "noReport", "busy"].includes(M.aaPause);
+  const edits = (M.aaOn && live && aa && aa.edits) || [];
   const mix = aa && aa.mix;
-  if (M.aaOn && aa && aa.hasCheck) {
+  if (M.aaOn && live && aa && aa.hasCheck) {
     body.appendChild(para("l-p", aaMixText(mix)));
     if (edits.length) {
       body.appendChild(sep());

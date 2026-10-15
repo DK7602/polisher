@@ -173,6 +173,27 @@ TEST_CASE ("Auto Analyze: the clipper switching on, Mono Below on/off, and the U
     CHECK_FALSE (change (find (withUl, "ul"), "ulSquashSet")->shown);
 }
 
+TEST_CASE ("Auto Analyze: steps up and down count alike, and a step read back from a float still counts", "[autoanalyze]")
+{
+    // Mono Below 80 -> 100 Hz and 100 -> 80 Hz are the same size of step.
+    for (auto [from, to] : { std::pair { 80.0, 100.0 }, std::pair { 100.0, 80.0 }, std::pair { 100.0, 120.0 }, std::pair { 120.0, 100.0 } })
+    {
+        const Values planned { { "bassMono", from } };
+        CHECK (find (planEdits (planned, { { "bassMono", to } }, planned), "bass") != nullptr);
+    }
+    // A plan stored as a float (-20.3 reads -20.2999992) and a change of exactly the worth.
+    const Values planned { { "eqGain1", static_cast<double> (0.35f) }, { "dynThr1", static_cast<double> (-20.3f) } };
+    CHECK (find (planEdits (planned, { { "eqGain1", 1.1 }, { "dynThr1", -20.3 } }, planned), "eq") != nullptr);
+    CHECK (find (planEdits (planned, { { "eqGain1", 0.35 }, { "dynThr1", -18.8 } }, planned), "dyn") != nullptr);
+    // Mono Below switched off by you stays off while Auto-Master keeps it on; Auto-Master switching it off is offered.
+    CHECK (planEdits ({ { "bassMono", 80.0 } }, { { "bassMono", 120.0 } }, { { "bassMono", 0.0 } }).empty());
+    const auto off = planEdits ({ { "bassMono", 80.0 } }, { { "bassMono", 0.0 } }, { { "bassMono", 80.0 } });
+    REQUIRE (change (find (off, "bass"), "bassMono") != nullptr);
+    CHECK (change (find (off, "bass"), "bassMono")->to == 0.0);
+    // A stretch heard twice counts once.
+    CHECK_THAT (overlapSeconds ({ { 10.0, 13.0 }, { 10.0, 13.0 } }, { { 0.0, 60.0 } }), WithinAbs (3.0, 1.0e-9));
+}
+
 TEST_CASE ("Auto Analyze changes the cards only when the advice really changed", "[autoanalyze]")
 {
     const Values planned { { "eqGain1", 0.0 }, { "drive", 6.0 } };

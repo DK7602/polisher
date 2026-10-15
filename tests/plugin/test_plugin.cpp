@@ -1718,7 +1718,7 @@ TEST_CASE ("Auto Analyze: hears the hook again, offers what changed in the mix, 
     play (*p, head, testsig::musicLike (sr, 2.0, -20.0, 1));
     REQUIRE (waitForCheck (*p));
     CHECK (p->autoMaster.getAutoAnalyzeStatus() == "hook");
-    play (*p, head, testsig::silence (sr, 2, 2.5));   // stop: the next play starts afresh
+    play (*p, head, testsig::silence (sr, 2, 4.5));   // stop: the next play starts afresh
     CHECK (p->autoMaster.getAutoAnalyzeHeard() == 0.0);
 
     // The song again, unchanged: Auto-Master's decisions are the same, nothing to offer.
@@ -1731,7 +1731,7 @@ TEST_CASE ("Auto Analyze: hears the hook again, offers what changed in the mix, 
         CHECK (static_cast<bool> (advice["hasCheck"]));
         CHECK (advice["edits"].size() == 0);
     }
-    play (*p, head, testsig::silence (sr, 2, 2.5));
+    play (*p, head, testsig::silence (sr, 2, 4.5));
 
     // The mix changed upstream: the chorus arrives 3 dB louder. Drive comes down; Dynamics follows.
     head.seconds = 5.0;
@@ -1757,7 +1757,8 @@ TEST_CASE ("Auto Analyze: hears the hook again, offers what changed in the mix, 
     CHECK (p->history.size() == steps + 1);
     CHECK (p->history.undoLabel() == "Auto Analyze: Maximizer");
     CHECK (editFor (autoAdvice (*p), "max").isVoid());
-    CHECK ((double) reportOf (*p)["values"]["drive"] < (double) report["values"]["drive"] - 2.0);
+    CHECK ((double) reportOf (*p)["aaPlan"]["drive"] < (double) report["values"]["drive"] - 2.0);   // the plan moved
+    CHECK ((double) reportOf (*p)["values"]["drive"] == (double) report["values"]["drive"]);       // Auto-Master's own choice stays
 
     // Undo puts the control and the plan back, so the edit is offered again.
     CHECK (p->history.undo() == "Auto Analyze: Maximizer");
@@ -1783,10 +1784,19 @@ TEST_CASE ("Auto Analyze: hears the hook again, offers what changed in the mix, 
         if (c["id"].toString() == "drive")
             CHECK ((double) c["to"] == Catch::Approx (driveTo + 1.0).margin (0.06));
 
-    // A new genre: the advice is about the old one, so it waits for a new Auto-Master run.
+    // Your own Stem EQ move is never offered back (no suggestion for this mix).
+    set (*p, "stemVoc", 2.0f);
+    p->autoMaster.tick();
+    CHECK (editFor (autoAdvice (*p), "stem").isVoid());
+    set (*p, "stemVoc", 0.0f);
+
+    // A new genre: the advice is about the old one, so it waits for a new Auto-Master run (no edits to apply).
     set (*p, "amGenre", 4.0f);
     p->autoMaster.tick();
     CHECK (p->autoMaster.getAutoAnalyzeStatus() == "settings");
+    CHECK (autoAdvice (*p)["edits"].size() == 0);
+    CHECK (p->autoMaster.getAutoEditCount() == 0);
+    CHECK_FALSE (p->autoMaster.applyAutoEdit ("all"));
     set (*p, "amGenre", 0.0f);
 
     // The switch is saved with the project; a project from before it opens with it off.

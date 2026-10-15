@@ -28,9 +28,9 @@ analyze option as well. it could then give option to edit in the learn window as
 - AutoMasterController (plugin): Auto Analyze reuses THE SAME SongListener (no extra memory) via watchFlag (capture() feeds
   when listening OR watching); start() stops watching and cancels a check first. autoTick() at 5 Hz (updateTimer(): 15 Hz
   while Auto-Master runs, 5 Hz while Auto Analyze is on or a check runs). Pauses ("aaPause"): off / noReport / busy /
-  settings (amGenre, amIntensity, amTarget or the reference name differ from the report's new "settings" object) / closed
-  (editor sets setEditorOpen) / stopped / listening / hook / checking / cantJudge / "" (checked). Window restarts: 2 s
-  without music (kWatchStopMs), Mixology hand-off key change (processor hashes flags + 4 tone values + style in
+  settings (amGenre, amIntensity, amTarget or the reference name differ from the report's new "settings" object; edits hidden and APPLY refused while settings / noReport / busy) / closed
+  (editor sets setEditorOpen) / stopped / listening / hook / checking / cantJudge / "" (checked). Window restarts: 4 s
+  without music (kWatchStopMs, as Auto-Master's song end), Mixology hand-off key change (processor hashes flags + 4 tone values + style in
   updateSuite -> setMixKey), 90 s of music, a new report time (new Auto-Master run: advice cleared, aaSession++). Check: >= 20 s
   heard, the loudest 12 s judged once (again only when another part became loudest, >= 15 s later), gate = overlap with
   hookSpans >= 6 s (no hook data or no positions: allowed; old reports fall back to loudStart/loudEnd), then autoMaster on
@@ -39,8 +39,14 @@ analyze option as well. it could then give option to edit in the learn window as
   mixStats, now always saved), new notes (titles not in the old report), fresh reasons. recomputeEdits every tick (knobs
   moved -> "now -> new" follows), clamps / snaps to each parameter's range, bumps aaVersion on change. applyAutoEdit /
   keepAutoEdit(module | "all"): one undo group "Auto Analyze: Maximizer" / "Auto Analyze: keep X as it is" / "every edit";
-  writes fresh values into the report's values (plan moves; undo restores both); stem apply also sets stemOn and drops
-  the report's stemSuggest. Stem planned = the report's stemSuggest (already offered) else the current knobs.
+  writes fresh values into the report's "aaPlan" (planned = values overlaid by aaPlan, rounded to 1e-4; "values" /
+  "reasons" stay Auto-Master's own for Learn's module pages); undo restores both. Stem apply also sets stemOn; apply or
+  keep on stem drops the report's stemSuggest. Stem ids are in fresh only when the check made a suggestion (the user's
+  own Stem moves are never offered back); stem planned = the report's stemSuggest else the current knobs.
+- Review fixes (fresh-eyes agent): ratio worth judged as |log(f/plan)| (80->100 = 100->80), additive worth epsilon 1e-4;
+  Mono Below: a choice only when Auto-Master's on/off changed, a user's Off stays off; changeReport catches up with a
+  report changed by undo first; a failed check leaves "checking"; Mixology key keeps its last value when a read fails
+  and hashes only analysed + tone + style; overlapSeconds merges repeated spans; aaOn atomic.
 - Processor: setAutoAnalyze (marks the project changed); XML attribute autoAnalyze="1" (absent = off); a restore off the
   message thread is applied by the processor timer (pendingAutoAnalyze). Editor: frame aaOn / aaPause / aaHeard / aaEdits /
   aaVersion; native setAutoAnalyze, getAutoAnalyze (JSON: on, pause, heard, checked, updated, hasCheck, mix {loudDb, lufs,

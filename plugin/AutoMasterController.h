@@ -62,7 +62,7 @@ public:
     static constexpr double kWatchEnoughSeconds = 20.0;     // music heard before the first check
     static constexpr double kWatchRefreshSeconds = 15.0;    // then at most every 15 s (when the loudest part heard changed)
     static constexpr double kWatchMaxSeconds = 90.0;        // a stretch of playback longer than this starts again (the mix as it is now)
-    static constexpr double kWatchStopMs = 2000.0;          // this long without music: the song stopped (the next play starts afresh)
+    static constexpr double kWatchStopMs = 4000.0;          // this long without music: the song stopped (the next play starts afresh; as Auto-Master's song end)
     static constexpr double kHookOverlapSeconds = 6.0;      // the loudest 12 s heard must share this much with the song's hook spans
     enum State { idle = 0, listening = 1, analysing = 2 };
     enum Mode { fullMaster = 0, toneOnly = 1 };
@@ -139,7 +139,7 @@ public:
 
     // ---- Auto Analyze (message thread) ---------------------------------------------------------------
     void setAutoAnalyze (bool on);
-    bool getAutoAnalyze() const noexcept       { return aaOn; }
+    bool getAutoAnalyze() const noexcept       { return aaOn.load(); }   // any thread (the host saves state on its own)
     /** The editor tells whether its window is open: Auto Analyze listens only then. */
     void setEditorOpen (bool open);
     /** Mixology's hand-off (a hash of what it says about the mix; 0: none). A change starts the listen again. */
@@ -149,7 +149,7 @@ public:
     juce::String getAutoAnalyzeStatus() const  { return aaPause; }
     double getAutoAnalyzeHeard() const noexcept;   // music heard in this stretch of playback
     int getAutoAnalyzeVersion() const noexcept { return aaVersion; }
-    int getAutoEditCount() const noexcept      { return static_cast<int> (aaEdits.size()); }
+    int getAutoEditCount() const noexcept      { return editsLive() ? static_cast<int> (aaEdits.size()) : 0; }
     /** Status, the edits on offer (module, controls now -> new with their texts, Auto-Master's reasons) and
         what changed in the mix, for Learn. */
     juce::String getAutoAnalyzeJson() const;
@@ -174,6 +174,8 @@ private:
     polisher::autoanalyze::Values plannedValues() const;
     float paramValue (const juce::String& id) const;
     bool changeReport (const juce::String& module, bool applyParams);
+    /** The edits still apply: not while Auto-Master's plan is for other choices, or there is no plan. */
+    bool editsLive() const { return aaPause != "settings" && aaPause != "noReport" && aaPause != "busy"; }
     /** Sets a new state and waits until the audio thread is out of capture(), so the listener is ours. */
     void takeListener (State newState);
     void launchAnalysis();
@@ -208,13 +210,16 @@ private:
 
     // Auto Analyze (message thread, except watchFlag)
     std::atomic<bool> watchFlag { false };        // the audio thread feeds the listener for Auto Analyze
-    bool aaOn = false, editorOpen = false, watching = false, checkRunning = false, hasFresh = false;
+    std::atomic<bool> aaOn { false };
+    bool editorOpen = false, watching = false, checkRunning = false, hasFresh = false;
     std::uint64_t mixKey = 0, watchMixKey = 0;
     double watchMusicMs = 0.0;                    // when the music last grew
     std::int64_t watchHeard = 0;
     double checkedLoudStart = -1.0, checkedLoudLufs = -100.0, checkedAtHeard = 0.0;   // the loudest part last judged
     int aaSeenReport = -1, aaSession = 0, aaVersion = 0;
     juce::var aaReport;                           // the report parsed (the one the advice is about)
+    // Auto Analyze's own copy of Auto-Master's plan, kept in the report as "aaPlan": it moves as edits are applied
+    // or kept, while "values" (and "reasons") stay what Auto-Master itself chose, for Learn's module pages.
     juce::String aaBaseline;                      // its time stamp: a new Auto-Master run starts the advice over
     juce::String aaPause { "off" };
     polisher::autoanalyze::Values fresh;          // what Auto-Master chooses for the mix heard last

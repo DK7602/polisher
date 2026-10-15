@@ -587,9 +587,15 @@ bool AutoMasterController::reportSettingsMatch() const
 polisher::autoanalyze::Values AutoMasterController::plannedValues() const
 {
     polisher::autoanalyze::Values v;
-    if (auto* o = aaReport["values"].getDynamicObject())
-        for (const auto& p : o->getProperties())
-            v[p.name.toString().toStdString()] = static_cast<double> (p.value);
+    // Stored as floats: rounded back to the 0.0001 the plan was made in (-20.3 must not read -20.2999992).
+    auto take = [&v] (const juce::var& from)
+    {
+        if (auto* o = from.getDynamicObject())
+            for (const auto& p : o->getProperties())
+                v[p.name.toString().toStdString()] = std::round (static_cast<double> (p.value) * 1.0e4) * 1.0e-4;
+    };
+    take (aaReport["values"]);
+    take (aaReport["aaPlan"]);   // Auto Analyze's moves of the plan (applied or kept) win
     // Stem EQ is the user's (Auto-Master only suggests it): what the report already suggests counts as planned
     // (it has its own APPLY button), and without a suggestion the knobs as they are. A new suggestion is offered.
     const auto* suggested = aaReport["stemSuggest"].getArray();
@@ -614,6 +620,11 @@ void AutoMasterController::autoTick (double nowMs)
         checkRunning = false;
         if (result != nullptr && resultSession == aaSession && aaOn)
             takeFresh (*result);
+        else if (aaPause == "checking")
+        {
+            aaPause = hasFresh ? "" : "listening";   // it failed or was stopped: back to listening
+            ++aaVersion;
+        }
         updateTimer();
     }
 
@@ -667,7 +678,7 @@ void AutoMasterController::autoTick (double nowMs)
     if (heard > 0 && (stopped || listener.heardSeconds() >= kWatchMaxSeconds || mixKey != watchMixKey))
     {
         restartWatching();
-        if (! checkRunning) pause ("stopped");
+        if (! checkRunning) pause (stopped ? "stopped" : "listening");
         return;
     }
     if (checkRunning)                                 { pause ("checking"); return; }
@@ -747,9 +758,9 @@ void AutoMasterController::takeFresh (const polisher::AutoMasterResult& r)
         return;
     }
     fresh = polisher::autoanalyze::chainValues (r.chain);
-    for (int k = 0; k < polisher::kStems; ++k)   // Stem EQ: its suggestion, or the knobs as they are
-        fresh[ModuleParams::stemIds[k]] = r.hasStemSuggestion ? r.stemSuggestion.gainDb[static_cast<size_t> (k)]
-                                                              : static_cast<double> (paramValue (ModuleParams::stemIds[k]));
+    if (r.hasStemSuggestion)   // Stem EQ: only a suggestion is offered; without one the knobs are left alone
+        for (int k = 0; k < polisher::kStems; ++k)
+            fresh[ModuleParams::stemIds[k]] = r.stemSuggestion.gainDb[static_cast<size_t> (k)];
     hasFresh = true;
 
     // What changed in the mix since Auto-Master listened (the same part of the song, as it arrives).
@@ -832,7 +843,7 @@ void AutoMasterController::recomputeEdits (bool fromCheck)
 juce::String AutoMasterController::getAutoAnalyzeJson() const
 {
     auto* o = new juce::DynamicObject();
-    o->setProperty ("on", aaOn);
+    o->setProperty ("on", aaOn.load());
     o->setProperty ("pause", aaPause);
     o->setProperty ("heard", getAutoAnalyzeHeard());
     o->setProperty ("checked", aaCheckedAt);
@@ -858,6 +869,7 @@ juce::String AutoMasterController::getAutoAnalyzeJson() const
     juce::Array<juce::var> edits;
     for (const auto& e : aaEdits)
     {
+        if (! editsLive()) break;   // the plan is for other choices (or Auto-Master is running): nothing to apply
         auto* eo = new juce::DynamicObject();
         eo->setProperty ("module", juce::String (e.module));
         eo->setProperty ("title", juce::String (moduleTitle (e.module)));
@@ -884,6 +896,10 @@ juce::String AutoMasterController::getAutoAnalyzeJson() const
 
 bool AutoMasterController::changeReport (const juce::String& module, bool applyParams)
 {
+    if (reportVersion.load() != aaSeenReport)
+        autoTick (juce::Time::getMillisecondCounterHiRes());   // an undo / redo just now: work from the report as it is
+    if (! editsLive())
+        return false;
     std::vector<const polisher::autoanalyze::Edit*> chosen;
     for (const auto& e : aaEdits)
         if (module == "all" || module == juce::String (e.module))
@@ -899,9 +915,12 @@ bool AutoMasterController::changeReport (const juce::String& module, bool applyP
     // The report's plan moves to what Auto-Master chooses now for these controls (so the same advice doesn't
     // come back); applying also sets the controls. One undo step with the report (undo brings back both).
     auto doc = juce::JSON::parse (juce::JSON::toString (aaReport, true));   // a copy
-    auto* values = doc["values"].getDynamicObject();
-    if (values == nullptr)
+    auto* docObj = doc.getDynamicObject();
+    if (docObj == nullptr || ! doc["values"].isObject())
         return false;
+    if (! doc["aaPlan"].isObject())
+        docObj->setProperty ("aaPlan", juce::var (new juce::DynamicObject()));
+    auto* values = doc["aaPlan"].getDynamicObject();
     const bool grouped = onApplyBegin && onApplyEnd;
     if (grouped) onApplyBegin (label);
     bool stem = false;
@@ -916,10 +935,9 @@ bool AutoMasterController::changeReport (const juce::String& module, bool applyP
                 values->setProperty (id, static_cast<float> (f->second));
         }
     if (stem && applyParams)
-    {
         setParam ("stemOn", 1.0f);
-        if (auto* d = doc.getDynamicObject()) d->removeProperty ("stemSuggest");   // done: the report's own button goes away
-    }
+    if (stem)
+        docObj->removeProperty ("stemSuggest");   // applied or declined: the report's own APPLY button goes away
     setReport (juce::JSON::toString (doc, true));
     if (grouped) onApplyEnd();
     autoTick (juce::Time::getMillisecondCounterHiRes());   // the edits follow at once

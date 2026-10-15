@@ -156,9 +156,9 @@ Once Auto-Master has run, Learn shows an **AUTO ANALYZE** switch at the top (on 
 
 How it works:
 
-1. It listens to one stretch of playback at a time. After every stop (2 seconds without music) it starts again, so it always judges the mix as it is now. It also starts again when Mixology's advice on the mix changes, and after 90 seconds of music.
-2. Auto-Master set your master from the **hook or drop**, so Auto Analyze compares on that part too, like with like: it checks once it has heard 20 seconds of music **including the hook or drop** (or a repeat of it, such as the second chorus). While only a verse plays, Learn says which part to play.
-3. It runs Auto-Master's thinking again on that part, in the background (a few seconds), with your genre, intensity and target, and compares the result with the plan Auto-Master made. A module gets a card only when the change is worth hearing (for example 0.75 dB of EQ or Drive, 1.5 dB of a Dynamics threshold, a different Saturation mode). Smaller moves in the same module go with it.
+1. It listens to one stretch of playback at a time. After every stop (4 seconds without music) it starts again, so it always judges the mix as it is now. It also starts again when Mixology's advice on the mix changes, and after 90 seconds of music.
+2. Auto-Master set your master from the **hook or drop**, so Auto Analyze compares on that part too, like with like: it checks once it has heard 20 seconds of music **including the hook or drop** (or a repeat of it, such as the second chorus). While only a verse plays, Learn says which part to play. (Without Cubase's timeline positions, or with a report from before version 0.27, it can't tell the parts apart and checks the loudest part it heard.)
+3. It runs Auto-Master's thinking again on that part, in the background (usually 5–15 seconds at 44.1 or 48 kHz, longer at higher sample rates), with your genre, intensity and target, and compares the result with the plan Auto-Master made. A module gets a card only when the change is worth hearing (for example 0.75 dB of EQ or Drive, 1.5 dB of a Dynamics threshold, a different Saturation mode). Smaller moves in the same module go with it.
 4. It checks again (at most every 15 seconds of music) whenever a louder part becomes the one it judges. The cards only change when the advice really changed.
 
 On each card:
@@ -166,7 +166,7 @@ On each card:
 - **APPLY** sets that module's controls, as one undo step (the undo arrow puts them back). A control moves by **Auto-Master's change**, starting from where it is now, so a knob you set yourself keeps your touch: if you had added 1 dB of Low End and Auto-Master now wants 1.5 dB less, it goes from your setting down 1.5 dB.
 - **KEEP MINE** leaves the module as it is. The same advice doesn't come back for this mix (also one undo step).
 - **APPLY ALL** / **KEEP ALL MINE** do every card at once.
-- A new Vocals suggestion for Stem EQ shows up as a card too; applying it switches Stem EQ on.
+- A new Vocals suggestion for Stem EQ shows up as a card too; applying it switches Stem EQ on. Your own Stem EQ moves are never offered back.
 
 Good to know:
 

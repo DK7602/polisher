@@ -116,18 +116,16 @@ void PolisherAudioProcessor::updateSuite()
     auto& link = suite::Link::process();
     const auto now = suite::nowMs();
     hasHandoff = link.readMix (handoff, now);
-    // Auto Analyze hears the mix afresh when Mixology's word on it changes (its advice was updated).
+    // Auto Analyze hears the mix afresh when Mixology's word on it changes (what its Analyze Mix found). A read
+    // that fails now and then (Mixology busy, or silent a moment) keeps the last key, so the listen isn't restarted.
+    if (hasHandoff)
     {
-        std::uint64_t key = 0;
-        if (hasHandoff)
-        {
-            auto mixIn = [&key] (std::uint64_t v) { key = (key ^ v) * 1099511628211ull; };
-            key = 1469598103934665603ull;
-            mixIn (handoff.flags);
-            for (float d : { handoff.lowDb, handoff.lowMidDb, handoff.presenceDb, handoff.airDb })
-                mixIn (static_cast<std::uint64_t> (std::lround (d * 10.0f)));
-            mixIn (suite::nameHash (handoff.styleKey));
-        }
+        std::uint64_t key = 1469598103934665603ull;
+        auto mixIn = [&key] (std::uint64_t v) { key = (key ^ v) * 1099511628211ull; };
+        mixIn (handoff.flags & suite::MixInfo::analysed);
+        for (float d : { handoff.lowDb, handoff.lowMidDb, handoff.presenceDb, handoff.airDb })
+            mixIn (static_cast<std::uint64_t> (std::lround (d * 10.0f)));
+        mixIn (suite::nameHash (handoff.styleKey));
         autoMaster.setMixKey (key);
     }
     if (suiteSlot < 0) suiteSlot = link.claimMaster (suiteId, now);

@@ -139,7 +139,6 @@ namespace polisher::autoanalyze
             || starts (id, "glue") || starts (id, "dynImpact") || starts (id, "dynSustain") || id == "dynChannels" || id == "satChannels"
             || id == "maxBassFirst" || id == "stemKeep")
             return {};
-        if (id == "clipOn") return "clip";
         for (const char* m : { "ul", "stem", "ts", "rt", "eq", "bass", "dyn", "img", "sat", "clip" })
             if (starts (id, m)) return m;
         if (id == "drive" || id == "ceiling" || id == "release" || id == "adaptive" || id == "inTrim") return "max";
@@ -165,7 +164,11 @@ namespace polisher::autoanalyze
 
             double to = cur;
             bool significant = false;
-            const bool offSwitch = id == "bassMono" && (plan < 1.0 || f < 1.0 || cur < 1.0);   // Mono Below off: a choice
+            // Mono Below (0 = off): Auto-Master switching it on or off is a choice; while it keeps it on, the
+            // frequency moves by the ratio, unless you switched it off yourself (then it stays off).
+            const bool offSwitch = id == "bassMono" && ((plan < 1.0) != (f < 1.0));
+            if (id == "bassMono" && ! offSwitch && (plan < 1.0 || cur < 1.0))
+                continue;
             if (! known || rule.kind == Kind::hidden)
             {
                 to = f;
@@ -185,14 +188,17 @@ namespace polisher::autoanalyze
                 {
                     const double factor = f / plan;
                     to = std::round (cur * factor);
-                    significant = std::abs (factor - 1.0) >= rule.worth && std::abs (to - cur) >= 1.0;
+                    // The same step up or down (80 -> 100 Hz and 100 -> 80 Hz), whatever the rounding.
+                    significant = std::abs (std::log (factor)) >= std::log (1.0 + rule.worth) - 1.0e-4 && std::abs (to - cur) >= 1.0;
                 }
             }
             else
             {
                 const double delta = f - plan;
                 to = roundTo (cur + delta, rule.step);
-                significant = std::abs (delta) >= rule.worth - 1.0e-9 && std::abs (to - cur) >= rule.worth * 0.5;
+                // Planned values come back from the report as floats (-20.3 reads -20.2999992): a step of
+                // exactly the worth must count.
+                significant = std::abs (delta) >= rule.worth - 1.0e-4 && std::abs (to - cur) >= rule.worth * 0.5 - 1.0e-4;
             }
             if (std::abs (to - cur) <= 1.0e-6)
                 continue;
@@ -201,7 +207,7 @@ namespace polisher::autoanalyze
             if (rule.kind == Kind::hidden)
                 ch.shown = false;
             else if (rule.kind == Kind::additive && ! offSwitch && known)
-                ch.shown = std::abs (to - cur) >= rule.worth * 0.5;
+                ch.shown = std::abs (to - cur) >= rule.worth * 0.5 - 1.0e-4;
             auto& e = byModule[module];
             e.module = module;
             e.changes.push_back (ch);
@@ -241,9 +247,19 @@ namespace polisher::autoanalyze
 
     double overlapSeconds (const std::vector<TimeSpan>& a, const std::vector<TimeSpan>& b)
     {
+        // Each side merged first: a stretch heard twice (a cycle loop) counts once.
+        auto merged = [] (std::vector<TimeSpan> v)
+        {
+            std::sort (v.begin(), v.end(), [] (const TimeSpan& x, const TimeSpan& y) { return x.start < y.start; });
+            std::vector<TimeSpan> out;
+            for (const auto& s : v)
+                if (! out.empty() && s.start <= out.back().end) out.back().end = std::max (out.back().end, s.end);
+                else out.push_back (s);
+            return out;
+        };
         double total = 0.0;
-        for (const auto& x : a)
-            for (const auto& y : b)
+        for (const auto& x : merged (a))
+            for (const auto& y : merged (b))
                 total += std::max (0.0, std::min (x.end, y.end) - std::max (x.start, y.start));
         return total;
     }
