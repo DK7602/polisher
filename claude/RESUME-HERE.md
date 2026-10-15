@@ -4,7 +4,7 @@ Read this first in a new chat. Code: github.com/DK7602/polisher. Newest work: br
 `claude/eloquent-einstein-sscadx` (v0.28.0 = one song style shared with Voxology / Mixology, 2026-10-15;
 v0.27.0 = Auto Analyze, 2026-10-15; v0.26.0 = the suite link with Voxology /
 Mixology; v0.25.0 = the rename to Masterology). Merge to `main` when ready. Download Masterology-Windows from the latest
-green Actions run (v0.26.0: run 38657259925; v0.27.0: see the section below). The newest thread is "Masterology Auto
+green Actions run (v0.27.0: run 38756168366; v0.26.0: 38657259925). The newest thread is "Masterology Auto
 Edit" (started 2026-10-15).
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
@@ -63,6 +63,7 @@ analyze option as well. it could then give option to edit in the learn window as
   (JUCE 8.0.15 in the scratchpad); Playwright: npm i playwright@1.56.1 in the scratchpad, symlink node_modules into the repo
   (ESM ignores NODE_PATH), copy JUCE's native/javascript/*.js to plugin/ui/juce/, serve plugin/ui on :8765. Remove the symlink
   before committing.
+- v0.27.0 CI green: run 38756168366 (66d62b9, Windows: build, engine + plug-in tests, pluginval 10 + VST3 validator; UI smoke).
 - NOT YET HEARD / USED by the user. Ask them: run Auto-Master, switch Auto Analyze on, change the mix in Mixology (e.g. 808 +3
   dB), play through the hook, and see whether the cards make sense.
 
