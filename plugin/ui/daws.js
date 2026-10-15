@@ -15,19 +15,21 @@ export const DAWS = [
   { key: "reaper", name: "REAPER" },
   { key: "bitwig", name: "Bitwig Studio" },
   { key: "logic", name: "Logic Pro", also: "on a Mac" },
+  { key: "cakewalk", name: "Cakewalk", also: "by BandLab, and Sonar" },   // BandLab's web studio can't load plug-ins
   { key: "other", name: "Other DAW" },
 ];
 
 const P = {
   // What a piece of audio on a track is called.
-  clip: { cubase: "audio event", studioone: "audio event", fl: "audio clip", ableton: "clip", reaper: "item", bitwig: "clip", logic: "region", other: "audio clip" },
+  clip: { cakewalk: "clip", cubase: "audio event", studioone: "audio event", fl: "audio clip", ableton: "clip", reaper: "item", bitwig: "clip", logic: "region", other: "audio clip" },
   // The mixer window.
-  mixer: { cubase: "the MixConsole (F3)", studioone: "the Console (F3)", fl: "the Mixer (F9)", ableton: "the Mixer (Ctrl+Alt+M)", reaper: "the Mixer (Ctrl+M)",
+  mixer: { cakewalk: "the Console view (Alt+2)", cubase: "the MixConsole (F3)", studioone: "the Console (F3)", fl: "the Mixer (F9)", ableton: "the Mixer (Ctrl+Alt+M)", reaper: "the Mixer (Ctrl+M)",
     bitwig: "the Mix view", logic: "the Mixer (X)", other: "the mixer" },
   // The channel every track flows into.
-  master: { cubase: "Stereo Out", studioone: "Main", fl: "Master", ableton: "Main", reaper: "Master", bitwig: "Master", logic: "Stereo Out", other: "master" },
+  master: { cakewalk: "Master", cubase: "Stereo Out", studioone: "Main", fl: "Master", ableton: "Main", reaper: "Master", bitwig: "Master", logic: "Stereo Out", other: "master" },
   // Putting a plug-in on that channel (the text around it says where in the chain).
   loadOnMaster: {
+    cakewalk: "open the Console view (Alt+2), find the Master bus on the right, and add it to its FX rack",
     cubase: "open the MixConsole (F3), find Stereo Out on the far right, and load it in one of its insert slots",
     studioone: "open the Console (F3), find the Main channel on the right, and add it to its Inserts",
     fl: "open the Mixer (F9), select the Master insert, and load it in one of its effect slots",
@@ -38,6 +40,7 @@ const P = {
     other: "load it in the effects of the master channel (the one every track flows into)" },
   // A mono group / bus folds everything to the middle: how to spot and fix it.
   monoMeter: {
+    cakewalk: "In Cakewalk's Console view a mono bus shows one meter instead of two: check your buses (and the Master)",
     cubase: "In Cubase's MixConsole a mono channel shows one meter instead of two: check your groups (and the Stereo Out)",
     studioone: "In Studio One's Console a mono channel shows one meter instead of two: check your buses (and the Main out)",
     fl: "In FL Studio the Mixer inserts are stereo: look for an insert with its stereo separation turned to mono, or a mono effect on it",
@@ -47,6 +50,7 @@ const P = {
     logic: "In Logic's Mixer a mono channel shows one meter instead of two: check your summing stacks and buses (and the Stereo Out)",
     other: "Look for a mono group or bus on the way (one meter instead of two, or a mono effect on it)" },
   monoBusFix: {
+    cakewalk: "click its Interleave button (the mono / stereo switch on the strip) so it shows stereo",
     cubase: "find the small button at the bottom of its channel (next to the channel number): one circle = mono, two linked circles = stereo. Stop playback and click it once: it switches to stereo",
     studioone: "a mono channel has the single-circle button at the top of its strip: click it to make the channel stereo",
     fl: "Mixer inserts are always stereo: turn its stereo separation back to the middle and remove any effect that sums to mono",
@@ -57,6 +61,7 @@ const P = {
     other: "make that channel stereo (a mono / stereo switch on it, or a mono effect to switch off)" },
   // The audio outputs of the project are a stereo pair.
   outputsStereo: {
+    cakewalk: "the Master bus going to a stereo pair of outputs (its Output menu)",
     cubase: "Studio > Audio Connections > Outputs: a Stereo bus with Left and Right both connected",
     studioone: "Song > Song Setup > Audio I/O Setup > Outputs: the Main out with both Left and Right",
     fl: "the Master insert's output set to a stereo pair (for example Out 1 - Out 2)",
@@ -67,13 +72,13 @@ const P = {
     other: "the master going out on a stereo pair (Left and Right)" },
   // A track sending to an FX channel.
   sendHow: {
-    cubase: "MixConsole, Sends, at 0 dB", studioone: "in the Console, the channel's Sends: add one to that FX channel, at 0 dB",
+    cakewalk: "the track's Sends: Insert Send to that bus, at 0 dB", cubase: "MixConsole, Sends, at 0 dB", studioone: "in the Console, the channel's Sends: add one to that FX channel, at 0 dB",
     fl: "the track's Mixer insert: turn up the send knob on the route arrow to that insert, at 0 dB", ableton: "the track's Send knob for that return track",
     reaper: "the track's Routing button: add a send to that track, at 0 dB", bitwig: "the track's Sends in the Mix view",
     logic: "the channel strip's Sends: pick that bus, at 0 dB", other: "a send from the track to that FX channel, at 0 dB" },
   // Adding Mixology Link right after Voxology on a vocal.
   linkAfterVoxology: {
-    cubase: "in the insert slot right under Voxology (after it, still above the fader divider line)", studioone: "in the Insert right under Voxology",
+    cakewalk: "right after Voxology in the track's FX rack", cubase: "in the insert slot right under Voxology (after it, still above the fader divider line)", studioone: "in the Insert right under Voxology",
     fl: "in the effect slot right under Voxology on the vocal's Mixer insert", ableton: "right after Voxology in the track's device chain",
     reaper: "right after Voxology in the track's FX chain", bitwig: "right after Voxology in the track's device chain",
     logic: "in the Audio FX slot right under Voxology", other: "right after Voxology on the same track" },
@@ -89,6 +94,7 @@ const P = {
     other: "Mixology moves faders through Cubase only (for now): untick the fader and pan rows to apply the rest, and set those by hand." },
   // Turning a recording down at the source, before any plug-in.
   clipGain: {
+    cakewalk: "select the clip and lower its Clip Gain in the Inspector (Clip properties)",
     cubase: "drag the event's volume handle (the small square at the top middle of the event) down, or lower Pre-Gain in the channel's Pre section",
     studioone: "drag the event's gain handle (the small square at the top middle of the event) down, or lower Event Gain in the Inspector",
     fl: "double-click the audio clip and turn its volume down in the channel settings",
@@ -99,6 +105,7 @@ const P = {
     other: "lower the clip's own gain (the volume of the audio itself, before any plug-in)" },
   // Automating a control.
   automate: {
+    cakewalk: "with automation: the track's W (Write) button, or draw it in an automation lane",
     cubase: "with automation: the track's W button, or draw it in an automation lane",
     studioone: "with automation: show the lanes with A, then draw it",
     fl: "with automation: right-click the control > Create automation clip",
@@ -109,6 +116,7 @@ const P = {
     other: "with your DAW's automation" },
   // Sending the beat to a plug-in's side-chain input (Voxology hears the beat's key through it).
   sidechain: {
+    cakewalk: "on the beat track add a Send and pick \"Voxology (Sidechain)\" as its destination, at 0 dB",
     cubase: "click the side-chain button in Voxology's top bar (it lights up), then on the beat track open Sends, pick \"Voxology - Side-Chain\" and switch the send on, at 0 dB",
     studioone: "open the Side-Chain menu at the top of Voxology's window and tick the beat track",
     fl: "select the beat's Mixer insert, right-click the arrow at the bottom of the vocal's insert and pick \"Sidechain to this track\", then set Voxology's side-chain input in its wrapper settings (the gear) > Processing",
@@ -119,6 +127,7 @@ const P = {
     other: "send the beat to Voxology's side-chain input (your DAW's manual: \"side-chain\")" },
   // Playing MIDI into Voxology (an audio effect).
   midiToVoxology: {
+    cakewalk: "in Voxology's VST menu (top of its window) switch on Enable MIDI Input, then make a MIDI track and set its output to Voxology",
     cubase: "make a MIDI track and set its output to Voxology (the routing at the top of the Inspector)",
     studioone: "make an Instrument track and set its output to Voxology",
     fl: "add a MIDI Out channel and set its port to Voxology's MIDI input port (Voxology's wrapper settings, the gear)",
@@ -129,6 +138,7 @@ const P = {
     other: "route a MIDI track's output to Voxology" },
   // Recording a vocal in mono.
   monoTrack: {
+    cakewalk: "record from one input: set the track's Input to a mono input (Left or Right), not Stereo",
     cubase: "record vocals on a mono track (Add Track > Audio > Configuration: Mono)",
     studioone: "record vocals on a mono track (Add Tracks > Format: Mono)",
     fl: "record from one input: pick a single input (for example In 1) on the vocal's Mixer insert, not a stereo pair",
@@ -151,6 +161,7 @@ const P = {
   declipper: { cubase: "SpectraLayers (in Cubase Pro) or iZotope RX De-clip", other: "a declipper such as iZotope RX De-clip" },
   // Letting the song play straight through (no loop).
   loopOff: {
+    cakewalk: "turn off Loop on the Control Bar (the loop button)",
     cubase: "turn off Cycle on the transport bar (the loop button)",
     studioone: "turn off Loop on the transport (the loop button)",
     fl: "play in Song mode (SONG on the transport), not Pattern mode",
@@ -161,6 +172,7 @@ const P = {
     other: "turn off the loop on the transport" },
   // A plug-in doesn't show up.
   rescan: {
+    cakewalk: "open Edit > Preferences > File > VST Settings and click Scan",
     cubase: "open Studio > VST Plug-in Manager and click Update Plug-in Information",
     studioone: "open Studio One > Options > Locations > VST Plug-ins and click Rescan",
     fl: "open Options > Manage plugins and click Find installed plugins",
@@ -171,12 +183,12 @@ const P = {
     other: "rescan your plug-ins in your DAW's settings" },
   // The exported file's bit depth.
   exportDepth: {
-    cubase: "File > Export > Audio Mixdown: Bit Depth", studioone: "Song > Export Mixdown: Format", fl: "File > Export: Depth",
+    cakewalk: "File > Export > Audio: Bit Depth", cubase: "File > Export > Audio Mixdown: Bit Depth", studioone: "Song > Export Mixdown: Format", fl: "File > Export: Depth",
     ableton: "File > Export Audio/Video: Bit Depth", reaper: "File > Render: Format", bitwig: "File > Export Audio: Bit depth",
     logic: "File > Bounce > Project or Section: Bit Depth", other: "your DAW's export settings" },
   // A track's routing / output menu.
   trackOutput: {
-    cubase: "the track's output menu (the routing at the top of the Inspector)", studioone: "the channel's output menu (bottom of its strip in the Console)",
+    cakewalk: "the track's Output menu (Track view or Inspector)", cubase: "the track's output menu (the routing at the top of the Inspector)", studioone: "the channel's output menu (bottom of its strip in the Console)",
     fl: "the Mixer insert's route arrows", ableton: "the track's Audio To menu", reaper: "the track's Routing button",
     bitwig: "the track's output chooser (bottom of the track in the Mix view)", logic: "the channel strip's Output slot", other: "the track's output" },
 };

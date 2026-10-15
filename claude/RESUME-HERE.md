@@ -67,6 +67,10 @@ analyze option as well. it could then give option to edit in the learn window as
 - NOT YET HEARD / USED by the user. Ask them: run Auto-Master, switch Auto Analyze on, change the mix in Mixology (e.g. 808 +3
   dB), play through the hook, and see whether the cards make sense.
 
+## v0.29.1: Cakewalk (BandLab) in the DAW list (2026-10-15, from Mixology's thread)
+- v0.29.0 = your DAW shared by the trio (Settings > DAW, daws.js, {daw:...} tokens in AutoMaster.cpp, suite link
+  layout 3). v0.29.1 adds "cakewalk" (Cakewalk by BandLab, Sonar): BandLab's web studio can't host plug-ins.
+
 ## v0.28.0: one song style for the trio (2026-10-15, done from the "Mixology part 2" thread, on top of v0.27.0)
 - User (in the Mixology thread): one style list for all three, Mixology's (14 genres, 75 styles), a pop-up picker in
   each, and when two or three are in a project a style change in one changes all. "yes go ahead, do it here".

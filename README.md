@@ -15,7 +15,7 @@ meters only) with a button to Microsoft's free download page; install it and reo
 
 User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (also inside the plug-in: Quick Help > Open the full manual).
 
-## Status — v0.29.0
+## Status — v0.29.1
 
 | Piece | State |
 | --- | --- |

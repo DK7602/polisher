@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.29.0 · October 2026
+Version 0.29.1 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
@@ -8,7 +8,7 @@ Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d7
 
 Masterology (called **Polisher** before version 0.25.0) is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds twelve modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.29.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.29.1. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 
@@ -620,7 +620,7 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 
 **Voxology** makes each vocal sound great, **Mixology** makes all your tracks work together, **Masterology** turns the finished mix into the master. In the same Cubase project they tell each other what they do. Nothing to set up: use Masterology 0.29, Mixology 0.13 and Voxology 0.50 (or newer; update all three together, older and newer ones don't see each other), with Mixology on the Stereo Out before Masterology.
 
-- **One DAW for all three**: Settings (the gear) > **DAW**. Masterology finds the program it runs in (Cubase, Studio One, FL Studio, Ableton Live, REAPER, Bitwig Studio, Logic Pro) and writes every tip in Learn for it: where the master channel is, how to load a plug-in last on it, how to turn off the loop so the song plays through. "Found: ..." uses the one it found; pick another if it got it wrong. Mixology and Voxology share it: pick it in any of the three and the others follow.
+- **One DAW for all three**: Settings (the gear) > **DAW**. Masterology finds the program it runs in (Cubase, Studio One, FL Studio, Ableton Live, REAPER, Bitwig Studio, Logic Pro, Cakewalk by BandLab / Sonar) and writes every tip in Learn for it: where the master channel is, how to load a plug-in last on it, how to turn off the loop so the song plays through. "Found: ..." uses the one it found; pick another if it got it wrong. Mixology and Voxology share it: pick it in any of the three and the others follow. BandLab: pick **Cakewalk** (BandLab's desktop DAW for Windows); BandLab's web studio (browser or app) can't load plug-ins.
 
 - **One song style for all three**: pick the style in Masterology, Mixology or Voxology and the others in the project follow within a second (Masterology shows "Style: ..., picked in Mixology"). The newest choice wins, also after you reopen the project. Here it sets Auto-Master's genre; your master doesn't change until you run Auto-Master again.
 

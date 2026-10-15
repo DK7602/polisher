@@ -314,7 +314,7 @@ namespace suite
     using SongStyle = SharedChoice;
 
     // ---- the DAW (keys and names: plugin/ui/daws.js has the same list) ---------------------------------------
-    /** The DAW a host program is ("cubase", "studioone", "fl", "ableton", "reaper", "bitwig", "logic", "other"),
+    /** The DAW a host program is ("cubase", "studioone", "fl", "ableton", "reaper", "bitwig", "logic", "cakewalk", "other"),
         from its file name or path (JUCE's PluginHostType::getHostPath()). Nuendo counts as Cubase. */
     inline std::string dawFromHostPath (const std::string& path)
     {
@@ -330,6 +330,7 @@ namespace suite
         if (has ("reaper")) return "reaper";
         if (has ("bitwig")) return "bitwig";
         if (has ("logic")) return "logic";
+        if (has ("cakewalk") || file.rfind ("sonar", 0) == 0) return "cakewalk";   // Cakewalk by BandLab, Sonar
         return "other";
     }
 
@@ -342,6 +343,7 @@ namespace suite
         if (key == "reaper") return "REAPER";
         if (key == "bitwig") return "Bitwig Studio";
         if (key == "logic") return "Logic Pro";
+        if (key == "cakewalk") return "Cakewalk";
         return "Other DAW";
     }
 }

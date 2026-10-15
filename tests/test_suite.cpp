@@ -275,6 +275,8 @@ TEST_CASE ("Suite: the DAW is found from the host program", "[suite]")
     CHECK (suite::dawFromHostPath ("C:\\Program Files\\REAPER (x64)\\reaper.exe") == "reaper");
     CHECK (suite::dawFromHostPath ("C:\\Program Files\\Bitwig Studio\\Bitwig Studio.exe") == "bitwig");
     CHECK (suite::dawFromHostPath ("/Applications/Logic Pro.app/Contents/MacOS/Logic Pro") == "logic");
+    CHECK (suite::dawFromHostPath ("C:\\Program Files\\Cakewalk\\Cakewalk Core\\Cakewalk.exe") == "cakewalk");
+    CHECK (suite::dawFromHostPath ("C:\\Program Files\\Cakewalk\\Sonar\\Sonar.exe") == "cakewalk");
     CHECK (suite::dawFromHostPath ("C:\\Tools\\pluginval.exe") == "other");
     CHECK (suite::dawFromHostPath ("") == "other");
     CHECK (std::string (suite::dawName ("studioone")) == "Studio One");
