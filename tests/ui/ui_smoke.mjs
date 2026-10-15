@@ -759,6 +759,39 @@ await page.evaluate(() => window.__polisherMock.setMixology(null));
 check(await waitForLearn(/^(?![\s\S]*FROM MIXOLOGY)/), 'without Mixology the note goes');
 await page.evaluate(async () => (await import('./juce/index.js')).getComboBoxState('amGenre').setChoiceIndex(0));
 
+// Auto Analyze: after an Auto-Master run, Learn has its switch; on, it listens and offers edits with APPLY / KEEP MINE.
+await pick('Maximizer');
+await page.waitForTimeout(200);
+check(await page.evaluate(() => !!document.getElementById('btn-autoanalyze')), 'Learn shows the AUTO ANALYZE switch once Auto-Master has run');
+await page.click('#btn-autoanalyze');
+check(await waitForLearn(/HOW IT WORKS/), 'switching it on opens its Learn page');
+check(await page.evaluate(() => window.__mockAa.on), 'the switch reaches the plug-in');
+await page.evaluate(() => window.__polisherMock.aaCheck());
+check(await waitForLearn(/NEW EDITS/), 'the edits show when the mix changed');
+const aaCards = await page.evaluate(() => [...document.querySelectorAll('#learn-body .aa-card')].map((c) => c.textContent));
+check(aaCards.length === 2 && /TONAL EQ/.test(aaCards[0]) && /→/.test(aaCards[0]) && /MAXIMIZER/.test(aaCards[1]), `one card per module, now → new (${aaCards.length} cards)`);
+check(/arrives 1\.8 dB louder on the hook/.test(await learnText()) && /more low end \(\+2\.1 dB\)/.test(await learnText()), 'it says what changed in the mix');
+check(/Auto Analyze: 2 new edits/.test(await page.evaluate(() => document.getElementById('am-sub').textContent)), 'the Auto-Master button says edits are waiting');
+const aaDriveBefore = await page.evaluate(async () => (await import('./juce/index.js')).getSliderState('drive').getScaledValue());
+const aaHistBefore = await hist();
+await page.evaluate(() => [...document.querySelectorAll('#learn-body .aa-card')].find((c) => /MAXIMIZER/.test(c.textContent)).querySelector('button').click());
+await page.waitForTimeout(400);
+const aaDriveAfter = await page.evaluate(async () => (await import('./juce/index.js')).getSliderState('drive').getScaledValue());
+const aaHistAfter = await hist();
+check(Math.abs(aaDriveAfter - (aaDriveBefore - 1.8)) < 0.02, `APPLY moves the control (Drive ${aaDriveBefore.toFixed(2)} → ${aaDriveAfter.toFixed(2)})`);
+check(aaHistAfter.pos === aaHistBefore.pos + 1 && /Auto Analyze: Maximizer/.test(aaHistAfter.undoTitle), `as one undo step ("${aaHistAfter.undoTitle}")`);
+check(await page.evaluate(() => document.querySelectorAll('#learn-body .aa-card').length === 1), 'the applied card goes away');
+await page.evaluate(() => [...document.querySelectorAll('#learn-body .aa-card button')].find((b) => b.textContent === 'KEEP MINE').click());
+check(await waitForLearn(/YOUR SETTINGS STILL FIT/), 'KEEP MINE clears the last card');
+await pick('Tonal EQ');
+await page.waitForTimeout(200);
+check(await page.evaluate(() => /WHAT IT HEARS/.test(document.querySelector('#learn-body .aa-strip').textContent)), 'module pages keep the switch at the top');
+await page.click('#btn-autoanalyze');
+await page.waitForTimeout(300);
+check(await page.evaluate(() => !window.__mockAa.on), 'the switch turns it off again');
+await pick('Maximizer');
+await page.waitForTimeout(150);
+
 check(errors.length === 0, `no script errors (${errors.join(' | ')})`);
 await browser.close();
 

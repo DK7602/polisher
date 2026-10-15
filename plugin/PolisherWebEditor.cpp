@@ -165,6 +165,25 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                              {
                                  complete (audioProcessor.autoMaster.getReportJson());
                              })
+        // Auto Analyze: switch it on / off (saved with the project), fetch the advice, apply or keep an edit
+        // (a module id, or "all").
+        .withNativeFunction ("setAutoAnalyze", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 audioProcessor.setAutoAnalyze (args.size() > 0 && static_cast<bool> (args[0]));
+                                 complete (audioProcessor.autoMaster.getAutoAnalyze());
+                             })
+        .withNativeFunction ("getAutoAnalyze", [this] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 complete (audioProcessor.autoMaster.getAutoAnalyzeJson());
+                             })
+        .withNativeFunction ("applyAutoEdit", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 complete (audioProcessor.autoMaster.applyAutoEdit (args.size() > 0 ? args[0].toString() : juce::String()));
+                             })
+        .withNativeFunction ("keepAutoEdit", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 complete (audioProcessor.autoMaster.keepAutoEdit (args.size() > 0 ? args[0].toString() : juce::String()));
+                             })
         // Match ref: pick a reference song (the dialog runs asynchronously; the song is then read and
         // measured on a background thread), forget it, or fetch what's loaded.
         .withNativeFunction ("loadReference", [this] (const juce::Array<juce::var>&, auto complete)
@@ -288,12 +307,14 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
     for (auto& e : audioProcessor.meters.stemEnergy) e.store (0.0f);
     audioProcessor.meters.satResidual.store (0.0f);
     audioProcessor.meters.satSignal.store (0.0f);
+    audioProcessor.autoMaster.setEditorOpen (true);   // Auto Analyze listens while the window is open
     startTimerHz (30);
 }
 
 PolisherWebEditor::~PolisherWebEditor()
 {
     stopTimer();
+    audioProcessor.autoMaster.setEditorOpen (false);
     // Level match is a listening aid: switch it off when the window closes so it can't end up in a bounce.
     if (auto* p = audioProcessor.parameters.getParameter ("levelMatch"))
         if (p->getValue() > 0.5f)
@@ -459,6 +480,13 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("amLoudJump", am.loudestPartJumped());
     frame->setProperty ("amCanFinish", am.canFinish());
     frame->setProperty ("amByItself", am.finishedByItself());
+    // Auto Analyze: on, why it waits ("" = checked), music heard in this stretch, edits on offer, and a
+    // version that changes whenever its advice or status does (the page then fetches getAutoAnalyze).
+    frame->setProperty ("aaOn",       am.getAutoAnalyze());
+    frame->setProperty ("aaPause",    am.getAutoAnalyzeStatus());
+    frame->setProperty ("aaHeard",    roundTo (static_cast<float> (am.getAutoAnalyzeHeard()), 0.1f));
+    frame->setProperty ("aaEdits",    am.getAutoEditCount());
+    frame->setProperty ("aaVersion",  am.getAutoAnalyzeVersion());
     // Tone Steady's stored target: how much of the song it was learned from (0 = following the music).
     {
         const auto tone = audioProcessor.toneTarget.get();

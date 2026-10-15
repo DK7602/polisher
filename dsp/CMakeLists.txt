@@ -16,6 +16,7 @@ add_library(polisher_dsp STATIC
     src/Unlimiter.cpp
     src/Monitoring.cpp
     src/SongListener.cpp
+    src/AutoAnalyze.cpp
     src/SuiteLink.cpp)
 
 target_include_directories(polisher_dsp PUBLIC include)

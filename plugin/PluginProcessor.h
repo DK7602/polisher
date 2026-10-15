@@ -167,6 +167,9 @@ public:
         marks a project changed only for parameter edits or this call. Message thread. */
     void markStateChanged();
 
+    /** Auto Analyze on / off (see AutoMasterController), saved with the project: marks it changed. Message thread. */
+    void setAutoAnalyze (bool on);
+
     /** Tone Steady's stored target (the song's own tone, learned by Auto-Master), saved with the state. */
     ToneTargetStore toneTarget;
     /** Tone Steady's CLEAR: back to following the music, as one undo step (message thread). */
@@ -186,7 +189,14 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
 private:
-    void timerCallback() override { updateSuite(); }
+    void timerCallback() override
+    {
+        // A project opened on another thread: Auto Analyze's saved switch is applied here, on the message thread.
+        if (const int pending = pendingAutoAnalyze.exchange (-1); pending >= 0)
+            autoMaster.setAutoAnalyze (pending != 0);
+        updateSuite();
+    }
+    std::atomic<int> pendingAutoAnalyze { -1 };   // -1: nothing waiting
     int suiteSlot = -1;
     std::uint64_t suiteId = 0;
     suite::MixInfo handoff;

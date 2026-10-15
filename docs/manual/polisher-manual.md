@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.26.0 · October 2026
+Version 0.27.0 · October 2026
 
 Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
 
@@ -8,7 +8,7 @@ Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d7
 
 Masterology (called **Polisher** before version 0.25.0) is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds twelve modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.26.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
+This manual covers version 0.27.0. Every control is explained in plain words, with the number ranges the plug-in really uses.
 
 **The 30-second version**
 
@@ -107,6 +107,7 @@ Auto-Master sets the Tonal EQ bands together. Neighbouring bands overlap, so it 
 5. It then **chooses every setting** (the button says THINKING and counts the seconds). That runs the whole chain many times on the 12 seconds it kept, so it takes longer at higher sample rates: usually 5–15 seconds at 44.1 or 48 kHz, 10–30 seconds at 96 kHz, 20–60 seconds at 192 kHz (slower computers take longer). **CANCEL** in Learn stops it without changing anything, and closing the project doesn't wait for it.
 6. Read the report in Learn (**WHY IT SOUNDS LIKE THIS**). It starts with what it heard, for example *Listened to 2:47 of your song; the loudest part (0:54–1:06, usually the hook or drop) set the levels*, and shows the **Whole song** loudness and loudness range as your mix arrives. *Your mix measured …* is your mix as it reaches Masterology, before Input Trim and before your Stem EQ moves (with Keep Loudness off, a Stem EQ boost makes it louder inside Masterology, and the report says so).
 7. Don't like it? Click the **undo arrow** to put every control back as it was, Tone Steady's target too (the whole run is one undo step; the redo arrow brings it back). To compare two runs, keep each in a snapshot: see [Undo, redo and snapshots](#undo-redo-and-snapshots).
+8. Keep mixing? Switch on **AUTO ANALYZE** (top of Learn): when your mix changes, it tells you what Auto-Master would change. See [Auto Analyze](#auto-analyze-keep-the-master-in-step-with-your-mix).
 
 Timeline positions come from Cubase's playhead. If playback **jumps** while it listens (a **cycle loop** wraps, or you move the playhead), the report says so: when the loudest 12 seconds it heard join two places on your timeline it names both, and the whole-song figures then count what it heard, repeats included. For exact figures, turn Cycle off and play the song once through. It listens for up to 15 minutes, and its memory stays the same however long the song is (it keeps only the loudest 12 seconds of audio and a few numbers per second). On a **mono** bus it measures one channel, as loudness meters do.
 
@@ -148,6 +149,32 @@ The report starts with **Matched to your reference "…"**, explains every move 
 - Only the reference's measurements and its name are saved with your project, not the song. Moving or deleting the file later changes nothing.
 - While a reference is loaded the target pills step back; click the **×** on the reference pill to clear it and go back to the genre and target.
 - Clicking the pill again loads a different song.
+
+### Auto Analyze: keep the master in step with your mix
+
+Once Auto-Master has run, Learn shows an **AUTO ANALYZE** switch at the top (on the report and on every module page). Turn it on and keep working on your mix: while your song plays, Masterology keeps listening to the mix as it arrives. When the mix changes (you rebalanced it in Mixology, turned the 808 up, added an EQ on a track), Learn shows what Auto-Master would change now, one card per module, **now → new**, with Auto-Master's reason. It only gives advice: **nothing changes until you press APPLY**.
+
+How it works:
+
+1. It listens to one stretch of playback at a time. After every stop (2 seconds without music) it starts again, so it always judges the mix as it is now. It also starts again when Mixology's advice on the mix changes, and after 90 seconds of music.
+2. Auto-Master set your master from the **hook or drop**, so Auto Analyze compares on that part too, like with like: it checks once it has heard 20 seconds of music **including the hook or drop** (or a repeat of it, such as the second chorus). While only a verse plays, Learn says which part to play.
+3. It runs Auto-Master's thinking again on that part, in the background (a few seconds), with your genre, intensity and target, and compares the result with the plan Auto-Master made. A module gets a card only when the change is worth hearing (for example 0.75 dB of EQ or Drive, 1.5 dB of a Dynamics threshold, a different Saturation mode). Smaller moves in the same module go with it.
+4. It checks again (at most every 15 seconds of music) whenever a louder part becomes the one it judges. The cards only change when the advice really changed.
+
+On each card:
+
+- **APPLY** sets that module's controls, as one undo step (the undo arrow puts them back). A control moves by **Auto-Master's change**, starting from where it is now, so a knob you set yourself keeps your touch: if you had added 1 dB of Low End and Auto-Master now wants 1.5 dB less, it goes from your setting down 1.5 dB.
+- **KEEP MINE** leaves the module as it is. The same advice doesn't come back for this mix (also one undo step).
+- **APPLY ALL** / **KEEP ALL MINE** do every card at once.
+- A new Vocals suggestion for Stem EQ shows up as a card too; applying it switches Stem EQ on.
+
+Good to know:
+
+- Above the cards, Learn says what changed in the mix since Auto-Master listened, for example "arrives 1.8 dB louder on the hook, and its tone moved: more low end (+2.1 dB)". A mix that got louder usually means lower Drive (or Input Trim) and higher Dynamics thresholds; a mix with more low end means less Low End EQ.
+- **YOUR SETTINGS STILL FIT** means Auto-Master would make the same choices for your mix as it is now.
+- If you change the **genre, intensity, target or reference**, Auto Analyze pauses: Auto-Master's plan was made for the old choice. Run Auto-Master again and it carries on with the new plan.
+- It listens only while Masterology's window is open, and pauses while Auto-Master listens. The switch is saved with your project (off for new instances and older projects).
+- A big change to the mix (a new arrangement, a different song) is better served by running Auto-Master again from the start.
 
 ## Every module and its controls
 
@@ -529,6 +556,7 @@ The **Learn** panel on the right explains, live, what the selected module is doi
 - **Red boxes** need a decision. Each one says **Do I need to fix it?** and gives numbered **How** steps.
 - **Blue boxes** are tips, or warnings that don't need fixing. Nothing blue is a problem.
 - After Auto-Master, the top of each module's Learn shows the reasons for its settings, and **WHY IT SOUNDS LIKE THIS** holds the whole report.
+- After Auto-Master, the **AUTO ANALYZE** switch sits at the top of Learn; when it has edits for you, the link next to it says **NEW EDITS · SEE** (and the Auto-Master button says how many). See [Auto Analyze](#auto-analyze-keep-the-master-in-step-with-your-mix).
 
 **Quick Help** (the **?** button, top right) is a one-page cheat sheet: the chain order and the first moves for every module. Its **OPEN THE FULL MANUAL** button opens this manual inside Masterology, with contents on the left; it works offline. Press **Esc** or **×** to close it.
 
@@ -595,6 +623,7 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 - **From Mixology** (in Learn): Mixology tells Masterology the mix style you picked there, how loud the mix comes in and how high its peaks are, and, after Mixology's Analyze Mix, how its tone sits against that style. Learn shows it as **FROM MIXOLOGY** at the bottom of the panel.
 - **Use Mixology's genre**: when Mixology's style points to another Auto-Master genre than the one at the top (for example Mixology mixed it as R&B and the genre says Trap / Hip-Hop), Learn shows the note at the top with a button, **USE R&B (MIXOLOGY'S STYLE)**. One click sets the genre; run Auto-Master after.
 - **Warnings from the mix**: Learn also says when Mixology heard a **mono mix** at the Stereo Out (left = right), when **Mixology's Limiter** is on (two limiters squash the mix twice: switch Mixology's off), and when the mix leaves almost no room (peaks above −1 dBTP).
+- **Auto Analyze with Mixology**: when Mixology's advice on the mix changes (its Analyze Mix or Auto Analyze heard something new), Masterology's Auto Analyze starts listening again, so its edits are about the mix as Mixology left it. Use both: fix the mix in Mixology, then let Masterology's Auto Analyze adjust the master.
 - **Masterology's goal in Mixology**: Mixology's Master page shows what Masterology aims for (for example "Masterology: −9 LUFS · −1.0 dBTP": the target, or a reference's loudness while Match ref is on, and the Maximizer's ceiling).
 
 ## Troubleshooting
@@ -608,6 +637,8 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Auto-Master finished while you only paused | After 30 s of music, 4 seconds without music count as the song's end | Fine if it heard the hook. Otherwise run it again and keep the song playing |
 | The report says playback jumped | A cycle loop or a playhead move while it listened | Turn Cycle off on the transport bar and play the song once from start to end |
 | Learn never shows FROM MIXOLOGY | No Mixology 0.8+ in the same project, or it isn't on the Stereo Out | Put Mixology on the Stereo Out before Masterology and open its window once (it then knows your mix style) |
+| Auto Analyze never shows edits | It waits for the hook or drop, or the song keeps stopping, or the window is closed | Keep Masterology's window open and play through the hook or drop for at least 20 seconds without stopping. Learn's status line says what it waits for |
+| Auto Analyze says "Paused" after you changed the genre or target | Auto-Master's plan was made for the old choice | Run Auto-Master again; Auto Analyze carries on with the new plan |
 | Auto-Master says it heard too little | Playback stopped or was mostly silence | Click Auto-Master, play the song from the start and let it play (it needs at least 12 s of music) |
 | Tone Steady's Target says "following the music" | No song tone learned yet (or CLEAR was pressed, or the song was saved before targets existed) | Press LEARN in Tone Steady (or run Auto-Master) and play the whole song |
 | Master lands quieter than the target | Auto-Master protected the drums within the intensity's limit | Fine as it is. To go louder, choose Punchy, or tame the drum peaks in the mix |

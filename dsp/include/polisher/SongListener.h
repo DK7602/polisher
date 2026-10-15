@@ -37,6 +37,12 @@ struct SongStats
         playback, or playback restarted somewhere else after a stop). With any, integratedLufs and
         loudnessRangeLu describe what was heard (repeats included), not the song played once through. */
     int timelineJumps = 0;
+    /** Every part of the timeline that plays at the loudest part's level: each 100 ms of music inside a
+        windowSeconds stretch whose loudness is within kHookWithinLu of the loudest one's (the hook or drop
+        and its repeats), joined into spans (split where playback jumped or music is missing for more than
+        0.5 s). Empty without timeline positions. Auto Analyze checks the settings again only on a part
+        that plays at this level, so it compares like with like. */
+    std::vector<TimeSpan> hookSpans;
     int channels = 2;                   // 1: a mono bus (the loudness above counts one channel, as BS.1770 does)
 };
 
@@ -68,6 +74,7 @@ public:
     static constexpr double kSilencePeak = 0.003;       // about -50 dBFS: a 100 ms piece below it is not music
     static constexpr int kMinToneBlocks = 8;            // a tone needs at least 8 s of music at the song's level
     static constexpr double kJumpSeconds = 0.05;        // a block this far from where the last one ended: the playhead jumped
+    static constexpr double kHookWithinLu = 1.0;        // SongStats::hookSpans: windows this close to the loudest one's loudness
 
     void prepare (double sampleRate, double windowSeconds, double maxSeconds);
     void reset() noexcept;

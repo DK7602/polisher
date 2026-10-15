@@ -110,7 +110,50 @@
   window.__mockResets = resets;
   // The suite link: Mixology's hand-off for the song (null = no Mixology in the project). The smoke test sets it.
   let fromMixology = null;
-  window.__polisherMock = { setPlaying: (on) => { transport.playing = !!on; }, setMixology: (h) => { fromMixology = h; } };
+  window.__polisherMock = { setPlaying: (on) => { transport.playing = !!on; }, setMixology: (h) => { fromMixology = h; },
+                            aaCheck: () => aaCheck() };
+  // Simulated Auto Analyze: once on (after an Auto-Master run) it "hears" 3 s of song per 0.1 s while playing,
+  // checks after 20 s (0.6 s of thinking) and offers two edits: the mix arrived 1.8 dB louder with more low end.
+  // aaCheck() (the smoke test) skips straight to the advice.
+  const aa = { on: false, pause: "off", heard: 0, version: 0, edits: [], checked: "", updated: "", mix: null, hasCheck: false, timer: 0 };
+  window.__mockAa = aa;
+  const aaBump = (pause) => { if (pause !== undefined) aa.pause = pause; aa.version++; };
+  function aaCheck() {
+    const now = new Date().toISOString();
+    aa.checked = aa.updated = now;
+    aa.hasCheck = true;
+    const ch = (id, name, from, to, unit) => ({ id, name, from, to, fromText: `${from.toFixed(1)} ${unit}`, toText: `${to.toFixed(1)} ${unit}` });
+    aa.edits = [
+      { module: "eq", title: "Tonal EQ", changes: [ch("eqGain1", "EQ Low End Gain", sliders.eqGain1.value, sliders.eqGain1.value - 1.5, "dB")] },
+      { module: "max", title: "Maximizer", changes: [ch("drive", "Drive", sliders.drive.value, Math.max(0, sliders.drive.value - 1.8), "dB")] },
+    ];
+    aa.mix = { loudDb: 1.8, lufs: -15.3, bandDb: [2.1, 0.6, 0, -0.2, 0, -0.3, -1.1], notes: [],
+               reasons: [{ module: "eq", control: "Low End", value: "\u22121.5 dB", why: "Your mix now has about 6 dB more sub than typical Trap / Hip-Hop masters, so a 1.5 dB cut closes part of the gap." },
+                         { module: "max", control: "Drive", value: "+7.6 dB", why: "+7.6 dB of Drive lands this part at \u22129.0 LUFS, your Loud \u22129 target." }] };
+    aaBump("");
+  }
+  function aaApplyEdits(module, apply) {
+    const chosen = aa.edits.filter((e) => module === "all" || e.module === module);
+    if (!chosen.length) return false;
+    beginGroup("Auto Analyze: " + (apply ? "" : "keep ") + chosen.map((e) => e.title).join(" + ") + (apply ? "" : " as it is"));
+    if (apply) for (const e of chosen) for (const c of e.changes) setV(c.id, c.to);
+    endGroup();
+    aa.edits = aa.edits.filter((e) => !chosen.includes(e));
+    aaBump();
+    return true;
+  }
+  setInterval(() => {
+    if (!aa.on) return;
+    const ok = am.report && JSON.parse(am.report).ok;
+    if (!ok) { if (aa.pause !== "noReport") aaBump("noReport"); return; }
+    if (am.state !== 0) { if (aa.pause !== "busy") aaBump("busy"); return; }
+    if (!transport.playing) { if (aa.pause !== "stopped") { aa.heard = 0; aaBump("stopped"); } return; }
+    if (aa.pause === "checking") { if (++aa.timer >= 6) aaCheck(); return; }
+    if (aa.hasCheck && aa.pause === "") { aa.heard += 3; return; }
+    aa.heard += 3;
+    if (aa.heard >= 20) { aa.timer = 0; aaBump("checking"); }
+    else if (aa.pause !== "listening") aaBump("listening");
+  }, 100);
   // Simulated Auto-Master: it "listens" to a 2:30 song 30x faster than real time (its loudest part at
   // 0:54), finishes by itself at the song's end (or on FINISH from 12 s of music on), then thinks for
   // 0.9 s. Mode 1 is Tone Steady's LEARN: it only stores the song's tone (toneTarget: seconds heard),
@@ -322,6 +365,7 @@
     initialisationData: {
       __juce__platform: [],
       __juce__functions: ["resetMeter", "startAutoMaster", "finishAutoMaster", "cancelAutoMaster", "getAutoMasterReport", "clearToneTarget",
+                          "setAutoAnalyze", "getAutoAnalyze", "applyAutoEdit", "keepAutoEdit",
                           "loadReference", "clearReference", "getReference", "setMonitor",
                           "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve"],
       __juce__registeredGlobalEventIds: [],
@@ -367,6 +411,15 @@
         if (payload.name === "cancelAutoMaster" && (am.state === 1 || am.state === 2)) am.state = 0;
         if (payload.name === "clearToneTarget" && am.toneTarget) { beginGroup("Tone Steady: follow the music"); am.toneTarget = 0; endGroup(); }
         if (payload.name === "getAutoMasterReport") result = am.report;
+        if (payload.name === "setAutoAnalyze") {
+          aa.on = !!(payload.params || [])[0];
+          if (!aa.on) Object.assign(aa, { edits: [], hasCheck: false, mix: null, heard: 0 });
+          aaBump(aa.on ? "stopped" : "off");
+          result = aa.on;
+        }
+        if (payload.name === "getAutoAnalyze") result = JSON.stringify({ on: aa.on, pause: aa.pause, heard: aa.heard, checked: aa.checked, updated: aa.updated,
+                                                                          hasCheck: aa.hasCheck, mix: aa.mix || undefined, edits: aa.on ? aa.edits : [] });
+        if (payload.name === "applyAutoEdit" || payload.name === "keepAutoEdit") result = aaApplyEdits((payload.params || [])[0], payload.name === "applyAutoEdit");
         if (payload.name === "setMonitor") {
           const [listen, mono, phone] = payload.params || [];
           mon.listen = Number.isInteger(listen) && listen >= 0 && listen < 13 ? listen : 0;
@@ -437,6 +490,7 @@
       punch: toggles.bassOn && sliders.bassPunch.value > 0 ? +(sliders.bassPunch.value / 100 * 4 * beat).toFixed(1) : 0,
       bassWidth: 42, corr: +(0.55 - (sliders.imgMid.value + sliders.imgHigh.value - 200) / 400).toFixed(2), matchDb: +(-(11 * (1 - Math.exp(-drive / 11)))).toFixed(1),
       amState: am.state, amProgress: am.state === 1 ? +Math.min(1, am.heard / 12).toFixed(2) : 0, amHearing: true, amReport: am.version,
+      aaOn: aa.on, aaPause: aa.pause, aaHeard: aa.heard, aaEdits: aa.on ? aa.edits.length : 0, aaVersion: aa.version,
       amMode: am.mode, amHeard: am.heard, amCanFinish: am.state === 1 && am.heard >= 12, amByItself: am.byItself,
       amLoudAt: am.heard < 12 ? -1 : Math.min(LOUD_AT, am.heard - 12), amLoudEnd: am.heard < 12 ? -1 : Math.min(LOUD_AT, am.heard - 12) + 12,
       amLoudJump: false, amLoudLufs: am.heard >= LOUD_AT + 12 ? -17.6 : -21.2,

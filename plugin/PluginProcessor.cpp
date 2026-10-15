@@ -116,6 +116,20 @@ void PolisherAudioProcessor::updateSuite()
     auto& link = suite::Link::process();
     const auto now = suite::nowMs();
     hasHandoff = link.readMix (handoff, now);
+    // Auto Analyze hears the mix afresh when Mixology's word on it changes (its advice was updated).
+    {
+        std::uint64_t key = 0;
+        if (hasHandoff)
+        {
+            auto mixIn = [&key] (std::uint64_t v) { key = (key ^ v) * 1099511628211ull; };
+            key = 1469598103934665603ull;
+            mixIn (handoff.flags);
+            for (float d : { handoff.lowDb, handoff.lowMidDb, handoff.presenceDb, handoff.airDb })
+                mixIn (static_cast<std::uint64_t> (std::lround (d * 10.0f)));
+            mixIn (suite::nameHash (handoff.styleKey));
+        }
+        autoMaster.setMixKey (key);
+    }
     if (suiteSlot < 0) suiteSlot = link.claimMaster (suiteId, now);
     if (suiteSlot < 0) return;   // four Masterologys already
 
@@ -769,6 +783,14 @@ void PolisherAudioProcessor::pollReference()
     }
 }
 
+void PolisherAudioProcessor::setAutoAnalyze (bool on)
+{
+    if (autoMaster.getAutoAnalyze() == on)
+        return;
+    autoMaster.setAutoAnalyze (on);
+    markStateChanged();
+}
+
 juce::String PolisherAudioProcessor::captureExtraState() const
 {
     // Besides the controls, an undo step or a snapshot carries what explains and shapes the sound without
@@ -961,6 +983,8 @@ void PolisherAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     if (auto xml = parameters.copyState().createXml())
     {
         xml->setAttribute ("amReport", autoMaster.getReportForSaving());
+        if (autoMaster.getAutoAnalyze())
+            xml->setAttribute ("autoAnalyze", 1);   // absent: off (also every state saved before it existed)
         // Match ref: the reference song's measurements and name (no audio). Absent when none is loaded.
         if (const auto ref = reference.getJsonForSaving(); ref.isNotEmpty())
             xml->setAttribute ("amReference", ref);
@@ -982,6 +1006,8 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
             const auto savedReport = xml->getStringAttribute ("amReport");
             const auto savedReference = xml->getStringAttribute ("amReference");   // "" in states from before Match ref
             const auto savedTone = xml->getStringAttribute ("toneTarget");         // "": Tone Steady follows the music (as before)
+            const bool savedAuto = xml->getIntAttribute ("autoAnalyze", 0) != 0;
+            xml->removeAttribute ("autoAnalyze");
             xml->removeAttribute ("amReport");
             xml->removeAttribute ("amReference");
             xml->removeAttribute ("toneTarget");
@@ -1012,6 +1038,13 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
                     child->setAttribute ("value", 0.0);
             parameters.replaceState (juce::ValueTree::fromXml (*xml));
             autoMaster.onStateRestored (savedReport);
+            if (juce::MessageManager::existsAndIsCurrentThread())
+            {
+                pendingAutoAnalyze.store (-1);
+                autoMaster.setAutoAnalyze (savedAuto);
+            }
+            else
+                pendingAutoAnalyze.store (savedAuto ? 1 : 0);
             reference.restoreFromJson (savedReference);
             toneTarget.restoreFromJson (savedTone);
             snapshots.fromXml (savedSnapshots.get());

@@ -15,7 +15,7 @@ meters only) with a button to Microsoft's free download page; install it and reo
 
 User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (also inside the plug-in: Quick Help > Open the full manual).
 
-## Status — v0.26.0
+## Status — v0.27.0
 
 | Piece | State |
 | --- | --- |
@@ -37,6 +37,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | Dynamics Impact: per-band transient shaping (−100…+100 %), loudness kept per band, steady sound untouched | Done (v0.17) |
 | Glue (module 07): one bus compressor for the whole mix in three vintage flavours (Bus / Opto / Tube: knee, detector, timing), Ignore Lows sidechain high-pass, Auto release, parallel Mix, Gain, zero latency, exact pass-through at 1:1 | Done (v0.24) |
 | Suite link: Masterology tells Mixology its goal (target, ceiling, genre); Mixology's hand-off (style, peaks, loudness, tone, mono, its limiter) shows in Learn as FROM MIXOLOGY with a one-click matching genre (`dsp/include/suite/SuiteLink.h`, the same file in Voxology and Mixology) | Done (v0.26) |
+| Auto Analyze: after Auto-Master, keeps listening while the song plays; when it hears the hook again and the mix changed, it re-runs Auto-Master in the background and offers per-module edits in Learn (now → new, APPLY / KEEP MINE, one undo step each), keeping the user's own knob offsets (`dsp/include/polisher/AutoAnalyze.h`) | Done (v0.27) |
 | New name and logo: Polisher is now **Masterology** (plug-in name, vendor "Masterology Audio", header logo, manual, Blind Test). Same plug-in ID, so old projects and presets load | Done (v0.25) |
 | Shoot-out kit: Blind Test checks the masters were made at the same loudness (names the one to push and by how much) and and the same ceiling (names the file to change and by how much, matched to masterology.wav), and adds measurements to the answer key (kick / snare punch, range, width, bass width, 6-band tone balance); manual guide for Masterology vs Ozone 12 / TDR Limiter 6 GE / LoudMax | Done (v0.23) |
 | Mid / side on Dynamics (Channels: Stereo / Mid only / Side only, all bands, click-free switch) and Saturation (Channels: Stereo / Mid / Side, works with Focus) | Done (v0.22) |

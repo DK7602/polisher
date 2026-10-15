@@ -29,7 +29,8 @@ add_executable(polisher_tests
     test_songlistener.cpp
     test_genrecurve.cpp
     test_suite.cpp
-    test_handoff.cpp)
+    test_handoff.cpp
+    test_autoanalyze.cpp)
 
 target_link_libraries(polisher_tests PRIVATE polisher_dsp Catch2::Catch2WithMain)
 set_target_properties(polisher_tests PROPERTIES FOLDER "Masterology")

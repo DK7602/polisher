@@ -471,6 +471,39 @@ SongStats SongListener::stats() const
     }
     if (s.loudestSpans.empty())
         s.positionFromHost = false;
+
+    // The parts that play at the loudest part's level (the hook and its repeats): every piece of a window
+    // within kHookWithinLu of the loudest window's energy, on the timeline.
+    if (hasWindow() && s.positionFromHost)
+    {
+        const int W = windowHops;
+        const double floorSum = bestSum * std::pow (10.0, -kHookWithinLu / 10.0);
+        std::vector<std::uint8_t> hook (static_cast<size_t> (H), 0);
+        double sum = 0.0;
+        int coverUntil = -1;   // pieces up to here belong to a loud-enough window
+        for (int j = 0; j < H; ++j)
+        {
+            sum += e (j);
+            if (j >= W) sum -= e (j - W);
+            if (j + 1 >= W && sum >= floorSum * (1.0 - 1.0e-9))
+            {
+                for (int k = std::max (coverUntil + 1, j + 1 - W); k <= j; ++k) hook[static_cast<size_t> (k)] = 1;
+                coverUntil = j;
+            }
+        }
+        bool known = true;
+        for (int j = 0; j < H && known; ++j) known = hopTime[static_cast<size_t> (j)] >= 0.0;
+        for (int j = 0; known && j < H; ++j)
+        {
+            if (hook[static_cast<size_t> (j)] == 0) continue;
+            const double t = hopTime[static_cast<size_t> (j)];
+            auto& out = s.hookSpans;
+            const bool joins = ! out.empty() && j > 0 && hook[static_cast<size_t> (j - 1)] != 0 && hopJump[static_cast<size_t> (j)] == 0
+                            && t - out.back().end <= 0.5;
+            if (joins) out.back().end = t + kHopSeconds;
+            else       out.push_back ({ t, t + kHopSeconds });
+        }
+    }
     s.timelineJumps = jumpCount;
     s.channels = stereoSeen ? 2 : 1;
     return s;

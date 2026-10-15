@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "polisher/AutoAnalyze.h"
 #include "polisher/AutoMaster.h"
 #include "polisher/SongListener.h"
 #include "ReferenceTrack.h"
@@ -35,7 +36,15 @@
     never while the audio thread may be using it), so nothing reallocates while the audio thread
     writes. Each run has a session number; a result from an older session is thrown away. Everything
     except capture() runs on the message thread (prepare() may run on any thread and only touches
-    atomics). */
+    atomics).
+
+    Auto Analyze (setAutoAnalyze): after a successful Auto-Master, while the window is open and the
+    controller has nothing else to do, the same listener hears the mix as it arrives (one stretch of
+    playback at a time: it starts again after a stop, when Mixology's hand-off changes, after
+    kWatchMaxSeconds, or for a new report). When the loudest part it heard plays at the hook's level of
+    the song Auto-Master heard (the report's hook spans), it runs Auto-Master again on that part in the
+    background and offers the difference as edits (polisher::autoanalyze::planEdits). It never changes
+    anything by itself: applyAutoEdit / keepAutoEdit, one undo step each. */
 class AutoMasterController final : private juce::Timer
 {
 public:
@@ -49,6 +58,12 @@ public:
     // can carry another song's tone. Synthetic songs: a 15 s listen reads 0.1-2.7 dB from its own
     // song's tone in steady songs, other songs 3-19 dB (see toneDistanceDb).
     static constexpr double kSameSongToneDb = 3.0;
+    // Auto Analyze
+    static constexpr double kWatchEnoughSeconds = 20.0;     // music heard before the first check
+    static constexpr double kWatchRefreshSeconds = 15.0;    // then at most every 15 s (when the loudest part heard changed)
+    static constexpr double kWatchMaxSeconds = 90.0;        // a stretch of playback longer than this starts again (the mix as it is now)
+    static constexpr double kWatchStopMs = 2000.0;          // this long without music: the song stopped (the next play starts afresh)
+    static constexpr double kHookOverlapSeconds = 6.0;      // the loudest 12 s heard must share this much with the song's hook spans
     enum State { idle = 0, listening = 1, analysing = 2 };
     enum Mode { fullMaster = 0, toneOnly = 1 };
 
@@ -67,7 +82,7 @@ public:
         // Busy flag first, then the state (both sequentially consistent): whoever stops the listening
         // either sees this block in progress and waits for it, or this block sees the new state.
         captureBusy.store (true);
-        if (stateFlag.load() == listening && listener.getSampleRate() == sampleRate.load (std::memory_order_relaxed))
+        if ((stateFlag.load() == listening || watchFlag.load()) && listener.getSampleRate() == sampleRate.load (std::memory_order_relaxed))
         {
             const int nch = buffer.getNumChannels(), n = buffer.getNumSamples();
             if (nch > 0 && n > 0)   // a mono bus: no right channel, so it is measured as one channel
@@ -122,8 +137,43 @@ public:
     int getReportVersion() const noexcept      { return reportVersion.load(); }
     juce::String getReportJson() const;        // "" when there's no report
 
+    // ---- Auto Analyze (message thread) ---------------------------------------------------------------
+    void setAutoAnalyze (bool on);
+    bool getAutoAnalyze() const noexcept       { return aaOn; }
+    /** The editor tells whether its window is open: Auto Analyze listens only then. */
+    void setEditorOpen (bool open);
+    /** Mixology's hand-off (a hash of what it says about the mix; 0: none). A change starts the listen again. */
+    void setMixKey (std::uint64_t key)         { mixKey = key; }
+    /** Why it isn't checking right now: "off", "noReport", "busy", "closed", "settings", "stopped", "listening",
+        "hook" (the part heard isn't at the hook's level), "checking", "cantJudge", or "" (checked; see the edits). */
+    juce::String getAutoAnalyzeStatus() const  { return aaPause; }
+    double getAutoAnalyzeHeard() const noexcept;   // music heard in this stretch of playback
+    int getAutoAnalyzeVersion() const noexcept { return aaVersion; }
+    int getAutoEditCount() const noexcept      { return static_cast<int> (aaEdits.size()); }
+    /** Status, the edits on offer (module, controls now -> new with their texts, Auto-Master's reasons) and
+        what changed in the mix, for Learn. */
+    juce::String getAutoAnalyzeJson() const;
+    /** Applies one module's edit ("all": every edit) as one undo step. False when there is none. */
+    bool applyAutoEdit (const juce::String& module);
+    /** Keeps the settings as they are for that edit: Auto-Master's plan is moved to the new one without
+        changing a control, so the same advice doesn't come back. One undo step. */
+    bool keepAutoEdit (const juce::String& module);
+
 private:
     void timerCallback() override { tick(); }
+    void updateTimer();
+    polisher::AutoMasterSettings currentSettings() const;
+    void autoTick (double nowMs);
+    void startWatching (bool fresh);
+    void stopWatching();
+    void restartWatching();
+    void launchCheck (polisher::AudioClip clip);
+    void takeFresh (const polisher::AutoMasterResult& result);
+    void recomputeEdits (bool fromCheck);
+    bool reportSettingsMatch() const;
+    polisher::autoanalyze::Values plannedValues() const;
+    float paramValue (const juce::String& id) const;
+    bool changeReport (const juce::String& module, bool applyParams);
     /** Sets a new state and waits until the audio thread is out of capture(), so the listener is ours. */
     void takeListener (State newState);
     void launchAnalysis();
@@ -155,6 +205,27 @@ private:
     std::atomic<int> reportVersion { 0 };
     mutable juce::CriticalSection reportLock;
     juce::String report;
+
+    // Auto Analyze (message thread, except watchFlag)
+    std::atomic<bool> watchFlag { false };        // the audio thread feeds the listener for Auto Analyze
+    bool aaOn = false, editorOpen = false, watching = false, checkRunning = false, hasFresh = false;
+    std::uint64_t mixKey = 0, watchMixKey = 0;
+    double watchMusicMs = 0.0;                    // when the music last grew
+    std::int64_t watchHeard = 0;
+    double checkedLoudStart = -1.0, checkedLoudLufs = -100.0, checkedAtHeard = 0.0;   // the loudest part last judged
+    int aaSeenReport = -1, aaSession = 0, aaVersion = 0;
+    juce::var aaReport;                           // the report parsed (the one the advice is about)
+    juce::String aaBaseline;                      // its time stamp: a new Auto-Master run starts the advice over
+    juce::String aaPause { "off" };
+    polisher::autoanalyze::Values fresh;          // what Auto-Master chooses for the mix heard last
+    std::vector<polisher::autoanalyze::Edit> aaEdits;
+    juce::var freshInfo;                          // the last check: mix loudness / tone, notes, reasons
+    juce::String aaCheckedAt, aaUpdatedAt;
+    std::shared_ptr<std::atomic<bool>> checkCancel;
+    juce::CriticalSection checkLock;
+    std::unique_ptr<polisher::AutoMasterResult> pendingCheck;
+    int pendingCheckSession = -1;
+    std::atomic<bool> checkReady { false };
 
     juce::ThreadPool pool { 1 };                  // last: destroyed (and joined) first
 

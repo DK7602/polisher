@@ -7,6 +7,7 @@
 #include "../Signals.h"
 #include "../SwitchLevel.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_session.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -1646,6 +1647,185 @@ TEST_CASE ("Tone Steady with a stored tone never allocates while the EQ and Inpu
         worst = std::max (worst, allocations.load());
     }
     CHECK (worst == 0);
+}
+
+namespace {
+
+/** Ticks Auto Analyze (like its timer) until a check it started has ended. */
+bool waitForCheck (PolisherAudioProcessor& p)
+{
+    for (int i = 0; i < 15000; ++i)   // up to 5 minutes
+    {
+        p.autoMaster.tick();
+        if (p.autoMaster.getAutoAnalyzeStatus() != "checking")
+            return true;
+        juce::Thread::sleep (20);
+    }
+    return false;
+}
+
+juce::var autoAdvice (PolisherAudioProcessor& p) { return juce::JSON::parse (p.autoMaster.getAutoAnalyzeJson()); }
+
+/** The edit offered for a module (void when there is none). */
+juce::var editFor (const juce::var& advice, const juce::String& module)
+{
+    if (const auto* list = advice["edits"].getArray())
+        for (const auto& e : *list)
+            if (e["module"].toString() == module) return e;
+    return {};
+}
+
+} // namespace
+
+TEST_CASE ("Auto Analyze: hears the hook again, offers what changed in the mix, and applies it as one undo step", "[plugin][automaster][autoanalyze]")
+{
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, false);
+    p->history.setMergeWindowMs (0.0);
+    FakePlayHead head;
+    p->setPlayHead (&head);
+    auto song = [sr] (double chorusDb)
+    {
+        return songOf ({ testsig::musicLike (sr, 20.0, -20.0, 1), testsig::musicLike (sr, 14.0, chorusDb, 2),
+                         testsig::musicLike (sr, 10.0, -20.0, 3) });
+    };
+    const auto original = song (-8.0);
+
+    // Auto-Master hears the song from 0:05 (verse, chorus 0:25-0:39, verse) and sets everything.
+    head.seconds = 5.0;
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, original);
+    play (*p, head, testsig::silence (sr, 2, 4.5));
+    REQUIRE (waitForAutoMaster (*p));
+    const auto report = reportOf (*p);
+    REQUIRE (static_cast<bool> (report["ok"]));
+    REQUIRE (report["listen"]["hookSpans"].size() >= 1);
+    CHECK (report["settings"].isObject());
+    CHECK (report["mixStats"].isObject());
+
+    // Off by default; on, it waits for the window and for music.
+    CHECK_FALSE (p->autoMaster.getAutoAnalyze());
+    p->setAutoAnalyze (true);
+    p->autoMaster.tick();
+    CHECK (p->autoMaster.getAutoAnalyzeStatus() == "closed");
+    p->autoMaster.setEditorOpen (true);
+    p->autoMaster.tick();
+    CHECK (p->autoMaster.getAutoAnalyzeStatus() == "stopped");
+
+    // Only the verse: not the part the master was set from, so nothing is judged.
+    head.seconds = 5.0;
+    play (*p, head, testsig::musicLike (sr, 20.0, -20.0, 1));
+    play (*p, head, testsig::musicLike (sr, 2.0, -20.0, 1));
+    REQUIRE (waitForCheck (*p));
+    CHECK (p->autoMaster.getAutoAnalyzeStatus() == "hook");
+    play (*p, head, testsig::silence (sr, 2, 2.5));   // stop: the next play starts afresh
+    CHECK (p->autoMaster.getAutoAnalyzeHeard() == 0.0);
+
+    // The song again, unchanged: Auto-Master's decisions are the same, nothing to offer.
+    head.seconds = 5.0;
+    play (*p, head, original);
+    REQUIRE (waitForCheck (*p));
+    {
+        const auto advice = autoAdvice (*p);
+        INFO (juce::JSON::toString (advice, true));
+        CHECK (static_cast<bool> (advice["hasCheck"]));
+        CHECK (advice["edits"].size() == 0);
+    }
+    play (*p, head, testsig::silence (sr, 2, 2.5));
+
+    // The mix changed upstream: the chorus arrives 3 dB louder. Drive comes down; Dynamics follows.
+    head.seconds = 5.0;
+    play (*p, head, song (-5.0));
+    REQUIRE (waitForCheck (*p));
+    const auto advice = autoAdvice (*p);
+    INFO (advice.toString());
+    CHECK ((double) advice["mix"]["loudDb"] > 2.5);
+    CHECK ((double) advice["mix"]["loudDb"] < 3.5);
+    const auto max = editFor (advice, "max");
+    REQUIRE (max.isObject());
+    CHECK (max["title"].toString() == "Maximizer");
+    const float driveBefore = p->parameters.getRawParameterValue ("drive")->load();
+    double driveTo = driveBefore;
+    for (const auto& c : *max["changes"].getArray())
+        if (c["id"].toString() == "drive") { driveTo = (double) c["to"]; CHECK ((double) c["from"] == Catch::Approx (driveBefore).margin (1.0e-4)); }
+    CHECK (driveTo < driveBefore - 2.0);
+
+    // Apply: the control moves, as one undo step; the edit is gone (Auto-Master's plan is the new one).
+    const int steps = p->history.size();
+    REQUIRE (p->autoMaster.applyAutoEdit ("max"));
+    CHECK (p->parameters.getRawParameterValue ("drive")->load() == Catch::Approx (driveTo).margin (0.02));
+    CHECK (p->history.size() == steps + 1);
+    CHECK (p->history.undoLabel() == "Auto Analyze: Maximizer");
+    CHECK (editFor (autoAdvice (*p), "max").isVoid());
+    CHECK ((double) reportOf (*p)["values"]["drive"] < (double) report["values"]["drive"] - 2.0);
+
+    // Undo puts the control and the plan back, so the edit is offered again.
+    CHECK (p->history.undo() == "Auto Analyze: Maximizer");
+    p->autoMaster.tick();
+    CHECK (p->parameters.getRawParameterValue ("drive")->load() == Catch::Approx (driveBefore).margin (1.0e-4));
+    CHECK (editFor (autoAdvice (*p), "max").isObject());
+
+    // Keep: nothing moves, the advice goes away.
+    const auto values = p->parameters.copyState().toXmlString();
+    REQUIRE (p->autoMaster.keepAutoEdit ("all"));
+    CHECK (p->history.undoLabel().startsWith ("Auto Analyze: keep "));
+    CHECK (p->parameters.copyState().toXmlString() == values);
+    CHECK (autoAdvice (*p)["edits"].size() == 0);
+
+    // A knob of yours keeps its offset: the edit moves it by Auto-Master's change, from where it is.
+    p->history.undo();
+    p->autoMaster.tick();
+    set (*p, "drive", driveBefore + 1.0f);
+    p->autoMaster.tick();
+    const auto mine = editFor (autoAdvice (*p), "max");
+    REQUIRE (mine.isObject());
+    for (const auto& c : *mine["changes"].getArray())
+        if (c["id"].toString() == "drive")
+            CHECK ((double) c["to"] == Catch::Approx (driveTo + 1.0).margin (0.06));
+
+    // A new genre: the advice is about the old one, so it waits for a new Auto-Master run.
+    set (*p, "amGenre", 4.0f);
+    p->autoMaster.tick();
+    CHECK (p->autoMaster.getAutoAnalyzeStatus() == "settings");
+    set (*p, "amGenre", 0.0f);
+
+    // The switch is saved with the project; a project from before it opens with it off.
+    juce::MemoryBlock saved;
+    p->getStateInformation (saved);
+    auto q = makeProcessor (sr, 512, false);
+    q->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    CHECK (q->autoMaster.getAutoAnalyze());
+    p->setAutoAnalyze (false);
+    p->getStateInformation (saved);
+    q->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    CHECK_FALSE (q->autoMaster.getAutoAnalyze());
+
+    // A new Auto-Master run starts the advice over.
+    p->setAutoAnalyze (true);
+    REQUIRE (p->autoMaster.start());
+    p->autoMaster.tick();
+    CHECK (p->autoMaster.getAutoAnalyzeStatus() == "busy");
+    p->autoMaster.cancel();
+    p->setPlayHead (nullptr);
+}
+
+TEST_CASE ("Auto Analyze's listening never allocates on the audio thread", "[plugin][automaster][autoanalyze]")
+{
+    const double sr = 44100.0;
+    auto p = makeProcessor (sr, 512, false);
+    FakePlayHead head;
+    p->setPlayHead (&head);
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, testsig::musicLike (sr, 13.0, -12.0, 1));
+    REQUIRE (p->autoMaster.finish());
+    REQUIRE (waitForAutoMaster (*p));
+    p->autoMaster.setEditorOpen (true);
+    p->setAutoAnalyze (true);
+    p->autoMaster.tick();
+    head.seconds = 0.0;
+    CHECK (play (*p, head, testsig::musicLike (sr, 25.0, -12.0, 1)) == 0);
+    REQUIRE (waitForCheck (*p));
+    p->setPlayHead (nullptr);
 }
 
 TEST_CASE ("Snapshots store and recall Tone Steady's target; a snapshot from before targets leaves it", "[plugin][snapshots]")

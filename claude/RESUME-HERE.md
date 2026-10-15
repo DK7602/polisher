@@ -1,11 +1,63 @@
-# Masterology (formerly Polisher) — resume here (updated 2026-10-15)
+# Masterology (formerly Polisher) — resume here (updated 2026-10-15, v0.27.0)
 
 Read this first in a new chat. Code: github.com/DK7602/polisher. Newest work: branch
-`claude/eloquent-einstein-sscadx` (v0.26.0 = the suite link with Voxology / Mixology, 2026-10-14; v0.25.0 = the
-rename to Masterology). Merge to `main` when ready. Download Masterology-Windows from the latest green Actions run
-(v0.26.0: run 38657259925). The newest thread is "Masterology Auto Edit" (started 2026-10-15).
+`claude/eloquent-einstein-sscadx` (v0.27.0 = Auto Analyze, 2026-10-15; v0.26.0 = the suite link with Voxology /
+Mixology; v0.25.0 = the rename to Masterology). Merge to `main` when ready. Download Masterology-Windows from the latest
+green Actions run (v0.26.0: run 38657259925; v0.27.0: see the section below). The newest thread is "Masterology Auto
+Edit" (started 2026-10-15).
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
+
+## v0.27.0 Auto Analyze (2026-10-15, thread "Masterology Auto Edit")
+User: "we just added an auto analyze in mixology (v0.11.0). once the auto master has been run it should also have an auto
+analyze option as well. it could then give option to edit in the learn window as it picks up changes and new edit needs."
+- Design (no duplicate rules: it re-runs the real polisher::autoMaster and diffs): dsp polisher/AutoAnalyze.h/.cpp
+  (tests/test_autoanalyze.cpp [autoanalyze]): chainValues(chain) = every control Auto-Master sets (apply() now uses it, the
+  report's "values" = it minus hidden ulSquashSet); planEdits(planned = report values, fresh, current): additive knobs move by
+  fresh - planned FROM THE CURRENT VALUE (the user's offsets stay), dynX / Atk / Rel / rtRelease / release / ulLength by ratio,
+  choices (modes, focus, clipOn, oversampling, adaptive) and Stem EQ suggestions go to fresh when Auto-Master changed its mind,
+  bassMono 0 = off is a choice, ulSquashSet hidden (rides with a Unlimiter edit); never moved: module switches, bypass, eqFreq /
+  eqMode, glue*, Impact / Sustain, Channels, maxBassFirst, stemOn / stemKeep. A module is offered when one control moves by its
+  worth (EQ / Drive / Trim / dynGain 0.75 dB, dynThr 1.5, ratio 0.3, satDrive 1.5, clipLevel 0.5, ceiling 0.25, img 5 %, other
+  % 10, ratio kinds 25 %, bassMono 20 %); smaller moves ride along (shown = false). sameAdvice() = same modules + targets within
+  half the worth. overlapSeconds(). Measured: a mix 3 dB louder -> Drive (or Trim) -2..-4 dB, dyn thresholds +3; Presence +4
+  -> eqGain6 down >= 0.7; the same clip twice -> no edits (deterministic).
+- SongStats::hookSpans (SongListener::stats): every 100 ms hop inside a 12 s window within kHookWithinLu = 1 LU of the loudest
+  window, joined into timeline spans (split at jumps / > 0.5 s gaps); empty without positions. Saved in the report's
+  listen.hookSpans. A window reaching ~2 s into the verse next to a chorus counts (by design).
+- AutoMasterController (plugin): Auto Analyze reuses THE SAME SongListener (no extra memory) via watchFlag (capture() feeds
+  when listening OR watching); start() stops watching and cancels a check first. autoTick() at 5 Hz (updateTimer(): 15 Hz
+  while Auto-Master runs, 5 Hz while Auto Analyze is on or a check runs). Pauses ("aaPause"): off / noReport / busy /
+  settings (amGenre, amIntensity, amTarget or the reference name differ from the report's new "settings" object) / closed
+  (editor sets setEditorOpen) / stopped / listening / hook / checking / cantJudge / "" (checked). Window restarts: 2 s
+  without music (kWatchStopMs), Mixology hand-off key change (processor hashes flags + 4 tone values + style in
+  updateSuite -> setMixKey), 90 s of music, a new report time (new Auto-Master run: advice cleared, aaSession++). Check: >= 20 s
+  heard, the loudest 12 s judged once (again only when another part became loudest, >= 15 s later), gate = overlap with
+  hookSpans >= 6 s (no hook data or no positions: allowed; old reports fall back to loudStart/loudEnd), then autoMaster on
+  the clip with currentSettings() + the stored tone on the pool (one thread, shared with Auto-Master). takeFresh: fresh =
+  chainValues + stem suggestion (or current stems); info: loudDb (capturedLufs vs report capturedLufs), bandDb (vs report
+  mixStats, now always saved), new notes (titles not in the old report), fresh reasons. recomputeEdits every tick (knobs
+  moved -> "now -> new" follows), clamps / snaps to each parameter's range, bumps aaVersion on change. applyAutoEdit /
+  keepAutoEdit(module | "all"): one undo group "Auto Analyze: Maximizer" / "Auto Analyze: keep X as it is" / "every edit";
+  writes fresh values into the report's values (plan moves; undo restores both); stem apply also sets stemOn and drops
+  the report's stemSuggest. Stem planned = the report's stemSuggest (already offered) else the current knobs.
+- Processor: setAutoAnalyze (marks the project changed); XML attribute autoAnalyze="1" (absent = off); a restore off the
+  message thread is applied by the processor timer (pendingAutoAnalyze). Editor: frame aaOn / aaPause / aaHeard / aaEdits /
+  aaVersion; native setAutoAnalyze, getAutoAnalyze (JSON: on, pause, heard, checked, updated, hasCheck, mix {loudDb, lufs,
+  bandDb, notes, reasons}, edits [{module, title, changes [{id, name, from, to, fromText, toText}]}]), applyAutoEdit,
+  keepAutoEdit.
+- UI: Learn strip at the top of module pages and the report (AUTO ANALYZE toggle with a lamp + "N NEW EDITS · SEE" / "WHAT IT
+  HEARS" / "HOW IT WORKS"), learnView "auto" = renderAutoLearn (status line, mix change text, one card per module with
+  APPLY / KEEP MINE, APPLY ALL / KEEP ALL MINE, new notes, HOW IT WORKS). Auto-Master button sub-line says "Auto Analyze: N new
+  edits in Learn". Toast when new edits arrive. mock: window.__mockAa, __polisherMock.aaCheck(). ui_smoke checks it.
+- Tests: engine [autoanalyze] 7 cases; plug-in [autoanalyze] 2 (whole flow with a playhead: hook gate, unchanged mix = no
+  edits, chorus +3 dB -> Drive edit, apply = 1 undo step, undo brings it back, keep, user offset kept, settings pause, state
+  round trip, Auto-Master start = busy; and no allocation on the audio thread while watching). Local builds: see v0.23 notes
+  (JUCE 8.0.15 in the scratchpad); Playwright: npm i playwright@1.56.1 in the scratchpad, symlink node_modules into the repo
+  (ESM ignores NODE_PATH), copy JUCE's native/javascript/*.js to plugin/ui/juce/, serve plugin/ui on :8765. Remove the symlink
+  before committing.
+- NOT YET HEARD / USED by the user. Ask them: run Auto-Master, switch Auto Analyze on, change the mix in Mixology (e.g. 808 +3
+  dB), play through the hook, and see whether the cards make sense.
 
 ## NAME CHANGE: Polisher -> Masterology (v0.25.0, 2026-10-13)
 User renamed the plug-in Masterology and supplied the logo (chrome crown + red/blue waves + MASTEROLOGY). Older

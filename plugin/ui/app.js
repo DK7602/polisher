@@ -108,6 +108,10 @@ const histGroup = Juce.getNativeFunction("historyGroup");
 const snapStore = Juce.getNativeFunction("snapshotStore");
 const snapRecall = Juce.getNativeFunction("snapshotRecall");
 const amGetReport = Juce.getNativeFunction("getAutoMasterReport");
+const aaSet = Juce.getNativeFunction("setAutoAnalyze");     // Auto Analyze on / off (saved with the project)
+const aaGet = Juce.getNativeFunction("getAutoAnalyze");     // its status and the edits on offer
+const aaApply = Juce.getNativeFunction("applyAutoEdit");    // a module id or "all": one undo step
+const aaKeep = Juce.getNativeFunction("keepAutoEdit");      // leave it as it is (the advice doesn't come back)
 const refLoad = Juce.getNativeFunction("loadReference");
 const refClear = Juce.getNativeFunction("clearReference");
 const refGet = Juce.getNativeFunction("getReference");
@@ -134,6 +138,8 @@ const M = {
   ulBoost: 0, ulSquash: 0, refVersion: 0, refState: 0,
   // The suite link: Mixology's hand-off for this song ({ style, genre, peak, lufs, analysed, mono, limited, tone }) or null.
   fromMixology: null,
+  // Auto Analyze: on, why it waits ("" = checked), music heard in this stretch of playback, edits on offer.
+  aaOn: false, aaPause: "off", aaHeard: 0, aaEdits: 0, aaVersion: 0,
   listen: 0, mono: false, phone: false, listenNow: 0, listenGain: 0, listenUnder: -100,
 };
 // Listening aids (Listen / Solo, MONO, PHONE): monitoring only. The plug-in keeps them out of the saved
@@ -1149,6 +1155,7 @@ function renderLearn() {
   renderLearnBody();
   if (learnOn && learnView === "module") addMonitorLearn($("learn-body"));
   if (learnOn && learnView === "module") addMixologyLearn($("learn-body"));
+  if (learnOn && (learnView === "module" || learnView === "report")) addAutoAnalyzeStrip($("learn-body"));
   if (learnOn && learnView === "module" && M.amState === 1) {
     // Still listening while you look at a module: a way back to the listening view.
     const link = document.createElement("button");
@@ -1174,6 +1181,7 @@ function renderLearnBody() {
   if (learnView === "listen" && M.amState !== 0) { renderListenLearn(body); return; }
   if (learnView === "listen") learnView = "module";
   if (learnView === "report" && amReport) { renderReport(body); return; }
+  if (learnView === "auto") { renderAutoLearn(body); return; }
   if (learnView === "ref") { renderRefLearn(body); return; }
   if (learnView === "history") { renderHistoryLearn(body); return; }
   if (learnView === "snap") { renderSnapLearn(body); return; }
@@ -2471,7 +2479,9 @@ function updateAmButton() {
     sub.textContent = `Choosing every setting (${amThinkTime()})…`;
   } else {
     title.textContent = "AUTO-MASTER";
-    sub.textContent = amReport && amReport.ok ? "Done · click to run again" : "Click, then play your whole song";
+    sub.textContent = !(amReport && amReport.ok) ? "Click, then play your whole song"
+      : M.aaOn && M.aaEdits ? `Auto Analyze: ${M.aaEdits} new edit${M.aaEdits === 1 ? "" : "s"} in Learn`
+      : M.aaOn ? "Done · Auto Analyze listening" : "Done · click to run again";
   }
   if (tsTarget.refresh) tsTarget.refresh();
 }
@@ -3122,6 +3132,204 @@ function renderReport(body) {
   body.appendChild(tip("COMPARE IT", "Turn on MATCH, then press A for your original mix and B for the master: both play at the same loudness, so you hear only what the master changed. The undo arrow at the top puts every setting back. To compare two Auto-Master runs, keep each in a snapshot (S1, S2 at the top).", true));
 }
 
+// ---------------------------------------------------------------------------------------------
+// Auto Analyze: after Auto-Master, Masterology keeps listening while the song plays. When it hears the hook
+// again and the mix has changed, it works out what Auto-Master would change now and offers each module's
+// edit here (APPLY or KEEP MINE, one undo step each). It never changes anything by itself.
+let aa = null;                 // the plug-in's advice (getAutoAnalyze), or null
+let aaSeenVersion = -1;
+let aaSeenUpdate = "";         // the advice last announced with a toast
+const aaReady = () => !!(amReport && amReport.ok);
+async function fetchAutoAnalyze() {
+  let text = "";
+  try { text = await aaGet(); } catch (e) { text = ""; }
+  try { aa = text ? JSON.parse(text) : null; } catch (e) { aa = null; }
+  const edits = aa && aa.edits ? aa.edits.length : 0;
+  if (aa && aa.updated && aa.updated !== aaSeenUpdate) {
+    const first = aaSeenUpdate === "";
+    aaSeenUpdate = aa.updated;
+    if (!first && edits) toast(`Auto Analyze: your mix changed. ${edits === 1 ? "1 edit is" : `${edits} edits are`} ready in Learn.`);
+  }
+  updateAmButton();
+  if (learnOn && ["module", "report", "auto"].includes(learnView)) renderLearn();
+}
+function aaTime(iso) { return snapTime(iso); }
+function aaHookText() {
+  const L = amReport && amReport.listen;
+  const spans = L && Array.isArray(L.hookSpans) ? L.hookSpans : [];
+  if (spans.length) return spans.slice(0, 3).map(([a, b]) => `${fmtTime(a)}–${fmtTime(b)}`).join(", ");
+  return L && L.fromHost && L.loudStart >= 0 ? `${fmtTime(L.loudStart)}–${fmtTime(L.loudEnd)}` : "";
+}
+// One line: what Auto Analyze is doing right now.
+function aaStatusText() {
+  const p = M.aaPause, heard = M.aaHeard || 0, hook = aaHookText();
+  if (!M.aaOn) return "Off. Turn it on and Masterology keeps listening while your song plays: when your mix changes, it works out what Auto-Master would change and shows it here.";
+  switch (p) {
+    case "busy": return "Paused while Auto-Master listens and thinks.";
+    case "settings": return "Paused: you changed the genre, intensity, target or reference since Auto-Master ran, so its plan doesn't apply any more.";
+    case "stopped": return `Waiting for the song. Press play: it checks the hook or drop${hook ? ` (${hook})` : ""}, the part Auto-Master set your master from.`;
+    case "listening": return `Listening · ${fmtTime(heard)} heard. It checks once it has heard 20 seconds, including the hook or drop${hook ? ` (${hook})` : ""}.`;
+    case "hook": return `Listening · ${fmtTime(heard)} heard. Play the hook or drop${hook ? ` (${hook})` : ""}: Auto-Master set your master from that part, so that's where Auto Analyze compares, like with like.`;
+    case "checking": return "Checking the mix you just played (a few seconds)…";
+    case "cantJudge": return "It couldn't judge the last part it heard: it didn't sound like a full mix. Play the song with every track on.";
+    default: return aa && aa.checked ? `Listening · last checked at ${aaTime(aa.checked)}.` : "Listening.";
+  }
+}
+function aaToggleButton() {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.id = "btn-autoanalyze";
+  const live = M.aaOn && ["listening", "hook", "checking", ""].includes(M.aaPause);
+  b.className = "pill aa-toggle " + (M.aaOn ? "pill-red" : "pill-blue") + (live ? " live" : "");
+  b.setAttribute("aria-pressed", String(!!M.aaOn));
+  b.innerHTML = `<i class="aa-lamp"></i><span>AUTO ANALYZE${M.aaOn ? " ON" : ""}</span>`;
+  b.title = M.aaOn ? "Auto Analyze is on: click to stop it listening" : "Keep listening while the song plays and offer edits when the mix changes";
+  b.addEventListener("click", async () => {
+    const on = !M.aaOn;
+    M.aaOn = on;
+    try { await aaSet(on); } catch (e) { /* the next frame says what the plug-in has */ }
+    toast(on ? "Auto Analyze is on. Play your song: when your mix changes, the edits it needs show up in Learn." : "Auto Analyze is off.");
+    if (on) learnView = "auto";
+    renderLearn();
+    updateAmButton();
+  });
+  return b;
+}
+// At the top of Learn (module pages and the report), once Auto-Master has run: the switch, and the edits on offer.
+function addAutoAnalyzeStrip(body) {
+  if (!aaReady()) return;
+  const strip = document.createElement("div");
+  strip.className = "aa-strip";
+  strip.appendChild(aaToggleButton());
+  const n = M.aaOn && aa && aa.edits ? aa.edits.length : 0;
+  const link = document.createElement("button");
+  link.type = "button";
+  link.className = "l-link aa-see" + (n ? " has" : "");
+  link.textContent = n ? `${n} NEW EDIT${n === 1 ? "" : "S"} · SEE` : M.aaOn ? "WHAT IT HEARS →" : "HOW IT WORKS →";
+  link.addEventListener("click", () => { learnView = "auto"; renderLearn(); });
+  strip.appendChild(link);
+  body.prepend(strip);
+}
+// The mix since Auto-Master listened, in words.
+function aaMixText(mix) {
+  if (!mix) return "";
+  const parts = [];
+  if (typeof mix.loudDb === "number" && Math.abs(mix.loudDb) >= 0.5)
+    parts.push(`arrives ${fmtNum(Math.abs(mix.loudDb), 1)} dB ${mix.loudDb > 0 ? "louder" : "quieter"} on the hook`);
+  if (Array.isArray(mix.bandDb)) {
+    const moved = mix.bandDb.map((d, b) => [d, EQ_BANDS[b].name.toLowerCase()]).filter(([d]) => Math.abs(d) >= 1);
+    if (moved.length) parts.push("its tone moved: " + moved.map(([d, n]) => `${d > 0 ? "more" : "less"} ${n} (${fmtSigned(d)})`).join(", "));
+  }
+  return parts.length ? `Since Auto-Master listened, your mix ${parts.join(", and ")}.` : "Since Auto-Master listened, your mix's level and tone on the hook have stayed about the same.";
+}
+function aaRun(fn, module, done) {
+  return async () => {
+    let ok = false;
+    try { ok = await fn(module); } catch (e) { ok = false; }
+    if (ok) { toast(done); refreshAllCells(); userEdited(); }
+    // The plug-in sends a new version with the frame; fetch at once so the card goes away now.
+    fetchAutoAnalyze();
+  };
+}
+function aaEditCard(e, reasons) {
+  const d = document.createElement("div");
+  d.className = "l-tip ok aa-card";
+  d.appendChild(head(e.title.toUpperCase()));
+  for (const c of e.changes) {
+    const row = document.createElement("div");
+    row.className = "aa-change";
+    const name = document.createElement("span");
+    name.className = "aa-name";
+    name.textContent = c.name;
+    const val = document.createElement("span");
+    val.className = "mono aa-val";
+    val.textContent = `${c.fromText.replace(/^-/, MINUS)} → ${c.toText.replace(/^-/, MINUS)}`;
+    row.append(name, val);
+    d.appendChild(row);
+  }
+  for (const r of reasons.slice(0, 2)) d.appendChild(para("l-p aa-why", `${r.control} ${r.value}: ${r.why}`));
+  const row = document.createElement("div");
+  row.className = "l-actions";
+  const apply = document.createElement("button");
+  apply.type = "button";
+  apply.className = "pill pill-red stem-apply";
+  apply.textContent = "APPLY";
+  apply.addEventListener("click", aaRun(aaApply, e.module, `${e.title}: Auto Analyze's edit applied. Compare with MATCH; the undo arrow puts it back.`));
+  const keep = document.createElement("button");
+  keep.type = "button";
+  keep.className = "pill pill-blue stem-apply";
+  keep.textContent = "KEEP MINE";
+  keep.title = "Leave this module as it is: the same advice won't come back for this mix";
+  keep.addEventListener("click", aaRun(aaKeep, e.module, `${e.title} stays as it is.`));
+  row.append(apply, keep);
+  d.appendChild(row);
+  return d;
+}
+function renderAutoLearn(body) {
+  if (aaReady() || amReport) {
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "l-link";
+    link.textContent = "← AUTO-MASTER REPORT";
+    link.addEventListener("click", () => { learnView = amReport ? "report" : "module"; renderLearn(); });
+    body.appendChild(link);
+  }
+  body.appendChild(head("AUTO ANALYZE"));
+  if (!aaReady()) {
+    body.appendChild(para("l-p", "Run Auto-Master first: Auto Analyze watches your mix against the plan Auto-Master made."));
+    return;
+  }
+  const top = document.createElement("div");
+  top.className = "aa-strip";
+  top.appendChild(aaToggleButton());
+  body.appendChild(top);
+  body.appendChild(para("l-p aa-status", aaStatusText()));
+  if (M.aaOn && M.aaPause === "settings")
+    body.appendChild(tip("RUN AUTO-MASTER AGAIN", "The genre, intensity, target or reference changed since Auto-Master ran. Its plan was made for the old choice, so Auto Analyze waits.", true,
+      { need: "Yes, if you want the master to follow the new choice.",
+        steps: ["Click Auto-Master and play your whole song from the start.", "Auto Analyze carries on with the new plan by itself."] }));
+
+  const edits = (M.aaOn && aa && aa.edits) || [];
+  const mix = aa && aa.mix;
+  if (M.aaOn && aa && aa.hasCheck) {
+    body.appendChild(para("l-p", aaMixText(mix)));
+    if (edits.length) {
+      body.appendChild(sep());
+      body.appendChild(head(`NEW EDITS${aa.updated ? ` · ${aaTime(aa.updated)}` : ""}`));
+      body.appendChild(para("l-p", "What Auto-Master would change for your mix now. Your own knob moves are kept. Nothing changes until you press APPLY."));
+      const reasons = (mix && mix.reasons) || [];
+      for (const e of edits) body.appendChild(aaEditCard(e, reasons.filter((r) => r.module === e.module)));
+      if (edits.length > 1) {
+        const row = document.createElement("div");
+        row.className = "l-actions";
+        const all = document.createElement("button");
+        all.type = "button";
+        all.className = "pill pill-red stem-apply";
+        all.textContent = "APPLY ALL";
+        all.addEventListener("click", aaRun(aaApply, "all", "Every Auto Analyze edit applied, as one undo step. Compare with MATCH."));
+        const keep = document.createElement("button");
+        keep.type = "button";
+        keep.className = "pill pill-blue stem-apply";
+        keep.textContent = "KEEP ALL MINE";
+        keep.addEventListener("click", aaRun(aaKeep, "all", "Your settings stay as they are."));
+        row.append(all, keep);
+        body.appendChild(row);
+      }
+    } else {
+      body.appendChild(tip("YOUR SETTINGS STILL FIT", `Checked at ${aaTime(aa.checked)}: for your mix as it is now, Auto-Master would make the same choices${amReport.values ? " (or ones you already applied or kept)" : ""}. Nothing to do.`, true));
+    }
+    for (const raw of (mix && mix.notes) || []) {
+      const lines = raw.split("\n"), n = lines[0], cut = n.indexOf(":");
+      const title = cut > 0 && cut < 24 ? n.slice(0, cut) : "HEADS UP";
+      const text = cut > 0 && cut < 24 ? n.slice(cut + 1).trim() : n;
+      const need = lines.find((l) => l.startsWith("NEED:"));
+      const steps = lines.filter((l) => l.startsWith("STEP:")).map((l) => l.slice(5).trim());
+      body.appendChild(tip(title, text.charAt(0).toUpperCase() + text.slice(1), false, need ? { need: need.slice(5).trim(), steps } : undefined));
+    }
+  }
+  body.appendChild(tip("HOW IT WORKS", "While your song plays, Auto Analyze listens to the mix as it reaches Masterology. When it hears the hook or drop again (the part Auto-Master set your master from), it runs Auto-Master's thinking on the mix as it is now. If you changed the mix (louder, more low end, a new vocal level) it shows what Auto-Master would change, module by module. It starts listening again after every stop, so it always judges the mix as it is now. It only listens while this window is open, and it never moves a control by itself.", true));
+}
+
 // Current value of a parameter by id, in the same units the report stores.
 function paramValue(id) {
   if (id.startsWith("eqGain")) return eqGainAt(Number(id.slice(6)) - 1);
@@ -3407,6 +3615,7 @@ function updateLiveReadouts() {
 window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   const srChanged = frame.sr && frame.sr !== M.sr;
   const wasAm = M.amState, wasTarget = M.tsTarget, wasFail = M.tsLearnFail, wasFar = M.tsFar, wasMixology = mixologyKey();
+  const wasAa = M.aaOn, wasAaHeard = M.aaHeard;
   Object.assign(M, frame);
   if (mixologyKey() !== wasMixology && learnView === "module") renderLearn();   // Mixology came, went, or changed
   if (M.amState === 2 && wasAm !== 2) amThinkSince = performance.now();   // the analysis started: time it
@@ -3415,6 +3624,10 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   if (srChanged) { drawEq(); fetchGenreCurve(); }
   refreshHistory();
   refreshSnapshots();
+  if (M.aaVersion !== aaSeenVersion || (!!frame.aaOn) !== (!!wasAa)) {
+    aaSeenVersion = M.aaVersion;
+    fetchAutoAnalyze();
+  } else if (learnOn && learnView === "auto" && M.aaPause !== "" && Math.floor(M.aaHeard || 0) !== Math.floor(wasAaHeard || 0)) renderLearn();   // the heard count moves on
   if (M.amReport !== amSeenVersion) {
     const first = amSeenVersion === -1;
     amSeenVersion = M.amReport;
