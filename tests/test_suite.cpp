@@ -90,7 +90,7 @@ TEST_CASE ("Suite: Mixology's hand-off reaches Masterology; Masterology's goal r
     g.genreName = "Hip-Hop / Trap";
     g.targetLufs = -9.0f;
     g.ceilingDbtp = -1.0f;
-    g.version = suite::packVersion (0, 28, 0);
+    g.version = suite::packVersion (0, 29, 0);
     master.publishMaster (s, 7, g, 2100);
     const auto ms = mix.masters (2200);
     REQUIRE (ms.size() == 1);
@@ -219,4 +219,64 @@ TEST_CASE ("Suite: the song's style - the newest choice wins, in any plug-in", "
     // And when nobody refreshes it, it lapses after kAliveMs.
     CHECK (a.readStyle (got, 800 + suite::kAliveMs));
     CHECK_FALSE (a.readStyle (got, 800 + suite::kAliveMs + 1));
+}
+
+TEST_CASE ("Suite: the DAW is a second shared choice, apart from the style; Voxology's recording warnings reach Mixology", "[suite]")
+{
+    Memory mem;
+    suite::Link a (mem.data()), b (mem.data());
+    suite::SongStyle style (suite::StyleInfo::From::mixology);
+    suite::SharedChoice dawMix (suite::StyleInfo::From::mixology, suite::Choice::daw);
+    suite::SharedChoice dawVox (suite::StyleInfo::From::voxology, suite::Choice::daw);
+
+    style.pick ("trap.drill", "Trap & Drill - Drill");
+    style.sync (a, 1, 100);
+    dawVox.setUnpicked ("cubase", "Cubase");        // detected from the host, never picked: not shared
+    CHECK_FALSE (dawVox.sync (b, 2, 100));
+    suite::StyleInfo got;
+    CHECK_FALSE (a.readChoice (suite::Choice::daw, got, 100));
+    REQUIRE (a.readChoice (suite::Choice::style, got, 100));
+    CHECK (got.key == "trap.drill");
+
+    dawMix.pick ("studioone", "Studio One");      // picked in Mixology: Voxology follows, the style stays
+    dawMix.sync (a, 1, 200);
+    CHECK (dawVox.sync (b, 2, 300));
+    CHECK (dawVox.style().key == "studioone");
+    REQUIRE (b.readChoice (suite::Choice::style, got, 300));
+    CHECK (got.key == "trap.drill");
+    dawMix.leave (a, 1); dawVox.leave (b, 2);
+    CHECK_FALSE (a.readChoice (suite::Choice::daw, got, 300));
+    CHECK (a.readChoice (suite::Choice::style, got, 300));   // leaving the DAW leaves the style alone
+
+    // A vocal recorded too hot: the last Auto-Edit's findings go with the vocal's slot.
+    const int slot = b.claimVocal (9, 400);
+    REQUIRE (slot >= 0);
+    suite::VocalInfo v;
+    v.trackName = "Lead Vox 1 - Verse";
+    v.flags = suite::VocalInfo::processing | suite::VocalInfo::recordedHot | suite::VocalInfo::recordedClipped;
+    v.recordedPeakDb = 0.2f;
+    v.clippedSpots = 29;
+    v.version = 1;
+    b.publishVocal (slot, 9, v, 400);
+    const auto vocals = a.vocals (500);
+    REQUIRE (vocals.size() == 1);
+    CHECK ((vocals[0].flags & suite::VocalInfo::recordedClipped) != 0);
+    CHECK (vocals[0].recordedPeakDb == Catch::Approx (0.2f));
+    CHECK (vocals[0].clippedSpots == 29);
+}
+
+TEST_CASE ("Suite: the DAW is found from the host program", "[suite]")
+{
+    CHECK (suite::dawFromHostPath ("C:\\Program Files\\Steinberg\\Cubase 14\\Cubase14.exe") == "cubase");
+    CHECK (suite::dawFromHostPath ("C:\\Program Files\\Steinberg\\Nuendo 13\\Nuendo13.exe") == "cubase");
+    CHECK (suite::dawFromHostPath ("C:\\Program Files\\PreSonus\\Studio One 7\\Studio One.exe") == "studioone");
+    CHECK (suite::dawFromHostPath ("C:\\Program Files\\Image-Line\\FL Studio 2024\\FL64.exe") == "fl");
+    CHECK (suite::dawFromHostPath ("C:\\ProgramData\\Ableton\\Live 12 Suite\\Program\\Ableton Live 12 Suite.exe") == "ableton");
+    CHECK (suite::dawFromHostPath ("C:\\Program Files\\REAPER (x64)\\reaper.exe") == "reaper");
+    CHECK (suite::dawFromHostPath ("C:\\Program Files\\Bitwig Studio\\Bitwig Studio.exe") == "bitwig");
+    CHECK (suite::dawFromHostPath ("/Applications/Logic Pro.app/Contents/MacOS/Logic Pro") == "logic");
+    CHECK (suite::dawFromHostPath ("C:\\Tools\\pluginval.exe") == "other");
+    CHECK (suite::dawFromHostPath ("") == "other");
+    CHECK (std::string (suite::dawName ("studioone")) == "Studio One");
+    CHECK (std::string (suite::dawName ("nope")) == "Other DAW");
 }

@@ -74,6 +74,7 @@
   };
   // The song's style, shared with Voxology and Mixology (none chosen yet: the picker shows the genre).
   const song = { key: "", name: "", from: 0, version: 0 };
+  const daw = { key: location.hash === "#studioone" ? "studioone" : "cubase", picked: location.hash === "#studioone", from: 2, detected: "cubase" };
   // Simulated Match ref: starts with a reference loaded, so the preview and the smoke test show the pill,
   // the dashed curve and the comparison. "Loading" another file takes 0.6 s and loads a second song.
   const refCurve = (tilt) => Array.from({ length: 96 }, (_, i) => {
@@ -369,7 +370,7 @@
       __juce__functions: ["resetMeter", "startAutoMaster", "finishAutoMaster", "cancelAutoMaster", "getAutoMasterReport", "clearToneTarget",
                           "setAutoAnalyze", "getAutoAnalyze", "applyAutoEdit", "keepAutoEdit",
                           "loadReference", "clearReference", "getReference", "setMonitor",
-                          "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve", "pickStyle"],
+                          "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve", "pickStyle", "pickDaw"],
       __juce__registeredGlobalEventIds: [],
       __juce__sliders: Object.keys(sliders),
       __juce__toggles: Object.keys(toggles),
@@ -452,6 +453,7 @@
           combos.amGenre.value = (genre === undefined ? 5 : genre) / 5;
           send("__juce__comboBoxamGenre", { eventType: "valueChanged", value: combos.amGenre.value });   // as the host tells the window
         }
+        if (payload.name === "pickDaw") Object.assign(daw, { key: (payload.params || [])[0] || "cubase", picked: !!(payload.params || [])[0], from: 3 });
         if (payload.name === "snapshotStore") snapStore((payload.params || [])[0]);
         if (payload.name === "snapshotRecall") result = snapRecall((payload.params || [])[0]);
         send("__juce__complete", { promiseId: payload.resultId, result });
@@ -529,7 +531,7 @@
         ? +(-62 + sliders.satDrive.value * 2.4 + 20 * Math.log10(sliders.satMix.value / 100 + 1e-3) + 3 * beat).toFixed(1) : -100,
       listen: mon.listen, mono: mon.mono, phone: mon.phone, listenNow: mon.listen,
       listenGain: mon.listen && !bypass ? monGain[mon.listen] : 0, listenUnder: mon.listen && !bypass ? monUnder[mon.listen] : -100,
-      mix, master, songStyle: song,
+      mix, master, songStyle: song, daw,
     };
     window.__JUCE__.backend && window.__JUCE__.backend.emitByBackend("polisherMeters", JSON.stringify(frame));
   }, 1000 / 30);

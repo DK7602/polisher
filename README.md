@@ -15,7 +15,7 @@ meters only) with a button to Microsoft's free download page; install it and reo
 
 User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (also inside the plug-in: Quick Help > Open the full manual).
 
-## Status — v0.28.0
+## Status — v0.29.0
 
 | Piece | State |
 | --- | --- |
@@ -39,6 +39,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | Suite link: Masterology tells Mixology its goal (target, ceiling, genre); Mixology's hand-off (style, peaks, loudness, tone, mono, its limiter) shows in Learn as FROM MIXOLOGY with a one-click matching genre (`dsp/include/suite/SuiteLink.h`, the same file in Voxology and Mixology) | Done (v0.26) |
 | Auto Analyze: after Auto-Master, keeps listening while the song plays; when it hears the hook again and the mix changed, it re-runs Auto-Master in the background and offers per-module edits in Learn (now → new, APPLY / KEEP MINE, one undo step each), keeping the user's own knob offsets (`dsp/include/polisher/AutoAnalyze.h`) | Done (v0.27) |
 | One song style for the trio: Mixology's 75 styles (`plugin/ui/mixstyles.js`, the same file in all three) in a picker on the genre pill; pick it in any of the three and the others follow (suite link layout 2, the newest pick wins, saved with the project); the style sets Auto-Master's genre | Built (v0.28), waiting for the Cubase test |
+| Your DAW, shared by the trio: Settings > DAW (found from the host, or picked; suite link layout 3); every tip in Learn says how in that DAW (`plugin/ui/daws.js`, the same file in all three; `{daw:...}` tokens in the engine's text) | Built (v0.29), waiting for the test |
 | New name and logo: Polisher is now **Masterology** (plug-in name, vendor "Masterology Audio", header logo, manual, Blind Test). Same plug-in ID, so old projects and presets load | Done (v0.25) |
 | Shoot-out kit: Blind Test checks the masters were made at the same loudness (names the one to push and by how much) and and the same ceiling (names the file to change and by how much, matched to masterology.wav), and adds measurements to the answer key (kick / snare punch, range, width, bass width, 6-band tone balance); manual guide for Masterology vs Ozone 12 / TDR Limiter 6 GE / LoudMax | Done (v0.23) |
 | Mid / side on Dynamics (Channels: Stereo / Mid only / Side only, all bands, click-free switch) and Saturation (Channels: Stereo / Mid / Side, works with Focus) | Done (v0.22) |

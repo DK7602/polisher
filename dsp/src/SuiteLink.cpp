@@ -258,6 +258,8 @@ namespace suite
         s.compressionDb.store (std::max (0.0f, v.compressionDb), kRelaxed);
         s.reverbMix.store (std::clamp (v.reverbMix, 0.0f, 1.0f), kRelaxed);
         s.delayMix.store (std::clamp (v.delayMix, 0.0f, 1.0f), kRelaxed);
+        s.recordedPeakDb.store (v.recordedPeakDb, kRelaxed);
+        s.clippedSpots.store (v.clippedSpots, kRelaxed);
         storeText (s.trackName, v.trackName);
         endWrite (s.seq);
         s.heartbeatMs.store (now, kRelease);
@@ -281,6 +283,8 @@ namespace suite
                 v.compressionDb = s.compressionDb.load (kRelaxed);
                 v.reverbMix = s.reverbMix.load (kRelaxed);
                 v.delayMix = s.delayMix.load (kRelaxed);
+                v.recordedPeakDb = s.recordedPeakDb.load (kRelaxed);
+                v.clippedSpots = s.clippedSpots.load (kRelaxed);
                 v.trackName = loadText (s.trackName);
             });
             if (! ok || v.version == 0) continue;
@@ -393,7 +397,7 @@ namespace suite
         return out;
     }
 
-    // ---- the song's style ------------------------------------------------------------------------------
+    // ---- the shared choices (the song's style, the DAW) -------------------------------------------------
 
     namespace
     {
@@ -408,9 +412,9 @@ namespace suite
         }
     }
 
-    StyleInfo Link::shareStyle (const StyleInfo& mine, std::uint64_t instanceId, std::uint64_t now)
+    StyleInfo Link::shareChoice (Choice c, const StyleInfo& mine, std::uint64_t instanceId, std::uint64_t now)
     {
-        auto& s = block.style;
+        auto& s = block.choices[static_cast<std::size_t> (c) % static_cast<std::size_t> (kChoices)];
         if (! lockStyle (s.seq)) return mine;
         std::atomic_thread_fence (kAcquire);
         StyleInfo there;
@@ -439,9 +443,9 @@ namespace suite
         return result;
     }
 
-    bool Link::readStyle (StyleInfo& out, std::uint64_t now) const
+    bool Link::readChoice (Choice c, StyleInfo& out, std::uint64_t now) const
     {
-        const auto& s = block.style;
+        const auto& s = block.choices[static_cast<std::size_t> (c) % static_cast<std::size_t> (kChoices)];
         StyleInfo r;
         std::uint64_t beat = 0;
         const bool ok = readConsistent (s.seq, [&] {
@@ -456,9 +460,9 @@ namespace suite
         return true;
     }
 
-    void Link::leaveStyle (std::uint64_t instanceId)
+    void Link::leaveChoice (Choice c, std::uint64_t instanceId)
     {
-        auto& s = block.style;
+        auto& s = block.choices[static_cast<std::size_t> (c) % static_cast<std::size_t> (kChoices)];
         if (! lockStyle (s.seq)) return;
         if (s.holder.load (kRelaxed) == instanceId) s.heartbeatMs.store (0, kRelaxed);
         s.seq.fetch_add (1, kRelease);

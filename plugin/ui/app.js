@@ -3,6 +3,12 @@
 
 import * as Juce from "./juce/index.js";
 import { GENRES as STYLE_GENRES, STYLES as SONG_STYLES } from "./mixstyles.js";
+import { DAWS, dawOf, fillDaw } from "./daws.js";
+
+// The DAW you work in: found from the host, or picked here / in Mixology / in Voxology (all three follow). Every tip
+// says how to do things in it: {daw} / {daw:phrase} tokens (the window's and the engine's text) are filled in here.
+const DAW = { key: "cubase", picked: false, detected: "cubase", from: 0 };
+const D = (s) => (typeof s === "string" ? fillDaw(s, DAW.key) : s);
 
 const $ = (id) => document.getElementById(id);
 const MINUS = "−";
@@ -178,7 +184,7 @@ const modules = [
     controls: [["Vocals / Drums / Bass / Other", "Turns that part of the mix up or down (±12 dB). Other is everything else: synths, keys, guitars, pads, effects."],
                ["How it works", "A small AI model listens to the mix and works out, moment by moment and frequency by frequency, how much of the sound is vocals, drums, bass or other. Your four levels are mixed by those shares into one EQ that updates about 180 times a second."],
                ["Keep Loudness", "On: your moves change the balance, not how loud the mix is. When you turn a part up, Stem EQ turns the whole mix down by the same loudness (and the other way round), so A/B is a fair compare and the Maximizer isn't pushed harder. Off: a move also makes the mix louder or quieter."],
-               ["Trade-offs", "Adds about 40 ms of delay at any sample rate (Cubase compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly. Moves up to about ±6 dB stay clean. At 96 kHz or higher, set your audio buffer to 256 samples or more: Stem EQ (with Tone Steady and the Resonance Tamer) does its work in short bursts, and very small buffers there can crackle."]] },
+               ["Trade-offs", "Adds about 40 ms of delay at any sample rate ({daw} compensates it). Where two parts share the same notes, a move nudges both a little; Other moves touch the drums slightly. Moves up to about ±6 dB stay clean. At 96 kHz or higher, set your audio buffer to 256 samples or more: Stem EQ (with Tone Steady and the Resonance Tamer) does its work in short bursts, and very small buffers there can crackle."]] },
   { id: "ts", name: "Tone Steady", live: true, soon: "",
     what: "Keeps your tone steady as the song plays: when a section drifts muddier, harsher or thinner than the rest of the song, it nudges those frequencies back.",
     cells: [], controls: [] },
@@ -1105,7 +1111,7 @@ function drawEqNow() {
 
 // ---------------------------------------------------------------------------------------------
 // Learn panel
-function para(cls, text) { const p = document.createElement("p"); p.className = cls; p.textContent = text; return p; }
+function para(cls, text) { const p = document.createElement("p"); p.className = cls; p.textContent = D(text); return p; }
 function head(text) { const s = document.createElement("span"); s.className = "l-h"; s.textContent = text; return s; }
 function sep() { const d = document.createElement("div"); d.className = "l-sep"; return d; }
 function item(name, value, why) {
@@ -1114,7 +1120,7 @@ function item(name, value, why) {
   d.innerHTML = `<div class="l-item-head"><span class="l-item-name"></span>${value ? '<span class="pill pill-red mono l-item-val"></span>' : ""}</div><p class="l-item-why"></p>`;
   d.querySelector(".l-item-name").textContent = name;
   if (value) d.querySelector(".l-item-val").textContent = value;
-  d.querySelector(".l-item-why").textContent = why;
+  d.querySelector(".l-item-why").textContent = D(why);
   return d;
 }
 // A Learn box. Warnings always carry a plan: fix = { need: "Do I need to fix it? …", steps: ["…", …] }.
@@ -1129,7 +1135,7 @@ function tip(title, text, ok, fix) {
     const need = document.createElement("p");
     need.className = "l-p l-need";
     need.innerHTML = "<b>Do I need to fix it?</b> ";
-    need.appendChild(document.createTextNode(fix.need));
+    need.appendChild(document.createTextNode(D(fix.need)));
     d.appendChild(need);
     if (fix.steps && fix.steps.length) {
       const how = document.createElement("p");
@@ -1138,7 +1144,7 @@ function tip(title, text, ok, fix) {
       d.appendChild(how);
       const ol = document.createElement("ol");
       ol.className = "l-steps";
-      for (const st of fix.steps) { const li = document.createElement("li"); li.textContent = st; ol.appendChild(li); }
+      for (const st of fix.steps) { const li = document.createElement("li"); li.textContent = D(st); ol.appendChild(li); }
       d.appendChild(ol);
     }
   }
@@ -1267,7 +1273,7 @@ function renderLearnBody() {
   const dith = clamp(Math.round(P.maxDither.value * 2), 0, 2);
   body.appendChild(item("Dither", ["Off", "16-bit", "24-bit"][dith],
     dith === 0 ? "Off: right for a 24-bit or 32-bit float export. Turn on 16-bit only when you export a 16-bit WAV (CD, some distributors)."
-    : `On for ${dith === 1 ? "16" : "24"}-bit: adds a very quiet hiss (about ${dith === 1 ? "−98" : "−146"} dBFS) so quiet fades don't turn gritty when Cubase cuts the export to ${dith === 1 ? "16" : "24"} bits. Export at exactly that bit depth, with nothing after Masterology changing the level (Stereo Out fader at 0 dB).`));
+    : `On for ${dith === 1 ? "16" : "24"}-bit: adds a very quiet hiss (about ${dith === 1 ? "−98" : "−146"} dBFS) so quiet fades don't turn gritty when {daw} cuts the export to ${dith === 1 ? "16" : "24"} bits. Export at exactly that bit depth, with nothing after Masterology changing the level (Stereo Out fader at 0 dB).`));
   body.appendChild(item("Release", `${release} ms`,
     adaptive
       ? `Adaptive around ${release} ms: recovers quickly after single hits (drums) and moves slowly on sustained sound (808s, pads), so it doesn't pump.`
@@ -1456,7 +1462,7 @@ function renderImagerLearn(body) {
   body.appendChild(item("Correlation", `${corr < 0 ? MINUS : "+"}${Math.abs(corr).toFixed(2)}`, "How mono-safe the sound is right after the Imager (the modules after it barely change it): +1 is mono, around +0.3 to +0.7 is a healthy wide mix, below 0 means parts cancel when played on one speaker (phones, club PAs)."));
   if (on && !bypassed && corr < 0.1 && performance.now() - lastAudioTime < 1500)
     body.appendChild(tip("HEADS UP", "Correlation is near or below zero: parts of the mix will cancel on mono speakers (phones, club PAs).", false,
-      { need: "Yes.", steps: ["Set Mids and Highs back to 100 %.", "If Correlation is still low, check the mix for stereo wideners or out-of-phase effects: press Cubase's Mono button on the Stereo Out and listen for parts that disappear."] }));
+      { need: "Yes.", steps: ["Set Mids and Highs back to 100 %.", "If Correlation is still low, check the mix for stereo wideners or out-of-phase effects: press MONO in Masterology's top bar and listen for parts that disappear."] }));
   else if (on && lo > 100)
     body.appendChild(tip("HEADS UP", "Widening the lows on a master usually costs punch and mono compatibility.", false,
       { need: "Yes.", steps: ["Set Lows back to 100 %.", "For width, use Highs (about 110–115 %) instead."] }));
@@ -2178,11 +2184,11 @@ function addMixologyLearn(body) {
     frag.appendChild(b);
   }
   if (h.mono)
-    frag.appendChild(tip("YOUR MIX IS MONO", "Mixology heard the same thing on the left and the right at the Stereo Out: every pan and stereo effect is lost.", false,
-      { need: "Yes, unless the song is meant to be mono.", steps: ["In Cubase, check the output of your groups and the Stereo Out (a mono group or output folds everything to the middle).", "Mixology's Stereo page shows when it's fixed."] }));
+    frag.appendChild(tip("YOUR MIX IS MONO", "Mixology heard the same thing on the left and the right at the {daw:master} channel: every pan and stereo effect is lost.", false,
+      { need: "Yes, unless the song is meant to be mono.", steps: ["{daw:monoMeter}: a mono group or output folds everything to the middle.", "Mixology's Stereo page shows when it's fixed."] }));
   if (h.limited)
     frag.appendChild(tip("MIXOLOGY'S LIMITER IS ON", "Two limiters in a row squash the mix twice: Masterology's Maximizer is the one that should set the final loudness.", false,
-      { need: "Usually yes.", steps: ["Open Mixology on the Stereo Out, go to the Dynamics page and switch the Limiter off (or keep it only as a safety that never touches the music)."] }));
+      { need: "Usually yes.", steps: ["Open Mixology on the {daw:master} channel, go to the Dynamics page and switch the Limiter off (or keep it only as a safety that never touches the music)."] }));
   if (otherGenre || h.mono || h.limited) body.prepend(frag);
   else { body.appendChild(sep()); body.appendChild(frag); }
 }
@@ -2488,6 +2494,28 @@ function openStylePicker() {
   box.hidden = false;
 }
 $("genre-name").addEventListener("click", openStylePicker);
+
+// Your DAW: Settings' pick ("Found: ..." = the program Masterology runs in).
+const pickDawNative = Juce.getNativeFunction("pickDaw");
+function fillDawSelect() {
+  const sel = $("daw-select");
+  const found = dawOf(DAW.detected);
+  sel.replaceChildren(...[["", `Found: ${found.key === "other" ? "not known" : found.name}`], ...DAWS.map((d) => [d.key, d.name])].map(([v, t]) => {
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = t;
+    return o;
+  }));
+  sel.value = DAW.picked ? DAW.key : "";
+}
+$("daw-select").addEventListener("change", (e) => {
+  const v = e.target.value;
+  pickDawNative(v);
+  DAW.key = v || dawOf(DAW.detected).key;
+  DAW.picked = !!v;
+  renderLearn();
+});
+fillDawSelect();
 $("genre-prev").addEventListener("click", () => stepGenre(-1));
 $("genre-next").addEventListener("click", () => stepGenre(1));
 for (const [rowId, st] of [["row-intensity", P.amIntensity], ["row-target", P.amTarget]])
@@ -3131,7 +3159,7 @@ function renderSnapLearn(body) {
   link.addEventListener("click", () => { learnView = "module"; renderLearn(); });
   body.appendChild(link);
   body.appendChild(head("SNAPSHOTS S1–S4"));
-  body.appendChild(para("l-p", "Each slot keeps a whole sound: every knob and switch in every module, plus the Auto-Master report that explains it and the song's tone Tone Steady learned (if it learned one). They're saved with your Cubase project."));
+  body.appendChild(para("l-p", "Each slot keeps a whole sound: every knob and switch in every module, plus the Auto-Master report that explains it and the song's tone Tone Steady learned (if it learned one). They're saved with your {daw} project."));
   body.appendChild(item("Empty slot", null, "Click it to keep the settings you hear now."));
   body.appendChild(item("Stored slot", null, "Click it to switch to those settings. Knobs glide there and switches fade over, so nothing clicks or drops out, and the undo arrow takes you back."));
   body.appendChild(item("Red slot", null, "The one playing. A dot (S1•) means you've changed something since. To keep the change, click STORE, then the slot (or Shift-click the slot)."));
@@ -3142,7 +3170,7 @@ function renderSnapLearn(body) {
   body.appendChild(tip("TRY THIS", "Balanced vs Punchy: pick Balanced, click Auto-Master and play your whole song from the start (it finishes by itself), then click S1. Pick Punchy, run Auto-Master the same way and click S2. Turn on MATCH, play your chorus and listen to S1 for 15 seconds, then S2 for 15 seconds. Now flip S1 / S2 every few seconds: you hear punch and weight, not volume. Click the one you like and keep going.", true));
   body.appendChild(sep());
   body.appendChild(head("UNDO AND REDO"));
-  body.appendChild(para("l-p", `The arrows at the top step back and forward through your changes, one at a time: a knob move, a switch, a typed value, an Auto-Master run, Apply, a snapshot. Point at an arrow to see what it will undo. ${IS_MAC ? "⌘Z undoes, ⇧⌘Z redoes" : "Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes"} (click inside Masterology first, or Cubase takes the keys). The last 100 steps are kept while Masterology's window is closed, but not when you close the project. Automation from Cubase is never in the list.`));
+  body.appendChild(para("l-p", `The arrows at the top step back and forward through your changes, one at a time: a knob move, a switch, a typed value, an Auto-Master run, Apply, a snapshot. Point at an arrow to see what it will undo. ${IS_MAC ? "⌘Z undoes, ⇧⌘Z redoes" : "Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes"} (click inside Masterology first, or {daw} takes the keys). The last 100 steps are kept while Masterology's window is closed, but not when you close the project. Automation from {daw} is never in the list.`));
 }
 
 const AM_MODULES = [["ul", "UNLIMITER"], ["eq", "TONAL EQ"], ["stem", "STEM EQ"], ["ts", "TONE STEADY"], ["rt", "RESONANCE TAMER"], ["bass", "BASS CONTROL"], ["glue", "GLUE"], ["dyn", "DYNAMICS"], ["img", "STEREO IMAGER"], ["sat", "SATURATION"], ["clip", "SOFT CLIPPER"], ["max", "MAXIMIZER"]];
@@ -3187,7 +3215,7 @@ function renderReport(body) {
         ? "The loudest 12 seconds it heard join two or more places on your timeline (a cycle loop, or the playhead moved), so the levels were set from audio that isn't one stretch of your song."
         : "A cycle loop or a jump of the playhead happened while it listened, so the whole-song figures count what it heard, not your song played once through.", !(L.loudPieces > 1),
       { need: L.loudPieces > 1 ? "Only if the joined parts weren't your loudest part (the hook or drop). Otherwise the settings fit." : "No: the loudest part was one stretch of your song, so the settings fit. Only the whole-song figures are off.",
-        steps: ["Turn off Cycle on Cubase's transport bar (the loop button), so the song plays straight through.", "Click Auto-Master and play the song from the start to the end."] }));
+        steps: ["In {daw}, {daw:loopOff}, so the song plays straight through.", "Click Auto-Master and play the song from the start to the end."] }));
   if (L && L.heard > 0 && L.heard < 30)
     body.appendChild(tip("PLAY THE WHOLE SONG NEXT TIME", `Auto-Master heard ${fmtTime(L.heard)} of your song, so it set the levels from that part.`, true,
       { need: "No, if that was the loudest part (the hook or drop). Otherwise the louder part will be limited harder than planned.",
@@ -3699,6 +3727,12 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   const wasAa = M.aaOn, wasAaHeard = M.aaHeard;
   Object.assign(M, frame);
   if (mixologyKey() !== wasMixology && learnView === "module") renderLearn();   // Mixology came, went, or changed
+  // The DAW: found from the host, or picked in any of the three. Learn says it again in that DAW's words.
+  if (frame.daw && (frame.daw.key !== DAW.key || !!frame.daw.picked !== DAW.picked || frame.daw.detected !== DAW.detected)) {
+    Object.assign(DAW, { key: frame.daw.key || "other", picked: !!frame.daw.picked, detected: frame.daw.detected || "other", from: frame.daw.from || 0 });
+    fillDawSelect();
+    renderLearn();
+  }
   // The song's style: this project's, or one just picked in Mixology or Voxology.
   if (frame.songStyle && frame.songStyle.version !== SONG.version) {
     const first = SONG.version === -1, ss = frame.songStyle;

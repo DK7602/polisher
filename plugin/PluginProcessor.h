@@ -159,6 +159,12 @@ public:
     suite::StyleInfo songStyleNow() const { const juce::ScopedLock sl (styleLock); return songStyle.style(); }
     std::uint32_t songStyleVersion() const { return styleVersion.load(); }
 
+    /** The DAW you work in, shared the same way: found from the host, or picked here / in Mixology / in Voxology.
+        Every tip then says how to do things in it. "" = back to the one found. Message thread. */
+    void pickDaw (const std::string& key);
+    suite::StyleInfo dawNow() const { const juce::ScopedLock sl (styleLock); return daw.style(); }
+    std::string dawDetected() const { return detectedDaw; }
+
     /** The reference song for Match ref (its measurements only), saved with the state. */
     ReferenceTrack reference;
     /** Match ref from the window: read and measure a song / forget it. Both mark the project as changed
@@ -212,6 +218,8 @@ private:
     suite::SongStyle songStyle { suite::StyleInfo::From::masterology };   // under styleLock
     std::atomic<std::uint32_t> styleVersion { 0 };
     void applyStyleGenre();   // the Auto-Master genre the song's style belongs to
+    const std::string detectedDaw = suite::dawFromHostPath (juce::PluginHostType::getHostPath().toStdString());
+    suite::SharedChoice daw { suite::StyleInfo::From::masterology, suite::Choice::daw };   // under styleLock
     int suiteRefVersion = -1;
     polisher::ReferenceProfile suiteRef;
 

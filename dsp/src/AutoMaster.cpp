@@ -1212,9 +1212,8 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                         "single instrument or vocal sounds like. Mastering one track would pile on EQ it doesn't need, so I haven't "
                         "changed anything.";
             r.tipTitle = "PUT MASTEROLOGY ON THE MASTER";
-            r.tip = "Masterology belongs on the channel every track flows into. In Cubase: open the MixConsole (F3), find Stereo Out "
-                    "on the far right, and load Masterology in its last insert slot. Remove it from this track, then press play on "
-                    "the chorus and run Auto-Master again.";
+            r.tip = "Masterology belongs on the channel every track flows into ({daw:master}). In {daw}: {daw:loadOnMaster}, "
+                    "as the last plug-in there. Remove it from this track, then press play on the chorus and run Auto-Master again.";
             return r;
         }
     }
@@ -1286,7 +1285,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                 r.notes.push_back ("SQUASHED INPUT: your audio was already limited or clipped before Masterology (Squash " + num (squash) +
                                    " dB), and " + why2 + "."
                                    "\nNEED: Optional. The master works as it is."
-                                   "\nSTEP: If it's your own mix, turn off the limiter or clipper on Stereo Out before Masterology (or export the beat without it)."
+                                   "\nSTEP: If it's your own mix, turn off the limiter or clipper on the {daw:master} channel before Masterology (or export the beat without it)."
                                    "\nSTEP: Then run Auto-Master again.");
             }
             else
@@ -1299,7 +1298,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                 r.notes.push_back ("SQUASHED INPUT: your audio was already limited or clipped before Masterology (Squash " + num (squash) +
                                    " dB). The Unlimiter wins back part of the punch, but the cleanest result comes from the unlimited mix."
                                    "\nNEED: Optional. The master works as it is."
-                                   "\nSTEP: If it's your own mix, turn off the limiter or clipper on Stereo Out before Masterology (or export the beat without it)."
+                                   "\nSTEP: If it's your own mix, turn off the limiter or clipper on the {daw:master} channel before Masterology (or export the beat without it)."
                                    "\nSTEP: Then set the Unlimiter Amount back to 0 and run Auto-Master again.");
             }
         }
@@ -2042,7 +2041,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         r.notes.push_back ("HEADS UP: your mix arrives very quiet (" + num (arrivesLufs) + " LUFS), so even the maximum Drive leaves the master at "
                            + num (out.integratedLufs) + " LUFS, short of the " + tname + " target (" + num (r.targetLufs) + " LUFS)."
                            "\nNEED: Yes, if you want the target loudness."
-                           "\nSTEP: Turn the mix up before Masterology: raise the Stereo Out fader, or the track faders, by about "
+                           "\nSTEP: Turn the mix up before Masterology: raise the track faders together (not the {daw:master} fader: it comes after Masterology) by about "
                            + num (std::ceil (r.targetLufs - out.integratedLufs), false, 0) + " dB."
                            "\nSTEP: Run Auto-Master again.");
     }

@@ -357,7 +357,7 @@ TEST_CASE ("Auto-Master won't master a single instrument", "[automaster]")
         CHECK (r.notAFullMix);
         CHECK (r.analysis.usable);
         CHECK (r.summary.find ("full mix") != std::string::npos);
-        CHECK (r.tip.find ("Stereo Out") != std::string::npos);
+        CHECK (r.tip.find ("{daw:loadOnMaster}") != std::string::npos);   // the window says how, in your DAW's words
     }
 }
 

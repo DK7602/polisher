@@ -13,8 +13,9 @@
 //              its tone against the style, a mono mix), so Masterology can start from the right place.
 //   - masters: each Masterology publishes its goal (loudness target, true-peak ceiling, genre), so Mixology's
 //              hand-off check uses Masterology's real numbers.
-//   - style:   the song's style (Mixology's list of 75, "genre.style"), the same in all three: pick it in any of them
-//              and the others follow. The newest choice wins (each saves the time you picked it with the project).
+//   - choices: the song's style (Mixology's list of 75, "genre.style") and the DAW you work in ("cubase", "studioone"...),
+//              the same in all three: pick one in any of them and the others follow. The newest choice wins (each saves
+//              the time you picked it with the project).
 // Framework-free C++17, lock-free (atomics and sequence counters), no allocation on the audio thread (the
 // publishers call it from their message thread anyway). Zero-filled memory is a valid, empty block.
 
@@ -28,7 +29,7 @@
 
 namespace suite
 {
-    constexpr std::uint32_t kLayout = 2;   // 2: the shared song style
+    constexpr std::uint32_t kLayout = 3;   // 2: the shared song style; 3: the shared DAW, Voxology's recording warnings
     constexpr int kMaxVocals = 64;
     constexpr int kMaxMasters = 4;
     constexpr std::size_t kTextBytes = 64;
@@ -65,6 +66,9 @@ namespace suite
             saturation = 1u << 8,
             gate       = 1u << 9,
             beat       = 1u << 10,  // Voxology in Beat mode: this track is the beat (Voxology only listens to its key)
+            // What Voxology's last Auto-Edit heard in the recording itself (before any plug-in): fixed at the source.
+            recordedHot     = 1u << 11,   // peaks over the top of the meter (0 dBFS) coming in
+            recordedClipped = 1u << 12,   // flat tops: it clipped while it was recorded
         };
         /** Voxology's Auto-Edit style (its aeStyle choice + 1). */
         enum class Style : std::uint32_t { unknown = 0, trapLead, rap, melodic, robot, rnb, pop, folk, naturalSinger };
@@ -77,6 +81,8 @@ namespace suite
         float compressionDb = 0.0f;   // how much its compressor / leveler takes off lately (dB, >= 0)
         float reverbMix = 0.0f;       // 0..1
         float delayMix = 0.0f;        // 0..1
+        float recordedPeakDb = -100.0f;   // the recording's loudest peak coming in (dBFS), from the last Auto-Edit
+        std::uint32_t clippedSpots = 0;   // how many clipped spots that Auto-Edit found
         std::uint32_t version = 0;    // packVersion of the Voxology that wrote it (0: readers skip the slot)
         // Filled in by the reader:
         int slot = -1;
@@ -119,12 +125,16 @@ namespace suite
         std::uint64_t instanceId = 0;
     };
 
-    /** The song's style, shared by Voxology, Mixology and Masterology. */
+    /** What the three share and you pick in any of them: the song's style, and the DAW you work in. */
+    enum class Choice : std::uint32_t { style = 0, daw = 1 };
+    constexpr int kChoices = 2;
+
+    /** A shared choice (the song's style, or the DAW), shared by Voxology, Mixology and Masterology. */
     struct StyleInfo
     {
         enum class From : std::uint32_t { none = 0, voxology, mixology, masterology };
-        std::string key;              // "hiphop.modern" ("" = none)
-        std::string name;             // "Hip Hop - Modern Clean"
+        std::string key;              // "hiphop.modern" / "cubase" ("" = none)
+        std::string name;             // "Hip Hop - Modern Clean" / "Cubase"
         std::uint64_t pickedAt = 0;   // when you picked it (wallMs; 0 = never picked: follows the others)
         From from = From::none;       // the plug-in you picked it in
         bool operator== (const StyleInfo& o) const { return key == o.key && pickedAt == o.pickedAt; }
@@ -143,7 +153,8 @@ namespace suite
         std::atomic<std::uint64_t> heartbeatMs;
         std::atomic<std::uint32_t> seq;          // odd while the fields below are written
         std::atomic<std::uint32_t> nameHash, flags, style, version;
-        std::atomic<float> compressionDb, reverbMix, delayMix;
+        std::atomic<float> compressionDb, reverbMix, delayMix, recordedPeakDb;
+        std::atomic<std::uint32_t> clippedSpots;
         Text<128> trackName;
     };
 
@@ -168,10 +179,10 @@ namespace suite
         Text<kTextBytes> goalName, genreName;
     };
 
-    struct alignas (64) StyleSlot
+    struct alignas (64) ChoiceSlot
     {
         std::atomic<std::uint32_t> seq;          // odd while written; writers take it with a compare-exchange
-        std::atomic<std::uint64_t> heartbeatMs;  // refreshed by the plug-ins that hold this style (0 = none)
+        std::atomic<std::uint64_t> heartbeatMs;  // refreshed by the plug-ins that hold this choice (0 = none)
         std::atomic<std::uint64_t> holder;       // the instance that refreshed it last
         std::atomic<std::uint64_t> pickedAt;
         std::atomic<std::uint32_t> from;
@@ -182,7 +193,7 @@ namespace suite
     {
         std::atomic<std::uint32_t> layout;
         MixSlot mix;
-        StyleSlot style;
+        std::array<ChoiceSlot, kChoices> choices;   // [Choice::style], [Choice::daw]
         std::array<VocalSlot, kMaxVocals> vocals;
         std::array<MasterSlot, kMaxMasters> masters;
     };
@@ -222,27 +233,32 @@ namespace suite
         // ---- Mixology reads the masters -----------------------------------------------------------------
         std::vector<MasterInfo> masters (std::uint64_t nowMs) const;
 
-        // ---- all three: the song's style ---------------------------------------------------------------
-        /** Offer this instance's style, a few times a second (message thread). It goes in when it is newer than the
+        // ---- all three: the shared choices (the song's style, the DAW) ------------------------------------
+        /** Offer this instance's choice, a few times a second (message thread). It goes in when it is newer than the
             one there, or when no live plug-in holds the one there; holding the same one refreshes it. Returns the
-            style everyone should use now (yours, or a newer one: adopt it). Never-picked styles (pickedAt 0) are
+            choice everyone should use now (yours, or a newer one: adopt it). Never-picked choices (pickedAt 0) are
             never offered: they just get the shared one, if any (else they come back as they are). */
-        StyleInfo shareStyle (const StyleInfo& mine, std::uint64_t instanceId, std::uint64_t nowMs);
-        /** The shared style, if a live plug-in holds one. */
-        bool readStyle (StyleInfo&, std::uint64_t nowMs) const;
-        /** Closing: if this instance refreshed the shared style last, it lapses straight away (so a project opened
-            next in the same host doesn't take the closed project's style). */
-        void leaveStyle (std::uint64_t instanceId);
+        StyleInfo shareChoice (Choice, const StyleInfo& mine, std::uint64_t instanceId, std::uint64_t nowMs);
+        /** The shared choice, if a live plug-in holds one. */
+        bool readChoice (Choice, StyleInfo&, std::uint64_t nowMs) const;
+        /** Closing: if this instance refreshed the shared choice last, it lapses straight away (so a project opened
+            next in the same host doesn't take the closed project's choice). */
+        void leaveChoice (Choice, std::uint64_t instanceId);
+
+        StyleInfo shareStyle (const StyleInfo& mine, std::uint64_t id, std::uint64_t now) { return shareChoice (Choice::style, mine, id, now); }
+        bool readStyle (StyleInfo& out, std::uint64_t now) const { return readChoice (Choice::style, out, now); }
+        void leaveStyle (std::uint64_t id) { leaveChoice (Choice::style, id); }
 
     private:
         Block& block;
     };
 
-    /** One plug-in's side of the song's style (message thread): what it saves with the project and what it uses. */
-    class SongStyle
+    /** One plug-in's side of a shared choice (message thread): what it saves with the project and what it uses.
+        SongStyle (the default) is the song's style; SharedChoice (from, Choice::daw) the DAW. */
+    class SharedChoice
     {
     public:
-        explicit SongStyle (StyleInfo::From plugIn) : who (plugIn) {}
+        explicit SharedChoice (StyleInfo::From plugIn, Choice c = Choice::style) : who (plugIn), choice (c) {}
 
         /** You picked a style in this plug-in: the others follow at their next sync. */
         void pick (const std::string& key, const std::string& name)
@@ -259,12 +275,12 @@ namespace suite
         /** A few times a second. True when another plug-in's newer choice replaced this one's: use style() now. */
         bool sync (Link& link, std::uint64_t instanceId, std::uint64_t nowMs)
         {
-            const auto shared = link.shareStyle (mine, instanceId, nowMs);
+            const auto shared = link.shareChoice (choice, mine, instanceId, nowMs);
             if (shared.key.empty() || (shared == mine && shared.name == mine.name)) return false;
             mine = shared;
             return true;
         }
-        void leave (Link& link, std::uint64_t instanceId) { link.leaveStyle (instanceId); }
+        void leave (Link& link, std::uint64_t instanceId) { link.leaveChoice (choice, instanceId); }
 
         const StyleInfo& style() const { return mine; }
 
@@ -292,6 +308,40 @@ namespace suite
 
     private:
         StyleInfo::From who;
+        Choice choice;
         StyleInfo mine;
     };
+    using SongStyle = SharedChoice;
+
+    // ---- the DAW (keys and names: plugin/ui/daws.js has the same list) ---------------------------------------
+    /** The DAW a host program is ("cubase", "studioone", "fl", "ableton", "reaper", "bitwig", "logic", "other"),
+        from its file name or path (JUCE's PluginHostType::getHostPath()). Nuendo counts as Cubase. */
+    inline std::string dawFromHostPath (const std::string& path)
+    {
+        std::string p;
+        for (char c : path) p.push_back (static_cast<char> (c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c));
+        const auto slash = p.find_last_of ("/\\");
+        const auto file = slash == std::string::npos ? p : p.substr (slash + 1);
+        auto has = [&] (const char* w) { return p.find (w) != std::string::npos; };
+        if (has ("cubase") || has ("nuendo")) return "cubase";
+        if (has ("studio one") || has ("studioone")) return "studioone";
+        if (has ("fl studio") || file.rfind ("fl64", 0) == 0 || file == "fl.exe" || file.rfind ("fl ", 0) == 0) return "fl";
+        if (has ("ableton")) return "ableton";
+        if (has ("reaper")) return "reaper";
+        if (has ("bitwig")) return "bitwig";
+        if (has ("logic")) return "logic";
+        return "other";
+    }
+
+    inline const char* dawName (const std::string& key)
+    {
+        if (key == "cubase") return "Cubase";
+        if (key == "studioone") return "Studio One";
+        if (key == "fl") return "FL Studio";
+        if (key == "ableton") return "Ableton Live";
+        if (key == "reaper") return "REAPER";
+        if (key == "bitwig") return "Bitwig Studio";
+        if (key == "logic") return "Logic Pro";
+        return "Other DAW";
+    }
 }

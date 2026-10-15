@@ -102,6 +102,7 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     // The suite link: Mixology (in the same project) sees what this Masterology aims for, and hands it the mix.
     suiteId = static_cast<std::uint64_t> (juce::Random::getSystemRandom().nextInt64()) ^ reinterpret_cast<std::uintptr_t> (this);
     if (suiteId == 0) suiteId = 1;
+    daw.setUnpicked (detectedDaw, suite::dawName (detectedDaw));   // until you pick one (here or in Mixology / Voxology)
     startTimerHz (4);
 }
 
@@ -111,6 +112,7 @@ PolisherAudioProcessor::~PolisherAudioProcessor()
     suite::Link::process().releaseMaster (suiteSlot, suiteId);
     const juce::ScopedLock sl (styleLock);
     songStyle.leave (suite::Link::process(), suiteId);
+    daw.leave (suite::Link::process(), suiteId);
 }
 
 void PolisherAudioProcessor::updateSuite()
@@ -135,6 +137,7 @@ void PolisherAudioProcessor::updateSuite()
     {
         const juce::ScopedLock sl (styleLock);
         adopted = songStyle.sync (link, suiteId, now);
+        if (daw.sync (link, suiteId, now)) ++styleVersion;
     }
     if (adopted)
     {
@@ -179,6 +182,19 @@ void PolisherAudioProcessor::pickStyle (const std::string& key, const std::strin
     }
     ++styleVersion;
     applyStyleGenre();
+    markStateChanged();
+    updateSuite();   // the others follow at once
+}
+
+void PolisherAudioProcessor::pickDaw (const std::string& key)
+{
+    {
+        const juce::ScopedLock sl (styleLock);
+        if (key.empty()) daw.setUnpicked (detectedDaw, suite::dawName (detectedDaw));
+        else if (key != daw.style().key || daw.style().pickedAt == 0) daw.pick (key, suite::dawName (key));
+        else return;
+    }
+    ++styleVersion;
     markStateChanged();
     updateSuite();   // the others follow at once
 }
@@ -1026,6 +1042,8 @@ void PolisherAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
             const juce::ScopedLock sl (styleLock);
             if (! songStyle.style().key.empty())
                 xml->setAttribute ("songStyle", juce::String::fromUTF8 (songStyle.save().c_str()));
+            if (daw.style().pickedAt != 0)   // your DAW, when you picked one (else it is found from the host each time)
+                xml->setAttribute ("daw", juce::String::fromUTF8 (daw.save().c_str()));
         }
         // Match ref: the reference song's measurements and name (no audio). Absent when none is loaded.
         if (const auto ref = reference.getJsonForSaving(); ref.isNotEmpty())
@@ -1061,6 +1079,13 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
                 ++styleVersion;
             }
             xml->removeAttribute ("songStyle");
+            {
+                const juce::ScopedLock sl (styleLock);
+                daw = suite::SharedChoice { suite::StyleInfo::From::masterology, suite::Choice::daw };
+                if (! daw.restore (xml->getStringAttribute ("daw").toStdString()))
+                    daw.setUnpicked (detectedDaw, suite::dawName (detectedDaw));
+            }
+            xml->removeAttribute ("daw");
             // Snapshots: their own element ("" in states from before snapshots: every slot empty).
             std::unique_ptr<juce::XmlElement> savedSnapshots;
             if (auto* e = xml->getChildByName (SettingsSnapshots::kTag))
