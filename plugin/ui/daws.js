@@ -88,10 +88,12 @@ const P = {
   // Keeping the low end in the middle.
   monoLows: { cubase: "Cubase's MultiPanner or a stereo-width plug-in on those tracks", ableton: "Live's Utility with Bass Mono on, on those tracks",
     other: "a stereo-width plug-in on those tracks (width 0 below about 120 Hz)" },
-  // When Mixology can't move the DAW's faders (the bridge is Cubase only, for now).
+  // When Mixology can't move the DAW's faders (bridges: Cubase, FL Studio, Ableton Live, for now).
   noFaderLink: {
     cubase: "Not connected to Cubase, so faders and pans can't move (Settings > Cubase Bridge).",
-    other: "Mixology moves faders through Cubase only (for now): untick the fader and pan rows to apply the rest, and set those by hand." },
+    fl: "Not connected to FL Studio, so faders and pans can't move (Settings > FL Studio Bridge).",
+    ableton: "Not connected to Ableton Live, so faders and pans can't move (Settings > Ableton Live Bridge).",
+    other: "Mixology moves faders in Cubase, FL Studio and Ableton Live (for now): untick the fader and pan rows to apply the rest, and set those by hand." },
   // Turning a recording down at the source, before any plug-in.
   clipGain: {
     cakewalk: "select the clip and lower its Clip Gain in the Inspector (Clip properties)",
@@ -194,6 +196,10 @@ const P = {
 };
 
 /** The DAW's entry (the "other" one for an unknown key). */
+// The DAWs Mixology can move faders in (a bridge script: Cubase's MIDI Remote, FL Studio's and Live's Python scripts).
+export const BRIDGED = ["cubase", "fl", "ableton"];
+export function hasBridge(key) { return BRIDGED.includes(key); }
+
 export function dawOf(key) { return DAWS.find((d) => d.key === key) || DAWS[DAWS.length - 1]; }
 
 /** The DAW's name as it reads in a sentence ("Cubase", "your DAW" for Other). */
