@@ -7,7 +7,7 @@ endif()
 # product page (an empty one is better than a placeholder).
 juce_add_plugin(Polisher
     PRODUCT_NAME                "Masterology"
-    COMPANY_NAME                "Masterology Audio"
+    COMPANY_NAME                "Sonicology"                # the suite: Voxology, Mixology, Masterology
     BUNDLE_ID                   com.polisheraudio.polisher
     PLUGIN_MANUFACTURER_CODE    Plsh
     PLUGIN_CODE                 Pls1
