@@ -175,8 +175,9 @@ public:
         (the reference is saved with it, not a parameter). Message thread. */
     void loadReference (const juce::File& file);
     void clearReference();
-    /** Message thread, regularly (the editor's timer): when a load started here has ended, marks the
-        project changed again (the host may have saved while it was still being measured). */
+    /** Message thread, regularly (the processor's own timer, so also with the window closed): when a load
+        started here has ended, marks the project changed again (the host may have saved while it was still
+        being measured). */
     void pollReference();
 
     /** Tells the host the project changed although no parameter did (a snapshot stored, a reference
@@ -210,7 +211,7 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     /** The processor's own work, four times a second on the message thread (its timer; tests call it directly):
-        what other threads left for the message thread, then the suite link. */
+        what other threads left for the message thread, a Match ref load that ended, then the suite link. */
     void tick()
     {
         // A project opened on another thread: Auto Analyze's saved switch is applied here, on the message thread.
@@ -218,6 +219,7 @@ public:
             autoMaster.setAutoAnalyze (pending != 0);
         if (stateRevisionPending.exchange (false))
             bumpStateRevision();
+        pollReference();   // a Match ref that finished measuring after the window closed still marks the project
         updateSuite();
     }
 

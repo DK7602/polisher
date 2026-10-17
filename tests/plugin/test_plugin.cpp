@@ -2554,9 +2554,9 @@ TEST_CASE ("Plug-in: storing a snapshot or loading / clearing a reference marks 
     CHECK (changes.nonParameter == 3);
     for (int i = 0; i < 600 && p->reference.getState() == ReferenceTrack::loading; ++i)
         juce::Thread::sleep (20);
-    p->pollReference();
+    p->tick();            // the processor's own timer: also with the window closed
     CHECK (changes.nonParameter == 4);
-    p->pollReference();
+    p->pollReference();   // (the window's timer asks too)
     CHECK (changes.nonParameter == 4);   // once per load
     dir.deleteRecursively();
 
