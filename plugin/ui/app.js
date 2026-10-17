@@ -3844,7 +3844,8 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   $("sp-master").setAttribute("d", master);
   $("sp-master-glow").setAttribute("d", master);
 });
-setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "glue", "dyn", "sat", "stem", "ts", "rt", "ul"].includes(selected)) refreshLearn(); }, 1000);
+// Every module page has live numbers: once a second Learn checks them (nothing changes on screen unless one did).
+setInterval(() => { if (learnOn && learnView === "module") refreshLearn(); }, 1000);
 // The history's Learn page follows the graph, but only as often as a new point can change it.
 let histLearnAt = 0;
 function scheduleHistLearn() { const now = performance.now(); if (now - histLearnAt > 1000) { histLearnAt = now; refreshLearn(); } }
