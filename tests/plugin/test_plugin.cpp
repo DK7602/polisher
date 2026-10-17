@@ -3194,6 +3194,32 @@ TEST_CASE ("Plug-in: the song's style is shared (picked here or in Mixology), se
     CHECK (shared.key == "electronic.house");
 }
 
+TEST_CASE ("Plug-in: Settings > DAW \"Found\" is a fresh pick of the DAW found, so it sticks and the others follow", "[plugin][suite]")
+{
+    auto& link = suite::Link::process();
+    auto p = makeProcessor (48000.0, 512, false);
+    p->updateSuite();
+    juce::Thread::sleep ((int) suite::Presence::kSettleMs + 20);
+    const auto found = p->dawDetected();
+    p->pickDaw ("fl");   // the wrong DAW picked; Mixology follows it
+    suite::SharedChoice mixology (suite::StyleInfo::From::mixology, suite::Choice::daw);
+    mixology.setUnpicked (found, suite::dawName (found));
+    CHECK (mixology.sync (link, 992, suite::nowMs()));
+    CHECK (mixology.style().key == "fl");
+
+    p->pickDaw ("");     // "Found: ..."
+    CHECK (p->dawNow().key == found);
+    CHECK (p->dawNow().pickedAt != 0);
+    for (int i = 0; i < 3; ++i) p->updateSuite();   // not undone by the pick before, still alive in the shared slot
+    CHECK (p->dawNow().key == found);
+    CHECK (mixology.sync (link, 992, suite::nowMs()));
+    CHECK (mixology.style().key == found);
+    suite::StyleInfo shared;
+    REQUIRE (link.readChoice (suite::Choice::daw, shared, suite::nowMs()));
+    CHECK (shared.key == found);
+    mixology.leave (link, 992);
+}
+
 TEST_CASE ("Plug-in: the suite link only while the host runs Masterology (another open project doesn't reach it)", "[plugin][suite]")
 {
     auto& link = suite::Link::process();

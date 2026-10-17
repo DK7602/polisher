@@ -163,7 +163,8 @@ public:
     std::uint32_t songStyleVersion() const { return styleVersion.load(); }
 
     /** The DAW you work in, shared the same way: found from the host, or picked here / in Mixology / in Voxology.
-        Every tip then says how to do things in it. "" = back to the one found. Message thread. */
+        Every tip then says how to do things in it. "" = the one found ("Found: ..."), as a pick of its own, so
+        the other plug-ins follow it too. Message thread. */
     void pickDaw (const std::string& key);
     suite::StyleInfo dawNow() const { const juce::ScopedLock sl (styleLock); return daw.style(); }
     std::string dawDetected() const { return detectedDaw; }

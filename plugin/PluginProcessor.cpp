@@ -216,9 +216,12 @@ void PolisherAudioProcessor::pickDaw (const std::string& key)
 {
     {
         const juce::ScopedLock sl (styleLock);
-        if (key.empty()) daw.setUnpicked (detectedDaw, suite::dawName (detectedDaw));
-        else if (key != daw.style().key || daw.style().pickedAt == 0) daw.pick (key, suite::dawName (key));
-        else return;
+        // "Found: <your DAW>" ("") is a fresh pick of the DAW found from the host: the newest pick, so every plug-in
+        // follows. Going back to "not picked" would be undone at once: the earlier pick is still alive in the shared
+        // slot (this very instance kept it there), and a choice that isn't picked always takes the shared one.
+        const auto& wanted = key.empty() ? detectedDaw : key;
+        if (wanted == daw.style().key && daw.style().pickedAt != 0) return;
+        daw.pick (wanted, suite::dawName (wanted));
     }
     ++styleVersion;
     markStateChanged();
