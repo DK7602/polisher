@@ -1,4 +1,5 @@
 #include "PolisherWebEditor.h"
+#include "PluginEditor.h"
 #include "polisher/MixHandoff.h"
 
 #include "PolisherUIData.h"
@@ -50,8 +51,9 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeBaseOptions()
     using Options = juce::WebBrowserComponent::Options;
     return Options{}
        #if JUCE_WINDOWS
-        // WebView2 (Chromium) on Windows. The legacy IE backend can't run this UI, so it is never
-        // used; if WebView2 is missing, isSupported() is false and the basic editor is shown instead.
+        // WebView2 (Chromium) on Windows. The legacy IE backend can't run this UI: if WebView2 is
+        // missing, isSupported() is false and the basic editor is shown instead; if it fails later
+        // (JUCE then falls back to IE, or the page never loads), checkPageStarted() shows it.
         .withBackend (Options::Backend::webview2)
        #endif
         .withWinWebView2Options (Options::WinWebView2{}
@@ -361,6 +363,36 @@ void PolisherWebEditor::paint (juce::Graphics& g)
 void PolisherWebEditor::resized()
 {
     webView.setBounds (getLocalBounds());
+    if (basicView != nullptr)
+        basicView->setBounds (getLocalBounds());
+}
+
+void PolisherWebEditor::checkPageStarted()
+{
+    if (! isShowing())
+        return;   // the web view only starts once the window is on screen
+    ++framesShownWithoutPage;
+    if (framesShownWithoutPage % 30 == 0)   // once a second: is the page running? (the legacy IE view never answers)
+    {
+        juce::Component::SafePointer<PolisherWebEditor> safe (this);
+        webView.evaluateJavascript ("!!(window.__JUCE__ && document.getElementById ('stage'))",
+                                    [safe] (juce::WebBrowserComponent::EvaluationResult result)
+                                    {
+                                        if (const auto* v = result.getResult(); safe != nullptr && v != nullptr && static_cast<bool> (*v))
+                                            safe->pageAnswered = true;
+                                    });
+    }
+    if (! pageAnswered && framesShownWithoutPage >= kPageTimeoutFrames)
+        showBasicView();
+}
+
+void PolisherWebEditor::showBasicView()
+{
+    webView.setVisible (false);
+    audioProcessor.autoMaster.setEditorOpen (false);   // Auto Analyze shows its advice in the full screen only
+    basicView = std::make_unique<PolisherAudioProcessorEditor> (audioProcessor, PolisherAudioProcessorEditor::Reason::webViewFailed);
+    addAndMakeVisible (*basicView);
+    resized();
 }
 
 std::optional<juce::WebBrowserComponent::Resource> PolisherWebEditor::getResource (const juce::String& url)
@@ -461,6 +493,10 @@ juce::var PolisherWebEditor::makeSpectrum (const SpectrumTap& tap, Analyser& sta
 
 void PolisherWebEditor::timerCallback()
 {
+    if (! pageAnswered && basicView == nullptr)
+        checkPageStarted();
+    if (basicView != nullptr)
+        return;   // the BASIC VIEW has the window (and reads the meters itself)
     auto& m = audioProcessor.meters;
 
     const float gr = m.gainReduction.exchange (0.0f);

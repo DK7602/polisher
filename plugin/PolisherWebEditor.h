@@ -108,6 +108,16 @@ private:
     std::unique_ptr<juce::FileChooser> referenceChooser;   // Match ref: the open dialog, while it's open
     bool pageGroupOpen = false;                            // the page opened an undo group (historyGroup)
 
+    // WebView2 can still fail after isSupported() (a second environment that won't start, a locked or mismatched
+    // user-data folder, a crashed runtime): the page then never runs, and the window would stay blank. Once the
+    // window has been on screen kPageTimeoutFrames without the page answering, the BASIC VIEW takes it over.
+    static constexpr int kPageTimeoutFrames = 15 * 30;     // 15 s of the 30 Hz timer
+    void checkPageStarted();
+    void showBasicView();
+    bool pageAnswered = false;
+    int framesShownWithoutPage = 0;
+    std::unique_ptr<juce::AudioProcessorEditor> basicView;
+
     // Same size and points as polisher::spectrumDisplayCurve, so a reference's curve lines up with the live ones.
     static_assert (kFftSize == polisher::kDisplayFftSize && kSpectrumPoints == polisher::kDisplayPoints);
     juce::dsp::FFT fft { kFftOrder };
