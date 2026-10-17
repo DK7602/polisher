@@ -261,7 +261,12 @@ void PolisherAudioProcessor::applyStyleGenre()
     if (genre < 0) return;
     auto* p = parameters.getParameter ("amGenre");
     const float v = p->convertTo0to1 (static_cast<float> (genre));
-    if (std::abs (p->getValue() - v) > 1e-4f) p->setValueNotifyingHost (v);
+    if (std::abs (p->getValue() - v) > 1e-4f)
+    {
+        p->beginChangeGesture();   // VST3 hosts expect beginEdit / endEdit around a change the plug-in makes
+        p->setValueNotifyingHost (v);
+        p->endChangeGesture();
+    }
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::createParameterLayout()

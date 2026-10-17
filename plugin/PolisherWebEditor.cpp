@@ -342,7 +342,11 @@ PolisherWebEditor::~PolisherWebEditor()
     // Level match is a listening aid: switch it off when the window closes so it can't end up in a bounce.
     if (auto* p = audioProcessor.parameters.getParameter ("levelMatch"))
         if (p->getValue() > 0.5f)
+        {
+            p->beginChangeGesture();   // as a click on MATCH would (VST3: beginEdit / endEdit)
             p->setValueNotifyingHost (0.0f);
+            p->endChangeGesture();
+        }
     // So are Listen / Solo and the MONO / PHONE checks: back to the plain master.
     audioProcessor.resetMonitoring();
     if (pageGroupOpen)
