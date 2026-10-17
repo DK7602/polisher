@@ -18,6 +18,7 @@
 #include <numbers>
 #include <new>
 #include <random>
+#include <thread>
 
 // --- Allocation counter: every operator new on the thread that set `countAllocations` is counted ----
 // (per thread, so a background analysis or file read running meanwhile is never counted as the audio
@@ -50,6 +51,15 @@ void set (PolisherAudioProcessor& p, const juce::String& id, float plain)
     auto* param = p.parameters.getParameter (id);
     REQUIRE (param != nullptr);
     param->setValueNotifyingHost (param->convertTo0to1 (plain));
+}
+
+/** The controls as the host saves them, without the hidden State Revision (it moves whenever the project changed). */
+juce::String controlsXml (PolisherAudioProcessor& p)
+{
+    auto state = p.parameters.copyState();
+    if (auto rev = state.getChildWithProperty ("id", PolisherAudioProcessor::kStateRevisionId); rev.isValid())
+        state.removeChild (rev, nullptr);
+    return state.toXmlString();
 }
 
 /** Every module doing real work, as after an Auto-Master run on a loud trap mix. */
@@ -1767,10 +1777,10 @@ TEST_CASE ("Auto Analyze: hears the hook again, offers what changed in the mix, 
     CHECK (editFor (autoAdvice (*p), "max").isObject());
 
     // Keep: nothing moves, the advice goes away.
-    const auto values = p->parameters.copyState().toXmlString();
+    const auto values = controlsXml (*p);
     REQUIRE (p->autoMaster.keepAutoEdit ("all"));
     CHECK (p->history.undoLabel().startsWith ("Auto Analyze: keep "));
-    CHECK (p->parameters.copyState().toXmlString() == values);
+    CHECK (controlsXml (*p) == values);
     CHECK (autoAdvice (*p)["edits"].size() == 0);
 
     // A knob of yours keeps its offset: the edit moves it by Auto-Master's change, from where it is.
@@ -1956,8 +1966,11 @@ float plainOf (PolisherAudioProcessor& p, const juce::String& id) { return p.par
 /** Every control's 0..1 value, in parameter order. */
 std::vector<float> allValues (PolisherAudioProcessor& p)
 {
+    // Every control (not the hidden State Revision: it moves whenever the project changed, e.g. a report undone).
     std::vector<float> v;
-    for (auto* param : p.getParameters()) v.push_back (param->getValue());
+    for (auto* param : p.getParameters())
+        if (dynamic_cast<juce::AudioProcessorParameterWithID*> (param)->paramID != PolisherAudioProcessor::kStateRevisionId)
+            v.push_back (param->getValue());
     return v;
 }
 
@@ -2553,6 +2566,54 @@ TEST_CASE ("Plug-in: storing a snapshot or loading / clearing a reference marks 
     p->setStateInformation (state.getData(), (int) state.getSize());
     CHECK (changes.nonParameter == 4);
     p->removeListener (&changes);
+}
+
+TEST_CASE ("Plug-in: a change that isn't a parameter also moves the hidden State Revision (Logic, and VST3 hosts that ignore setDirty)", "[plugin][snapshots]")
+{
+    auto p = makeProcessor (48000.0, 512, false);
+    auto* rev = p->parameters.getParameter (PolisherAudioProcessor::kStateRevisionId);
+    REQUIRE (rev != nullptr);
+    CHECK_FALSE (rev->isAutomatable());
+    CHECK_FALSE (SettingsScope::isSetting (PolisherAudioProcessor::kStateRevisionId));
+
+    struct Gestures final : juce::AudioProcessorListener
+    {
+        int index = -1, begun = 0, ended = 0, changed = 0;
+        void audioProcessorParameterChanged (juce::AudioProcessor*, int i, float) override { changed += i == index; }
+        void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override {}
+        void audioProcessorParameterChangeGestureBegin (juce::AudioProcessor*, int i) override { begun += i == index; }
+        void audioProcessorParameterChangeGestureEnd (juce::AudioProcessor*, int i) override { ended += i == index; }
+    } gestures;
+    gestures.index = rev->getParameterIndex();
+    p->addListener (&gestures);
+
+    // A snapshot stored: the parameter moves, inside a begin / end gesture (as VST3 hosts expect)...
+    const float before = rev->getValue();
+    const int steps = p->history.size();
+    p->snapshots.store (0);
+    CHECK (rev->getValue() != before);
+    CHECK (gestures.changed == 1);
+    CHECK (gestures.begun == 1);
+    CHECK (gestures.ended == 1);
+    // ... and it is no undo step, nor part of the snapshot (the slot still counts as the settings in place).
+    CHECK (p->history.size() == steps);
+    CHECK (p->snapshots.getStatus().active == 0);
+    CHECK_FALSE (p->snapshots.getStatus().modified);
+
+    // Each change moves it again; it wraps around at the top.
+    p->clearReference();
+    CHECK (gestures.changed == 2);
+    rev->setValueNotifyingHost (1.0f);
+    p->markStateChanged();
+    CHECK (rev->getValue() == 0.0f);
+
+    // From another thread: the processor's timer moves it, on the message thread.
+    const float now = rev->getValue();
+    std::thread ([&] { p->markStateChanged(); }).join();
+    CHECK (rev->getValue() == now);
+    p->tick();
+    CHECK (rev->getValue() != now);
+    p->removeListener (&gestures);
 }
 
 TEST_CASE ("Plug-in: a host call with no samples changes nothing (Drive still ramps)", "[plugin]")

@@ -11,13 +11,14 @@
 
 /** Which controls belong to undo / redo and to snapshots: everything that shapes the sound. Not A/B (the
     global bypass), MATCH, the meter preferences, nor Auto-Master's genre / intensity / target (they say
-    what Auto-Master aims for next time; they don't change what you hear). */
+    what Auto-Master aims for next time; they don't change what you hear), nor the hidden State Revision
+    (it only tells the host the project changed). */
 namespace SettingsScope
 {
     inline bool isSetting (const juce::String& id)
     {
         return id != "bypass" && id != "levelMatch" && id != "autoreset" && id != "resetOnChange"
-            && id != "amGenre" && id != "amIntensity" && id != "amTarget";
+            && id != "amGenre" && id != "amIntensity" && id != "amTarget" && id != "stateRev";
     }
 
     inline const juce::String& minus() { static const auto s = juce::String::fromUTF8 ("\xE2\x88\x92"); return s; }

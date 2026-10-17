@@ -62,6 +62,7 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     clipOversamplingParam = parameters.getRawParameterValue (ParamIDs::clipOversampling);
     eqOnParam = parameters.getRawParameterValue (ParamIDs::eqOn);
     levelMatchParam = parameters.getRawParameterValue (ParamIDs::levelMatch);
+    stateRevisionParam = parameters.getParameter (kStateRevisionId);
     moduleParams.attach (parameters);
     imgOnParam   = parameters.getRawParameterValue ("imgOn");
     imgLowParam  = parameters.getRawParameterValue ("imgLow");
@@ -333,6 +334,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
     choice ("amGenre", "Auto-Master Genre", { "Trap / Hip-Hop", "R&B", "Pop", "EDM", "Rock", "Acoustic" }, 0);
     choice ("amIntensity", "Auto-Master Intensity", { "Gentle", "Balanced", "Punchy" }, 1);
     choice ("amTarget", "Auto-Master Target", { "Stream -14", "Loud -9", "Club -7" }, 1);
+
+    // Not a control: it goes up by one whenever something saved with the project that isn't a parameter changes
+    // (markStateChanged). Logic (AU) ignores JUCE's "state changed" call, and so does a VST3 host that ignores
+    // setDirty, but every host marks the project changed when a parameter moves. Not automatable (Logic and Cubase
+    // don't offer it), and not a setting: undo, snapshots and A/B ignore it (SettingsScope::isSetting). Version hint 14.
+    layout.add (std::make_unique<AudioParameterInt> (ParameterID { kStateRevisionId, 14 }, "State Revision", 0, kStateRevisions - 1, 0,
+                                                     AudioParameterIntAttributes().withAutomatable (false)));
 
     return layout;
 }
@@ -810,7 +818,24 @@ void PolisherAudioProcessor::clearToneTarget()
 
 void PolisherAudioProcessor::markStateChanged()
 {
+    // VST3: JUCE passes this on as the host's setDirty. The AU wrapper drops it (Logic never hears of it), and some
+    // VST3 hosts ignore setDirty: the hidden State Revision parameter moving marks the project changed there too.
     updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+    if (juce::MessageManager::existsAndIsCurrentThread())
+        bumpStateRevision();
+    else
+        stateRevisionPending.store (true);   // the timer moves it, on the message thread
+}
+
+void PolisherAudioProcessor::bumpStateRevision()
+{
+    // As one gesture, like a control moved in the window (VST3 hosts expect beginEdit / endEdit around a change the
+    // plug-in makes). The value only has to differ from the saved one; it wraps around.
+    auto* p = stateRevisionParam;
+    const int next = (juce::roundToInt (p->convertFrom0to1 (p->getValue())) + 1) % kStateRevisions;
+    p->beginChangeGesture();
+    p->setValueNotifyingHost (p->convertTo0to1 (static_cast<float> (next)));
+    p->endChangeGesture();
 }
 
 void PolisherAudioProcessor::loadReference (const juce::File& file)

@@ -178,8 +178,12 @@ public:
 
     /** Tells the host the project changed although no parameter did (a snapshot stored, a reference
         loaded or cleared, Tone Steady's target learned or cleared), so it asks to save it. A VST3 host
-        marks a project changed only for parameter edits or this call. Message thread. */
+        marks a project changed only for parameter edits or setDirty, and Logic (AU) only for parameter
+        edits: this calls setDirty and moves the hidden State Revision parameter (kStateRevisionId).
+        Message thread (from another thread the parameter moves at the next timer tick). */
     void markStateChanged();
+    static constexpr const char* kStateRevisionId = "stateRev";
+    static constexpr int kStateRevisions = 1000;
 
     /** Auto Analyze on / off (see AutoMasterController), saved with the project: marks it changed. Message thread. */
     void setAutoAnalyze (bool on);
@@ -202,15 +206,24 @@ public:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-private:
-    void timerCallback() override
+    /** The processor's own work, four times a second on the message thread (its timer; tests call it directly):
+        what other threads left for the message thread, then the suite link. */
+    void tick()
     {
         // A project opened on another thread: Auto Analyze's saved switch is applied here, on the message thread.
         if (const int pending = pendingAutoAnalyze.exchange (-1); pending >= 0)
             autoMaster.setAutoAnalyze (pending != 0);
+        if (stateRevisionPending.exchange (false))
+            bumpStateRevision();
         updateSuite();
     }
+
+private:
+    void timerCallback() override { tick(); }
     std::atomic<int> pendingAutoAnalyze { -1 };   // -1: nothing waiting
+    juce::RangedAudioParameter* stateRevisionParam = nullptr;
+    std::atomic<bool> stateRevisionPending { false };   // markStateChanged ran off the message thread
+    void bumpStateRevision();
     int suiteSlot = -1;
     std::uint64_t suiteId = 0;
     suite::MixInfo handoff;
