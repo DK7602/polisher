@@ -169,6 +169,7 @@ void PolisherAudioProcessor::updateSuite()
     if (const auto st = songStyleNow(); ! st.name.empty()) g.genreName = st.name;
     g.ceilingDbtp = ceilingParam->load();
     g.inputLufs = meters.inputIntegrated.load();
+    g.inputPeakDbtp = meters.inputTruePeak.load();
     g.version = static_cast<std::uint32_t> (JucePlugin_VersionCode);
     if (! link.publishMaster (suiteSlot, suiteId, g, now)) suiteSlot = -1;   // taken over while silent: claim again
 }
@@ -967,6 +968,7 @@ void PolisherAudioProcessor::publishMeters()
     meters.truePeakMax.store (clampDb (outputMeter.truePeakDbtp()));
     meters.inputShortTerm.store (clampDb (inputMeter.shortTermLufs()));
     meters.inputIntegrated.store (clampDb (inputMeter.integratedLufs()));
+    meters.inputTruePeak.store (clampDb (inputMeter.truePeakDbtp()));
 
     // Peak-hold style values: keep the largest until the editor reads and clears them.
     const float recent = clampDb (outputMeter.takeRecentTruePeakDbtp());

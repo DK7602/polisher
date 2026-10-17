@@ -265,6 +265,73 @@ TEST_CASE ("Suite: the DAW is a second shared choice, apart from the style; Voxo
     CHECK (vocals[0].clippedSpots == 29);
 }
 
+TEST_CASE ("Suite: Mixology answers each vocal, for that claim of the slot and that track name", "[suite]")
+{
+    Memory mem;
+    suite::Link vox (mem.data()), mix (mem.data());
+    const int slot = vox.claimVocal (7, 100);
+    REQUIRE (slot >= 0);
+    suite::VocalInfo v;
+    v.trackName = "Lead Vox";
+    v.flags = suite::VocalInfo::processing;
+    v.version = 1;
+    vox.publishVocal (slot, 7, v, 100);
+    const auto hash = suite::nameHash ("Lead Vox");
+    suite::VocalAck got;
+    CHECK_FALSE (vox.vocalAck (slot, 7, hash, got, 150));   // no Mixology yet
+
+    auto seen = mix.vocals (200);
+    REQUIRE (seen.size() == 1);
+    suite::VocalAck a;
+    a.state = suite::VocalAck::State::matched;
+    a.bits = suite::VocalAck::balancesLevel | suite::VocalAck::heard;
+    a.vocalDb = -1.5f;
+    a.targetDb = 1.0f;
+    mix.ackVocal (seen[0], a, 200);
+    REQUIRE (vox.vocalAck (slot, 7, hash, got, 300));
+    CHECK (got.state == suite::VocalAck::State::matched);
+    CHECK ((got.bits & suite::VocalAck::balancesLevel) != 0);
+    CHECK (got.vocalDb == Catch::Approx (-1.5f));
+    CHECK (got.targetDb == Catch::Approx (1.0f));
+
+    CHECK_FALSE (vox.vocalAck (slot, 99, hash, got, 300));                         // not this instance's slot
+    CHECK_FALSE (vox.vocalAck (slot, 7, suite::nameHash ("Lead Vox 2"), got, 300)); // renamed since: no answer yet
+    CHECK_FALSE (vox.vocalAck (slot, 7, hash, got, 200 + suite::kAliveMs + 100));  // Mixology went quiet
+
+    // The slot is released and claimed again: the old answer isn't for the new owner, and an answer made for
+    // the old claim is ignored.
+    vox.releaseVocal (slot, 7);
+    const int again = vox.claimVocal (8, 400);
+    REQUIRE (again == slot);
+    vox.publishVocal (again, 8, v, 400);
+    CHECK_FALSE (vox.vocalAck (again, 8, hash, got, 450));
+    mix.ackVocal (seen[0], a, 450);   // the old reading
+    CHECK_FALSE (vox.vocalAck (again, 8, hash, got, 460));
+    seen = mix.vocals (500);
+    REQUIRE (seen.size() == 1);
+    a.state = suite::VocalAck::State::noLink;
+    a.bits = 0;
+    mix.ackVocal (seen[0], a, 500);
+    REQUIRE (vox.vocalAck (again, 8, hash, got, 520));
+    CHECK (got.state == suite::VocalAck::State::noLink);
+}
+
+TEST_CASE ("Suite: the beat key goes from Voxology on the beat to Honey Tune", "[suite]")
+{
+    Memory mem;
+    suite::Link vox (mem.data()), honey (mem.data());
+    int key = -1, scale = -1;
+    float sure = 0.0f;
+    std::uint64_t when = 0;
+    CHECK_FALSE (honey.readBeatKey (key, scale, sure, when));   // nothing yet
+    vox.publishBeatKey (4, 2, 0.83f, 123456);
+    REQUIRE (honey.readBeatKey (key, scale, sure, when));
+    CHECK (key == 4);
+    CHECK (scale == 2);
+    CHECK (sure == Catch::Approx (0.83f));
+    CHECK (when == 123456);
+}
+
 TEST_CASE ("Suite: the DAW is found from the host program", "[suite]")
 {
     CHECK (suite::dawFromHostPath ("C:\\Program Files\\Steinberg\\Cubase 14\\Cubase14.exe") == "cubase");

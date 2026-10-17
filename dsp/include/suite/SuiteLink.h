@@ -9,10 +9,13 @@
 // The plug-ins are separate libraries, so they meet in a named block of shared memory, one per host process:
 //   - vocals:  each Voxology publishes the track it sits on and what it does there (compressing, de-essing, its
 //              reverb / delay, its style), so Mixology never stacks a second compressor or reverb on that vocal.
+//              Mixology answers each one: whether it found that track and treats it as a vocal (and if not, why),
+//              and what it hears there, so Voxology only says "MIXOLOGY ✓" when it is true.
 //   - mix:     Mixology on the Stereo Out publishes the hand-off for mastering (the mix style, peaks, loudness,
 //              its tone against the style, a mono mix), so Masterology can start from the right place.
 //   - masters: each Masterology publishes its goal (loudness target, true-peak ceiling, genre), so Mixology's
 //              hand-off check uses Masterology's real numbers.
+//   - beat key: the song's key as a Voxology on the beat hears it, for Honey Tune (another plug-in file).
 //   - choices: the song's style (Mixology's list of 75, "genre.style") and the DAW you work in ("cubase", "studioone"...),
 //              the same in all three: pick one in any of them and the others follow. The newest choice wins (each saves
 //              the time you picked it with the project).
@@ -29,7 +32,8 @@
 
 namespace suite
 {
-    constexpr std::uint32_t kLayout = 3;   // 2: the shared song style; 3: the shared DAW, Voxology's recording warnings
+    constexpr std::uint32_t kLayout = 4;   // 2: the shared song style; 3: the shared DAW, Voxology's recording warnings;
+                                           // 4: Mixology answers each vocal
     constexpr int kMaxVocals = 64;
     constexpr int kMaxMasters = 4;
     constexpr std::size_t kTextBytes = 64;
@@ -87,6 +91,31 @@ namespace suite
         // Filled in by the reader:
         int slot = -1;
         std::uint64_t instanceId = 0;
+        std::uint32_t generation = 0;   // which claim of the slot (an answer is only for the claim it was given to)
+    };
+
+    /** Mixology's answer to one Voxology. */
+    struct VocalAck
+    {
+        enum class State : std::uint32_t
+        {
+            none = 0,
+            matched,      // Mixology found the track and treats it as a vocal
+            noLink,       // no Mixology Link on that track: Mixology can't hear it
+            noName,       // the host told Voxology no track name: Mixology can't match it
+            sharedName,   // another track has the same name: Mixology can't tell them apart
+            notVocal,     // you gave the track another role in Mixology
+            beatTrack,    // Voxology is in Beat mode there: Mixology knows it is the beat
+        };
+        enum Bit : std::uint32_t
+        {
+            balancesLevel = 1u << 0,   // Mixology moves this track's fader (its DAW bridge reads it): it sets the vocal level
+            heard         = 1u << 1,   // Analyze Mix heard this vocal: vocalDb / targetDb are real
+        };
+        State state = State::none;
+        std::uint32_t bits = 0;
+        float vocalDb = 0.0f;    // the vocal against the rest of the mix while it sings (dB, after the fader)
+        float targetDb = 0.0f;   // where the song's style (and your setting) wants it
     };
 
     /** Mixology's hand-off to mastering (the Mixology on the Stereo Out). */
@@ -156,6 +185,11 @@ namespace suite
         std::atomic<float> compressionDb, reverbMix, delayMix, recordedPeakDb;
         std::atomic<std::uint32_t> clippedSpots;
         Text<128> trackName;
+        // Mixology's answer (written by Mixology, read by the Voxology that owns the slot):
+        std::atomic<std::uint32_t> ackSeq;
+        std::atomic<std::uint32_t> ackGeneration, ackHash, ackState, ackBits;
+        std::atomic<float> ackVocalDb, ackTargetDb;
+        std::atomic<std::uint64_t> ackMs;
     };
 
     struct alignas (64) MixSlot
@@ -189,11 +223,20 @@ namespace suite
         Text<kTextBytes> key, name;
     };
 
+    struct alignas (64) KeySlot
+    {
+        std::atomic<std::uint32_t> seq;          // odd while written; writers take it with a compare-exchange
+        std::atomic<std::uint64_t> whenMs;       // 0 = never written
+        std::atomic<std::int32_t> key, scale;
+        std::atomic<float> confidence;
+    };
+
     struct Block
     {
         std::atomic<std::uint32_t> layout;
         MixSlot mix;
         std::array<ChoiceSlot, kChoices> choices;   // [Choice::style], [Choice::daw]
+        KeySlot beatKey;
         std::array<VocalSlot, kMaxVocals> vocals;
         std::array<MasterSlot, kMaxMasters> masters;
     };
@@ -218,9 +261,20 @@ namespace suite
             instance's (it was silent longer than kAliveMs and another took it over): claim again. */
         bool publishVocal (int slot, std::uint64_t instanceId, const VocalInfo&, std::uint64_t nowMs);
 
+        /** Mixology's answer for this instance's slot and track (nameHash as published), if a Mixology gave one within
+            kAliveMs for this claim of the slot and this name. */
+        bool vocalAck (int slot, std::uint64_t instanceId, std::uint32_t nameHash, VocalAck&, std::uint64_t nowMs) const;
+        /** The song's key as a Voxology on the beat hears it (key 0 = C .. 11, Voxology's scale index, 0..1 sure), with
+            the time it was heard; Honey Tune reads it (and judges how old is too old). */
+        void publishBeatKey (int key, int scale, float confidence, std::uint64_t whenMs);
+        bool readBeatKey (int& key, int& scale, float& confidence, std::uint64_t& whenMs) const;   // false: never written
+
         // ---- Mixology ---------------------------------------------------------------------------------
         /** Every live Voxology. */
         std::vector<VocalInfo> vocals (std::uint64_t nowMs) const;
+        /** Mixology answers one vocal (as vocals() gave it), a few times a second. Nothing happens when the slot was
+            claimed again since. */
+        void ackVocal (const VocalInfo&, const VocalAck&, std::uint64_t nowMs);
         void publishMix (const MixInfo&, std::uint64_t nowMs);
 
         // ---- Masterology ------------------------------------------------------------------------------

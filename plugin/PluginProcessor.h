@@ -87,6 +87,7 @@ public:
         std::atomic<float> clipReduction { 0.0f };   // largest clipper peak reduction since read (dB, <= 0)
         std::atomic<float> inputShortTerm { -100.0f };  // your mix, before Drive (LUFS)
         std::atomic<float> inputIntegrated { -100.0f };
+        std::atomic<float> inputTruePeak { -100.0f };   // the incoming mix's highest true peak (dBTP), for Mixology
         std::atomic<float> bassTame { 0.0f };        // deepest Sub Tame cut since read (dB, <= 0)
         std::atomic<float> bassPunch { 0.0f };       // biggest Punch boost since read (dB, >= 0)
         std::atomic<float> bassWidth { 0.0f };       // how stereo the incoming bass is (%)
