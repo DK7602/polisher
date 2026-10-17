@@ -39,6 +39,17 @@ namespace
     {
         return v >= 1000.0f ? juce::String (v / 1000.0f, v >= 10000.0f ? 1 : 2) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz";
     }
+
+    /** A pick restored from a preset (or the host's A/B compare, or a default preset) carries the time it was made,
+        often newer than this song's pick: it would switch the style (or DAW) of all three plug-ins. When another one
+        is live in the suite, it comes back as "not picked" and follows that one. Opening a project is unaffected:
+        nothing holds a choice then (a closed or inactive project left it). Any thread. */
+    void followLiveChoice (suite::SharedChoice& c, suite::Choice which)
+    {
+        suite::StyleInfo live;
+        if (c.style().pickedAt != 0 && suite::Link::process().readChoice (which, live, suite::nowMs()) && live.key != c.style().key)
+            c.setUnpicked (c.style().key, c.style().name);
+    }
 }
 
 PolisherAudioProcessor::PolisherAudioProcessor()
@@ -1177,6 +1188,7 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
                 const juce::ScopedLock sl (styleLock);
                 songStyle = suite::SongStyle { suite::StyleInfo::From::masterology };
                 songStyle.restore (xml->getStringAttribute ("songStyle").toStdString());
+                followLiveChoice (songStyle, suite::Choice::style);   // a preset doesn't change the song's style
                 ++styleVersion;
             }
             xml->removeAttribute ("songStyle");
@@ -1185,6 +1197,7 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
                 daw = suite::SharedChoice { suite::StyleInfo::From::masterology, suite::Choice::daw };
                 if (! daw.restore (xml->getStringAttribute ("daw").toStdString()))
                     daw.setUnpicked (detectedDaw, suite::dawName (detectedDaw));
+                followLiveChoice (daw, suite::Choice::daw);   // nor the DAW (a preset made in another one)
             }
             xml->removeAttribute ("daw");
             // Snapshots: their own element ("" in states from before snapshots: every slot empty).

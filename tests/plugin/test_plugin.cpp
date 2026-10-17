@@ -3291,6 +3291,43 @@ TEST_CASE ("Plug-in: the song's style is shared (picked here or in Mixology), se
     CHECK (shared.key == "electronic.house");
 }
 
+TEST_CASE ("Plug-in: loading a preset doesn't switch the song's style for the whole suite", "[plugin][suite]")
+{
+    auto& link = suite::Link::process();
+    const auto settle = [] { juce::Thread::sleep ((int) suite::Presence::kSettleMs + 20); };
+    // A preset saved from a trap song (picked "later" than this song's style).
+    juce::MemoryBlock preset;
+    {
+        auto other = makeProcessor (48000.0, 512, false);
+        other->pickStyle ("trap.drill", "Trap & Drill - Drill");
+        other->getStateInformation (preset);
+    }
+    // This song: R&B, picked in Mixology a while ago and live.
+    suite::SongStyle mixology (suite::StyleInfo::From::mixology);
+    REQUIRE (mixology.restore ("rnb.modern|R&B & Soul - Modern|1000|2"));
+    mixology.sync (link, 993, suite::nowMs());
+    auto p = makeProcessor (48000.0, 512, false);
+    p->setStateInformation (preset.getData(), (int) preset.getSize());
+    CHECK (p->songStyleNow().pickedAt == 0);   // the preset's style comes back as "not picked"...
+    p->updateSuite();
+    settle();
+    p->updateSuite();
+    suite::StyleInfo shared;
+    REQUIRE (link.readStyle (shared, suite::nowMs()));
+    CHECK (shared.key == "rnb.modern");         // ... so the song keeps its style, and Masterology follows it
+    CHECK (p->songStyleNow().key == "rnb.modern");
+    CHECK_FALSE (mixology.sync (link, 993, suite::nowMs()));
+    mixology.leave (link, 993);
+    p.reset();
+
+    // Nothing live (a project opening): the saved pick is the song's style, as always.
+    CHECK_FALSE (link.readStyle (shared, suite::nowMs()));
+    auto q = makeProcessor (48000.0, 512, false);
+    q->setStateInformation (preset.getData(), (int) preset.getSize());
+    CHECK (q->songStyleNow().key == "trap.drill");
+    CHECK (q->songStyleNow().pickedAt != 0);
+}
+
 TEST_CASE ("Plug-in: Settings > DAW \"Found\" is a fresh pick of the DAW found, so it sticks and the others follow", "[plugin][suite]")
 {
     auto& link = suite::Link::process();
