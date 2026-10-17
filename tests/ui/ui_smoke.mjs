@@ -768,6 +768,11 @@ check(genreNow === 1, `the button sets Auto-Master's genre (now ${genreNow})`);
 check(await page.evaluate(() => ![...document.querySelectorAll('#learn-body button')].some((b) => /MIXOLOGY'S STYLE/.test(b.textContent))), 'the offer goes once the genre matches');
 await page.evaluate(() => window.__polisherMock.setMixology({ style: 'R&B & Soul - Modern', genre: 1, peak: -0.4, lufs: -9.1, analysed: false, mono: true, limited: true, tone: [0, 0, 0, 0] }));
 check(await waitForLearn(/YOUR MIX IS MONO/) && /MIXOLOGY'S LIMITER IS ON/.test(await learnText()) && /almost no room left/.test(await learnText()), 'a mono mix, Mixology\'s limiter and no headroom are flagged');
+// A hand-off that isn't this mix (Mixology on a group, in another project...): said so, without its numbers and tips.
+await page.evaluate(() => window.__polisherMock.setMixology({ style: 'R&B & Soul - Modern', genre: 1, peak: -0.4, lufs: -9.1, analysed: false, mono: true, limited: true, tone: [0, 0, 0, 0], notThisMix: 1 }));
+check(await waitForLearn(/aren't the mix reaching Masterology/) && !/YOUR MIX IS MONO|MIXOLOGY'S LIMITER IS ON|almost no room left/.test(await learnText()), 'a hand-off from another signal is called so, without its numbers');
+await page.evaluate(() => window.__polisherMock.setMixology({ style: 'R&B & Soul - Modern', genre: 1, peak: -0.4, lufs: -9.1, analysed: false, mono: false, limited: false, tone: [0, 0, 0, 0], notThisMix: 2 }));
+check(await waitForLearn(/Mixology hears nothing/), 'a silent Mixology (bypassed, another project) is called so');
 await page.evaluate(() => window.__polisherMock.setMixology(null));
 check(await waitForLearn(/^(?![\s\S]*FROM MIXOLOGY)/), 'without Mixology the note goes');
 await page.evaluate(async () => (await import('./juce/index.js')).getComboBoxState('amGenre').setChoiceIndex(0));

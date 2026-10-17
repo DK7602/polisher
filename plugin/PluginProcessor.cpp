@@ -126,6 +126,8 @@ void PolisherAudioProcessor::leaveSuite()
     link.releaseMaster (suiteSlot, suiteId);
     suiteSlot = -1;
     hasHandoff = false;
+    placement.forget();
+    lastSuiteMs = 0;
     const juce::ScopedLock sl (styleLock);
     songStyle.leave (link, suiteId);
     daw.leave (link, suiteId);
@@ -146,6 +148,19 @@ void PolisherAudioProcessor::updateSuite()
     if (step == suite::Presence::Step::join)
         findDawAgain();
     hasHandoff = link.readMix (handoff, now);
+    // Is the hand-off about the mix this Masterology hears? It comes from whichever Mixology publishes (on a group, after
+    // Masterology, in another open project...): Mixology right before Masterology measures the same short-term loudness.
+    const auto dt = lastSuiteMs == 0 ? std::uint64_t { 0 } : std::min<std::uint64_t> (now - lastSuiteMs, 1000);
+    lastSuiteMs = now;
+    const float inShort = meters.inputShortTerm.load();
+    const bool music = meters.transport.load() != 0 && inShort > suitecheck::Placement::kMusicLufs;
+    if (hasHandoff)
+    {
+        lastHandoffMs = now;
+        placement.update (dt, music, inShort, handoff.shortTermLufs);
+    }
+    else if (now - lastHandoffMs > 3000)
+        placement.forget();   // (a read that fails now and then keeps the verdict)
     // Auto Analyze hears the mix afresh when Mixology's word on it changes (what its Analyze Mix found). A read
     // that fails now and then (Mixology busy, or silent a moment) keeps the last key, so the listen isn't restarted.
     if (hasHandoff)

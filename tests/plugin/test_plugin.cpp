@@ -3185,6 +3185,45 @@ TEST_CASE ("Plug-in: the suite link (Masterology's goal reaches Mixology, Mixolo
     CHECK (link.masters (suite::nowMs()).empty());
 }
 
+TEST_CASE ("Plug-in: Mixology's hand-off is checked against what reaches Masterology (Mixology right before it, or not)", "[plugin][suite]")
+{
+    using P = suitecheck::Placement;
+    const auto run = [] (P& p, int ms, bool music, float ours, float theirs)
+    {
+        for (int t = 0; t < ms; t += 250) p.update (250, music, ours, theirs);
+    };
+    P p;
+    // Right before Masterology: the same short-term loudness, give or take a little (and the first seconds of a
+    // play, while the 3 s windows fill, don't count at all).
+    run (p, 1000, true, -14.0f, -30.0f);
+    CHECK (p.get() == P::thisMix);
+    run (p, 20000, true, -14.0f, -14.4f);
+    CHECK (p.get() == P::thisMix);
+
+    // On a group (or after Masterology): 3 LU apart. A moment apart is fine, a while apart is another signal.
+    run (p, 2000, true, -14.0f, -17.0f);
+    CHECK (p.get() == P::thisMix);
+    run (p, 3000, true, -14.0f, -17.0f);
+    CHECK (p.get() == P::otherSignal);
+    // Stopped, or a silent stretch: the verdict stays (nothing to compare).
+    run (p, 10000, false, -100.0f, -100.0f);
+    CHECK (p.get() == P::otherSignal);
+    // Fixed (Mixology moved to the master channel): back once they agree for a while after the windows fill.
+    run (p, 3500 + 2000, true, -12.0f, -12.2f);
+    CHECK (p.get() == P::thisMix);
+
+    // Mixology hears nothing (bypassed, or in another open project) while music plays here.
+    run (p, 3500 + 4000, true, -12.0f, -100.0f);
+    CHECK (p.get() == P::mixologySilent);
+    p.forget();   // no hand-off any more
+    CHECK (p.get() == P::thisMix);
+
+    // The processor: no verdict without a hand-off, and nothing while nothing plays.
+    auto proc = makeProcessor (48000.0, 512, false);
+    proc->updateSuite();
+    CHECK (proc->handoffPlacement() == P::thisMix);
+}
+
 TEST_CASE ("Plug-in: the song's style is shared (picked here or in Mixology), sets Auto-Master's genre, saved with the song", "[plugin][suite]")
 {
     auto& link = suite::Link::process();

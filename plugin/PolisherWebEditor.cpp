@@ -672,6 +672,8 @@ void PolisherWebEditor::timerCallback()
         mo->setProperty ("analysed", (h.flags & suite::MixInfo::analysed) != 0);
         mo->setProperty ("mono", (h.flags & suite::MixInfo::monoMix) != 0);
         mo->setProperty ("limited", (h.flags & suite::MixInfo::limited) != 0);
+        // 0: about this mix; 1: Mixology's loudness isn't what reaches Masterology; 2: Mixology hears nothing.
+        mo->setProperty ("notThisMix", audioProcessor.handoffPlacement());
         juce::Array<juce::var> tone;   // low, low mids, presence, air against the style (dB)
         for (float d : { h.lowDb, h.lowMidDb, h.presenceDb, h.airDb }) tone.add (roundTo (d, 0.1f));
         mo->setProperty ("tone", tone);

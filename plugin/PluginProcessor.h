@@ -22,6 +22,7 @@
 #include "ReferenceTrack.h"
 #include "ToneTargetStore.h"
 #include "SettingsHistory.h"
+#include "HandoffCheck.h"
 #include "suite/SuiteLink.h"
 
 #include <array>
@@ -154,6 +155,9 @@ public:
     /** Mixology's hand-off (the style it mixed in, the mix's peaks and loudness, its tone), when a Mixology
         is in this project. Message thread. */
     bool mixologyHandoff (suite::MixInfo& out) const { if (! hasHandoff) return false; out = handoff; return true; }
+    /** Whether that hand-off is about the mix this Masterology hears (suitecheck::Placement::Verdict: 0 yes, 1 another
+        signal, 2 Mixology hears nothing): Mixology's short-term loudness against this input's, while music plays. */
+    int handoffPlacement() const { return placement.get(); }
 
     /** The song's style (Mixology's list of 75, the same in Voxology and Mixology): you picked it here. Sets the
         Auto-Master genre it belongs to; the other plug-ins in the project follow. Message thread. */
@@ -235,6 +239,8 @@ private:
     std::uint64_t suiteId = 0;
     suite::MixInfo handoff;
     bool hasHandoff = false;
+    suitecheck::Placement placement;          // is the hand-off this mix? (message thread)
+    std::uint64_t lastSuiteMs = 0, lastHandoffMs = 0;
     mutable juce::CriticalSection styleLock;
     suite::SongStyle songStyle { suite::StyleInfo::From::masterology };   // under styleLock
     std::atomic<std::uint32_t> styleVersion { 0 };
