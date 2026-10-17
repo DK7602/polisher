@@ -30,6 +30,19 @@ namespace
     }
 
     float roundTo (float v, float step) { return std::round (v / step) * step; }
+
+    /** The window's first width: 1280 (x 720) where that fits, else as large as fits the screen it opens on, under
+        the host's title and plug-in bars (16:9, not below the minimum). */
+    int initialWidth()
+    {
+        int w = 1280;
+        if (const auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForPoint (juce::Desktop::getMousePosition().toFloat()))
+        {
+            const auto area = d->userBounds.toNearestInt();   // the screen less the taskbar / menu bar, in points
+            w = std::min ({ w, area.getWidth() - 40, (area.getHeight() - 100) * PolisherWebEditor::kDesignWidth / PolisherWebEditor::kDesignHeight });
+        }
+        return std::max (w, PolisherWebEditor::kMinWidth);
+    }
 }
 
 juce::WebBrowserComponent::Options PolisherWebEditor::makeBaseOptions()
@@ -305,13 +318,14 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
     addAndMakeVisible (webView);
     webView.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
 
-    // Fixed 16:9 design, freely resizable; the page scales itself to fit. Not smaller than 70 % of the
-    // design: below that the smallest texts (meter labels, Learn) shrink under ~8 px and can't be read.
+    // Fixed 16:9 design, freely resizable; the page scales itself to fit. Not smaller than half the design
+    // (kMinWidth), and it opens no larger than the screen.
     setResizable (true, true);
     setResizeLimits (kMinWidth, kMinHeight, 2400, 1350);
     if (auto* c = getConstrainer())
         c->setFixedAspectRatio (static_cast<double> (kDesignWidth) / kDesignHeight);
-    setSize (1280, 720);
+    const int width = initialWidth();
+    setSize (width, width * kDesignHeight / kDesignWidth);
 
     // Energy meters piled up while the editor was closed: start fresh.
     for (auto& e : audioProcessor.meters.stemEnergy) e.store (0.0f);

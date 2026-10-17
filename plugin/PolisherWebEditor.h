@@ -34,8 +34,11 @@ public:
 
     static constexpr int kDesignWidth = 1600;
     static constexpr int kDesignHeight = 900;
-    static constexpr int kMinWidth = 1120;    // 70 % of the design (smaller and the small texts can't be read)
-    static constexpr int kMinHeight = 630;
+    // Half the design: still fits a 1080p laptop at 150 % or 175 % (1280 x 720 / 1097 x 617 points, less the
+    // taskbar and the host's title bar). The page scales as a whole; its smallest texts are then 5 points, 7.5 to
+    // 9 pixels on such a screen (what 70 % gave on a 100 % screen).
+    static constexpr int kMinWidth = 800;
+    static constexpr int kMinHeight = 450;
 
 private:
     static constexpr int kFftOrder = 12;
