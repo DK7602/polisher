@@ -1158,11 +1158,34 @@ function louderBy() {
 }
 function avgGrRecent() { return grWindow.length ? grWindow.reduce((a, b) => a + b, 0) / grWindow.length : 0; }
 
-function renderLearn() {
-  renderLearnBody();
-  if (learnOn && learnView === "module") addMonitorLearn($("learn-body"));
-  if (learnOn && learnView === "module") addMixologyLearn($("learn-body"));
-  if (learnOn && (learnView === "module" || learnView === "report")) addAutoAnalyzeStrip($("learn-body"));
+// The panel is built off-screen and swapped in only when it differs from what is shown, so the live numbers
+// (refreshed every second and as controls move) don't take away a button you are pressing, the keyboard focus
+// or a tooltip. renderLearn(): after something you did (a click, a key), shown at once. refreshLearn(): the
+// live numbers, which wait while you press inside the panel or the keyboard is on one of its buttons.
+const learnBody = $("learn-body");
+const FOCUSABLE = "button:not([disabled]), a[href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
+const learnControls = (root) => [...root.querySelectorAll(FOCUSABLE)].map((e) => `${e.tagName}#${e.id}.${e.className}`).join("|");
+let learnShown = "";          // the HTML on screen
+let learnPending = false;     // a refresh waits for the press or the focus to leave
+let learnPress = 0;           // when a press inside the panel started (0: none)
+learnBody.addEventListener("pointerdown", () => { learnPress = performance.now(); }, true);
+function learnRelease() {
+  if (!learnPress) return;
+  learnPress = 0;
+  if (learnPending) setTimeout(refreshLearn, 0);   // after the click that ends the press
+}
+for (const t of ["pointerup", "pointercancel"]) window.addEventListener(t, learnRelease, true);
+window.addEventListener("blur", learnRelease);
+learnBody.addEventListener("focusout", (e) => { if (learnPending && !learnBody.contains(e.relatedTarget)) setTimeout(refreshLearn, 0); });
+
+function renderLearn() { showLearn(true); }
+function refreshLearn() { showLearn(false); }
+function buildLearn() {
+  const body = document.createElement("div");
+  renderLearnBody(body);
+  if (learnOn && learnView === "module") addMonitorLearn(body);
+  if (learnOn && learnView === "module") addMixologyLearn(body);
+  if (learnOn && (learnView === "module" || learnView === "report")) addAutoAnalyzeStrip(body);
   if (learnOn && learnView === "module" && M.amState === 1) {
     // Still listening while you look at a module: a way back to the listening view.
     const link = document.createElement("button");
@@ -1170,13 +1193,39 @@ function renderLearn() {
     link.className = "l-link";
     link.textContent = `← ${M.amMode === 1 ? "LEARNING TONE" : "LISTENING"} · ${fmtTime(M.amHeard || 0)} HEARD`;
     link.addEventListener("click", () => { learnView = "listen"; renderLearn(); });
-    $("learn-body").prepend(link);
+    body.prepend(link);
+  }
+  return body;
+}
+function showLearn(now) {
+  let next;
+  try { next = buildLearn(); } catch (e) { reportOnce("learn", e); return; }
+  const html = next.innerHTML;
+  if (html === learnShown) { learnPending = false; return; }
+  const pressing = learnPress && performance.now() - learnPress < 4000;   // (a press the window never saw end is let go)
+  const focused = learnBody.contains(document.activeElement) && document.activeElement !== learnBody ? document.activeElement : null;
+  // On a button with the keyboard: new numbers wait; new or changed buttons come in, with the focus kept.
+  if (pressing || (!now && focused && learnControls(next) === learnControls(learnBody))) { learnPending = true; return; }
+  learnPending = false;
+  const index = focused ? [...learnBody.querySelectorAll(FOCUSABLE)].indexOf(focused) : -1;
+  learnBody.replaceChildren(...next.childNodes);
+  learnShown = html;
+  if (focused) {
+    const all = [...learnBody.querySelectorAll(FOCUSABLE)];
+    const same = (focused.id && all.find((e) => e.id === focused.id))
+      || all.find((e) => e.tagName === focused.tagName && e.textContent === focused.textContent) || all[Math.min(index, all.length - 1)];
+    if (same) same.focus({ preventScroll: true });
   }
 }
+// A part of the window that fails says so once in the console instead of stopping everything else.
+const reported = new Set();
+function reportOnce(part, e) {
+  if (reported.has(part)) return;
+  reported.add(part);
+  console.error(`Masterology UI (${part}):`, e);
+}
 
-function renderLearnBody() {
-  const body = $("learn-body");
-  body.innerHTML = "";
+function renderLearnBody(body) {
   if (!learnOn) {
     const off = document.createElement("div");
     off.className = "l-off";
@@ -1928,12 +1977,12 @@ function watchListening(wasAm, wasTarget, wasFail, wasFar) {
       }
     }
     tsTarget.refresh();
-    if (learnOn && learnView === "module" && selected === "ts") renderLearn();
+    if (learnOn && learnView === "module" && selected === "ts") refreshLearn();
   }
   if (learnOn && learnView === "listen") {
     const key = [M.amState, Math.floor(M.amHeard || 0), M.amCanFinish, M.amHearing, M.amLoudAt, M.amLoudEnd, M.amLoudJump,
                  M.amState === 2 && amThinkSince ? Math.floor((performance.now() - amThinkSince) / 1000) : 0].join("|");
-    if (key !== lastListenDraw) { lastListenDraw = key; renderLearn(); }
+    if (key !== lastListenDraw) { lastListenDraw = key; refreshLearn(); }
   }
 }
 
@@ -2731,7 +2780,7 @@ async function fetchReport(openIt) {
   if (!amReport && learnView === "report") learnView = "module";
   refreshAllCells();
   updateAmButton();
-  renderLearn();
+  refreshLearn();
 }
 // Knobs show values pushed by the plug-in; after Auto-Master or Undo, redraw them all.
 function refreshAllCells() {
@@ -2771,7 +2820,7 @@ async function fetchReference() {
   refreshRefPill();
   refreshAmChoices();
   drawRefCurve();
-  renderLearn();
+  refreshLearn();
 }
 // What Auto-Master aims for with a reference: its loudest 12 s (compared with the loudest 12 s of your song).
 // References saved before that was measured only have their loudest 30 s.
@@ -3257,7 +3306,7 @@ async function fetchAutoAnalyze() {
   updateAmButton();
   // The auto page follows every change; the module pages and the report only when the strip changes.
   const sig = `${M.aaOn}|${edits}`;
-  if (learnOn && (learnView === "auto" || (["module", "report"].includes(learnView) && sig !== aaStripSig))) renderLearn();
+  if (learnOn && (learnView === "auto" || (["module", "report"].includes(learnView) && sig !== aaStripSig))) refreshLearn();
   aaStripSig = sig;
 }
 let aaStripSig = "";
@@ -3509,11 +3558,13 @@ function onParamsChanged() {
   updateLiveReadouts();
   scheduleLearn();
 }
-let learnQueued = false;
+// Live changes (a knob turning, the host's automation): Learn follows at most 10 times a second.
+let learnQueued = false, learnSoftAt = 0;
 function scheduleLearn() {
   if (learnQueued) return;
   learnQueued = true;
-  requestAnimationFrame(() => { learnQueued = false; renderLearn(); });
+  setTimeout(() => requestAnimationFrame(() => { learnQueued = false; learnSoftAt = performance.now(); refreshLearn(); }),
+             Math.max(0, 100 - (performance.now() - learnSoftAt)));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3726,12 +3777,12 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   const wasAm = M.amState, wasTarget = M.tsTarget, wasFail = M.tsLearnFail, wasFar = M.tsFar, wasMixology = mixologyKey();
   const wasAa = M.aaOn, wasAaHeard = M.aaHeard;
   Object.assign(M, frame);
-  if (mixologyKey() !== wasMixology && learnView === "module") renderLearn();   // Mixology came, went, or changed
+  if (mixologyKey() !== wasMixology && learnView === "module") refreshLearn();   // Mixology came, went, or changed
   // The DAW: found from the host, or picked in any of the three. Learn says it again in that DAW's words.
   if (frame.daw && (frame.daw.key !== DAW.key || !!frame.daw.picked !== DAW.picked || frame.daw.detected !== DAW.detected)) {
     Object.assign(DAW, { key: frame.daw.key || "other", picked: !!frame.daw.picked, detected: frame.daw.detected || "other", from: frame.daw.from || 0 });
     fillDawSelect();
-    renderLearn();
+    refreshLearn();
   }
   // The song's style: this project's, or one just picked in Mixology or Voxology.
   if (frame.songStyle && frame.songStyle.version !== SONG.version) {
@@ -3754,7 +3805,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   if (M.aaVersion !== aaSeenVersion || (!!frame.aaOn) !== (!!wasAa)) {
     aaSeenVersion = M.aaVersion;
     fetchAutoAnalyze();
-  } else if (learnOn && learnView === "auto" && M.aaPause !== "" && Math.floor(M.aaHeard || 0) !== Math.floor(wasAaHeard || 0)) renderLearn();   // the heard count moves on
+  } else if (learnOn && learnView === "auto" && M.aaPause !== "" && Math.floor(M.aaHeard || 0) !== Math.floor(wasAaHeard || 0)) refreshLearn();   // the heard count moves on
   if (M.amReport !== amSeenVersion) {
     const first = amSeenVersion === -1;
     amSeenVersion = M.amReport;
@@ -3793,10 +3844,10 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
   $("sp-master").setAttribute("d", master);
   $("sp-master-glow").setAttribute("d", master);
 });
-setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "glue", "dyn", "sat", "stem", "ts", "rt", "ul"].includes(selected)) renderLearn(); }, 1000);
+setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "glue", "dyn", "sat", "stem", "ts", "rt", "ul"].includes(selected)) refreshLearn(); }, 1000);
 // The history's Learn page follows the graph, but only as often as a new point can change it.
 let histLearnAt = 0;
-function scheduleHistLearn() { const now = performance.now(); if (now - histLearnAt > 1000) { histLearnAt = now; renderLearn(); } }
+function scheduleHistLearn() { const now = performance.now(); if (now - histLearnAt > 1000) { histLearnAt = now; refreshLearn(); } }
 
 // ---------------------------------------------------------------------------------------------
 buildSpectrumGrid();
