@@ -139,15 +139,15 @@ void PolisherAudioProcessor::leaveSuite()
     hasHandoff = false;
     placement.forget();
     lastSuiteMs = 0;
+    bypassedSinceMs = 0;
     const juce::ScopedLock sl (styleLock);
     songStyle.leave (link, suiteId);
     daw.leave (link, suiteId);
 }
 
-void PolisherAudioProcessor::updateSuite()
+void PolisherAudioProcessor::updateSuite (std::uint64_t now)
 {
     auto& link = suite::Link::process();
-    const auto now = suite::nowMs();
     // Only while the host runs this Masterology. The block is one per host process, and a project that is open but
     // not active (or an insert switched off) keeps its timer running: it must neither take another song's style nor
     // look present to Mixology. It joins again at the next prepareToPlay; the newest pick still wins.
@@ -198,6 +198,18 @@ void PolisherAudioProcessor::updateSuite()
     {
         ++styleVersion;
         applyStyleGenre();
+    }
+    // Bypassed (A, or the host's bypass button) for a while: Masterology isn't processing, so Mixology mustn't say
+    // "Masterology is on". It shows no Masterology until B is back. A few seconds on A to compare don't count.
+    if (bypassParam->load() <= 0.5f)
+        bypassedSinceMs = 0;
+    else if (bypassedSinceMs == 0)
+        bypassedSinceMs = now;
+    if (bypassedSinceMs != 0 && now - bypassedSinceMs >= kBypassedHideMs)
+    {
+        link.releaseMaster (suiteSlot, suiteId);
+        suiteSlot = -1;
+        return;
     }
     if (suiteSlot < 0) suiteSlot = link.claimMaster (suiteId, now);
     if (suiteSlot < 0) return;   // four Masterologys already

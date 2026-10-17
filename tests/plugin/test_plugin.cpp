@@ -3181,6 +3181,19 @@ TEST_CASE ("Plug-in: the suite link (Masterology's goal reaches Mixology, Mixolo
     CHECK ((got.flags & suite::MixInfo::monoMix) != 0);
     CHECK (got.peakDbtp == -5.5f);
 
+    // Bypassed (A, or the host's bypass): a few seconds to compare change nothing; for longer, Mixology no longer
+    // sees a Masterology (it isn't processing), until B is back.
+    set (*p, "bypass", 1.0f);
+    const auto t0 = suite::nowMs();
+    p->updateSuite (t0);
+    p->updateSuite (t0 + 2000);
+    CHECK (link.masters (t0 + 2000).size() == 1);
+    p->updateSuite (t0 + PolisherAudioProcessor::kBypassedHideMs + 1);
+    CHECK (link.masters (t0 + PolisherAudioProcessor::kBypassedHideMs + 1).empty());
+    set (*p, "bypass", 0.0f);
+    p->updateSuite (t0 + PolisherAudioProcessor::kBypassedHideMs + 250);
+    CHECK (link.masters (t0 + PolisherAudioProcessor::kBypassedHideMs + 250).size() == 1);
+
     p.reset();   // removed: its goal goes with it
     CHECK (link.masters (suite::nowMs()).empty());
 }

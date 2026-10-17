@@ -150,8 +150,11 @@ public:
     /** Tells Mixology what this Masterology aims for (target loudness, ceiling, genre) and reads Mixology's
         hand-off for the song. Message thread; the plug-in's timer calls it four times a second. Only while the
         host runs this Masterology (prepareToPlay .. releaseResources, see suite::Presence): in a project that
-        is open but not active, or switched off, it neither shows itself nor follows the others. */
-    void updateSuite();
+        is open but not active, or switched off, it neither shows itself nor follows the others. Bypassed
+        for kBypassedHideMs, it doesn't show itself either (it isn't processing). */
+    void updateSuite() { updateSuite (suite::nowMs()); }
+    void updateSuite (std::uint64_t nowMs);   // (tests: at a given time on suite::nowMs()'s clock)
+    static constexpr std::uint64_t kBypassedHideMs = 8000;
     /** Mixology's hand-off (the style it mixed in, the mix's peaks and loudness, its tone), when a Mixology
         is in this project. Message thread. */
     bool mixologyHandoff (suite::MixInfo& out) const { if (! hasHandoff) return false; out = handoff; return true; }
@@ -244,7 +247,7 @@ private:
     bool hasHandoff = false;
     suitecheck::Placement placement;          // is the hand-off this mix? (message thread)
     suitecheck::InputMono inputMono;          // does the input sound mono? (message thread)
-    std::uint64_t lastSuiteMs = 0, lastHandoffMs = 0;
+    std::uint64_t lastSuiteMs = 0, lastHandoffMs = 0, bypassedSinceMs = 0;
     mutable juce::CriticalSection styleLock;
     suite::SongStyle songStyle { suite::StyleInfo::From::masterology };   // under styleLock
     std::atomic<std::uint32_t> styleVersion { 0 };
