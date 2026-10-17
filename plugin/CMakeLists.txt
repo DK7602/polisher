@@ -18,6 +18,7 @@ juce_add_plugin(Polisher
     IS_MIDI_EFFECT              FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     COPY_PLUGIN_AFTER_BUILD     FALSE
+    NEEDS_WEB_BROWSER           TRUE                        # (Linux builds need it to find WebKitGTK)
     NEEDS_WEBVIEW2              TRUE
     VST3_CATEGORIES             Fx Mastering Dynamics
     AU_MAIN_TYPE                kAudioUnitType_Effect)

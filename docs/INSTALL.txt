@@ -1,0 +1,26 @@
+MASTEROLOGY - install by hand (this download holds Masterology only; the Sonicology installer does all of this
+for you, with Voxology and Mixology)
+
+1. THE PLUG-IN
+   Windows  Copy  VST3\Masterology.vst3  to  C:\Program Files\Common Files\VST3\
+            (Chrome may call the zip "dangerous" because it isn't code-signed yet: choose Keep.)
+            Masterology's screen needs the Microsoft Edge WebView2 Runtime. Windows 11 has it; Windows 10 gets it
+            with Microsoft Edge. If Masterology opens a small screen saying BASIC VIEW, click GET WEBVIEW2.
+   Mac      Easiest: use the Sonicology installer (it isn't blocked the way a downloaded file is). By hand: open
+            Masterology-macOS.tar.gz, copy Masterology.vst3 to /Library/Audio/Plug-Ins/VST3/ and
+            Masterology.component (AU, for Logic) to /Library/Audio/Plug-Ins/Components/, then in Terminal clear the
+            download block on each copy:
+              xattr -dr com.apple.quarantine "/Library/Audio/Plug-Ins/VST3/Masterology.vst3"
+              xattr -dr com.apple.quarantine "/Library/Audio/Plug-Ins/Components/Masterology.component"
+            otherwise the DAW calls it damaged. Needs macOS 12 or newer.
+   An old "Polisher" plug-in (Masterology's first name) is the same plug-in to your DAW: delete Polisher.vst3
+   (and Polisher.component on a Mac) so the DAW doesn't load the old one.
+
+2. Rescan the plug-ins in your DAW (Cubase: Studio > VST Plug-in Manager > Rescan). Masterology is listed under
+   Sonicology. It goes in the LAST insert slot of your master channel (Cubase: Stereo Out), after Mixology.
+
+3. Optional: the Standalone folder holds Masterology as its own program, and the BlindTest folder holds
+   Masterology Blind Test, to compare masters fairly (see the manual).
+
+Already installed? Close your DAW and copy the plug-in again.
+The full manual is MANUAL.md (also inside Masterology: Quick Help > Open the full manual).

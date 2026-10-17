@@ -465,8 +465,8 @@ TEST_CASE ("Plug-in: a state saved before a control existed puts that control ba
     set (*p, "inTrim", -6.6f);
     set (*p, "drive", 3.0f);
     p->setStateInformation (v013.getData(), (int) v013.getSize());
-    CHECK (p->parameters.getRawParameterValue ("inTrim")->load() == 0.0f);
-    CHECK (p->parameters.getRawParameterValue ("drive")->load() == 0.0f);    // from the preset
+    CHECK (p->parameters.getRawParameterValue ("inTrim")->load() == Catch::Approx (0.0).margin (1.0e-4));
+    CHECK (p->parameters.getRawParameterValue ("drive")->load() == Catch::Approx (0.0).margin (1.0e-4));    // from the preset
 }
 
 TEST_CASE ("Plug-in: Stem EQ Keep loudness is on for a new instance, off for a song saved before it existed", "[plugin]")
@@ -500,7 +500,7 @@ TEST_CASE ("Plug-in: Stem EQ Keep loudness is on for a new instance, off for a s
     auto old = makeProcessor (48000.0, 512, false);
     old->setStateInformation (v0150.getData(), (int) v0150.getSize());
     CHECK (keepOf (*old) == 0.0f);
-    CHECK (old->parameters.getRawParameterValue ("stemBass")->load() == 6.0f);
+    CHECK (old->parameters.getRawParameterValue ("stemBass")->load() == Catch::Approx (6.0).margin (1.0e-4));
 }
 
 TEST_CASE ("Plug-in: Saturation Focus is Full for a new instance and for a song saved before it existed", "[plugin][saturation]")
@@ -535,7 +535,7 @@ TEST_CASE ("Plug-in: Saturation Focus is Full for a new instance and for a song 
     set (*old, "satFocus", 1.0f);
     old->setStateInformation (v0150.getData(), (int) v0150.getSize());
     CHECK (focusOf (*old) == 0.0f);
-    CHECK (old->parameters.getRawParameterValue ("satDrive")->load() == 12.0f);   // from the song
+    CHECK (old->parameters.getRawParameterValue ("satDrive")->load() == Catch::Approx (12.0).margin (1.0e-4));   // from the song
 
     const auto beat = testsig::trapLike (sr, 3.0);
     fresh->prepareToPlay (sr, 512);
@@ -657,7 +657,7 @@ TEST_CASE ("Plug-in: the Match ref reference is saved with the project and comes
     b->setStateInformation (plain.getData(), (int) plain.getSize());
     CHECK_FALSE (b->reference.getProfile().valid);
     CHECK (b->reference.getState() == ReferenceTrack::empty);
-    CHECK (b->parameters.getRawParameterValue ("drive")->load() == 4.0f);
+    CHECK (b->parameters.getRawParameterValue ("drive")->load() == Catch::Approx (4.0).margin (1.0e-4));
 
     // A reference saved before the hook loudness and file rate were kept: Auto-Master aims for its loudest part.
     {
@@ -1449,8 +1449,8 @@ TEST_CASE ("Tone Steady: Learn listens to the song for its tone only; the target
     const auto learned = a->toneTarget.get();
     CHECK (std::abs (learned.seconds - 34.0) < 0.05);
     CHECK (a->autoMaster.getReportVersion() == reportBefore);
-    CHECK (a->parameters.getRawParameterValue ("tsAmount")->load() == 60.0f);
-    CHECK (a->parameters.getRawParameterValue ("drive")->load() == 0.0f);
+    CHECK (a->parameters.getRawParameterValue ("tsAmount")->load() == Catch::Approx (60.0).margin (1.0e-4));
+    CHECK (a->parameters.getRawParameterValue ("drive")->load() == Catch::Approx (0.0).margin (1.0e-4));
 
     // LEARN and CLEAR are undo steps of their own.
     CHECK (a->history.undoLabel() == "Tone Steady: learn the song's tone");
@@ -2021,13 +2021,13 @@ TEST_CASE ("Undo: one gesture is one step; host automation and listening control
     const float driveBefore = p->parameters.getParameter ("drive")->convertTo0to1 (0.0f);
     CHECK (h.undo() == driveLabel);
     CHECK (p->parameters.getParameter ("drive")->getValue() == driveBefore);
-    CHECK (plainOf (*p, "ceiling") == -2.0f);
-    CHECK (plainOf (*p, "eqGain3") == 4.0f);
-    CHECK (plainOf (*p, "bypass") == 1.0f);
+    CHECK (plainOf (*p, "ceiling") == Catch::Approx (-2.0).margin (1.0e-4));
+    CHECK (plainOf (*p, "eqGain3") == Catch::Approx (4.0).margin (1.0e-4));
+    CHECK (plainOf (*p, "bypass") == Catch::Approx (1.0).margin (1.0e-4));
     CHECK_FALSE (h.canUndo());
     CHECK (h.redoLabel() == driveLabel);
     CHECK (h.redo() == driveLabel);
-    CHECK (plainOf (*p, "drive") == 3.0f);
+    CHECK (plainOf (*p, "drive") == Catch::Approx (3.0).margin (1.0e-4));
     CHECK_FALSE (h.canRedo());
 
     // Switches, choices and other units read in plain words.
@@ -2061,8 +2061,8 @@ TEST_CASE ("Undo: one gesture is one step; host automation and listening control
     CHECK (h.size() == n + 1);
     CHECK (h.undoLabel() == "EQ Bass (2 controls)");
     h.undo();
-    CHECK (plainOf (*p, "eqGain2") == 0.0f);
-    CHECK (plainOf (*p, "eqFreq2") == 100.0f);
+    CHECK (plainOf (*p, "eqGain2") == Catch::Approx (0.0).margin (1.0e-4));
+    CHECK (plainOf (*p, "eqFreq2") == Catch::Approx (100.0).margin (1.0e-4));
 
     // A new change after an undo drops what could have been redone (the history is one line).
     CHECK (h.canRedo());
@@ -2095,7 +2095,7 @@ TEST_CASE ("Undo: quick repeats on one control merge; the history keeps the last
     gesture (*p, "drive", 4.0f);              // back to Drive after it: a new step, not merged
     CHECK (h.size() == 3);
     h.undo();
-    CHECK (plainOf (*p, "drive") == 1.0f);
+    CHECK (plainOf (*p, "drive") == Catch::Approx (1.0).margin (1.0e-4));
     gesture (*p, "drive", 3.0f);              // after an undo: never merged into an older step
     CHECK (h.size() == 3);
     CHECK (h.undoLabel() == "Drive 1.0" + ARROW + "3.0 dB");
@@ -2140,7 +2140,7 @@ TEST_CASE ("Undo: an Auto-Master run is one step that undoes everything it set; 
     for (size_t i = 0; i < before.size(); ++i) changed += before[i] != after[i] ? 1 : 0;
     INFO (changed << " controls changed");
     CHECK (changed >= 15);
-    CHECK (plainOf (*p, "bypass") == 0.0f);      // Auto-Master switched to B
+    CHECK (plainOf (*p, "bypass") == Catch::Approx (0.0).margin (1.0e-4));      // Auto-Master switched to B
     CHECK (reportAfter.isNotEmpty());
     CHECK (h.size() == 2);
     CHECK (h.undoLabel() == "Auto-Master (Trap / Hip-Hop, Balanced)");
@@ -2166,7 +2166,7 @@ TEST_CASE ("Undo: an Auto-Master run is one step that undoes everything it set; 
     h.redo();
     h.redo();
     CHECK (plainOf (*p, "satDrive") == sat + 2.0f);
-    CHECK (plainOf (*p, "imgHigh") == 90.0f);
+    CHECK (plainOf (*p, "imgHigh") == Catch::Approx (90.0).margin (1.0e-4));
 
     // A failed run (silence) changes no setting and adds no step.
     const int n = h.size();
@@ -2208,10 +2208,10 @@ TEST_CASE ("Snapshots: recall brings back the exact settings as one undo step, a
     CHECK (snaps.recall (0));
     INFO (firstDifference (s1, settingsOf (*p)));
     CHECK (firstDifference (s1, settingsOf (*p)).isEmpty());
-    CHECK (plainOf (*p, "bypass") == 1.0f);
-    CHECK (plainOf (*p, "levelMatch") == 1.0f);
-    CHECK (plainOf (*p, "amIntensity") == 2.0f);
-    CHECK (plainOf (*p, "amTarget") == 0.0f);
+    CHECK (plainOf (*p, "bypass") == Catch::Approx (1.0).margin (1.0e-4));
+    CHECK (plainOf (*p, "levelMatch") == Catch::Approx (1.0).margin (1.0e-4));
+    CHECK (plainOf (*p, "amIntensity") == Catch::Approx (2.0).margin (1.0e-4));
+    CHECK (plainOf (*p, "amTarget") == Catch::Approx (0.0).margin (1.0e-4));
     CHECK (p->autoMaster.getReportJson().contains ("Balanced"));   // the report that explains S1
     CHECK (h.size() == 1);
     CHECK (h.undoLabel() == "Recall Snapshot 1");
@@ -2240,7 +2240,7 @@ TEST_CASE ("Snapshots: recall brings back the exact settings as one undo step, a
     snaps.store (0);
     CHECK (snaps.recall (1));
     CHECK (snaps.recall (0));
-    CHECK (plainOf (*p, "drive") == 7.0f);
+    CHECK (plainOf (*p, "drive") == Catch::Approx (7.0).margin (1.0e-4));
 }
 
 TEST_CASE ("Snapshots are saved with the project; a project from before snapshots loads with every slot empty", "[plugin][snapshots]")
@@ -2289,7 +2289,7 @@ TEST_CASE ("Snapshots are saved with the project; a project from before snapshot
     st = b->snapshots.getStatus();
     CHECK (std::none_of (st.slots.begin(), st.slots.end(), [] (const auto& s) { return s.filled; }));
     CHECK (st.active == -1);
-    CHECK (plainOf (*b, "drive") == 4.25f);
+    CHECK (plainOf (*b, "drive") == Catch::Approx (4.25).margin (1.0e-4));
     CHECK_FALSE (b->snapshots.recall (0));
 }
 
@@ -2433,7 +2433,7 @@ TEST_CASE ("Plug-in: a project always opens with MATCH off, so a saved MATCH nev
 
     auto b = makeProcessor (sr, 512, false);
     b->setStateInformation (state.getData(), (int) state.getSize());
-    CHECK (plainOf (*b, "levelMatch") == 0.0f);   // ...but the project opens with it off
+    CHECK (plainOf (*b, "levelMatch") == Catch::Approx (0.0).margin (1.0e-4));   // ...but the project opens with it off
     CHECK (plainOf (*b, "drive") == plainOf (*a, "drive"));
 
     // With the window never opened, playback is the real master (MATCH would turn it down ~9 dB).
@@ -2703,8 +2703,8 @@ TEST_CASE ("Snapshots: a slot stored before a control existed puts that control 
     auto stNow = b->snapshots.getStatus();
     CHECK (stNow.modified);                       // not what S1 holds
     REQUIRE (b->snapshots.recall (0));
-    CHECK (plainOf (*b, "satFocus") == 0.0f);     // Full: what that version played
-    CHECK (plainOf (*b, "stemKeep") == 0.0f);     // a song from before Keep Loudness plays without it
+    CHECK (plainOf (*b, "satFocus") == Catch::Approx (0.0).margin (1.0e-4));     // Full: what that version played
+    CHECK (plainOf (*b, "stemKeep") == Catch::Approx (0.0).margin (1.0e-4));     // a song from before Keep Loudness plays without it
     stNow = b->snapshots.getStatus();
     CHECK ((stNow.active == 0 && ! stNow.modified));
     gesture (*b, "satFocus", 1.0f);
@@ -3091,11 +3091,11 @@ TEST_CASE ("Plug-in: the song's style is shared (picked here or in Mixology), se
     auto a = makeProcessor (48000.0, 512, false);
     a->updateSuite();
     CHECK (a->songStyleNow().key.empty());   // none chosen yet
-    CHECK (plainOf (*a, "amGenre") == 0.0f);
+    CHECK (plainOf (*a, "amGenre") == Catch::Approx (0.0).margin (1.0e-4));
 
     // Picked here: Auto-Master's genre follows (Rock), the style is shared and published as the genre's name.
     a->pickStyle ("rock.metal", "Rock - Metal");
-    CHECK (plainOf (*a, "amGenre") == 4.0f);
+    CHECK (plainOf (*a, "amGenre") == Catch::Approx (4.0).margin (1.0e-4));
     suite::StyleInfo shared;
     REQUIRE (link.readStyle (shared, suite::nowMs()));
     CHECK (shared.key == "rock.metal");
@@ -3112,7 +3112,7 @@ TEST_CASE ("Plug-in: the song's style is shared (picked here or in Mixology), se
     a->updateSuite();
     CHECK (a->songStyleNow().key == "electronic.house");
     CHECK (a->songStyleVersion() != before);
-    CHECK (plainOf (*a, "amGenre") == 3.0f);   // EDM
+    CHECK (plainOf (*a, "amGenre") == Catch::Approx (3.0).margin (1.0e-4));   // EDM
 
     // Saved with the song, with when it was picked.
     juce::MemoryBlock state;

@@ -1,7 +1,7 @@
 name: Build & Test
 
-# Every push builds Windows only (the repo is private: macOS minutes count 10x against the free
-# 2,000 a month). For a Mac build: Actions -> Build & Test -> Run workflow, tick "Also build macOS".
+# Every push builds and checks Windows, plus the engine tests under the sanitizers. For a Mac build:
+# Actions -> Build & Test -> Run workflow ("Also build macOS" is ticked by default).
 on:
   push:
   pull_request:
@@ -11,6 +11,11 @@ on:
         description: "Also build macOS (VST3 / AU / Standalone)"
         type: boolean
         default: true
+
+# A newer push cancels the older build on the same branch.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -53,24 +58,35 @@ jobs:
       - name: Unit tests (engine + plug-in)
         run: ctest --test-dir build -C Release --output-on-failure
 
-      # The blind-test tool goes next to the plug-in folders, so the artifact keeps VST3 / Standalone at
-      # its top level (upload-artifact roots a multi-path upload at the paths' common folder).
-      - name: Stage the blind-test tool
+      # One folder with everything: the plug-in, the stand-alone app, the blind-test tool, the manual and
+      # INSTALL.txt. On a Mac it's packed as a .tar.gz inside the download, because GitHub's zip drops the
+      # programs' "can run" permission.
+      - name: Package
         shell: bash
         run: |
-          mkdir -p build/plugin/Polisher_artefacts/Release/BlindTest
-          cp build/tools/blindtest/MasterologyBlindTest_artefacts/Release/MasterologyBlindTest* build/plugin/Polisher_artefacts/Release/BlindTest/
+          P="Masterology-${{ matrix.name }}"
+          R=build/plugin/Polisher_artefacts/Release
+          mkdir -p "$P/VST3" "$P/BlindTest"
+          cp -R "$R/VST3/Masterology.vst3" "$P/VST3/"
+          [ -d "$R/AU" ] && cp -R "$R/AU" "$P/"
+          [ -d "$R/Standalone" ] && cp -R "$R/Standalone" "$P/"
+          cp -R build/tools/blindtest/MasterologyBlindTest_artefacts/Release/MasterologyBlindTest* "$P/BlindTest/"
+          find "$P" \( -name "*.exp" -o -name "*.lib" -o -name "*.pdb" \) -delete
+          cp docs/manual/polisher-manual.md "$P/MANUAL.md"
+          cp docs/INSTALL.txt "$P/INSTALL.txt"
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            find "$P" -path "*/Contents/MacOS/*" -type f -exec chmod 755 {} +
+            mkdir -p upload && tar -czf "upload/$P.tar.gz" "$P" && cp docs/INSTALL.txt upload/
+          else
+            mv "$P" upload
+          fi
 
-      - name: Upload plug-ins
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: Masterology-${{ matrix.name }}
-          path: |
-            build/plugin/Polisher_artefacts/Release/VST3
-            build/plugin/Polisher_artefacts/Release/AU
-            build/plugin/Polisher_artefacts/Release/Standalone
-            build/plugin/Polisher_artefacts/Release/BlindTest
-          if-no-files-found: warn
+          path: upload
+          if-no-files-found: error
 
       - name: pluginval (macOS)
         if: runner.os == 'macOS'
@@ -86,7 +102,8 @@ jobs:
           mkdir -p ~/Library/Audio/Plug-Ins/Components
           cp -R build/plugin/Polisher_artefacts/Release/AU/Masterology.component ~/Library/Audio/Plug-Ins/Components/
           killall -9 AudioComponentRegistrar || true
-          auval -v aufx Pls1 Plsh
+          auval -v aufx Pls1 Plsh | tee auval.log
+          grep -q "AU VALIDATION SUCCEEDED" auval.log
 
       # Steinberg's own VST3 validator, built from the VST3 SDK (cached by SDK commit); pluginval runs it
       # as part of its checks.
@@ -144,11 +161,9 @@ jobs:
           if-no-files-found: ignore
 
   # The engine tests under AddressSanitizer + UndefinedBehaviorSanitizer: out-of-bounds reads and writes,
-  # use after free, leaks, overflow and other undefined behaviour fail the run.
-  # ~20 Linux minutes, so not on every push (private-repo minutes): pull requests and manual runs only.
+  # use after free, leaks, overflow and other undefined behaviour fail the run (~20 minutes, every push).
   sanitizers:
     name: Engine tests (ASan + UBSan)
-    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -59,7 +59,15 @@ namespace SettingsScope
         }
         if (dynamic_cast<const juce::AudioParameterChoice*> (&p) != nullptr)
             return name + ": " + p.getText (after, 64);
-        const auto a = p.getText (before, 64).replace ("-", minus()), b = p.getText (after, 64).replace ("-", minus());
+        // A value a hair under zero reads "-0.0" (float rounding, e.g. on macOS): say 0.0.
+        auto text = [&p] (float v)
+        {
+            auto t = p.getText (v, 64);
+            if (t.startsWithChar ('-') && juce::CharacterFunctions::isDigit (t[1]) && t.substring (1).getDoubleValue() == 0.0)
+                t = t.substring (1);
+            return t.replace ("-", minus());
+        };
+        const auto a = text (before), b = text (after);
         // The same unit on both sides is said once: "4.5 → 8.0 dB" rather than "4.5 dB → 8.0 dB".
         const auto unitA = a.fromLastOccurrenceOf (" ", false, false), unitB = b.fromLastOccurrenceOf (" ", false, false);
         if (a.containsChar (' ') && b.containsChar (' ') && unitA == unitB && unitA.isNotEmpty())
