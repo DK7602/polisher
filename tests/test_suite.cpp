@@ -383,6 +383,25 @@ TEST_CASE ("Suite: the DAW is found from the host program", "[suite]")
     CHECK (suite::dawFromHostPath ("C:\\Program Files\\Cakewalk\\Sonar\\Sonar.exe") == "cakewalk");
     CHECK (suite::dawFromHostPath ("C:\\Tools\\pluginval.exe") == "other");
     CHECK (suite::dawFromHostPath ("") == "other");
+    // Fender Studio Pro (Studio One's successor), FL Studio's plug-in bridge, and an FL folder that says "Studio Pro...".
+    CHECK (suite::dawFromHostPath ("C:\\Program Files\\Fender\\Studio Pro 8\\Studio Pro.exe") == "studioone");
+    CHECK (suite::dawFromHostPath ("/Applications/Studio Pro 8.app/Contents/MacOS/Studio Pro") == "studioone");
+    CHECK (suite::dawFromHostPath ("C:\\Program Files\\Image-Line\\Shared\\Plugins\\ILBridge.exe") == "fl");
+    CHECK (suite::dawFromHostPath ("C:\\Program Files (x86)\\Image-Line\\FL Studio Producer Edition\\FL.exe") == "fl");
+    // The path first, else JUCE's name for the host: Logic running the plug-in in AUHostingService, Fender Studio Pro.
+    const std::string xpc = "/System/Library/Frameworks/AudioToolbox.framework/XPCServices/AUHostingService.xpc/Contents/MacOS/AUHostingService";
+    CHECK (suite::dawFromHostPath (xpc) == "other");
+    CHECK (suite::dawFromHost (xpc, "Apple Logic") == "logic");
+    CHECK (suite::dawFromHost ("C:\\Program Files\\Fender\\Studio\\Host.exe", "Fender Studio Pro") == "studioone");
+    CHECK (suite::dawFromHost ("C:\\Program Files\\Steinberg\\Cubase 14\\Cubase14.exe", "Unknown") == "cubase");
+    CHECK (suite::dawFromHost ("C:\\Tools\\pluginval.exe", "pluginval") == "other");
+    CHECK (suite::dawFromHost ("", "Unknown") == "other");
+    for (const auto& [name, key] : { std::pair { "Steinberg Cubase", "cubase" }, std::pair { "Steinberg Nuendo", "cubase" },
+                                     std::pair { "Studio One", "studioone" }, std::pair { "FL Studio", "fl" },
+                                     std::pair { "Ableton Live", "ableton" }, std::pair { "Reaper", "reaper" },
+                                     std::pair { "Bitwig Studio", "bitwig" }, std::pair { "Apple Logic", "logic" },
+                                     std::pair { "Cakewalk by Bandlab", "cakewalk" }, std::pair { "Cakewalk Sonar", "cakewalk" } })
+        CHECK (suite::dawFromHost ("", name) == key);
     CHECK (std::string (suite::dawName ("studioone")) == "Studio One");
     CHECK (std::string (suite::dawName ("nope")) == "Other DAW");
 }

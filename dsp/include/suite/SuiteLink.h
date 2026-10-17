@@ -410,7 +410,9 @@ namespace suite
 
     // ---- the DAW (keys and names: plugin/ui/daws.js has the same list) ---------------------------------------
     /** The DAW a host program is ("cubase", "studioone", "fl", "ableton", "reaper", "bitwig", "logic", "cakewalk", "other"),
-        from its file name or path (JUCE's PluginHostType::getHostPath()). Nuendo counts as Cubase. */
+        from its file name or path (JUCE's PluginHostType::getHostPath()), or from a host's name (JUCE's
+        PluginHostType().getHostDescription(): "Fender Studio Pro", "Apple Logic"...). Nuendo counts as Cubase, and Fender
+        Studio Pro (Studio One's successor) as Studio One. */
     inline std::string dawFromHostPath (const std::string& path)
     {
         std::string p;
@@ -418,15 +420,28 @@ namespace suite
         const auto slash = p.find_last_of ("/\\");
         const auto file = slash == std::string::npos ? p : p.substr (slash + 1);
         auto has = [&] (const char* w) { return p.find (w) != std::string::npos; };
+        auto fileHas = [&] (const char* w) { return file.find (w) != std::string::npos; };
         if (has ("cubase") || has ("nuendo")) return "cubase";
         if (has ("studio one") || has ("studioone")) return "studioone";
-        if (has ("fl studio") || file.rfind ("fl64", 0) == 0 || file == "fl.exe" || file.rfind ("fl ", 0) == 0) return "fl";
+        if (has ("fl studio") || file.rfind ("fl64", 0) == 0 || file == "fl.exe" || file.rfind ("fl ", 0) == 0
+            || fileHas ("ilbridge")) return "fl";   // FL Studio, and its plug-in bridge
+        if (fileHas ("studio pro") || fileHas ("studiopro")) return "studioone";   // Fender Studio Pro (the file name only:
+                                                                                  // "FL Studio Producer Edition" is FL)
         if (has ("ableton")) return "ableton";
         if (has ("reaper")) return "reaper";
         if (has ("bitwig")) return "bitwig";
         if (has ("logic")) return "logic";
         if (has ("cakewalk") || file.rfind ("sonar", 0) == 0) return "cakewalk";   // Cakewalk by BandLab, Sonar
         return "other";
+    }
+
+    /** The DAW from the host program's path, else from the host's name as JUCE's PluginHostType().getHostDescription() gives
+        it: JUCE also knows Logic running plug-ins out of process (AUHostingService, whose path says nothing) and Fender
+        Studio Pro. "other" only when neither tells. */
+    inline std::string dawFromHost (const std::string& path, const std::string& hostName)
+    {
+        const auto fromPath = dawFromHostPath (path);
+        return fromPath != "other" ? fromPath : dawFromHostPath (hostName);
     }
 
     inline const char* dawName (const std::string& key)

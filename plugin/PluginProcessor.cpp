@@ -138,10 +138,13 @@ void PolisherAudioProcessor::updateSuite()
     // Only while the host runs this Masterology. The block is one per host process, and a project that is open but
     // not active (or an insert switched off) keeps its timer running: it must neither take another song's style nor
     // look present to Mixology. It joins again at the next prepareToPlay; the newest pick still wins.
-    if (suitePresence.update (now) == suite::Presence::Step::leave)
+    const auto step = suitePresence.update (now);
+    if (step == suite::Presence::Step::leave)
         leaveSuite();
     if (! suitePresence.takingPart())
         return;
+    if (step == suite::Presence::Step::join)
+        findDawAgain();
     hasHandoff = link.readMix (handoff, now);
     // Auto Analyze hears the mix afresh when Mixology's word on it changes (what its Analyze Mix found). A read
     // that fails now and then (Mixology busy, or silent a moment) keeps the last key, so the listen isn't restarted.
@@ -197,6 +200,28 @@ void PolisherAudioProcessor::updateSuite()
     g.inputPeakDbtp = meters.inputTruePeak.load();
     g.version = static_cast<std::uint32_t> (JucePlugin_VersionCode);
     if (! link.publishMaster (suiteSlot, suiteId, g, now)) suiteSlot = -1;   // taken over while silent: claim again
+}
+
+std::string PolisherAudioProcessor::findDaw()
+{
+    return suite::dawFromHost (juce::PluginHostType::getHostPath().toStdString(), juce::PluginHostType().getHostDescription());
+}
+
+void PolisherAudioProcessor::findDawAgain()
+{
+    if (dawDetected() != "other")
+        return;
+    const auto found = findDaw();
+    if (found == "other")
+        return;
+    {
+        const juce::ScopedLock sl (styleLock);
+        detectedDaw = found;
+        if (daw.style().pickedAt != 0)
+            return;   // you picked one: that stays
+        daw.setUnpicked (detectedDaw, suite::dawName (detectedDaw));
+    }
+    ++styleVersion;
 }
 
 void PolisherAudioProcessor::pickStyle (const std::string& key, const std::string& name)

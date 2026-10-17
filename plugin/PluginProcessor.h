@@ -167,7 +167,7 @@ public:
         the other plug-ins follow it too. Message thread. */
     void pickDaw (const std::string& key);
     suite::StyleInfo dawNow() const { const juce::ScopedLock sl (styleLock); return daw.style(); }
-    std::string dawDetected() const { return detectedDaw; }
+    std::string dawDetected() const { const juce::ScopedLock sl (styleLock); return detectedDaw; }
 
     /** The reference song for Match ref (its measurements only), saved with the state. */
     ReferenceTrack reference;
@@ -237,7 +237,12 @@ private:
     suite::SongStyle songStyle { suite::StyleInfo::From::masterology };   // under styleLock
     std::atomic<std::uint32_t> styleVersion { 0 };
     void applyStyleGenre();   // the Auto-Master genre the song's style belongs to
-    const std::string detectedDaw = suite::dawFromHostPath (juce::PluginHostType::getHostPath().toStdString());
+    // The DAW found from the host (under styleLock): its path, else JUCE's own detection (Logic hosting the plug-in
+    // out of process, Fender Studio Pro). Looked for again when the plug-in starts, while it is still "other": Logic
+    // tells an AU who it is only after creating it.
+    static std::string findDaw();
+    void findDawAgain();
+    std::string detectedDaw = findDaw();
     suite::SharedChoice daw { suite::StyleInfo::From::masterology, suite::Choice::daw };   // under styleLock
     int suiteRefVersion = -1;
     polisher::ReferenceProfile suiteRef;
