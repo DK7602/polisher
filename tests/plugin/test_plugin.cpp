@@ -688,6 +688,35 @@ TEST_CASE ("Plug-in: the Match ref reference is saved with the project and comes
     CHECK_FALSE (b->reference.getProfile().valid);
 }
 
+TEST_CASE ("Plug-in: a reference file with a damaged sample rate is refused before anything is sized from it", "[plugin][reference]")
+{
+    // A 16-bit stereo WAV whose header says 4 GHz (WAV allows up to 4.29 GHz): no buffers of gigabytes, a plain message.
+    const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("PolisherRefRateTest");
+    dir.createDirectory();
+    for (const juce::uint32 rate : { 4000000000u, 1000000u, 7999u })
+    {
+        INFO (rate);
+        const auto file = dir.getChildFile ("damaged " + juce::String ((juce::int64) rate) + ".wav");
+        file.deleteFile();
+        {
+            juce::FileOutputStream out (file);
+            REQUIRE (out.openedOk());
+            const int frames = 4800, dataBytes = frames * 4;
+            out.write ("RIFF", 4); out.writeInt (36 + dataBytes); out.write ("WAVE", 4);
+            out.write ("fmt ", 4); out.writeInt (16); out.writeShort (1); out.writeShort (2);
+            out.writeInt ((int) rate); out.writeInt (0); out.writeShort (4); out.writeShort (16);
+            out.write ("data", 4); out.writeInt (dataBytes);
+            for (int i = 0; i < frames * 2; ++i) out.writeShort ((short) ((i * 37) % 2000 - 1000));
+        }
+        juce::String error;
+        const auto p = ReferenceTrack::analyseFile (file, error);
+        CHECK_FALSE (p.valid);
+        CHECK (error.contains ("no audio Masterology can use"));
+    }
+    CHECK_FALSE (ReferenceTrack::isOnlineOnly (dir));   // an ordinary folder on disk
+    dir.deleteRecursively();
+}
+
 TEST_CASE ("Plug-in: a reference file is read in the background and its loudest part measured", "[plugin][reference]")
 {
     // MP3 support is compiled in (JUCE_USE_MP3AUDIOFORMAT), next to WAV, AIFF and FLAC.
@@ -756,6 +785,16 @@ TEST_CASE ("Plug-in: a reference file is read in the background and its loudest 
     ref.clear();
     CHECK (ref.getState() == ReferenceTrack::empty);
     CHECK_FALSE (ref.getProfile().valid);
+
+    // Closed while a load runs: it doesn't wait for the reading thread, and the load never reaches it afterwards.
+    {
+        auto closing = std::make_unique<ReferenceTrack>();
+        closing->load (file);
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        closing.reset();
+        CHECK (juce::Time::getMillisecondCounterHiRes() - t0 < 100.0);
+        juce::Thread::sleep (300);   // the shared thread drops it at its next chunk
+    }
     dir.deleteRecursively();
 }
 

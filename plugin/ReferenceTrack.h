@@ -5,6 +5,8 @@
 #include "polisher/AutoMaster.h"
 
 #include <atomic>
+#include <memory>
+#include <mutex>
 
 /** The reference song for "Match ref".
 
@@ -16,7 +18,12 @@
     the file has moved.
 
     Every load / clear / restore has a job number; a slower load that finishes after a newer request
-    is thrown away. All public functions are thread-safe; none may be called from the audio thread. */
+    is thrown away. All public functions are thread-safe; none may be called from the audio thread.
+
+    The reading runs on one thread shared by every Masterology in the process, and a load still running
+    touches only its own shared state: closing a plug-in never waits for a read that blocks (a network
+    share that went away). Online-only cloud files (OneDrive, iCloud), which block while they download,
+    are refused with a message before anything is read. */
 class ReferenceTrack final
 {
 public:
@@ -56,6 +63,10 @@ public:
     static polisher::ReferenceProfile analyseFile (const juce::File& file, juce::String& error,
                                                    const std::function<bool()>& keepGoing = [] { return true; });
 
+    /** True for a cloud file that isn't on this computer yet (OneDrive "online only", iCloud "optimised"): reading
+        it waits for the download, for as long as that takes. */
+    static bool isOnlineOnly (const juce::File& file);
+
 private:
     void finish (int job, const polisher::ReferenceProfile& profile, const juce::String& error);
 
@@ -63,10 +74,10 @@ private:
     polisher::ReferenceProfile profile;           // guarded by lock
     juce::String message;                         // guarded by lock
     juce::File lastFolder;                        // guarded by lock
-    std::atomic<int> state { empty }, version { 0 }, job { 0 };
-    std::atomic<bool> shuttingDown { false };
+    std::atomic<int> state { empty }, version { 0 };
 
-    juce::ThreadPool pool { 1 };                  // last: destroyed (and joined) first
+    struct Shared;                                // what a running load may still touch once this is gone
+    std::shared_ptr<Shared> shared;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ReferenceTrack)
 };
