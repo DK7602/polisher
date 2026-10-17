@@ -158,6 +158,9 @@ public:
     /** Whether that hand-off is about the mix this Masterology hears (suitecheck::Placement::Verdict: 0 yes, 1 another
         signal, 2 Mixology hears nothing): Mixology's short-term loudness against this input's, while music plays. */
     int handoffPlacement() const { return placement.get(); }
+    /** This Masterology's own input sounds mono (its L/R correlation while music plays), so Mixology's "mono mix"
+        (maybe from an old Analyze Mix) is shown only when it is still true. */
+    bool inputSoundsMono() const { return inputMono.soundsMono(); }
 
     /** The song's style (Mixology's list of 75, the same in Voxology and Mixology): you picked it here. Sets the
         Auto-Master genre it belongs to; the other plug-ins in the project follow. Message thread. */
@@ -240,6 +243,7 @@ private:
     suite::MixInfo handoff;
     bool hasHandoff = false;
     suitecheck::Placement placement;          // is the hand-off this mix? (message thread)
+    suitecheck::InputMono inputMono;          // does the input sound mono? (message thread)
     std::uint64_t lastSuiteMs = 0, lastHandoffMs = 0;
     mutable juce::CriticalSection styleLock;
     suite::SongStyle songStyle { suite::StyleInfo::From::masterology };   // under styleLock

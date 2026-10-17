@@ -154,6 +154,7 @@ void PolisherAudioProcessor::updateSuite()
     lastSuiteMs = now;
     const float inShort = meters.inputShortTerm.load();
     const bool music = meters.transport.load() != 0 && inShort > suitecheck::Placement::kMusicLufs;
+    inputMono.update (dt, music, meters.correlation.load());   // (L/R stay as they come in: mono in, mono there)
     if (hasHandoff)
     {
         lastHandoffMs = now;

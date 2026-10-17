@@ -57,4 +57,36 @@ namespace suitecheck
         Verdict verdict = thisMix;
         std::uint64_t musicMs = 0, offMs = 0, agreeMs = 0;
     };
+
+    /** Does Masterology's own input sound mono (left and right the same: L/R correlation about 1 while music plays)?
+        Mixology's "mono mix" flag may come from an Analyze Mix made before the bus was fixed. Not known (false) until
+        music has played for kHoldMs. */
+    class InputMono
+    {
+    public:
+        void update (std::uint64_t dtMs, bool music, float correlation) noexcept
+        {
+            if (! music)
+                return;
+            if (correlation >= kMonoAt)
+            {
+                stereoMs = 0;
+                if ((monoMs += dtMs) >= kHoldMs) verdict = 1;
+            }
+            else if (correlation < kStereoBelow)
+            {
+                monoMs = 0;
+                if ((stereoMs += dtMs) >= kHoldMs) verdict = 0;
+            }
+        }
+        bool soundsMono() const noexcept { return verdict == 1; }
+
+        static constexpr float kMonoAt = 0.995f;       // the side about 26 dB under the mid, or less
+        static constexpr float kStereoBelow = 0.99f;
+        static constexpr std::uint64_t kHoldMs = 2000;
+
+    private:
+        int verdict = -1;   // -1 not known yet, 0 stereo, 1 mono
+        std::uint64_t monoMs = 0, stereoMs = 0;
+    };
 }

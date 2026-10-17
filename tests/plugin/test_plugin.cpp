@@ -3222,6 +3222,25 @@ TEST_CASE ("Plug-in: Mixology's hand-off is checked against what reaches Mastero
     auto proc = makeProcessor (48000.0, 512, false);
     proc->updateSuite();
     CHECK (proc->handoffPlacement() == P::thisMix);
+    CHECK_FALSE (proc->inputSoundsMono());   // not known before music played: Mixology's "mono" isn't shown
+}
+
+TEST_CASE ("Plug-in: \"YOUR MIX IS MONO\" only when Masterology's own input sounds mono too", "[plugin][suite]")
+{
+    using M = suitecheck::InputMono;
+    const auto run = [] (M& m, int ms, bool music, float corr) { for (int t = 0; t < ms; t += 250) m.update (250, music, corr); };
+    M m;
+    CHECK_FALSE (m.soundsMono());            // nothing heard yet
+    run (m, 10000, false, 1.0f);             // silence reads as correlation 1: not judged
+    CHECK_FALSE (m.soundsMono());
+    run (m, 2000, true, 1.0f);               // a mono bus
+    CHECK (m.soundsMono());
+    run (m, 1000, true, 0.6f);               // fixed: stereo again, a moment...
+    CHECK (m.soundsMono());
+    run (m, 1000, true, 0.6f);               // ... and for a while
+    CHECK_FALSE (m.soundsMono());
+    run (m, 5000, true, 0.993f);             // in between: stays as it was
+    CHECK_FALSE (m.soundsMono());
 }
 
 TEST_CASE ("Plug-in: the song's style is shared (picked here or in Mixology), sets Auto-Master's genre, saved with the song", "[plugin][suite]")

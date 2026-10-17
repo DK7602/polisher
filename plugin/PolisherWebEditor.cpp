@@ -670,7 +670,8 @@ void PolisherWebEditor::timerCallback()
         mo->setProperty ("peak", roundTo (h.peakDbtp, 0.1f));
         mo->setProperty ("lufs", roundTo (h.integratedLufs, 0.1f));
         mo->setProperty ("analysed", (h.flags & suite::MixInfo::analysed) != 0);
-        mo->setProperty ("mono", (h.flags & suite::MixInfo::monoMix) != 0);
+        // Mixology's "mono mix" may be from an Analyze Mix made before the bus was fixed: only when this input agrees.
+        mo->setProperty ("mono", (h.flags & suite::MixInfo::monoMix) != 0 && audioProcessor.inputSoundsMono());
         mo->setProperty ("limited", (h.flags & suite::MixInfo::limited) != 0);
         // 0: about this mix; 1: Mixology's loudness isn't what reaches Masterology; 2: Mixology hears nothing.
         mo->setProperty ("notThisMix", audioProcessor.handoffPlacement());
