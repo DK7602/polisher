@@ -122,7 +122,7 @@ img { -webkit-user-drag: none; }
 #eq-nodes { position: absolute; inset: 0; pointer-events: none; }
 #eq-nodes[hidden], #eq-readout[hidden], #eq-layer[hidden], #legend-eq[hidden], #legend-ref[hidden] { display: none; }
 .eq-node { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 999px; pointer-events: auto; cursor: grab;
-  display: flex; align-items: center; justify-content: center; font: 700 11px/1 "IBM Plex Mono", monospace; color: #fff; touch-action: none;
+  display: flex; align-items: center; justify-content: center; font: 700 11px/1 monospace; color: #fff; touch-action: none;
   background: radial-gradient(circle at 35% 30%, #ffffff 0, #ffd3d6 18%, #e0141e 55%, #7a0810 100%);
   box-shadow: 0 0 0 1.5px rgba(255,255,255,.85), 0 0 10px rgba(255,60,70,.55), 0 3px 6px rgba(0,0,0,.6); text-shadow: 0 1px 1px rgba(0,0,0,.6); }
 .eq-node.flat { background: radial-gradient(circle at 35% 30%, #ffffff 0, #dff0ff 18%, #6fa8d8 55%, #1d4a7a 100%); box-shadow: 0 0 0 1.5px rgba(255,255,255,.7), 0 0 8px rgba(120,190,255,.45), 0 3px 6px rgba(0,0,0,.6); }
@@ -140,13 +140,15 @@ img { -webkit-user-drag: none; }
 .sw-genre { height: 0; border-top: 2.5px dotted #7EE0C3; opacity: .85; }
 .sw-gr { height: 9px; background: rgba(156,203,240,.3); border-top: 1px solid rgba(156,203,240,.8); }
 .sw-target { height: 0; border-top: 1.5px dashed #DCE8F5; opacity: .8; }
+/* The EQ points' digits and SPECTRUM / HISTORY use the generic monospace, and the DAW list 13.33 px Arial: that is how the
+   approved look renders (they named fonts that never applied). Named here so every machine draws them the same. */
 /* the genre line's legend entry is also its show / hide switch */
 .legend-btn { display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
 .legend-btn[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
 .legend-btn:hover span { color: #fff; }
 /* Spectrum / History switch at the right end of the legend */
 .view-toggle { margin-left: auto; display: flex; border-radius: 999px; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(120,180,240,.5); flex-shrink: 0; }
-.view-toggle button { height: 18px; padding: 0 9px; border: 0; background: transparent; color: var(--muted); font: 700 9.5px/1 "IBM Plex Mono", monospace; letter-spacing: .06em; cursor: pointer; }
+.view-toggle button { height: 18px; padding: 0 9px; border: 0; background: transparent; color: var(--muted); font: 700 9.5px/1 monospace; letter-spacing: .06em; cursor: pointer; }
 .view-toggle button[aria-pressed="true"] { background: linear-gradient(180deg,#FF5A62,#C8101A); color: #fff; }
 /* Loudness history: the same screen, other contents */
 #spectrum-screen:not(.view-history) .hist-only, #spectrum-screen:not(.view-history) #hist-layer { display: none !important; }
@@ -280,7 +282,7 @@ img { -webkit-user-drag: none; }
 .pop-foot { font-size: 11px; color: var(--dim); }
 /* Your DAW (shared with Mixology and Voxology) */
 .daw-row { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 700; letter-spacing: .08em; color: #DCE8F5; }
-.daw-row select { flex: 1; height: 30px; border: 0; border-radius: 10px; padding: 0 10px; font: 600 13px inherit; color: #fff;
+.daw-row select { flex: 1; height: 30px; border: 0; border-radius: 10px; padding: 0 10px; font: 400 13.3333px Arial; color: #fff;
   background: rgba(255,255,255,.08); box-shadow: inset 0 0 0 1px rgba(160,210,255,.45); cursor: pointer; }
 .daw-row select option { background: #0F2C54; color: #fff; }
 .toast { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); z-index: 30; max-width: 560px; padding: 12px 18px;
