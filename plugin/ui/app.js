@@ -379,6 +379,9 @@ function knobMarkup(angle) {
   return `<img src="assets/knob.png" alt=""><div class="pointer" style="transform: rotate(${angle}deg)"><span></span></div>`;
 }
 const angleFor = (norm) => -135 + 270 * clamp(norm, 0, 1);
+// Which way a wheel turn goes: up (or left) = more. Shift+wheel arrives as a sideways scroll (deltaY 0), so the
+// direction comes from the larger of the two; a scroll with neither is ignored.
+const wheelDir = (e) => { const d = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX; return d < 0 ? 1 : d > 0 ? -1 : 0; };
 
 // A typed value -> the control's own units. Accepts "−3", "-3 dB", "1.2k" / "1.2 kHz", "2.5:1", "120 ms",
 // "off" (the control's minimum); keeps it in range. A control that only goes up from a positive start
@@ -434,8 +437,10 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   knob.addEventListener("dblclick", () => { state.sliderDragStarted(); setNorm(scaledToNorm(state, def)); state.sliderDragEnded(); });
   knob.addEventListener("wheel", (e) => {
     e.preventDefault();
+    const dir = wheelDir(e);
+    if (!dir) return;
     state.sliderDragStarted();
-    setNorm(state.getNormalisedValue() + (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 0.002 : 0.01));
+    setNorm(state.getNormalisedValue() + dir * (e.shiftKey ? 0.002 : 0.01));
     state.sliderDragEnded();
   }, { passive: false });
   // Double-click the number (or press Enter on the knob) to type an exact value.
@@ -1055,9 +1060,11 @@ const nodeEls = EQ_BANDS.map((band, b) => {
   });
   n.addEventListener("wheel", (e) => {
     e.preventDefault();
+    const dir = wheelDir(e);
+    if (!dir) return;
     const gs = P.eqGain[b];
     gs.sliderDragStarted();
-    gs.setNormalisedValue(scaledToNorm(gs, clamp(eqGainAt(b) + (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 0.1 : 0.5), -EQ_MAX, EQ_MAX)));
+    gs.setNormalisedValue(scaledToNorm(gs, clamp(eqGainAt(b) + dir * (e.shiftKey ? 0.1 : 0.5), -EQ_MAX, EQ_MAX)));
     gs.sliderDragEnded();
     eqCells[b].refresh(); onParamsChanged(); userEdited();
   }, { passive: false });
