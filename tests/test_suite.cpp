@@ -332,6 +332,43 @@ TEST_CASE ("Suite: the beat key goes from Voxology on the beat to Honey Tune", "
     CHECK (when == 123456);
 }
 
+TEST_CASE ("Suite: a plug-in takes part only while the host runs it (prepareToPlay .. releaseResources)", "[suite]")
+{
+    using Step = suite::Presence::Step;
+    suite::Presence p;
+    CHECK (p.update (100) == Step::away);   // created, not started yet
+    CHECK_FALSE (p.takingPart());
+    p.start();                               // prepareToPlay
+    CHECK (p.update (200) == Step::join);
+    CHECK (p.takingPart());
+    CHECK_FALSE (p.settled (200));           // the shared choices wait a moment...
+    CHECK (p.update (300) == Step::here);
+    CHECK (p.settled (200 + suite::Presence::kSettleMs));   // ... then follow
+    p.stop();                                // releaseResources (an inactive project, an insert switched off)
+    CHECK (p.update (900) == Step::leave);
+    CHECK_FALSE (p.takingPart());
+    CHECK_FALSE (p.settled (5000));
+    CHECK (p.update (1000) == Step::away);
+    p.stop(); p.start(); p.stop();           // stopped and started between two ticks: still away, nothing to do
+    CHECK (p.update (1100) == Step::away);
+    p.start();
+    CHECK (p.update (1200) == Step::join);   // back: joins again, and waits again before syncing
+    CHECK_FALSE (p.settled (1300));
+    CHECK (p.settled (1200 + suite::Presence::kSettleMs));
+
+    // Away, a plug-in neither holds the shared style nor follows it: another project's pick doesn't reach it.
+    Memory mem;
+    suite::Link link (mem.data());
+    suite::SongStyle songA (suite::StyleInfo::From::masterology), songB (suite::StyleInfo::From::mixology);
+    songA.pick ("trap.drill", "Trap & Drill - Drill");
+    songA.sync (link, 1, 2000);
+    songA.leave (link, 1);                   // song A's project made inactive: it leaves the choice at once
+    suite::StyleInfo got;
+    CHECK_FALSE (link.readStyle (got, 2100));
+    CHECK_FALSE (songB.sync (link, 2, 2100));   // song B (nothing picked yet) doesn't get song A's style
+    CHECK (songB.style().key.empty());
+}
+
 TEST_CASE ("Suite: the DAW is found from the host program", "[suite]")
 {
     CHECK (suite::dawFromHostPath ("C:\\Program Files\\Steinberg\\Cubase 14\\Cubase14.exe") == "cubase");

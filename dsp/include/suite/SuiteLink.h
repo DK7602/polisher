@@ -19,6 +19,8 @@
 //   - choices: the song's style (Mixology's list of 75, "genre.style") and the DAW you work in ("cubase", "studioone"...),
 //              the same in all three: pick one in any of them and the others follow. The newest choice wins (each saves
 //              the time you picked it with the project).
+// A plug-in takes part only while the host runs it, from prepareToPlay to releaseResources (Presence), so projects that
+// are open in the same host but not active don't reach each other.
 // Framework-free C++17, lock-free (atomics and sequence counters), no allocation on the audio thread (the
 // publishers call it from their message thread anyway). Zero-filled memory is a valid, empty block.
 
@@ -366,6 +368,45 @@ namespace suite
         StyleInfo mine;
     };
     using SongStyle = SharedChoice;
+
+    /** Whether a plug-in takes part in the link: only while the host runs it, from prepareToPlay to releaseResources.
+        The block is one per host process, and hosts keep projects that aren't active loaded (Cubase, Logic, Studio One;
+        REAPER's background tabs) with their plug-ins' timers running: one song's style must not reach another, and a
+        plug-in that isn't playing must not look present. While away a plug-in neither publishes nor reads anything, and
+        neither offers nor follows the shared choices. The same in all three plug-ins:
+          prepareToPlay:     presence.start();     releaseResources: presence.stop();     (any thread)
+          the timer (message thread), before anything else with the link:
+            switch (presence.update (nowMs)) { leave: release slots, leave() the choices, forget what was read; away: stop;
+                                               join / here: go on, and sync the choices only once settled (nowMs). } */
+    class Presence
+    {
+    public:
+        enum class Step { away, leave, join, here };
+
+        void start() noexcept { running.store (true, std::memory_order_release); }
+        void stop() noexcept  { running.store (false, std::memory_order_release); }
+
+        /** Message thread, from the plug-in's timer. leave / join once, when the host stopped / started the plug-in. */
+        Step update (std::uint64_t nowMs) noexcept
+        {
+            const bool run = running.load (std::memory_order_acquire);
+            if (run == taking) return run ? Step::here : Step::away;
+            taking = run;
+            joinedMs = nowMs;
+            return run ? Step::join : Step::leave;
+        }
+        bool takingPart() const noexcept { return taking; }
+        /** Taking part for kSettleMs: sync the shared choices from now on. A project just switched to waits a moment,
+            so the plug-ins of the one switched from have stopped (and left the choices) first. */
+        bool settled (std::uint64_t nowMs) const noexcept { return taking && nowMs - std::min (nowMs, joinedMs) >= kSettleMs; }
+
+        static constexpr std::uint64_t kSettleMs = 500;
+
+    private:
+        std::atomic<bool> running { false };
+        bool taking = false;          // message thread
+        std::uint64_t joinedMs = 0;   // message thread
+    };
 
     // ---- the DAW (keys and names: plugin/ui/daws.js has the same list) ---------------------------------------
     /** The DAW a host program is ("cubase", "studioone", "fl", "ableton", "reaper", "bitwig", "logic", "cakewalk", "other"),

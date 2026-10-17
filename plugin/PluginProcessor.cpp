@@ -110,16 +110,38 @@ PolisherAudioProcessor::PolisherAudioProcessor()
 PolisherAudioProcessor::~PolisherAudioProcessor()
 {
     stopTimer();
-    suite::Link::process().releaseMaster (suiteSlot, suiteId);
+    leaveSuite();
+}
+
+void PolisherAudioProcessor::releaseResources()
+{
+    suitePresence.stop();   // off the suite link at the next tick (see updateSuite)
+}
+
+void PolisherAudioProcessor::leaveSuite()
+{
+    // Mixology stops seeing this Masterology at once, and a style or DAW only this instance kept alive lapses
+    // straight away (another project, or the next one opened, doesn't take it).
+    auto& link = suite::Link::process();
+    link.releaseMaster (suiteSlot, suiteId);
+    suiteSlot = -1;
+    hasHandoff = false;
     const juce::ScopedLock sl (styleLock);
-    songStyle.leave (suite::Link::process(), suiteId);
-    daw.leave (suite::Link::process(), suiteId);
+    songStyle.leave (link, suiteId);
+    daw.leave (link, suiteId);
 }
 
 void PolisherAudioProcessor::updateSuite()
 {
     auto& link = suite::Link::process();
     const auto now = suite::nowMs();
+    // Only while the host runs this Masterology. The block is one per host process, and a project that is open but
+    // not active (or an insert switched off) keeps its timer running: it must neither take another song's style nor
+    // look present to Mixology. It joins again at the next prepareToPlay; the newest pick still wins.
+    if (suitePresence.update (now) == suite::Presence::Step::leave)
+        leaveSuite();
+    if (! suitePresence.takingPart())
+        return;
     hasHandoff = link.readMix (handoff, now);
     // Auto Analyze hears the mix afresh when Mixology's word on it changes (what its Analyze Mix found). A read
     // that fails now and then (Mixology busy, or silent a moment) keeps the last key, so the listen isn't restarted.
@@ -133,8 +155,10 @@ void PolisherAudioProcessor::updateSuite()
         mixIn (suite::nameHash (handoff.styleKey));
         autoMaster.setMixKey (key);
     }
-    // The song's style: the newest choice in Voxology, Mixology or Masterology wins.
+    // The song's style: the newest choice in Voxology, Mixology or Masterology wins (from a moment after joining,
+    // so the plug-ins of a project just switched away from have left first).
     bool adopted = false;
+    if (suitePresence.settled (now))
     {
         const juce::ScopedLock sl (styleLock);
         adopted = songStyle.sync (link, suiteId, now);
@@ -403,6 +427,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     monitorOut.prepare (sampleRate);
     stemEq.setTamerDelta (false);
     dynamics.setMonitorBand (-1, false);
+    suitePresence.start();   // on the suite link from the next tick (see updateSuite)
 }
 
 namespace

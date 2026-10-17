@@ -3151,6 +3151,8 @@ TEST_CASE ("Plug-in: the song's style is shared (picked here or in Mixology), se
     auto& link = suite::Link::process();
     auto a = makeProcessor (48000.0, 512, false);
     a->updateSuite();
+    juce::Thread::sleep ((int) suite::Presence::kSettleMs + 20);   // joined a moment ago: the shared choices wait that long
+    a->updateSuite();
     CHECK (a->songStyleNow().key.empty());   // none chosen yet
     CHECK (plainOf (*a, "amGenre") == 0.0f);
 
@@ -3186,8 +3188,61 @@ TEST_CASE ("Plug-in: the song's style is shared (picked here or in Mixology), se
     CHECK (b->songStyleNow().key == "electronic.house");
     CHECK (b->songStyleNow().from == suite::StyleInfo::From::mixology);
     b->updateSuite();
+    juce::Thread::sleep ((int) suite::Presence::kSettleMs + 20);
+    b->updateSuite();
     REQUIRE (link.readStyle (shared, suite::nowMs()));
     CHECK (shared.key == "electronic.house");
+}
+
+TEST_CASE ("Plug-in: the suite link only while the host runs Masterology (another open project doesn't reach it)", "[plugin][suite]")
+{
+    auto& link = suite::Link::process();
+    const auto settle = [] { juce::Thread::sleep ((int) suite::Presence::kSettleMs + 20); };
+    auto songA = makeProcessor (48000.0, 512, false);   // prepared: on the link
+    songA->updateSuite();
+    settle();
+    songA->pickStyle ("trap.drill", "Trap & Drill - Drill");
+    REQUIRE (link.masters (suite::nowMs()).size() == 1);
+    suite::StyleInfo shared;
+    REQUIRE (link.readStyle (shared, suite::nowMs()));
+
+    // Song A's project made inactive (the host releases its plug-ins): off the link at once, its style lapses.
+    songA->releaseResources();
+    songA->updateSuite();
+    CHECK (link.masters (suite::nowMs()).empty());
+    CHECK_FALSE (link.readStyle (shared, suite::nowMs()));
+    suite::MixInfo mix;
+    mix.styleKey = "pop.modern";
+    mix.styleName = "Pop - Modern";
+    mix.version = 1;
+    link.publishMix (mix, suite::nowMs());
+    songA->updateSuite();
+    CHECK_FALSE (songA->mixologyHandoff (mix));   // a Mixology in the other song isn't this song's
+
+    // Song B, a new project: its Masterology doesn't take song A's style...
+    auto songB = makeProcessor (48000.0, 512, false);
+    songB->updateSuite();
+    settle();
+    songB->updateSuite();
+    CHECK (songB->songStyleNow().key.empty());
+    // ... and a pick in song B doesn't change song A.
+    songB->pickStyle ("rnb.modern", "R&B & Soul - Modern");
+    songA->updateSuite();
+    CHECK (songA->songStyleNow().key == "trap.drill");
+    CHECK (plainOf (*songA, "amGenre") == 0.0f);   // Trap / Hip-Hop, as picked
+    REQUIRE (link.masters (suite::nowMs()).size() == 1);
+
+    // Back to song A (song B's plug-ins released first): A joins again and its own pick is the song's style again.
+    songB->releaseResources();
+    songB->updateSuite();
+    songA->prepareToPlay (48000.0, 512);
+    songA->updateSuite();
+    CHECK (link.masters (suite::nowMs()).size() == 1);
+    settle();
+    songA->updateSuite();
+    REQUIRE (link.readStyle (shared, suite::nowMs()));
+    CHECK (shared.key == "trap.drill");
+    CHECK (songA->songStyleNow().key == "trap.drill");
 }
 
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:

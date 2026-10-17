@@ -40,7 +40,7 @@ public:
 
     // AudioProcessor
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
-    void releaseResources() override {}
+    void releaseResources() override;
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
 
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
@@ -147,7 +147,9 @@ public:
 
     // --- The suite link (Voxology, Mixology, Masterology) --------------------------------------------
     /** Tells Mixology what this Masterology aims for (target loudness, ceiling, genre) and reads Mixology's
-        hand-off for the song. Message thread; the plug-in's timer calls it four times a second. */
+        hand-off for the song. Message thread; the plug-in's timer calls it four times a second. Only while the
+        host runs this Masterology (prepareToPlay .. releaseResources, see suite::Presence): in a project that
+        is open but not active, or switched off, it neither shows itself nor follows the others. */
     void updateSuite();
     /** Mixology's hand-off (the style it mixed in, the mix's peaks and loudness, its tone), when a Mixology
         is in this project. Message thread. */
@@ -221,6 +223,8 @@ public:
 private:
     void timerCallback() override { tick(); }
     std::atomic<int> pendingAutoAnalyze { -1 };   // -1: nothing waiting
+    suite::Presence suitePresence;                // taking part in the suite link (prepareToPlay .. releaseResources)
+    void leaveSuite();                            // stopped or closing: off the link at once
     juce::RangedAudioParameter* stateRevisionParam = nullptr;
     std::atomic<bool> stateRevisionPending { false };   // markStateChanged ran off the message thread
     void bumpStateRevision();
