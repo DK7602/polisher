@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.29.2 · October 2026
+Version 0.29.3 · October 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
@@ -621,7 +621,7 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 
 ## With Voxology and Mixology
 
-**Voxology** makes each vocal sound great, **Mixology** makes all your tracks work together, **Masterology** turns the finished mix into the master. In the same Cubase project they tell each other what they do. Nothing to set up: use Masterology 0.29, Mixology 0.13 and Voxology 0.50 (or newer; update all three together, older and newer ones don't see each other), with Mixology on the Stereo Out before Masterology.
+**Voxology** makes each vocal sound great, **Mixology** makes all your tracks work together, **Masterology** turns the finished mix into the master. In the same Cubase project they tell each other what they do. Nothing to set up: use Masterology 0.29.3, Mixology 0.21 and Voxology 0.52 (or newer; update all three together, older and newer ones don't see each other; the Sonicology installer always has a matching set), with Mixology on the Stereo Out before Masterology.
 
 - **One DAW for all three**: Settings (the gear) > **DAW**. Masterology finds the program it runs in (Cubase, Studio One, FL Studio, Ableton Live, REAPER, Bitwig Studio, Logic Pro, Cakewalk by BandLab / Sonar) and writes every tip in Learn for it: where the master channel is, how to load a plug-in last on it, how to turn off the loop so the song plays through. "Found: ..." uses the one it found; pick another if it got it wrong. Mixology and Voxology share it: pick it in any of the three and the others follow. BandLab: pick **Cakewalk** (BandLab's desktop DAW for Windows); BandLab's web studio (browser or app) can't load plug-ins.
 
@@ -643,7 +643,7 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Auto-Master keeps listening | It waits for the song to end (4 seconds without music after at least 30 s of it), or Cycle is on and the loop keeps playing | Let the song play to its end, or click Auto-Master again (or FINISH NOW in Learn) any time after 12 s of music |
 | Auto-Master finished while you only paused | After 30 s of music, 4 seconds without music count as the song's end | Fine if it heard the hook. Otherwise run it again and keep the song playing |
 | The report says playback jumped | A cycle loop or a playhead move while it listened | Turn Cycle off on the transport bar and play the song once from start to end |
-| Learn never shows FROM MIXOLOGY | No Mixology 0.8+ in the same project, or it isn't on the Stereo Out | Put Mixology on the Stereo Out before Masterology and open its window once (it then knows your mix style) |
+| Learn never shows FROM MIXOLOGY | No matching Mixology (0.21 or newer, with Masterology 0.29.3 or newer) in the same project, or it isn't on the Stereo Out | Put Mixology on the Stereo Out before Masterology and open its window once (it then knows your mix style) |
 | Auto Analyze never shows edits | It waits for the hook or drop, or the song keeps stopping, or the window is closed | Keep Masterology's window open and play through the hook or drop for at least 20 seconds without stopping. Learn's status line says what it waits for |
 | Auto Analyze says "Paused" after you changed the genre or target | Auto-Master's plan was made for the old choice | Run Auto-Master again; Auto Analyze carries on with the new plan |
 | Auto-Master says it heard too little | Playback stopped or was mostly silence | Click Auto-Master, play the song from the start and let it play (it needs at least 12 s of music) |

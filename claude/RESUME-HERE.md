@@ -1,4 +1,4 @@
-# Masterology (formerly Polisher) — resume here (updated 2026-10-15, v0.29.1)
+# Masterology (formerly Polisher) — resume here (updated 2026-10-17, v0.29.3)
 
 Read this first in a new chat. Code: github.com/DK7602/polisher. Newest work: branch
 `claude/eloquent-einstein-sscadx` (v0.29.1 = Cakewalk in the DAW list; v0.29.0 = your DAW shared by the trio;
@@ -67,6 +67,14 @@ analyze option as well. it could then give option to edit in the learn window as
 - v0.27.0 CI green: run 38756168366 (66d62b9, Windows: build, engine + plug-in tests, pluginval 10 + VST3 validator; UI smoke).
 - NOT YET HEARD / USED by the user. Ask them: run Auto-Master, switch Auto Analyze on, change the mix in Mixology (e.g. 808 +3
   dB), play through the hook, and see whether the cards make sense.
+
+## v0.29.3: suite link 4 (2026-10-17, from Mixology's "Mixology audit" thread)
+- Released with Mixology 0.21.0 and Voxology 0.52.0: SuiteLink.h / .cpp layout 4 (Mixology's answer to each Voxology,
+  the beat key for Honey Tune, the release fence in lockStyle; the same files in all three, Mixology is the master
+  copy) and test_suite.cpp synced. Older suite plug-ins don't see 0.29.3.
+- Masterology now publishes MasterInfo.inputPeakDbtp (input true peak; it was always -100). Manual: the version line
+  and the minimum versions (live Claude Docs copy updated too).
+- Masterology's own full audit is next (user: "after Mixology we'll do the same with Voxology and Masterology").
 
 ## v0.29.1: Cakewalk (BandLab) in the DAW list (2026-10-15, from Mixology's thread)
 - v0.29.0 = your DAW shared by the trio (Settings > DAW, daws.js, {daw:...} tokens in AutoMaster.cpp, suite link
