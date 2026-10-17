@@ -6,14 +6,21 @@
 Producer-minded mastering suite with an **Auto-Master** button and a **Learn** mode that explains
 every setting. Style: red / white / powder-blue liquid glass.
 
-Formats: **VST3** and **Standalone** on macOS and Windows, plus **AU** on macOS.
+Formats: **VST3** on macOS and Windows, plus **AU** on macOS (the Sonicology installer ships these; the
+individual download also has a **Standalone** app and **Masterology Blind Test**).
 
-**System requirements.** Windows 10 or 11 (64-bit) or macOS 11+. On Windows the Masterology screen runs on
+**Install.** The Sonicology installer (built in the Mixology repo: Actions > Sonicology suite) installs all three
+plug-ins on Windows or Mac and removes an old Polisher. By hand: the Masterology download from Build & Test, with
+`docs/INSTALL.txt`.
+
+**System requirements.** Windows 10 or 11 (64-bit) or macOS 12+. On Windows the Masterology screen runs on
 the **Microsoft Edge WebView2 Runtime**: it ships with Windows 11 and comes with Microsoft Edge on
 Windows 10. Without it Masterology still processes audio but opens a basic view (Maximizer controls and
 meters only) with a button to Microsoft's free download page; install it and reopen Masterology.
 
 User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (also inside the plug-in: Quick Help > Open the full manual).
+A live copy is kept in Claude Docs (project 3bf99dd7-1111-4be3-884d-d787ae49506c, node 15637893-1eb5): update it
+whenever the manual changes.
 
 ## Status — v0.29.3
 
@@ -40,7 +47,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 | Auto Analyze: after Auto-Master, keeps listening while the song plays; when it hears the hook again and the mix changed, it re-runs Auto-Master in the background and offers per-module edits in Learn (now → new, APPLY / KEEP MINE, one undo step each), keeping the user's own knob offsets (`dsp/include/polisher/AutoAnalyze.h`) | Done (v0.27) |
 | One song style for the trio: Mixology's 75 styles (`plugin/ui/mixstyles.js`, the same file in all three) in a picker on the genre pill; pick it in any of the three and the others follow (suite link layout 2, the newest pick wins, saved with the project); the style sets Auto-Master's genre | Built (v0.28), waiting for the Cubase test |
 | Your DAW, shared by the trio: Settings > DAW (found from the host, or picked; suite link layout 3); every tip in Learn says how in that DAW (`plugin/ui/daws.js`, the same file in all three; `{daw:...}` tokens in the engine's text) | Built (v0.29), waiting for the test |
-| New name and logo: Polisher is now **Masterology** (plug-in name, vendor "Masterology Audio", header logo, manual, Blind Test). Same plug-in ID, so old projects and presets load | Done (v0.25) |
+| New name and logo: Polisher is now **Masterology** (plug-in name, header logo, manual, Blind Test; vendor "Sonicology" since v0.29). Same plug-in ID, so old projects and presets load | Done (v0.25) |
 | Shoot-out kit: Blind Test checks the masters were made at the same loudness (names the one to push and by how much) and and the same ceiling (names the file to change and by how much, matched to masterology.wav), and adds measurements to the answer key (kick / snare punch, range, width, bass width, 6-band tone balance); manual guide for Masterology vs Ozone 12 / TDR Limiter 6 GE / LoudMax | Done (v0.23) |
 | Mid / side on Dynamics (Channels: Stereo / Mid only / Side only, all bands, click-free switch) and Saturation (Channels: Stereo / Mid / Side, works with Focus) | Done (v0.22) |
 | Saturation Focus Highs only (sheen above 4 kHz) and Bass + Highs (808 + hats, mids clean), each with its own split and oversampling | Done (v0.21) |
@@ -153,10 +160,11 @@ cmake -S . -B build-tests -DPOLISHER_BUILD_PLUGIN=OFF && cmake --build build-tes
 
 Meter behaviour: the loudness meter resets automatically when the host transport starts ("Reset on play", on by default).
 
-Every push runs the GitHub Actions workflow on Windows: build, unit tests, pluginval at strictness 10
-(the maximum) with Steinberg's VST3 validator, and the built plug-in as a downloadable artifact
-(Masterology-Windows). macOS (universal arm64 + x86_64, VST3 / AU / Standalone, pluginval + `auval`) builds
-on a manual run: Actions > Build & Test > Run workflow, "Also build macOS".
+Every push runs the GitHub Actions workflow on Windows (build, unit tests, pluginval at strictness 10 with
+Steinberg's VST3 validator, and the download Masterology-Windows: the plug-in, Standalone, Blind Test, the manual
+and INSTALL.txt) and the engine tests under ASan + UBSan. macOS (universal arm64 + x86_64, VST3 / AU / Standalone,
+pluginval + `auval`, packed as a .tar.gz so the programs keep their permission to run) builds on a manual run:
+Actions > Build & Test > Run workflow.
 
 ## Engine notes
 

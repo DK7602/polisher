@@ -5,18 +5,16 @@ Version 0.29.3 · October 2026
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
 
-Live, shareable copy: https://claude.ai/code/artifact/3bf99dd7-1111-4be3-884d-d787ae49506c (this file is its source; keep both in step).
-
 ## What Masterology is
 
 Masterology (called **Polisher** before version 0.25.0) is a mastering plug-in: it takes your finished stereo mix and makes it louder, clearer and ready to release. It holds twelve modules in one window, and **Auto-Master** can set all of them for you while your song plays once.
 
-This manual covers version 0.29.1. Every control is explained in plain words, with the number ranges the plug-in really uses.
+Every control is explained in plain words, with the number ranges the plug-in really uses. The steps say Cubase where a menu is named; [In your DAW](#in-your-daw) has the same steps for Studio One, FL Studio, Ableton Live, REAPER, Bitwig Studio, Logic Pro and Cakewalk.
 
 **The 30-second version**
 
-1. Put Masterology in the **last insert slot of Stereo Out**.
-2. Turn off any other limiter, clipper or mastering chain on Stereo Out.
+1. Put Masterology in the **last insert slot of your master channel** (Cubase: Stereo Out).
+2. Turn off any other limiter, clipper or mastering chain on that channel.
 3. Pick your song's style, an intensity and a target at the top.
 4. Press **Auto-Master** and play your whole song from the start. It finds the loudest part by itself and finishes when the song ends.
 5. Turn on **MATCH** and flip **A / B** to check the result at equal loudness.
@@ -28,10 +26,16 @@ Masterology goes on **Stereo Out**, the channel every track flows into, in the *
 
 ### Install
 
-1. Download the Windows build (Masterology-Windows) and unzip it.
-2. Copy **Masterology.vst3** into `C:\Program Files\Common Files\VST3`.
+**Easiest: the Sonicology installer** (Masterology, Mixology, Voxology and Honey Tune in one go, for Windows or Mac). Close your DAW, run it and keep the plug-ins it ticks. It also removes an old **Polisher** (Masterology's first name). The plug-ins aren't code-signed yet: on Windows click **More info > Run anyway** if SmartScreen stops it; on a Mac, if it says the installer can't be checked, open **System Settings > Privacy & Security** and click **Open Anyway**.
+
+**By hand (Windows)**:
+
+1. Download **Masterology-Windows** and unzip it (in Chrome, Ctrl+J and **Keep** if it warns).
+2. Copy **Masterology.vst3** from its VST3 folder into `C:\Program Files\Common Files\VST3`.
 3. **Updating from Polisher** (Masterology's old name)? Delete **Polisher.vst3** from that folder first. It's the same plug-in, so your projects that used Polisher open with Masterology and keep their settings.
-4. Start Cubase. If Masterology doesn't show up, open **Studio > VST Plug-in Manager** and click **Update Plug-in Information**.
+4. Start Cubase. If Masterology doesn't show up, open **Studio > VST Plug-in Manager** and click **Update Plug-in Information**. It's listed under Sonicology.
+
+**By hand (Mac)**: INSTALL.txt in the download has the steps (macOS blocks a downloaded plug-in until you clear its download flag, so the installer is easier). Needs macOS 12 or newer.
 
 Masterology's screen runs on the **Microsoft Edge WebView2 Runtime**. Windows 11 has it built in and Windows 10 gets it with Microsoft Edge, so you rarely need to do anything. If Masterology opens a small screen that says **BASIC VIEW**, the runtime is missing: click **GET WEBVIEW2**, install the free "Evergreen" runtime from Microsoft, then close and reopen Masterology. Your settings are kept, and the whole chain keeps processing audio in the basic view.
 
@@ -44,7 +48,7 @@ Masterology's screen runs on the **Microsoft Edge WebView2 Runtime**. Windows 11
 
 ### Set your mix level
 
-Leave headroom going in. A good input is about **−17 LUFS integrated with peaks around −1 dBTP**. If your mix is hotter, pull it down: lower the track faders together (or a group they all play through) by about 6 dB. The Stereo Out fader comes after Masterology, so it doesn't change what Masterology hears.
+Leave headroom going in: peaks between **−6 and −3 dBTP** and about **−18 to −14 LUFS** integrated (no more than about 3 dB louder than your target). It's the same rule as Mixology's HAND-OFF checks. If your mix is hotter, pull it down: lower the track faders together (or a group they all play through) by a few dB. The Stereo Out fader comes after Masterology, so it doesn't change what Masterology hears. Too hot anyway? Auto-Master turns it down with Input Trim.
 
 ### Your first master
 
@@ -68,6 +72,23 @@ Leave headroom going in. A good input is about **−17 LUFS integrated with peak
 ### Exporting
 
 Export as usual with **File > Export > Audio Mixdown**. MATCH and the listening aids (Listen, Solo, MONO, PHONE) switch themselves off during a normal (offline) export, so your file is the real master. For a Realtime Export, switch MATCH and every listening aid off (no red banner on the spectrum) and make sure B is on before you start: in real time Masterology can't tell an export from playback. Masterology reports its delay to Cubase, which lines everything up for you.
+
+### In your DAW
+
+The same steps outside Cubase. Pick your DAW in Settings (the gear) and every tip in Learn uses its words too.
+
+| DAW | Your master channel: put Masterology last on it | Export | Real-time export (switch MATCH and the listening aids off first) |
+| --- | --- | --- | --- |
+| Cubase / Nuendo | MixConsole (F3) > Stereo Out, last insert slot | File > Export > Audio Mixdown | the Realtime Export box |
+| Studio One / Studio Pro | Console (F3) > Main, last insert | Song > Export Mixdown | the Realtime Processing box |
+| FL Studio | Mixer (F9) > Master, last effect slot | File > Export | not needed: FL Studio renders offline |
+| Ableton Live | the Main track's device chain, last device | File > Export Audio/Video | only with external instruments or effects |
+| REAPER | the Master track's FX button (View > Master track), last in the chain | File > Render | Online Render in the render settings |
+| Bitwig Studio | the Master track's device chain, last device | File > Export Audio | not needed: Bitwig renders offline |
+| Logic Pro (AU) | Mixer (X) > Stereo Out, last Audio FX slot | File > Bounce > Project or Section | Mode: Realtime (Offline is the default) |
+| Cakewalk / Sonar | Console view (Alt+2) > Master bus, last in its FX rack | File > Export > Audio | the Fast bounce box switched off |
+
+Rescan the plug-ins if Masterology isn't in the list: in Studio One, Options > Locations > VST Plug-ins > Rescan; FL Studio, Options > Manage plugins > Find installed plugins; Live, Settings > Plug-Ins (Use VST3 Plug-In System Folders on) > Rescan; REAPER, Preferences > Plug-ins > VST > Re-scan; Logic, Settings > Plug-in Manager > Reset & Rescan Selection.
 
 ## The signal chain
 
@@ -448,7 +469,7 @@ On headphones, compare at a low, comfortable volume and take breaks. Ears tire f
 
 ### Blind test: compare masters without knowing which is which
 
-MATCH takes care of loudness, but you still know which side is Masterology. To compare Masterology's master with another one (your old chain, another plug-in, a pro master of the same song) fairly, use **Masterology Blind Test** (`MasterologyBlindTest.exe`, in the same download as the plug-in):
+MATCH takes care of loudness, but you still know which side is Masterology. To compare Masterology's master with another one (your old chain, another plug-in, a pro master of the same song) fairly, use **Masterology Blind Test** (`MasterologyBlindTest.exe`, in the **BlindTest** folder of the Masterology download; the Sonicology installer doesn't include it):
 
 1. In Cubase, export each version of the same song with **File > Export > Audio Mixdown** (WAV), for example: your mix with Masterology bypassed (`my mix.wav`), Masterology's master (`masterology.wav`), and the other master (`other.wav`). Two to eight files.
 2. Drag all the files at once onto **MasterologyBlindTest.exe** (in the **BlindTest** folder of the download).
@@ -563,7 +584,7 @@ The **Learn** panel on the right explains, live, what the selected module is doi
 
 **Quick Help** (the **?** button, top right) is a one-page cheat sheet: the chain order and the first moves for every module. Its **OPEN THE FULL MANUAL** button opens this manual inside Masterology, with contents on the left; it works offline. Press **Esc** or **×** to close it.
 
-**Settings** has three switches:
+**Settings** (the gear) has your **DAW** (shared with Mixology and Voxology, see [With Voxology and Mixology](#with-voxology-and-mixology)) and three switches:
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -631,7 +652,9 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 - **Use Mixology's genre**: with the shared style the genre follows Mixology's by itself. If you set Auto-Master's genre another way (for example a Cubase automation lane) and it no longer matches Mixology's style, Learn shows the note at the top with a button, **USE R&B (MIXOLOGY'S STYLE)**. One click sets the genre; run Auto-Master after.
 - **Warnings from the mix**: Learn also says when Mixology heard a **mono mix** at the Stereo Out (left = right), when **Mixology's Limiter** is on (two limiters squash the mix twice: switch Mixology's off), and when the mix leaves almost no room (peaks above −1 dBTP).
 - **Auto Analyze with Mixology**: when Mixology's advice on the mix changes (its Analyze Mix or Auto Analyze heard something new), Masterology's Auto Analyze starts listening again, so its edits are about the mix as Mixology left it. Use both: fix the mix in Mixology, then let Masterology's Auto Analyze adjust the master.
-- **Masterology's goal in Mixology**: Mixology's Master page shows what Masterology aims for (for example "Masterology: −9 LUFS · −1.0 dBTP": the target, or a reference's loudness while Match ref is on, and the Maximizer's ceiling).
+- **Masterology's goal in Mixology**: Mixology's Master page shows what Masterology aims for (for example "Masterology: −9 LUFS · −1.0 dBTP": the target, or a reference's loudness while Match ref is on, and the Maximizer's ceiling). Its HAND-OFF checks use those numbers: the mix's peaks under −3 dBTP, and the mix not more than 3 dB louder than your target.
+
+The link only works inside one program: the three must run in the same DAW, in the same process. Mastering in a separate project works too; Masterology then simply works on its own. DAWs that can run each plug-in in its own process keep them apart: in Bitwig set Settings > Plug-ins > Plug-in hosting to "By manufacturer" or "Together", in REAPER don't run them as separate / dedicated processes, in FL Studio don't make them bridged.
 
 ## Troubleshooting
 
@@ -643,7 +666,12 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 | Auto-Master keeps listening | It waits for the song to end (4 seconds without music after at least 30 s of it), or Cycle is on and the loop keeps playing | Let the song play to its end, or click Auto-Master again (or FINISH NOW in Learn) any time after 12 s of music |
 | Auto-Master finished while you only paused | After 30 s of music, 4 seconds without music count as the song's end | Fine if it heard the hook. Otherwise run it again and keep the song playing |
 | The report says playback jumped | A cycle loop or a playhead move while it listened | Turn Cycle off on the transport bar and play the song once from start to end |
-| Learn never shows FROM MIXOLOGY | No matching Mixology (0.21 or newer, with Masterology 0.29.3 or newer) in the same project, or it isn't on the Stereo Out | Put Mixology on the Stereo Out before Masterology and open its window once (it then knows your mix style) |
+| Learn never shows FROM MIXOLOGY | No matching Mixology (0.21 or newer, with Masterology 0.29.3 or newer) in the same project and the same process | Put Mixology on the Stereo Out before Masterology and open its window once (it then knows your mix style). Update all three together (the Sonicology installer has a matching set) |
+| Masterology, Mixology and Voxology don't see each other | Older and newer versions, or your DAW runs plug-ins in separate processes | Update all three together. Bitwig: Settings > Plug-ins > Plug-in hosting "By manufacturer" or "Together"; REAPER: don't run them as separate processes; FL Studio: don't make them bridged |
+| Two plug-ins called Masterology and Polisher, or the old version opens | An old Polisher (Masterology's first name) is still installed: to your DAW it's the same plug-in | Delete Polisher.vst3 (Mac: also Polisher.component) from the plug-in folders, or run the Sonicology installer, which removes it |
+| Mac: "Masterology is damaged and can't be opened" | macOS blocks a plug-in copied from a download | Use the Sonicology installer, or clear the download flag (see INSTALL.txt): `xattr -dr com.apple.quarantine` on the copied plug-in |
+| Logic Pro doesn't list Masterology | Logic loads only the AU (Masterology.component) and only after its own check | Logic Pro > Settings > Plug-in Manager > Reset & Rescan Selection. The Sonicology installer puts the AU in place |
+| Ableton Live doesn't list Masterology | Live doesn't look in the system VST3 folder by default | Settings > Plug-Ins: switch on Use VST3 Plug-In System Folders, then Rescan |
 | Auto Analyze never shows edits | It waits for the hook or drop, or the song keeps stopping, or the window is closed | Keep Masterology's window open and play through the hook or drop for at least 20 seconds without stopping. Learn's status line says what it waits for |
 | Auto Analyze says "Paused" after you changed the genre or target | Auto-Master's plan was made for the old choice | Run Auto-Master again; Auto Analyze carries on with the new plan |
 | Auto-Master says it heard too little | Playback stopped or was mostly silence | Click Auto-Master, play the song from the start and let it play (it needs at least 12 s of music) |
