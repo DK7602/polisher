@@ -100,6 +100,8 @@ analyze option as well. it could then give option to edit in the learn window as
   docs/INSTALL.txt (Mac .tar.gz keeps permissions), sanitizers every push, auval needs its success line, NEEDS_WEB_BROWSER
   (Linux); manual: installer / every DAW / one headroom rule (peaks -6 to -3 dBTP) / suite troubleshooting; live copy
   link moved from the manual to the README.
+- v0.29.4 CI green: run 39098724843 (6896b04; the sanitizer job now takes ~80 min with the new Auto Analyze tests).
+  In the Beta 4 suite installers (Mixology run 39098727832).
 - Not done (ideas): layout 5 (Masterology tells Mixology "fix it in the mix"), 8x true peak, linear-phase option,
   noise-shaped dither, Stem EQ model skipped when unused, ControlParameterIndexUpdater.
 
