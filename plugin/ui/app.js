@@ -480,7 +480,9 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
     knob.setPointerCapture(e.pointerId);
     dragStart = { y: e.clientY, n: state.getNormalisedValue() };
     state.sliderDragStarted();
-    e.preventDefault();
+    // No preventDefault: the press gives the knob the keyboard, as a click does, so the arrow keys and Enter work on
+    // the knob you just touched (a mouse focus shows no ring: :focus-visible). Nothing else happens by default here:
+    // the page selects no text and the knob's image can't be dragged.
   });
   knob.addEventListener("pointermove", (e) => {
     if (!dragStart) return;
