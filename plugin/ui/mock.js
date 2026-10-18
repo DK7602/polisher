@@ -379,7 +379,7 @@
       __juce__functions: ["resetMeter", "startAutoMaster", "finishAutoMaster", "cancelAutoMaster", "getAutoMasterReport", "clearToneTarget",
                           "setAutoAnalyze", "getAutoAnalyze", "applyAutoEdit", "keepAutoEdit",
                           "loadReference", "clearReference", "getReference", "setMonitor",
-                          "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve", "pickStyle", "pickDaw", "rememberUi"],
+                          "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve", "pickStyle", "pickDaw", "rememberUi", "showParameterMenu"],
       __juce__registeredGlobalEventIds: [],
       __juce__sliders: Object.keys(sliders),
       __juce__toggles: Object.keys(toggles),
@@ -472,6 +472,7 @@
         }
         if (payload.name === "pickDaw") Object.assign(daw, { key: (payload.params || [])[0] || "cubase", picked: !!(payload.params || [])[0], from: 3 });
         if (payload.name === "snapshotStore") snapStore((payload.params || [])[0]);
+        if (payload.name === "showParameterMenu") result = false;   // no host here: no menu
         if (payload.name === "rememberUi") {   // like the plug-in: kept for the next time the window opens (here: a reload)
           Object.assign(uiMemory, (payload.params || [])[0] || {});
           try { sessionStorage.setItem("polisher.mockUi", JSON.stringify(uiMemory)); } catch (_) {}

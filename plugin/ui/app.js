@@ -158,6 +158,7 @@ const aaSet = Juce.getNativeFunction("setAutoAnalyze");     // Auto Analyze on /
 const aaGet = Juce.getNativeFunction("getAutoAnalyze");     // its status and the edits on offer
 const aaApply = Juce.getNativeFunction("applyAutoEdit");    // a module id or "all": one undo step
 const aaKeep = Juce.getNativeFunction("keepAutoEdit");      // leave it as it is (the advice doesn't come back)
+const showParameterMenu = Juce.getNativeFunction("showParameterMenu");   // the host's menu for a parameter (right-click)
 const refLoad = Juce.getNativeFunction("loadReference");
 const refClear = Juce.getNativeFunction("clearReference");
 const refGet = Juce.getNativeFunction("getReference");
@@ -519,6 +520,8 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   knob.addEventListener("pointercancel", end);
   knob.addEventListener("lostpointercapture", end);   // e.g. the window lost the mouse mid-drag: the undo step still closes
   knob.addEventListener("dblclick", () => { state.sliderDragStarted(); setNorm(scaledToNorm(state, def)); state.sliderDragEnded(); });
+  // Right-click: the host's own menu for this parameter (automation, Quick Controls ...), where it has one.
+  knob.addEventListener("contextmenu", (e) => { e.preventDefault(); showParameterMenu(state.name).catch(() => {}); });
   const wheel = wheelStepper();
   knob.addEventListener("wheel", (e) => {
     e.preventDefault();

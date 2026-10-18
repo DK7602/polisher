@@ -277,6 +277,17 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                                  o->setProperty ("displayDb", points);
                                  complete (juce::JSON::toString (juce::var (o), true));
                              })
+        // Right-click on a knob: the host's own menu for that parameter (automation, Quick Controls and the like),
+        // at the mouse, where the host offers one. showParameterMenu(parameterId) -> whether a menu was shown.
+        .withNativeFunction ("showParameterMenu", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 auto* parameter = args.size() > 0 ? audioProcessor.parameters.getParameter (args[0].toString()) : nullptr;
+                                 auto* host = getHostContext();
+                                 auto menu = parameter != nullptr && host != nullptr ? host->getContextMenuForParameter (parameter) : nullptr;
+                                 complete (menu != nullptr);
+                                 if (menu != nullptr)
+                                     menu->showNativeMenu (getMouseXYRelative());
+                             })
         // What the page told us to remember (see loudnessHistoryFor): rememberUi({ module, learn, history }).
         .withNativeFunction ("rememberUi", [this] (const juce::Array<juce::var>& args, auto complete)
                              {
