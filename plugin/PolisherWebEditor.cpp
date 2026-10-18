@@ -420,6 +420,16 @@ std::optional<juce::WebBrowserComponent::Resource> PolisherWebEditor::getResourc
             {
                 std::vector<std::byte> bytes (static_cast<size_t> (size));
                 std::memcpy (bytes.data(), data, bytes.size());
+                // JUCE's index.js (the page's link to the plug-in, imported by app.js) has one private class method
+                // (#getControlParameterIndex), which WebKit parses only from Safari 15 (macOS 12): on macOS 11 the
+                // module, and with it the whole page, would fail to load. Served as an ordinary method it runs on
+                // macOS 11's Safari 14 too. (If a JUCE update renames it, this does nothing: check the minimum then.)
+                if (fileName == "index.js")
+                {
+                    const auto text = juce::String::fromUTF8 (data, size).replace ("#getControlParameterIndex", "_getControlParameterIndex");
+                    bytes.resize (text.getNumBytesAsUTF8());
+                    std::memcpy (bytes.data(), text.toRawUTF8(), bytes.size());
+                }
                 return juce::WebBrowserComponent::Resource { std::move (bytes), mimeTypeFor (fileName) };
             }
         }
