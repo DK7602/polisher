@@ -1148,7 +1148,8 @@ void PolisherAudioProcessor::publishMeters()
     meters.momentary.store (clampDb (outputMeter.momentaryLufs()));
     meters.shortTerm.store (clampDb (outputMeter.shortTermLufs()));
     meters.integrated.store (clampDb (outputMeter.integratedLufs()));
-    meters.loudnessRange.store (static_cast<float> (outputMeter.loudnessRangeLu()));
+    const double lra = outputMeter.loudnessRangeLu();
+    meters.loudnessRange.store (static_cast<float> (std::isfinite (lra) ? juce::jlimit (0.0, 100.0, lra) : 0.0));   // never NaN (the window can't show null)
     meters.truePeakMax.store (clampDb (outputMeter.truePeakDbtp()));
     meters.inputShortTerm.store (clampDb (inputMeter.shortTermLufs()));
     meters.inputIntegrated.store (clampDb (inputMeter.integratedLufs()));

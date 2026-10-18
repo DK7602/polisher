@@ -428,6 +428,8 @@ TEST_CASE ("Plug-in: one NaN or inf from the host never reaches the output or st
             CHECK (p->meters.shortTerm.load() > -30.0f);         // the meters keep measuring
             CHECK (p->meters.inputShortTerm.load() > -30.0f);
             CHECK (std::isfinite (p->meters.correlation.load()));
+            CHECK (std::isfinite (p->meters.loudnessRange.load()));   // (the window freezes on a NaN meter)
+            CHECK (p->meters.loudnessRange.load() >= 0.0f);
         }
     }
 
