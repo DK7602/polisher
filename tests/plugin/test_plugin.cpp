@@ -1262,12 +1262,26 @@ TEST_CASE ("Auto-Master: a try that didn't work keeps the last good report; load
     juce::MemoryBlock before;
     p->getStateInformation (before);   // no report, Drive at its default
 
+    // Your Glue, Impact and Bass First: Auto-Master sets them back for its plan, and the report says so.
+    set (*p, "glueRatio", 2.0f);
+    set (*p, "dynImpact1", 30.0f);
+    set (*p, "maxBassFirst", 40.0f);
     REQUIRE (p->autoMaster.start());
     play (*p, head, testsig::musicLike (sr, 13.0, -14.0, 1));
     REQUIRE (p->autoMaster.finish());
     REQUIRE (waitForAutoMaster (*p));
     const auto good = reportOf (*p);
     REQUIRE (static_cast<bool> (good["ok"]));
+    CHECK (p->parameters.getRawParameterValue ("glueRatio")->load() == Catch::Approx (1.0f));
+    juce::StringArray resets;
+    for (const auto& x : *good["reasons"].getArray())
+        if (x["why"].toString().contains ("(yours"))
+            resets.add (x["module"].toString() + " " + x["control"].toString() + ": " + x["why"].toString());
+    INFO (resets.joinIntoString ("\n"));
+    CHECK (resets.size() == 3);
+    CHECK (resets.joinIntoString ("|").contains ("glue Ratio: Auto-Master works out its loudness plan with Glue doing nothing, so it set Glue back to 1:1 (yours was 2.0:1)."));
+    CHECK (resets.joinIntoString ("|").contains ("Impact +30 % on Low"));
+    CHECK (resets.joinIntoString ("|").contains ("yours was 40"));
     const int steps = p->history.size();
     const auto settings = p->parameters.copyState().toXmlString();
 

@@ -193,6 +193,8 @@ private:
     void takeListener (State newState);
     void launchAnalysis();
     void stopForLoadedState();                    // a state was loaded: stop listening / analysing and any check
+    /** Report lines for what Auto-Master sets back for its plan (Glue, Impact / Sustain, Bass First) where yours differ. */
+    std::vector<polisher::AutoMasterReason> resetReasons (const polisher::autoanalyze::Values& planned) const;
     void setParam (const juce::String& id, float value);
     void setReport (const juce::String& json);
 

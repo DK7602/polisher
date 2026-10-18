@@ -1523,7 +1523,8 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         reason ("bass", "Mono Below", hz (chain.bass.monoHz),
                 refName + " keeps some stereo in its bass (" + pct (ref.bassWidthPercent) + " below 150 Hz; yours is " + pct (width) +
                 "), so only the deep sub below " + hz (chain.bass.monoHz) + " is made mono. That keeps the sub solid on club systems and phones, "
-                "while the bass above it stays as wide as in the reference.");
+                "while the bass above it keeps the width it has in your mix: Masterology never widens the bass, so a narrower bass than the "
+                "reference's stays as it is.");
     }
     else if (bassHeavy || width >= 20.0)
     {
@@ -1569,7 +1570,10 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                           ", so kicks can get lost under it. Punch adds thump to the start of each kick (it spots kicks by their click), so 808 notes and the sub aren't turned up."
                         : s.intensity == Intensity::gentle ? "Gentle keeps the kick as it is."
                         : ! a.hasLowEnd ? "There's very little low end in what I heard, so there are no kicks to punch up."
-                                        : "Your kicks already hit clearly above the bass, so no extra punch is needed.");
+                        : ! bassHeavy && a.lowCrestDb < 9.0
+                            ? "Your low end is mostly sustained, but in " + genre + " the kick and bass are played, so " + std::string (rules.name) +
+                              " leaves them as they are. If the kick gets lost under the bass, choose Punchy (it adds a little Punch) or turn Punch up yourself."
+                            : "Your kicks already hit clearly above the bass, so no extra punch is needed.");
 
     // --- Dynamics: gentle per-band glue ----------------------------------------------------------------
     // Each band is held down by a set amount on its loud moments (the threshold is found by running

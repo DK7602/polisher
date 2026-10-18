@@ -441,6 +441,10 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         if (s.songTone.valid)
             doc->setProperty ("toneTarget", s.songTone.seconds);
 
+        // What Auto-Master sets back for its plan (Glue to 1:1, Impact / Sustain / Bass First to 0): the report says
+        // so when you had them on, so your own moves aren't dropped without a word.
+        const auto resets = resetReasons (polisher::autoanalyze::chainValues (r.chain));
+
         // Every control Auto-Master decides (polisher::autoanalyze::chainValues: the same list Auto Analyze
         // compares with); the report keeps them, except the hidden ulSquashSet.
         auto* values = new juce::DynamicObject();
@@ -456,7 +460,9 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         for (const auto& n : r.notes)
             notes.add (juce::String::fromUTF8 (n.c_str()));
         doc->setProperty ("notes", notes);
-        doc->setProperty ("reasons", reasonsToVar (r.reasons));
+        auto reasons = r.reasons;
+        reasons.insert (reasons.end(), resets.begin(), resets.end());
+        doc->setProperty ("reasons", reasonsToVar (reasons));
         // Stem EQ is only ever suggested: the editor offers an Apply button with these values.
         if (r.hasStemSuggestion)
         {
@@ -499,6 +505,43 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
     setReport (juce::JSON::toString (juce::var (doc), true));
     if (grouped)
         onApplyEnd();
+}
+
+std::vector<polisher::AutoMasterReason> AutoMasterController::resetReasons (const polisher::autoanalyze::Values& planned) const
+{
+    std::vector<polisher::AutoMasterReason> out;
+    auto text = [this] (const juce::String& id)
+    {
+        if (auto* p = dynamic_cast<juce::RangedAudioParameter*> (state.getParameter (id)))
+            return p->getText (p->getValue(), 64).toStdString();
+        return std::string();
+    };
+    auto changes = [&] (const std::string& id)
+    {
+        const auto it = planned.find (id);
+        return it != planned.end() && state.getRawParameterValue (juce::String (id)) != nullptr
+            && std::abs (paramValue (juce::String (id)) - static_cast<float> (it->second)) > 0.005f;
+    };
+    if (changes ("glueRatio") || changes ("glueGain"))
+        out.push_back ({ "glue", "Ratio", "1:1",
+                         "Auto-Master works out its loudness plan with Glue doing nothing, so it set Glue back to 1:1 (yours was " + text ("glueRatio") +
+                         (std::abs (paramValue ("glueGain")) > 0.05f ? ", gain " + text ("glueGain") : std::string()) + "). To use your Glue again, "
+                         "set it back after Auto-Master and compare with MATCH: the master gets a little denser and louder." });
+    const char* const bands[] = { "Low", "Low Mid", "High Mid", "High" };
+    std::string dyn;
+    for (int b = 0; b < polisher::kDynBands; ++b)
+        for (const char* what : { "Impact", "Sustain" })
+            if (const auto id = "dyn" + std::string (what) + std::to_string (b + 1); changes (id))
+                dyn += (dyn.empty() ? "" : ", ") + std::string (what) + " " + text (id) + " on " + bands[b];
+    if (! dyn.empty())
+        out.push_back ({ "dyn", "Impact / Sustain", "0 %",
+                         "Auto-Master plans the compression without Impact and Sustain, so they are back at 0 (yours: " + dyn + "). Turn them up again "
+                         "after Auto-Master if you liked them; Auto Analyze leaves them where you put them." });
+    if (changes ("maxBassFirst"))
+        out.push_back ({ "max", "Bass First", "0 %",
+                         "Auto-Master plans the plain limiter, so Bass First is back at 0 % (yours was " + text ("maxBassFirst") + "). Turn it up again "
+                         "after Auto-Master if you liked it; Auto Analyze leaves it where you put it." });
+    return out;
 }
 
 void AutoMasterController::setReport (const juce::String& json)

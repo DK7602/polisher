@@ -925,3 +925,24 @@ TEST_CASE ("Stream -14 aims the whole song at -14 when Auto-Master heard the who
     s.target = LoudnessTarget::loud;
     CHECK_THAT (autoMaster (l.loudestWindow(), s).targetLufs, WithinAbs (-9.0, 1.0e-9));
 }
+
+TEST_CASE ("Punch's reason for played bass at Balanced says why it stays at 0", "[automaster]")
+{
+    // Rock / Acoustic at Balanced leave the kick as played: the reason must say so, not that the kick already hits.
+    const auto mix = testsig::trapLike (44100.0, 12.0);   // a sustained 808 under the kick
+    for (const auto g : { Genre::rock, Genre::acoustic })
+    {
+        AutoMasterSettings s;
+        s.genre = g;
+        const auto r = autoMaster (mix, s);
+        REQUIRE (r.ok);
+        REQUIRE (r.analysis.hasLowEnd);
+        REQUIRE (r.analysis.lowCrestDb < 9.0);
+        CHECK (r.chain.bass.punch == 0.0);
+        std::string why;
+        for (const auto& x : r.reasons) if (x.module == "bass" && x.control == "Punch") why = x.why;
+        INFO (why);
+        CHECK (why.find ("choose Punchy") != std::string::npos);
+        CHECK (why.find ("already hit clearly") == std::string::npos);
+    }
+}
