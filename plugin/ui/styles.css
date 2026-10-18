@@ -22,7 +22,7 @@ button { font-family: inherit; color: #fff; cursor: pointer; }
 button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 img { -webkit-user-drag: none; }
 
-#viewport { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+#viewport { position: fixed; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center; }
 #stage { position: relative; width: 1600px; height: 900px; flex-shrink: 0; overflow: hidden; border-radius: 28px;
   transform-origin: center center; background: var(--navy); }
 
@@ -45,22 +45,22 @@ img { -webkit-user-drag: none; }
 .imgbtn img { display: block; width: 100%; height: 100%; }
 .imgbtn.on { box-shadow: 0 0 0 2px var(--red-hot), 0 0 18px rgba(255,40,50,.85); }
 
-.frame { position: absolute; inset: 0; width: 1600px; height: 900px; }
+.frame { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 1600px; height: 900px; }
 .tray { position: absolute; left: 30px; top: 54px; width: 1540px; height: 804px; border-radius: 24px;
   background: linear-gradient(180deg,#081A36 0%,#040C1C 100%);
   box-shadow: inset 0 0 0 1px rgba(140,200,255,.35), inset 0 6px 18px rgba(0,0,0,.7), 0 0 20px rgba(60,150,255,.35); }
 
 .panel { position: absolute; }
-.panel-bg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.panel-bg { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; }
 
 /* ---------- signal chain ---------- */
 #chain { position: absolute; left: 40px; top: 64px; width: 287px; height: 784px; }
-.chain-bg { position: absolute; inset: 0; width: 287px; height: 784px; border-radius: 22px; }
+.chain-bg { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 287px; height: 784px; border-radius: 22px; }
 .chain-title { position: absolute; left: 22px; right: 18px; top: 60px; display: flex; align-items: baseline; justify-content: space-between; }
 .chain-title .wm { font-size: 17px; }
 .chain-title .mono { font-size: 10px; color: #DCE8F5; }
 .row { position: absolute; left: 15px; width: 259px; height: 61px; }
-.row > img { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.row > img { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
 .row-btn { position: absolute; left: 0; top: 0; width: 226px; height: 100%; border: 0; background: transparent;
   padding: 0 0 0 55px; display: flex; align-items: center; gap: 8px; text-align: left; }
 .row-text { display: flex; flex-direction: column; flex-grow: 1; min-width: 0; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
@@ -82,7 +82,7 @@ img { -webkit-user-drag: none; }
 /* The song's style (shared with Mixology and Voxology): its genre small above the style; click for the picker. */
 #genre-name { flex: 1; min-width: 0; text-align: center; cursor: pointer; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #genre-name small { display: block; font-size: 10px; font-weight: 600; letter-spacing: .06em; opacity: .75; text-transform: uppercase; }
-.style-picker { position: absolute; inset: 28px; z-index: 40; border-radius: 22px; display: flex; flex-direction: column; overflow: hidden;
+.style-picker { position: absolute; top: 28px; right: 28px; bottom: 28px; left: 28px; z-index: 40; border-radius: 22px; display: flex; flex-direction: column; overflow: hidden;
   background: linear-gradient(180deg,#0F2C54 0%,#050F22 100%);
   box-shadow: inset 0 0 0 1.5px rgba(160,210,255,.6), 0 0 32px rgba(60,150,255,.35), 0 20px 40px rgba(0,0,0,.7); }
 .style-picker[hidden] { display: none; }
@@ -106,7 +106,7 @@ img { -webkit-user-drag: none; }
 
 /* ---------- spectrum ---------- */
 #spectrum { left: 341px; top: 172px; width: 873px; height: 262px; }
-.spectrum-row { position: absolute; inset: 14px; display: flex; gap: 10px; }
+.spectrum-row { position: absolute; top: 14px; right: 14px; bottom: 14px; left: 14px; display: flex; gap: 10px; }
 .screen { border-radius: 12px; background: linear-gradient(180deg,#07172E 0%,#030A16 100%);
   box-shadow: inset 0 2px 10px rgba(0,0,0,.8), inset 0 0 0 1px rgba(120,180,240,.35), 0 1px 0 rgba(160,210,255,.18); }
 .spectrum-screen { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 7px 10px 6px; }
@@ -118,11 +118,11 @@ img { -webkit-user-drag: none; }
 .freq-labels span:last-child { transform: translateX(-100%); }
 .plot-row { flex-grow: 1; min-height: 0; display: flex; gap: 6px; }
 .plot-wrap { flex-grow: 1; min-width: 0; position: relative; }
-#spectrum-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-#eq-nodes { position: absolute; inset: 0; pointer-events: none; }
+#spectrum-svg { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; display: block; }
+#eq-nodes { position: absolute; top: 0; right: 0; bottom: 0; left: 0; pointer-events: none; }
 #eq-nodes[hidden], #eq-readout[hidden], #eq-layer[hidden], #legend-eq[hidden], #legend-ref[hidden] { display: none; }
 .eq-node { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 999px; pointer-events: auto; cursor: grab;
-  display: flex; align-items: center; justify-content: center; font: 700 11px/1 "IBM Plex Mono", monospace; color: #fff; touch-action: none;
+  display: flex; align-items: center; justify-content: center; font: 700 11px/1 monospace; color: #fff; touch-action: none;
   background: radial-gradient(circle at 35% 30%, #ffffff 0, #ffd3d6 18%, #e0141e 55%, #7a0810 100%);
   box-shadow: 0 0 0 1.5px rgba(255,255,255,.85), 0 0 10px rgba(255,60,70,.55), 0 3px 6px rgba(0,0,0,.6); text-shadow: 0 1px 1px rgba(0,0,0,.6); }
 .eq-node.flat { background: radial-gradient(circle at 35% 30%, #ffffff 0, #dff0ff 18%, #6fa8d8 55%, #1d4a7a 100%); box-shadow: 0 0 0 1.5px rgba(255,255,255,.7), 0 0 8px rgba(120,190,255,.45), 0 3px 6px rgba(0,0,0,.6); }
@@ -140,13 +140,15 @@ img { -webkit-user-drag: none; }
 .sw-genre { height: 0; border-top: 2.5px dotted #7EE0C3; opacity: .85; }
 .sw-gr { height: 9px; background: rgba(156,203,240,.3); border-top: 1px solid rgba(156,203,240,.8); }
 .sw-target { height: 0; border-top: 1.5px dashed #DCE8F5; opacity: .8; }
+/* The EQ points' digits and SPECTRUM / HISTORY use the generic monospace, and the DAW list 10 pt (13.33 px) Arial: that is how the
+   approved look renders (they named fonts that never applied). Named here so every machine draws them the same. */
 /* the genre line's legend entry is also its show / hide switch */
 .legend-btn { display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
 .legend-btn[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
 .legend-btn:hover span { color: #fff; }
 /* Spectrum / History switch at the right end of the legend */
 .view-toggle { margin-left: auto; display: flex; border-radius: 999px; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(120,180,240,.5); flex-shrink: 0; }
-.view-toggle button { height: 18px; padding: 0 9px; border: 0; background: transparent; color: var(--muted); font: 700 9.5px/1 "IBM Plex Mono", monospace; letter-spacing: .06em; cursor: pointer; }
+.view-toggle button { height: 18px; padding: 0 9px; border: 0; background: transparent; color: var(--muted); font: 700 9.5px/1 monospace; letter-spacing: .06em; cursor: pointer; }
 .view-toggle button[aria-pressed="true"] { background: linear-gradient(180deg,#FF5A62,#C8101A); color: #fff; }
 /* Loudness history: the same screen, other contents */
 #spectrum-screen:not(.view-history) .hist-only, #spectrum-screen:not(.view-history) #hist-layer { display: none !important; }
@@ -157,7 +159,7 @@ img { -webkit-user-drag: none; }
 .hist-note { position: absolute; font-size: 9.5px; color: var(--dim); pointer-events: none; transform: translateY(-50%); white-space: nowrap; }
 #hist-gr6-label { left: 20px; color: #FFB08F; }
 #hist-target-label { left: 84px; transform: translateY(-115%); color: #DCE8F5; }
-.hist-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted); pointer-events: none; }
+.hist-empty { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted); pointer-events: none; }
 .hist-empty[hidden] { display: none; }
 
 .outmeter { width: 85px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 6px; }
@@ -187,8 +189,8 @@ img { -webkit-user-drag: none; }
 .cell-sub { font-size: 10px; color: var(--dim); height: 13px; }
 .knob { position: relative; width: 92px; height: 92px; filter: drop-shadow(0 6px 8px rgba(0,0,0,.6)); cursor: ns-resize; touch-action: none; outline: none; border-radius: 999px; }
 .knob:focus-visible { box-shadow: 0 0 0 3px #fff; }
-.knob img { position: absolute; inset: 0; width: 92px; height: 92px; pointer-events: none; }
-.knob .pointer { position: absolute; inset: 0; pointer-events: none; }
+.knob img { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 92px; height: 92px; pointer-events: none; }
+.knob .pointer { position: absolute; top: 0; right: 0; bottom: 0; left: 0; pointer-events: none; }
 .knob .pointer span { position: absolute; left: 44.2px; top: 10px; width: 3.6px; height: 21px; border-radius: 2px;
   background: var(--red-hot); box-shadow: 0 0 4px #FF6A70, 0 0 10px rgba(255,40,50,.9); }
 .minmax { width: 100px; display: flex; justify-content: space-between; font-size: 10px; color: var(--dim); }
@@ -206,7 +208,7 @@ img { -webkit-user-drag: none; }
 
 /* ---------- learn ---------- */
 #learn { left: 1226px; top: 172px; width: 336px; height: 544px; }
-.learn-inner { position: absolute; inset: 14px; display: flex; flex-direction: column; gap: 8px; }
+.learn-inner { position: absolute; top: 14px; right: 14px; bottom: 14px; left: 14px; display: flex; flex-direction: column; gap: 8px; }
 .learn-head { height: 50px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 20px; }
 .learn-head .wm { font-size: 11.5px; }
 .learn-body { flex-grow: 1; min-height: 0; overflow-y: auto; padding: 4px 6px; display: flex; flex-direction: column; gap: 11px; }
@@ -280,7 +282,7 @@ img { -webkit-user-drag: none; }
 .pop-foot { font-size: 11px; color: var(--dim); }
 /* Your DAW (shared with Mixology and Voxology) */
 .daw-row { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 700; letter-spacing: .08em; color: #DCE8F5; }
-.daw-row select { flex: 1; height: 30px; border: 0; border-radius: 10px; padding: 0 10px; font: 600 13px inherit; color: #fff;
+.daw-row select { flex: 1; height: 30px; border: 0; border-radius: 10px; padding: 0 10px; font: 400 10pt Arial; color: #fff;
   background: rgba(255,255,255,.08); box-shadow: inset 0 0 0 1px rgba(160,210,255,.45); cursor: pointer; }
 .daw-row select option { background: #0F2C54; color: #fff; }
 .toast { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); z-index: 30; max-width: 560px; padding: 12px 18px;
@@ -382,7 +384,7 @@ body.theme-mono .pop-note { background: rgba(255,255,255,.06); border-color: rgb
 /* ---------- user manual ---------- */
 .manual-open { align-self: flex-start; padding: 8px 14px; border: 0; border-radius: 10px; font-size: 11px;
   background: linear-gradient(180deg,#FF3B45,#B00C14); box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 0 12px rgba(255,40,50,.5); }
-.manual { position: absolute; inset: 28px; z-index: 40; border-radius: 22px; display: flex; flex-direction: column; overflow: hidden;
+.manual { position: absolute; top: 28px; right: 28px; bottom: 28px; left: 28px; z-index: 40; border-radius: 22px; display: flex; flex-direction: column; overflow: hidden;
   background: linear-gradient(180deg,#0F2C54 0%,#050F22 100%);
   box-shadow: inset 0 0 0 1.5px rgba(160,210,255,.6), 0 0 32px rgba(60,150,255,.35), 0 20px 40px rgba(0,0,0,.7);
   -webkit-user-select: text; user-select: text; }
@@ -515,3 +517,45 @@ body.theme-mono #btn-redo:not(.is-disabled) { filter: drop-shadow(0 0 8px rgba(2
 .aa-why { font-size: 12px; color: var(--dim); margin: 0; }
 body.theme-mono .aa-toggle[aria-pressed="true"] .aa-lamp { background: #fff; box-shadow: 0 0 6px rgba(255,255,255,.8); }
 body.theme-mono .aa-see.has { background: rgba(255,255,255,.2); box-shadow: inset 0 0 0 1px rgba(255,255,255,.7); }
+
+/* ---------- older macOS (WebKit before Safari 14.1, macOS 11.0 to 11.2): no flex gap ----------
+   app.js gives the page the class no-flex-gap only there. These margins stand in for the gaps that keep controls
+   and text apart; elsewhere a missing gap only brings things a little closer. Never applies where gap works. */
+.no-flex-gap .header-row > * + * { margin-left: 7px; }
+.no-flex-gap .footer-row > * + * { margin-left: 16px; }
+.no-flex-gap .choices > * + * { margin-top: 10px; }
+.no-flex-gap .choice-row > * + * { margin-left: 6px; }
+.no-flex-gap .module-inner > * + * { margin-top: 6px; }
+.no-flex-gap .module-head > * + * { margin-left: 12px; }
+.no-flex-gap .spectrum-row > * + * { margin-left: 10px; }
+.no-flex-gap .spectrum-screen > * + * { margin-top: 3px; }
+.no-flex-gap .plot-row > * + * { margin-left: 6px; }
+.no-flex-gap .legend > * + * { margin-left: 16px; }
+.no-flex-gap .legend span > i:first-child, .no-flex-gap .legend-btn > i:first-child { margin-right: 6px; }
+.no-flex-gap .outmeter-lr > * + * { margin-left: 22px; }
+.no-flex-gap .learn-head > * + * { margin-left: 10px; }
+.no-flex-gap .listen > * + * { margin-left: 6px; }
+.no-flex-gap .aa-toggle > * + * { margin-left: 7px; }
+.no-flex-gap .pop-note > * + * { margin-left: 8px; }
+.no-flex-gap .cell > * + * { margin-top: 3px; }
+.no-flex-gap .seg > * + * { margin-left: 4px; }
+.no-flex-gap .seg-v > * + * { margin: 5px 0 0; }
+.no-flex-gap .band-pick > * + * { margin-top: 5px; }
+.no-flex-gap .band-pick .band-row > * + * { margin-left: 4px; }
+.no-flex-gap .stemhear > * + * { margin-top: 7px; }
+.no-flex-gap .sh-row > * + * { margin-left: 5px; }
+.no-flex-gap .snaps > * + *, .no-flex-gap .checks > * + * { margin-top: 3px; }
+.no-flex-gap .snap-row > * + * { margin-left: 3px; }
+.no-flex-gap .row-btn > * + * { margin-left: 8px; }
+.no-flex-gap .outmeter > * + * { margin-top: 6px; }
+.no-flex-gap .outmeter-bars > * + * { margin-left: 8px; }
+.no-flex-gap .meter > * + * { margin-top: 4px; }
+.no-flex-gap .automaster > * + * { margin-top: 3px; }
+.no-flex-gap .learn-inner > * + * { margin-top: 8px; }
+.no-flex-gap .learn-body > * + * { margin-top: 11px; }
+.no-flex-gap .l-tip > * + * { margin-top: 4px; }
+.no-flex-gap .l-item > * + * { margin-top: 3px; }
+.no-flex-gap .l-item-head > * + *, .no-flex-gap .l-actions > * + *, .no-flex-gap .aa-strip > * + * { margin-left: 8px; }
+.no-flex-gap .popover > * + * { margin-top: 12px; }
+.no-flex-gap .popover ul > * + * { margin-top: 8px; }
+.no-flex-gap .check > * + *, .no-flex-gap .daw-row > * + *, .no-flex-gap .monitor-banner > * + * { margin-left: 10px; }

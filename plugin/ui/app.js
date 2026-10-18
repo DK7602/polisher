@@ -15,6 +15,23 @@ const MINUS = "−";
 const fmtNum = (v, digits = 1) => (v < 0 ? MINUS : "") + Math.abs(v).toFixed(digits);
 const fmtDb = (v, unit, digits = 1) => (v <= -99 ? `${MINUS}inf ${unit}` : `${fmtNum(v, digits)} ${unit}`);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+// Writes only what changed, so live readouts don't rewrite the page (or make a screen reader repeat itself).
+const setText = (el, text) => { if (el && el.textContent !== text) el.textContent = text; };
+const setAttr = (el, name, value) => { if (el && el.getAttribute(name) !== value) el.setAttribute(name, value); };
+const setWidth = (el, v) => { if (el && el.style.width !== v) el.style.width = v; };
+const setHeight = (el, v) => { if (el && el.style.height !== v) el.style.height = v; };
+const setBottom = (el, v) => { if (el && el.style.bottom !== v) el.style.bottom = v; };
+
+// Flex gap arrived in WebKit with Safari 14.1 (macOS 11.3). On an older one the page gets the class no-flex-gap,
+// and styles.css keeps the controls and the text apart with margins instead.
+{
+  const probe = document.createElement("div");
+  probe.style.cssText = "display:flex;flex-direction:column;row-gap:1px;position:absolute;visibility:hidden";
+  probe.append(document.createElement("div"), document.createElement("div"));
+  document.body.appendChild(probe);
+  if (probe.scrollHeight !== 1) document.documentElement.classList.add("no-flex-gap");
+  probe.remove();
+}
 
 // ---------------------------------------------------------------------------------------------
 // Scale the fixed 1600x900 design to the window.
@@ -103,6 +120,28 @@ const P = {
   rtFocus: Juce.getComboBoxState("rtFocus"),
   stemGain: ["stemVoc", "stemDrums", "stemBass", "stemOther"].map((id) => Juce.getSliderState(id)),
 };
+// JUCE sends every value the page sets straight back. During a drag or a quick run of wheel or arrow steps an
+// older value can come back after a newer one was sent: the next step would start from it (a step lost) and the
+// pointer would jump back for a moment. So an echo of a value sent in the last second is dropped (the newest one
+// too: nothing changed). Any other value is the host's (automation, undo) and is taken.
+function guardEchoes(state) {
+  const sent = [];   // [value, when] sent in the last second, oldest first
+  const prune = (now) => { while (sent.length && (sent.length > 40 || now - sent[0][1] > 1000)) sent.shift(); };
+  const set = state.setNormalisedValue.bind(state), handle = state.handleEvent.bind(state);
+  state.setNormalisedValue = (n) => { set(n); const now = performance.now(); sent.push([state.getScaledValue(), now]); prune(now); };
+  state.handleEvent = (ev) => {
+    if (ev && ev.eventType === "valueChanged" && sent.length) {
+      prune(performance.now());
+      const { start = 0, end = 1, interval = 0 } = state.properties;
+      const near = Math.max(interval / 2, Math.abs(end - start) * 1e-6);
+      const i = sent.findIndex(([v]) => Math.abs(v - ev.value) <= near);
+      if (i >= 0) { sent.splice(0, i + 1); return; }   // ours, coming back
+      sent.length = 0;                                  // the host's: it wins
+    }
+    handle(ev);
+  };
+}
+Object.values(P).flat().filter((st) => typeof st.setNormalisedValue === "function").forEach(guardEchoes);
 const resetMeter = Juce.getNativeFunction("resetMeter");
 const amStart = Juce.getNativeFunction("startAutoMaster");
 const amCancel = Juce.getNativeFunction("cancelAutoMaster");
@@ -119,6 +158,7 @@ const aaSet = Juce.getNativeFunction("setAutoAnalyze");     // Auto Analyze on /
 const aaGet = Juce.getNativeFunction("getAutoAnalyze");     // its status and the edits on offer
 const aaApply = Juce.getNativeFunction("applyAutoEdit");    // a module id or "all": one undo step
 const aaKeep = Juce.getNativeFunction("keepAutoEdit");      // leave it as it is (the advice doesn't come back)
+const showParameterMenu = Juce.getNativeFunction("showParameterMenu");   // the host's menu for a parameter (right-click)
 const refLoad = Juce.getNativeFunction("loadReference");
 const refClear = Juce.getNativeFunction("clearReference");
 const refGet = Juce.getNativeFunction("getReference");
@@ -148,6 +188,7 @@ const M = {
   // Auto Analyze: on, why it waits ("" = checked), music heard in this stretch of playback, edits on offer.
   aaOn: false, aaPause: "off", aaHeard: 0, aaEdits: 0, aaVersion: 0,
   listen: 0, mono: false, phone: false, listenNow: 0, listenGain: 0, listenUnder: -100,
+  bassCut: 0, playing: true,   // playing: the host's transport (builds before it didn't send it)
 };
 // Listening aids (Listen / Solo, MONO, PHONE): monitoring only. The plug-in keeps them out of the saved
 // parameters, switches them off when this window closes and never puts them in an offline export.
@@ -229,7 +270,11 @@ const modules = [
                ["Oversampling", "Cuts down the harsh aliasing that clipping otherwise adds."]] },
   { id: "max", name: "Maximizer", live: true },
 ];
-let selected = "max";
+// What the plug-in remembers for this window (PolisherWebEditor): the module that was open, LEARN on or off (both
+// saved with the project) and the loudness history (while the plug-in runs), so reopening it puts you back there.
+const rememberUi = Juce.getNativeFunction("rememberUi");
+const UI_MEM = ((window.__JUCE__.initialisationData || {}).polisherUi || [])[0] || {};
+let selected = modules.some((m) => m.id === UI_MEM.module) ? UI_MEM.module : "max";
 let learnView = "module";      // "module", "report" (the Auto-Master report), "ref" (Match ref) or "history" (loudness history)
 let amReport = null;           // last Auto-Master report (parsed), or null
 
@@ -365,7 +410,7 @@ function renderChain() {
     btn.innerHTML = `<span class="row-text"><span class="row-name">${m.name}</span>
       <span class="row-read mono" id="read-${m.id}">${m.live ? "" : "Coming soon"}</span></span>
       <span class="row-num mono">${String(i + 1).padStart(2, "0")}</span>`;
-    btn.addEventListener("click", () => { selected = m.id; learnView = "module"; renderChain(); renderModule(); renderLearn(); });
+    btn.addEventListener("click", () => { selected = m.id; learnView = "module"; renderChain(); renderModule(); renderLearn(); rememberUi({ module: m.id }); });
     row.appendChild(btn);
     chainRows.appendChild(row);
   });
@@ -379,13 +424,36 @@ function knobMarkup(angle) {
   return `<img src="assets/knob.png" alt=""><div class="pointer" style="transform: rotate(${angle}deg)"><span></span></div>`;
 }
 const angleFor = (norm) => -135 + 270 * clamp(norm, 0, 1);
+// Mouse wheel and trackpad, as steps: up (or left) = more. Shift+wheel arrives as a sideways scroll (deltaY 0), so
+// the direction comes from the larger of the two; a scroll with neither is ignored. A notch of a classic wheel
+// (wheelDelta 120) is one step. A trackpad, or a free-spinning or high-resolution wheel, sends many small scrolls
+// (and momentum): those add up, one step per ~100 px, so a swipe moves a knob about as far as a notch or two.
+function wheelStepper() {
+  let acc = 0, at = 0;
+  return (e) => {
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;   // lines / pages, in pixels
+    const dx = e.deltaX * unit, dy = e.deltaY * unit, vertical = Math.abs(dy) >= Math.abs(dx);
+    const d = -(vertical ? dy : dx);
+    if (!d) return 0;
+    const now = performance.now();
+    if (now - at > 400 || acc * d < 0) acc = 0;                            // a new gesture, or the other way
+    at = now;
+    const ticks = Math.abs((vertical ? e.wheelDeltaY : e.wheelDeltaX) || 0) / 120;
+    if (e.deltaMode !== 0 || (ticks >= 1 && Number.isInteger(ticks))) { acc = 0; return Math.sign(d) * Math.max(1, ticks); }
+    acc += d;
+    const n = Math.trunc(acc / 100);
+    acc -= n * 100;
+    return n;
+  };
+}
 
 // A typed value -> the control's own units. Accepts "−3", "-3 dB", "1.2k" / "1.2 kHz", "2.5:1", "120 ms",
-// "off" (the control's minimum); keeps it in range. A control that only goes up from a positive start
+// "off" (the control's minimum), "1,200" (a comma before exactly three digits groups thousands; any other comma
+// is a decimal point, "2,5"); keeps it in range. A control that only goes up from a positive start
 // (Tone Steady Range) takes "-3" as 3. Returns null when there is no number.
 function parseTyped(text, state) {
   const { start, end } = state.properties;
-  const t = String(text).trim().toLowerCase().replace(/\u2212/g, "-").replace(",", ".");
+  const t = String(text).trim().toLowerCase().replace(/\u2212/g, "-").replace(/(\d),(\d{3})(?!\d)/g, "$1$2").replace(",", ".");
   if (t === "off") return start;
   const m = /([-+]?\d*\.?\d+)\s*(k(?!hz)|khz)?/.exec(t);
   if (!m) return null;
@@ -393,6 +461,20 @@ function parseTyped(text, state) {
   if (!Number.isFinite(v)) return null;
   if (start >= 0 && v < 0) v = -v;
   return clamp(v, Math.min(start, end), Math.max(start, end));
+}
+
+// One step of a knob, in normalised units (1 %, Shift 0.2 %), but at least far enough that its value changes: near
+// the bottom of a skewed range (Ratio at 1:1, short attack and release times) or with whole-number values (Bass
+// First, Impact), 1 % rounds back to the same value and the wheel and arrow keys would do nothing.
+function stepNorm(state, from, dir, size) {
+  const legal = (n) => state.snapToLegalValue(state.normalisedToScaledValue(clamp(n, 0, 1)));
+  const was = legal(from);
+  let n = from;
+  for (let i = 0; i < 1000; i++) {
+    n = clamp(n + dir * size, 0, 1);
+    if (legal(n) !== was || n <= 0 || n >= 1) break;
+  }
+  return n;
 }
 
 function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
@@ -407,19 +489,25 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   const value = cell.querySelector(".cell-value");
 
   const refresh = () => {
-    const n = state.getNormalisedValue();
+    const n = state.getNormalisedValue(), { start, end } = state.properties;
     pointer.style.transform = `rotate(${angleFor(n)}deg)`;
     value.textContent = fmt(state.getScaledValue());
     knob.setAttribute("aria-valuetext", value.textContent);
+    setAttr(knob, "aria-valuenow", String(+state.getScaledValue().toFixed(4)));
+    setAttr(knob, "aria-valuemin", String(Math.min(start, end)));
+    setAttr(knob, "aria-valuemax", String(Math.max(start, end)));
   };
   const setNorm = (n) => { state.setNormalisedValue(clamp(n, 0, 1)); refresh(); onParamsChanged(); userEdited(); };
 
   let dragStart = null;
   knob.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;   // drags with the left button only (right-click is the host's menu)
     knob.setPointerCapture(e.pointerId);
     dragStart = { y: e.clientY, n: state.getNormalisedValue() };
     state.sliderDragStarted();
-    e.preventDefault();
+    // No preventDefault: the press gives the knob the keyboard, as a click does, so the arrow keys and Enter work on
+    // the knob you just touched (a mouse focus shows no ring: :focus-visible). Nothing else happens by default here:
+    // the page selects no text and the knob's image can't be dragged.
   });
   knob.addEventListener("pointermove", (e) => {
     if (!dragStart) return;
@@ -432,10 +520,17 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   knob.addEventListener("pointercancel", end);
   knob.addEventListener("lostpointercapture", end);   // e.g. the window lost the mouse mid-drag: the undo step still closes
   knob.addEventListener("dblclick", () => { state.sliderDragStarted(); setNorm(scaledToNorm(state, def)); state.sliderDragEnded(); });
+  // Right-click: the host's own menu for this parameter (automation, Quick Controls ...), where it has one.
+  knob.addEventListener("contextmenu", (e) => { e.preventDefault(); showParameterMenu(state.name).catch(() => {}); });
+  const wheel = wheelStepper();
   knob.addEventListener("wheel", (e) => {
     e.preventDefault();
+    const steps = wheel(e);
+    if (!steps) return;
     state.sliderDragStarted();
-    setNorm(state.getNormalisedValue() + (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 0.002 : 0.01));
+    let n = state.getNormalisedValue();
+    for (let i = 0; i < Math.abs(steps); i++) n = stepNorm(state, n, Math.sign(steps), e.shiftKey ? 0.002 : 0.01);
+    setNorm(n);
     state.sliderDragEnded();
   }, { passive: false });
   // Double-click the number (or press Enter on the knob) to type an exact value.
@@ -444,7 +539,8 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
     const input = document.createElement("input");
     input.className = "value-input mono";
     input.type = "text";
-    input.value = value.textContent;
+    const shown = value.textContent;
+    input.value = shown;
     input.setAttribute("aria-label", `${label}: type a value`);
     value.hidden = true;
     value.after(input);
@@ -454,7 +550,9 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
     const finish = (commit) => {
       if (done) return;
       done = true;
-      const v = commit ? parseTyped(input.value, state) : null;
+      // Left as it opened (a look, then a click away or Enter): nothing changes. The box shows the rounded value,
+      // and writing that back would round a finer one (2.37 dB -> 2.40) and add an undo step.
+      const v = commit && input.value.trim() !== shown.trim() ? parseTyped(input.value, state) : null;
       input.remove();
       value.hidden = false;
       if (v !== null) { state.sliderDragStarted(); setNorm(scaledToNorm(state, v)); state.sliderDragEnded(); }
@@ -470,11 +568,16 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   value.title = "Double-click to type a value";
   value.addEventListener("dblclick", typeIn);
   // Each key press is one gesture (the plug-in's undo merges quick repeats into one step).
-  const nudge = (d) => { state.sliderDragStarted(); setNorm(state.getNormalisedValue() + d); state.sliderDragEnded(); };
+  const nudge = (dir, size) => { state.sliderDragStarted(); setNorm(stepNorm(state, state.getNormalisedValue(), dir, size)); state.sliderDragEnded(); };
+  const jump = (n) => { state.sliderDragStarted(); setNorm(n); state.sliderDragEnded(); };
   knob.addEventListener("keydown", (e) => {
-    const step = e.shiftKey ? 0.002 : 0.01;
-    if (e.key === "ArrowUp" || e.key === "ArrowRight") nudge(step);
-    else if (e.key === "ArrowDown" || e.key === "ArrowLeft") nudge(-step);
+    const size = e.shiftKey ? 0.002 : 0.01;
+    if (e.key === "ArrowUp" || e.key === "ArrowRight") nudge(1, size);
+    else if (e.key === "ArrowDown" || e.key === "ArrowLeft") nudge(-1, size);
+    else if (e.key === "PageUp") nudge(1, 0.1);
+    else if (e.key === "PageDown") nudge(-1, 0.1);
+    else if (e.key === "Home") jump(0);
+    else if (e.key === "End") jump(1);
     else if (e.key === "Enter") typeIn();
     else return;
     e.preventDefault();
@@ -1017,13 +1120,19 @@ const nodeEls = EQ_BANDS.map((band, b) => {
   n.className = "eq-node";
   n.textContent = String(b + 1);
   n.setAttribute("role", "slider");
-  n.setAttribute("aria-label", band.name);
+  n.setAttribute("aria-label", `${band.name}: left / right arrows move the frequency, up / down the gain`);
+  n.tabIndex = 0;   // (a click doesn't focus it: its press handler prevents that; the keyboard reaches it with Tab)
   eqNodes.appendChild(n);
 
-  let dragging = false;
+  // The point moves by as much as the pointer does (a fifth of it with Shift, like the knobs' fine control), from
+  // where it was grabbed: taking it a little off-centre doesn't make it jump under the pointer.
+  let dragging = false, grab = null;
   const setFromPointer = (e) => {
+    const fine = e.shiftKey ? 0.2 : 1;
+    grab.x += (e.clientX - grab.px) * fine; grab.y += (e.clientY - grab.py) * fine;
+    grab.px = e.clientX; grab.py = e.clientY;
     const r = plotWrap.getBoundingClientRect();
-    const fx = clamp((e.clientX - r.left) / r.width, 0, 1), fy = clamp((e.clientY - r.top) / r.height, 0, 1);
+    const fx = clamp((grab.x - r.left) / r.width, 0, 1), fy = clamp((grab.y - r.top) / r.height, 0, 1);
     const f = 20 * Math.pow(1000, fx);
     const g = clamp((0.5 - fy) * 2 * EQ_VIEW, -EQ_MAX, EQ_MAX);
     const fs = P.eqFreq[b], gs = P.eqGain[b];
@@ -1032,6 +1141,9 @@ const nodeEls = EQ_BANDS.map((band, b) => {
     eqCells[b].refresh(); onParamsChanged(); userEdited();
   };
   n.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    const c = n.getBoundingClientRect();
+    grab = { x: c.left + c.width / 2, y: c.top + c.height / 2, px: e.clientX, py: e.clientY };
     n.setPointerCapture(e.pointerId); dragging = true; n.classList.add("dragging");
     P.eqFreq[b].sliderDragStarted(); P.eqGain[b].sliderDragStarted();
     e.preventDefault(); e.stopPropagation();
@@ -1053,16 +1165,33 @@ const nodeEls = EQ_BANDS.map((band, b) => {
     for (const [s] of reset) s.sliderDragEnded();
     eqCells[b].refresh(); onParamsChanged(); userEdited();
   });
+  const wheel = wheelStepper();
   n.addEventListener("wheel", (e) => {
     e.preventDefault();
+    const steps = wheel(e);
+    if (!steps) return;
     const gs = P.eqGain[b];
     gs.sliderDragStarted();
-    gs.setNormalisedValue(scaledToNorm(gs, clamp(eqGainAt(b) + (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 0.1 : 0.5), -EQ_MAX, EQ_MAX)));
+    gs.setNormalisedValue(scaledToNorm(gs, clamp(eqGainAt(b) + steps * (e.shiftKey ? 0.1 : 0.5), -EQ_MAX, EQ_MAX)));
     gs.sliderDragEnded();
     eqCells[b].refresh(); onParamsChanged(); userEdited();
   }, { passive: false });
   n.addEventListener("pointerenter", () => { n.dataset.hover = "1"; drawEq(); });
-  n.addEventListener("pointerleave", () => { delete n.dataset.hover; if (!dragging) eqReadout.hidden = true; });
+  n.addEventListener("pointerleave", () => { delete n.dataset.hover; if (!dragging && !n.dataset.focus) eqReadout.hidden = true; });
+  // Keyboard: left / right move the frequency (1 % of its range, Shift 0.2 %), up / down the gain (0.5 dB, Shift
+  // 0.1 dB); each press is a gesture (the plug-in's undo merges quick repeats). The readout shows while focused.
+  n.addEventListener("keydown", (e) => {
+    const fs = P.eqFreq[b], gs = P.eqGain[b], fine = e.shiftKey;
+    let st, to;
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") { st = fs; to = stepNorm(fs, fs.getNormalisedValue(), e.key === "ArrowRight" ? 1 : -1, fine ? 0.002 : 0.01); }
+    else if (e.key === "ArrowUp" || e.key === "ArrowDown") { st = gs; to = scaledToNorm(gs, clamp(eqGainAt(b) + (e.key === "ArrowUp" ? 1 : -1) * (fine ? 0.1 : 0.5), -EQ_MAX, EQ_MAX)); }
+    else return;
+    e.preventDefault();
+    st.sliderDragStarted(); st.setNormalisedValue(to); st.sliderDragEnded();
+    eqCells[b].refresh(); onParamsChanged(); userEdited();
+  });
+  n.addEventListener("focus", () => { n.dataset.focus = "1"; drawEq(); });
+  n.addEventListener("blur", () => { delete n.dataset.focus; if (!dragging && !n.dataset.hover) eqReadout.hidden = true; });
   return n;
 });
 
@@ -1100,7 +1229,10 @@ function drawEqNow() {
     n.classList.toggle("flat", Math.abs(g) < 0.05 || !active);
     const text = `${EQ_BANDS[b].name} · ${fmtHz(f)} · ${g > 0.049 ? "+" : ""}${fmtNum(g, 1)} dB`;
     n.setAttribute("aria-valuetext", text);
-    if (n.classList.contains("dragging") || n.dataset.hover) {
+    setAttr(n, "aria-valuenow", String(+g.toFixed(2)));
+    setAttr(n, "aria-valuemin", String(-EQ_MAX));
+    setAttr(n, "aria-valuemax", String(EQ_MAX));
+    if (n.classList.contains("dragging") || n.dataset.hover || n.dataset.focus) {
       eqReadout.textContent = text;
       eqReadout.style.left = n.style.left;
       eqReadout.style.top = n.style.top;
@@ -1158,11 +1290,34 @@ function louderBy() {
 }
 function avgGrRecent() { return grWindow.length ? grWindow.reduce((a, b) => a + b, 0) / grWindow.length : 0; }
 
-function renderLearn() {
-  renderLearnBody();
-  if (learnOn && learnView === "module") addMonitorLearn($("learn-body"));
-  if (learnOn && learnView === "module") addMixologyLearn($("learn-body"));
-  if (learnOn && (learnView === "module" || learnView === "report")) addAutoAnalyzeStrip($("learn-body"));
+// The panel is built off-screen and swapped in only when it differs from what is shown, so the live numbers
+// (refreshed every second and as controls move) don't take away a button you are pressing, the keyboard focus
+// or a tooltip. renderLearn(): after something you did (a click, a key), shown at once. refreshLearn(): the
+// live numbers, which wait while you press inside the panel or the keyboard is on one of its buttons.
+const learnBody = $("learn-body");
+const FOCUSABLE = "button:not([disabled]), a[href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
+const learnControls = (root) => [...root.querySelectorAll(FOCUSABLE)].map((e) => `${e.tagName}#${e.id}.${e.className}`).join("|");
+let learnShown = "";          // the HTML on screen
+let learnPending = false;     // a refresh waits for the press or the focus to leave
+let learnPress = 0;           // when a press inside the panel started (0: none)
+learnBody.addEventListener("pointerdown", () => { learnPress = performance.now(); }, true);
+function learnRelease() {
+  if (!learnPress) return;
+  learnPress = 0;
+  if (learnPending) setTimeout(refreshLearn, 0);   // after the click that ends the press
+}
+for (const t of ["pointerup", "pointercancel"]) window.addEventListener(t, learnRelease, true);
+window.addEventListener("blur", learnRelease);
+learnBody.addEventListener("focusout", (e) => { if (learnPending && !learnBody.contains(e.relatedTarget)) setTimeout(refreshLearn, 0); });
+
+function renderLearn() { showLearn(true); }
+function refreshLearn() { showLearn(false); }
+function buildLearn() {
+  const body = document.createElement("div");
+  renderLearnBody(body);
+  if (learnOn && learnView === "module") addMonitorLearn(body);
+  if (learnOn && learnView === "module") addMixologyLearn(body);
+  if (learnOn && (learnView === "module" || learnView === "report")) addAutoAnalyzeStrip(body);
   if (learnOn && learnView === "module" && M.amState === 1) {
     // Still listening while you look at a module: a way back to the listening view.
     const link = document.createElement("button");
@@ -1170,13 +1325,39 @@ function renderLearn() {
     link.className = "l-link";
     link.textContent = `← ${M.amMode === 1 ? "LEARNING TONE" : "LISTENING"} · ${fmtTime(M.amHeard || 0)} HEARD`;
     link.addEventListener("click", () => { learnView = "listen"; renderLearn(); });
-    $("learn-body").prepend(link);
+    body.prepend(link);
+  }
+  return body;
+}
+function showLearn(now) {
+  let next;
+  try { next = buildLearn(); } catch (e) { reportOnce("learn", e); return; }
+  const html = next.innerHTML;
+  if (html === learnShown) { learnPending = false; return; }
+  const pressing = learnPress && performance.now() - learnPress < 4000;   // (a press the window never saw end is let go)
+  const focused = learnBody.contains(document.activeElement) && document.activeElement !== learnBody ? document.activeElement : null;
+  // On a button with the keyboard: new numbers wait; new or changed buttons come in, with the focus kept.
+  if (pressing || (!now && focused && learnControls(next) === learnControls(learnBody))) { learnPending = true; return; }
+  learnPending = false;
+  const index = focused ? [...learnBody.querySelectorAll(FOCUSABLE)].indexOf(focused) : -1;
+  learnBody.replaceChildren(...next.childNodes);
+  learnShown = html;
+  if (focused) {
+    const all = [...learnBody.querySelectorAll(FOCUSABLE)];
+    const same = (focused.id && all.find((e) => e.id === focused.id))
+      || all.find((e) => e.tagName === focused.tagName && e.textContent === focused.textContent) || all[Math.min(index, all.length - 1)];
+    if (same) same.focus({ preventScroll: true });
   }
 }
+// A part of the window that fails says so once in the console instead of stopping everything else.
+const reported = new Set();
+function reportOnce(part, e) {
+  if (reported.has(part)) return;
+  reported.add(part);
+  console.error(`Masterology UI (${part}):`, e);
+}
 
-function renderLearnBody() {
-  const body = $("learn-body");
-  body.innerHTML = "";
+function renderLearnBody(body) {
   if (!learnOn) {
     const off = document.createElement("div");
     off.className = "l-off";
@@ -1273,7 +1454,7 @@ function renderLearnBody() {
   const dith = clamp(Math.round(P.maxDither.value * 2), 0, 2);
   body.appendChild(item("Dither", ["Off", "16-bit", "24-bit"][dith],
     dith === 0 ? "Off: right for a 24-bit or 32-bit float export. Turn on 16-bit only when you export a 16-bit WAV (CD, some distributors)."
-    : `On for ${dith === 1 ? "16" : "24"}-bit: adds a very quiet hiss (about ${dith === 1 ? "−98" : "−146"} dBFS) so quiet fades don't turn gritty when {daw} cuts the export to ${dith === 1 ? "16" : "24"} bits. Export at exactly that bit depth, with nothing after Masterology changing the level (Stereo Out fader at 0 dB).`));
+    : `On for ${dith === 1 ? "16" : "24"}-bit: adds a very quiet hiss (about ${dith === 1 ? "−98" : "−146"} dBFS) so quiet fades don't turn gritty when {daw} cuts the export to ${dith === 1 ? "16" : "24"} bits. Export at exactly that bit depth, with nothing after Masterology changing the level ({daw:master} fader at 0 dB).`));
   body.appendChild(item("Release", `${release} ms`,
     adaptive
       ? `Adaptive around ${release} ms: recovers quickly after single hits (drums) and moves slowly on sustained sound (808s, pads), so it doesn't pump.`
@@ -1634,7 +1815,9 @@ function stemSuggestion() {
 function stemSuggestButton() {
   const s = stemSuggestion();
   if (!s) return null;
-  const moves = [0, 1, 2, 3].filter((k) => Math.abs(s[k] - stemGainAt(k)) > 0.05);
+  // Every stem whose sound changes: with Stem EQ off its knobs play as 0 dB, so a knob left at Drums +4 that the
+  // suggestion keeps comes back into the master when APPLY switches it on, and is listed too.
+  const moves = [0, 1, 2, 3].filter((k) => Math.abs(s[k] - (P.stemOn.getValue() ? stemGainAt(k) : 0)) > 0.05);
   const b = document.createElement("button");
   b.type = "button";
   b.className = "pill pill-red stem-apply";
@@ -1928,12 +2111,12 @@ function watchListening(wasAm, wasTarget, wasFail, wasFar) {
       }
     }
     tsTarget.refresh();
-    if (learnOn && learnView === "module" && selected === "ts") renderLearn();
+    if (learnOn && learnView === "module" && selected === "ts") refreshLearn();
   }
   if (learnOn && learnView === "listen") {
     const key = [M.amState, Math.floor(M.amHeard || 0), M.amCanFinish, M.amHearing, M.amLoudAt, M.amLoudEnd, M.amLoudJump,
                  M.amState === 2 && amThinkSince ? Math.floor((performance.now() - amThinkSince) / 1000) : 0].join("|");
-    if (key !== lastListenDraw) { lastListenDraw = key; renderLearn(); }
+    if (key !== lastListenDraw) { lastListenDraw = key; refreshLearn(); }
   }
 }
 
@@ -2005,6 +2188,7 @@ function renderClipperLearn(body) {
 // ---------------------------------------------------------------------------------------------
 // Header controls
 function setLearn(on) {
+  if (on !== learnOn) rememberUi({ learn: on });
   learnOn = on;
   const b = $("learn-toggle");
   b.textContent = on ? "LEARN ON" : "LEARN OFF";
@@ -2017,10 +2201,10 @@ $("learn-toggle").addEventListener("click", () => setLearn(!learnOn));
 // Level-matched A/B
 function refreshMatch() {
   const on = !!P.levelMatch.getValue();
-  const b = $("btn-match");
-  b.className = "pill match " + (on ? "pill-red" : "pill-blue");
-  b.setAttribute("aria-pressed", String(on));
-  b.textContent = on ? `MATCH ${M.matchDb < -0.05 ? fmtNum(M.matchDb) : "0.0"}` : "MATCH";
+  const b = $("btn-match"), cls = "pill match " + (on ? "pill-red" : "pill-blue");
+  if (b.className !== cls) b.className = cls;
+  setAttr(b, "aria-pressed", String(on));
+  setText(b, on ? `MATCH ${M.matchDb < -0.05 ? fmtNum(M.matchDb) : "0.0"}` : "MATCH");
 }
 $("btn-match").addEventListener("click", () => {
   const on = !P.levelMatch.getValue();
@@ -2057,7 +2241,7 @@ function refreshListenButton() {
   b.className = "pill listen " + (on ? "pill-red on" : "pill-blue");
   b.setAttribute("aria-pressed", String(on));
   $("btn-listen-text").textContent = "LISTEN";
-  b.title = `Listen: hear only ${listenWhat(mode)}. A listening aid: a normal export never contains it (switch it off before a Realtime Export)`;
+  b.title = D(`Listen: hear only ${listenWhat(mode)}. A listening aid: a normal export never contains it (switch it off before {daw:realtimeExport})`);
 }
 $("btn-listen").addEventListener("click", () => {
   const mode = listenModeFor(selected), on = MON.listen !== mode;
@@ -2080,11 +2264,11 @@ function refreshBanner() {
   const on = !!(MON.listen || check);
   $("monitor-banner").hidden = !on;
   if (!on) return;
-  $("monitor-text").textContent = MON.listen
+  setText($("monitor-text"), MON.listen
     ? `${isSoloMode(MON.listen) ? "SOLO" : "LISTENING"}: ${listenWhat(MON.listen)}${check ? `, on ${check}` : ""} — not the master`
     : MON.phone ? "PHONE CHECK: your master on a phone speaker — not the master's real sound"
-    : "MONO CHECK: left + right together — not the master's real sound";
-  $("monitor-level").textContent = monitorLevelText();
+    : "MONO CHECK: left + right together — not the master's real sound");
+  setText($("monitor-level"), monitorLevelText());
 }
 function refreshMonitor() {
   for (const [id, on] of [["btn-mono", MON.mono], ["btn-phone", MON.phone]]) {
@@ -2218,8 +2402,8 @@ function addMonitorLearn(body) {
   const mode = listenModeFor(selected);
   if (mode && MON.listen !== mode && !(selected === "dyn" && isSoloMode(MON.listen)))
     body.appendChild(tip("HEAR WHAT IT DOES", selected === "dyn"
-      ? "S next to a band plays only that band. LISTEN (headphones, top right of this panel) plays only what the picked band's compression takes off. Listening aids only: a normal export never contains them (switch them off before a Realtime Export)."
-      : `LISTEN (headphones, top right of this panel) plays only ${listenWhat(mode)}, so you can learn its sound. Quiet changes are turned up so you can hear them. A listening aid: a normal export never contains it (switch it off before a Realtime Export).`, true));
+      ? "S next to a band plays only that band. LISTEN (headphones, top right of this panel) plays only what the picked band's compression takes off. Listening aids only: a normal export never contains them (switch them off before {daw:realtimeExport})."
+      : `LISTEN (headphones, top right of this panel) plays only ${listenWhat(mode)}, so you can learn its sound. Quiet changes are turned up so you can hear them. A listening aid: a normal export never contains it (switch it off before {daw:realtimeExport}).`, true));
 }
 
 function refreshAB() {
@@ -2272,6 +2456,40 @@ $("btn-help").addEventListener("click", (e) => { e.stopPropagation(); togglePopo
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".popover")) togglePopover(null);
 });
+// Esc closes Settings or Quick Help too (the keyboard goes back to its button).
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const open = ["pop-settings", "pop-help"].find((id) => !$(id).hidden);
+  if (!open) return;
+  togglePopover(null);
+  if (keyboardNav) $(open === "pop-settings" ? "btn-settings" : "btn-help").focus({ preventScroll: true });
+});
+// The manual and the style picker are dialogs: when one opens the keyboard goes into it, Tab stays inside, and
+// closing it (Esc or ×) gives the keyboard back to where it was.
+function openDialog(box, first) {
+  const opener = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+  box.hidden = false;
+  if (!box.dataset.dialog) {
+    box.dataset.dialog = "1";
+    box.addEventListener("keydown", (e) => {
+      if (e.key !== "Tab") return;
+      const all = [...box.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+      if (!all.length) return;
+      const i = all.indexOf(document.activeElement);
+      if (e.shiftKey && i <= 0) { e.preventDefault(); all[all.length - 1].focus(); }
+      else if (!e.shiftKey && (i < 0 || i === all.length - 1)) { e.preventDefault(); all[0].focus(); }
+    });
+  }
+  box.returnFocus = opener;
+  if (first) first.focus({ preventScroll: true });
+}
+function closeDialog(box, fallback) {
+  if (box.hidden) return;
+  box.hidden = true;
+  const back = box.returnFocus && box.returnFocus.isConnected && box.returnFocus.offsetParent !== null ? box.returnFocus : fallback;
+  if (keyboardNav && back) back.focus({ preventScroll: true });
+  else if (box.contains(document.activeElement)) document.activeElement.blur();
+}
 
 // ---------------------------------------------------------------------------------------------
 // User manual: docs/manual/polisher-manual.md, embedded in the plug-in and rendered here (offline).
@@ -2344,7 +2562,7 @@ async function loadManual() {
 }
 async function openManual() {
   togglePopover(null);
-  $("manual").hidden = false;
+  openDialog($("manual"), $("btn-manual-close"));
   if (manualLoaded) return;
   const md = await loadManual();
   const body = $("manual-body"), toc = $("manual-toc");
@@ -2355,14 +2573,15 @@ async function openManual() {
   for (const t of doc.toc) {
     const a = document.createElement("a");
     a.textContent = t.text;
-    a.addEventListener("click", () => { const el = document.getElementById(t.id); if (el) body.scrollTo({ top: el.offsetTop - 8, behavior: "smooth" }); });
+    a.href = `#${t.id}`;   // a link the keyboard reaches with Tab (the page itself never navigates)
+    a.addEventListener("click", (e) => { e.preventDefault(); const el = document.getElementById(t.id); if (el) body.scrollTo({ top: el.offsetTop - 8, behavior: "smooth" }); });
     toc.appendChild(a);
   }
   manualLoaded = true;
 }
 $("btn-manual").addEventListener("click", (e) => { e.stopPropagation(); openManual(); });
-$("btn-manual-close").addEventListener("click", () => { $("manual").hidden = true; });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("manual").hidden) $("manual").hidden = true; });
+$("btn-manual-close").addEventListener("click", () => closeDialog($("manual"), $("btn-help")));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("manual").hidden) closeDialog($("manual"), $("btn-help")); });
 
 // Easter egg: clicking the logo swaps the colour scheme (blue chrome <-> black & white glass). Look only.
 function setMono(on) {
@@ -2397,8 +2616,8 @@ function userEdited() {
 let toastTimer = null;
 function toast(text) {
   const t = $("toast");
-  t.textContent = text;
   t.hidden = false;
+  t.textContent = text;   // (a status region: shown first, then the words, so a screen reader reads them)
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (t.hidden = true), 2600);
 }
@@ -2467,8 +2686,8 @@ function openStylePicker() {
         <button type="button" class="manual-close" aria-label="Close" title="Close (Esc)">&times;</button></div>
       <div class="stp-cols"><nav class="stp-genres"></nav><div class="stp-styles"></div></div>`;
     $("stage").appendChild(box);
-    box.querySelector(".manual-close").addEventListener("click", () => (box.hidden = true));
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !box.hidden) box.hidden = true; });
+    box.querySelector(".manual-close").addEventListener("click", () => closeDialog(box, $("genre-name")));
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !box.hidden) closeDialog(box, $("genre-name")); });
   }
   const now = SONG_STYLES.find((s) => s.key === (SONG.key || AM_FIRST_STYLE[comboIndex(P.amGenre)])) || SONG_STYLES[0];
   let shownGenre = now.genre;
@@ -2490,16 +2709,20 @@ function openStylePicker() {
       b.innerHTML = `<b>${s.name}</b><span>${s.about}</span>`;
       b.addEventListener("click", () => {
         pickSongStyle(key);
-        box.hidden = true;
+        closeDialog(box, $("genre-name"));
         toast(`Style: ${shownGenre.name} - ${s.name}. Auto-Master masters it as ${GENRES[amGenreFor(key)]}; Mixology and Voxology follow.`);
       });
       return b;
     }));
   };
   draw();
-  box.hidden = false;
+  openDialog(box, box.querySelector(".stp-style.sel") || box.querySelector(".stp-genre.sel"));
 }
 $("genre-name").addEventListener("click", openStylePicker);
+// The style name is the picker's button for the keyboard too (Enter or Space, once Tab has brought it there).
+$("genre-name").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openStylePicker(); }
+});
 
 // Your DAW: Settings' pick ("Found: ..." = the program Masterology runs in).
 const pickDawNative = Juce.getNativeFunction("pickDaw");
@@ -2519,9 +2742,18 @@ $("daw-select").addEventListener("change", (e) => {
   pickDawNative(v);
   DAW.key = v || dawOf(DAW.detected).key;
   DAW.picked = !!v;
+  fillDawTexts();
   renderLearn();
 });
 fillDawSelect();
+// The window's own texts with {daw} tokens (index.html: data-daw = the element's text, data-daw-title = its
+// tooltip), in the words of the DAW: filled now and whenever the DAW changes.
+function fillDawTexts() {
+  document.querySelectorAll("[data-daw]").forEach((el) => setText(el, D(el.dataset.daw)));
+  document.querySelectorAll("[data-daw-title]").forEach((el) => { el.title = D(el.dataset.dawTitle); });
+  refreshListenButton();
+}
+fillDawTexts();
 $("genre-prev").addEventListener("click", () => stepGenre(-1));
 $("genre-next").addEventListener("click", () => stepGenre(1));
 for (const [rowId, st] of [["row-intensity", P.amIntensity], ["row-target", P.amTarget]])
@@ -2578,20 +2810,20 @@ function updateAmButton() {
   const btn = $("btn-automaster"), title = $("am-title"), sub = $("am-sub");
   const busy = M.amState === 1 || M.amState === 2;
   btn.classList.toggle("busy", busy);
-  $("am-progress").hidden = M.amState !== 1;
+  if ($("am-progress").hidden !== (M.amState !== 1)) $("am-progress").hidden = M.amState !== 1;
   $("am-progress").classList.toggle("ready", !!M.amCanFinish);
-  $("am-progress-fill").style.width = (clamp(M.amProgress, 0, 1) * 100).toFixed(0) + "%";
+  setWidth($("am-progress-fill"), (clamp(M.amProgress, 0, 1) * 100).toFixed(0) + "%");
   if (M.amState === 1) {
-    title.textContent = M.amMode === 1 ? "LEARNING TONE" : "LISTENING";
-    sub.textContent = amListenText();
+    setText(title, M.amMode === 1 ? "LEARNING TONE" : "LISTENING");
+    setText(sub, amListenText());
   } else if (M.amState === 2) {
-    title.textContent = "THINKING";
-    sub.textContent = `Choosing every setting (${amThinkTime()})…`;
+    setText(title, "THINKING");
+    setText(sub, `Choosing every setting (${amThinkTime()})…`);
   } else {
-    title.textContent = "AUTO-MASTER";
-    sub.textContent = !(amReport && amReport.ok) ? "Click, then play your whole song"
+    setText(title, "AUTO-MASTER");
+    setText(sub, !(amReport && amReport.ok) ? "Click, then play your whole song"
       : M.aaOn && M.aaEdits ? `Auto Analyze: ${M.aaEdits} new edit${M.aaEdits === 1 ? "" : "s"} in Learn`
-      : M.aaOn ? "Done · Auto Analyze listening" : "Done · click to run again";
+      : M.aaOn ? "Done · Auto Analyze listening" : "Done · click to run again");
   }
   if (tsTarget.refresh) tsTarget.refresh();
 }
@@ -2601,6 +2833,12 @@ function updateAmButton() {
 // run, Apply and snapshot recall. The arrows say what they will undo / redo.
 const IS_MAC = /Mac/.test(navigator.platform || "");
 const KEY = IS_MAC ? "⌘" : "Ctrl+";
+if (IS_MAC) $("qh-undo-keys").textContent = "⌘Z undoes, ⇧⌘Z redoes";   // Quick Help, in a Mac's keys
+// The version in Settings comes from the plug-in (the build sets it), so it can't fall behind the release.
+{
+  const v = ((window.__JUCE__.initialisationData || {}).polisherVersion || [])[0];
+  if (typeof v === "string" && v) $("ui-version").textContent = ` v${v}`;
+}
 function refreshHistory() {
   for (const [id, label, verb, keys] of [["btn-undo", M.undo, "Undo", `${KEY}Z`], ["btn-redo", M.redo, "Redo", IS_MAC ? "⇧⌘Z" : "Ctrl+Shift+Z or Ctrl+Y"]]) {
     const b = $(id), on = !!label;
@@ -2643,6 +2881,26 @@ function swallowKey(e) {
   e.stopPropagation();
 }
 for (const type of ["keydown", "keypress", "keyup"]) document.addEventListener(type, swallowKey, true);
+
+// The web view is a browser underneath. Its own right-click menu (Back, Reload, Save as, Print) has no place in a
+// plug-in: it stays shut, except over the manual's text and a value box (to copy, paste). On Windows, WebView2 also
+// takes browser keys while Masterology has the keyboard: F3 opens a Find bar (F3 is Cubase's MixConsole key),
+// Ctrl+P Print (Cubase's Pool), F5 / Ctrl+R reload the page (the module, Learn and the history start over), F7
+// caret browsing, Ctrl + / - / 0 and Ctrl+wheel zoom. Those are switched off. (On a Mac the web view has no such
+// keys, and Cmd-keys must reach the host: Cmd+S saves the project in Logic.)
+document.addEventListener("contextmenu", (e) => {
+  if (!(e.target.closest && e.target.closest("#manual-body, input, textarea"))) e.preventDefault();
+});
+const BROWSER_KEYS = new Set(["F3", "F5", "F7", "BrowserBack", "BrowserForward", "BrowserRefresh", "BrowserSearch"]);
+const BROWSER_CTRL_KEYS = new Set(["f", "g", "p", "r", "s", "u", "o", "j", "h", "+", "=", "-", "_", "0"]);
+if (!IS_MAC) {
+  document.addEventListener("keydown", (e) => {
+    const ctrl = e.ctrlKey && !e.altKey && !e.metaKey && BROWSER_CTRL_KEYS.has((e.key || "").toLowerCase());
+    const back = e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight") && !isTyping(e.target);
+    if (BROWSER_KEYS.has(e.key) || ctrl || back) e.preventDefault();
+  }, true);
+  document.addEventListener("wheel", (e) => { if (e.ctrlKey) e.preventDefault(); }, { capture: true, passive: false });
+}
 
 $("btn-undo").addEventListener("click", () => stepHistory(false));
 $("btn-redo").addEventListener("click", () => stepHistory(true));
@@ -2737,7 +2995,7 @@ async function fetchReport(openIt) {
   if (!amReport && learnView === "report") learnView = "module";
   refreshAllCells();
   updateAmButton();
-  renderLearn();
+  refreshLearn();
 }
 // Knobs show values pushed by the plug-in; after Auto-Master or Undo, redraw them all.
 function refreshAllCells() {
@@ -2777,7 +3035,7 @@ async function fetchReference() {
   refreshRefPill();
   refreshAmChoices();
   drawRefCurve();
-  renderLearn();
+  refreshLearn();
 }
 // What Auto-Master aims for with a reference: its loudest 12 s (compared with the loudest 12 s of your song).
 // References saved before that was measured only have their loudest 30 s.
@@ -2877,8 +3135,29 @@ const HIST_SETTLE_MS = 3000;                                 // Short-term needs
 const hist = { pts: [], acc: null, gapNext: true, playingSince: null, lastFrame: 0, dirty: true };
 let histView = false;
 try { histView = localStorage.getItem("polisher.view") === "history"; } catch (_) {}
+histRestore(UI_MEM.history);
 
-function histReset() { hist.pts = []; hist.acc = null; hist.gapNext = true; hist.dirty = true; drawHistory(); }
+function histReset() { hist.pts = []; hist.acc = null; hist.gapNext = true; hist.dirty = true; hist.unsaved = true; drawHistory(); }
+// The plug-in keeps the history for the next time this window opens: sent every few seconds while it grows, and as
+// the window goes. It comes back with a gap (time went on while the window was closed).
+function histSave() {
+  if (!hist.unsaved) return;
+  hist.unsaved = false;
+  const r1 = (v) => Math.round(v * 10) / 10;
+  rememberUi({ history: JSON.stringify(hist.pts.map((p) => [r1(p.st), p.inSt === null ? null : r1(p.inSt), r1(p.gr), p.gap ? 1 : 0])) });
+}
+function histRestore(text) {
+  let pts = [];
+  try { pts = JSON.parse(text || "[]"); } catch (_) { pts = []; }
+  if (!Array.isArray(pts)) return;
+  hist.pts = pts.filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && (p[1] === null || Number.isFinite(p[1])) && Number.isFinite(p[2]))
+    .slice(-HIST_POINTS).map((p) => ({ st: p[0], inSt: p[1], gr: p[2], gap: !!p[3] }));
+  hist.gapNext = true;
+  hist.dirty = true;
+}
+setInterval(histSave, 5000);
+window.addEventListener("pagehide", histSave);
+document.addEventListener("visibilitychange", () => { if (document.hidden) histSave(); });
 function histFlush() {
   const a = hist.acc;
   hist.acc = null;
@@ -2887,6 +3166,7 @@ function histFlush() {
   hist.gapNext = false;
   if (hist.pts.length > HIST_POINTS) hist.pts.splice(0, hist.pts.length - HIST_POINTS);
   hist.dirty = true;
+  hist.unsaved = true;
 }
 function histBreak() { histFlush(); if (hist.pts.length) hist.gapNext = true; hist.playingSince = null; }
 // One meter frame. `playing` comes from the plug-in (the host's transport); older builds don't send it.
@@ -3263,7 +3543,7 @@ async function fetchAutoAnalyze() {
   updateAmButton();
   // The auto page follows every change; the module pages and the report only when the strip changes.
   const sig = `${M.aaOn}|${edits}`;
-  if (learnOn && (learnView === "auto" || (["module", "report"].includes(learnView) && sig !== aaStripSig))) renderLearn();
+  if (learnOn && (learnView === "auto" || (["module", "report"].includes(learnView) && sig !== aaStripSig))) refreshLearn();
   aaStripSig = sig;
 }
 let aaStripSig = "";
@@ -3515,11 +3795,13 @@ function onParamsChanged() {
   updateLiveReadouts();
   scheduleLearn();
 }
-let learnQueued = false;
+// Live changes (a knob turning, the host's automation): Learn follows at most 10 times a second.
+let learnQueued = false, learnSoftAt = 0;
 function scheduleLearn() {
   if (learnQueued) return;
   learnQueued = true;
-  requestAnimationFrame(() => { learnQueued = false; renderLearn(); });
+  setTimeout(() => requestAnimationFrame(() => { learnQueued = false; learnSoftAt = performance.now(); refreshLearn(); }),
+             Math.max(0, 100 - (performance.now() - learnSoftAt)));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3569,11 +3851,11 @@ function buildMeters() {
 function updateMeters() {
   for (const d of meterDefs) {
     const v = M[d.key];
-    $("mv-" + d.key).textContent = d.plain ? `${v.toFixed(1)} ${d.unit}`
-      : d.key === "integrated" && v <= -99 ? `— ${d.unit}` : fmtDb(v, d.unit);
+    setText($("mv-" + d.key), d.plain ? `${v.toFixed(1)} ${d.unit}`
+      : d.key === "integrated" && v <= -99 ? `— ${d.unit}` : fmtDb(v, d.unit));
     const pct = v <= -99 ? 0 : clamp(((v - d.lo) / (d.hi - d.lo)) * 100, 0, 100);
     const fill = $("mf-" + d.key);
-    fill.style.width = pct.toFixed(1) + "%";
+    setWidth(fill, pct.toFixed(1) + "%");
     fill.classList.toggle("hot", !!(d.hot && d.hot(v)));
   }
 }
@@ -3586,12 +3868,12 @@ function updateOutputMeter() {
     const cur = hold[ch + "Disp"] ?? -100;
     const disp = val > cur ? val : Math.max(val, cur - 1.2);   // smooth fall
     hold[ch + "Disp"] = disp;
-    $("bar-" + ch).style.height = (100 - levelPct(disp)).toFixed(1) + "%";
+    setHeight($("bar-" + ch), (100 - levelPct(disp)).toFixed(1) + "%");
     if (val > hold[ch] || now - hold[ch + "T"] > 1500) { hold[ch] = val; hold[ch + "T"] = now; }
-    $("hold-" + ch).style.bottom = levelPct(hold[ch]).toFixed(1) + "%";
+    setBottom($("hold-" + ch), levelPct(hold[ch]).toFixed(1) + "%");
   }
   if (M.peakRecent > hold.peak || now - hold.peakT > 2000) { hold.peak = M.peakRecent; hold.peakT = now; }
-  $("out-peak").textContent = hold.peak <= -99 ? `${MINUS}inf` : fmtNum(hold.peak, 1);
+  setText($("out-peak"), hold.peak <= -99 ? `${MINUS}inf` : fmtNum(hold.peak, 1));
 }
 
 // After Auto-Master looked at a module and chose to leave it untouched, say so instead of "Neutral".
@@ -3604,8 +3886,8 @@ function updateLiveReadouts() {
   const m = modules.find((x) => x.id === selected);
   const clipOn = !!P.clipOn.getValue();
   const clipText = M.clip > -0.05 ? "0.0" : fmtNum(M.clip);
-  chip.hidden = !m.live;
-  chip.textContent = selected === "clip" ? (clipOn ? `CLIP ${clipText} dB` : "OFF")
+  if (chip.hidden !== !m.live) chip.hidden = !m.live;
+  setText(chip, selected === "clip" ? (clipOn ? `CLIP ${clipText} dB` : "OFF")
                    : selected === "eq" ? (!eqEnabled() ? "OFF" : eqIsFlat() ? "FLAT" : "SHAPING")
  : selected === "img" ? (!P.imgOn.getValue() ? "OFF" : `CORR ${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`)
                    : selected === "dyn" ? (!P.dynOn.getValue() ? "OFF" : dynIsNeutral() ? "1:1" : `GR ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`)
@@ -3617,9 +3899,9 @@ function updateLiveReadouts() {
                    : selected === "rt" ? (!P.rtOn.getValue() ? "OFF" : rtIsNeutral() ? "IDLE" : (M.rtCut || 0) > -0.3 ? "RESTING" : `CUT ${fmtNum(M.rtCut)} dB`)
                    : selected === "stem" ? (!P.stemOn.getValue() ? "OFF" : stemIsNeutral() ? "FLAT" : `${stemMoves().length} MOVE${stemMoves().length > 1 ? "S" : ""}`)
                    : selected === "bass" ? (!P.bassOn.getValue() ? "OFF" : `WIDTH ${Math.round(M.bassWidth || 0)} %`)
-                   : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
+                   : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`);
   const r = $("read-max");
-  if (r) r.textContent = P.bypass.getValue() ? "Bypassed" : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
+  if (r) setText(r, P.bypass.getValue() ? "Bypassed" : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`);
   const bassOn = !!P.bassOn.getValue();
   const tameSet = P.bassTame.getScaledValue() > 0.5, punchSet = P.bassPunch.getScaledValue() > 0.5;
   const rb = $("read-bass");
@@ -3628,181 +3910,233 @@ function updateLiveReadouts() {
     if (bassMonoOn()) parts.push(parts.length || tameSet || punchSet ? "Mono" : `Mono ${Math.round(bassMonoHz())} Hz`);
     if (tameSet) parts.push("Tame");
     if (punchSet) parts.push("Punch");
-    rb.textContent = P.bypass.getValue() ? "Bypassed" : !bassOn ? "Off" : parts.length ? parts.join("\u00b7") : "Neutral";
+    setText(rb, P.bypass.getValue() ? "Bypassed" : !bassOn ? "Off" : parts.length ? parts.join("\u00b7") : "Neutral");
   }
   const tf = $("tamemeter-fill");
   if (tf) {
-    tf.style.width = (bassOn && tameSet ? clamp(-M.tame / 12, 0, 1) * 100 : 0).toFixed(1) + "%";
-    $("tamemeter-val").textContent = !bassOn || !tameSet ? "off" : `${M.tame < -0.05 ? fmtNum(M.tame) : "0.0"} dB`;
-    $("widthmeter-fill").style.width = clamp(M.bassWidth || 0, 0, 100).toFixed(0) + "%";
-    $("widthmeter-val").textContent = `${Math.round(M.bassWidth || 0)} % stereo`;
+    setWidth(tf, (bassOn && tameSet ? clamp(-M.tame / 12, 0, 1) * 100 : 0).toFixed(1) + "%");
+    setText($("tamemeter-val"), !bassOn || !tameSet ? "off" : `${M.tame < -0.05 ? fmtNum(M.tame) : "0.0"} dB`);
+    setWidth($("widthmeter-fill"), clamp(M.bassWidth || 0, 0, 100).toFixed(0) + "%");
+    setText($("widthmeter-val"), `${Math.round(M.bassWidth || 0)} % stereo`);
   }
   const ri = $("read-img");
   const imgW = [P.imgLow, P.imgMid, P.imgHigh].map((x) => x.getScaledValue());
   const imgNeutral = imgW.every((v) => Math.abs(v - 100) < 0.5);
-  if (ri) ri.textContent = P.bypass.getValue() ? "Bypassed" : !P.imgOn.getValue() ? "Off" : imgNeutral ? neutralText("img") : imgW.map((v) => Math.round(v)).join("/") + " %";
+  if (ri) setText(ri, P.bypass.getValue() ? "Bypassed" : !P.imgOn.getValue() ? "Off" : imgNeutral ? neutralText("img") : imgW.map((v) => Math.round(v)).join("/") + " %");
   const cf = $("corr-fill");
   if (cf) {
-    cf.style.width = (((clamp(M.corr, -1, 1) + 1) / 2) * 100).toFixed(0) + "%";
-    $("corr-val").textContent = `${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`;
+    setWidth(cf, (((clamp(M.corr, -1, 1) + 1) / 2) * 100).toFixed(0) + "%");
+    setText($("corr-val"), `${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`);
   }
   const rd = $("read-dyn");
-  if (rd) rd.textContent = P.bypass.getValue() ? "Bypassed" : !P.dynOn.getValue() ? "Off" : dynIsNeutral() ? neutralText("dyn")
-    : `${[0, 1, 2, 3].filter(dynBandActive).length} band${[0, 1, 2, 3].filter(dynBandActive).length > 1 ? "s" : ""} \u00b7 ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB${["", " \u00b7 mid", " \u00b7 side"][dynChannelsAt()]}`;
+  if (rd) setText(rd, P.bypass.getValue() ? "Bypassed" : !P.dynOn.getValue() ? "Off" : dynIsNeutral() ? neutralText("dyn")
+    : `${[0, 1, 2, 3].filter(dynBandActive).length} band${[0, 1, 2, 3].filter(dynBandActive).length > 1 ? "s" : ""} \u00b7 ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB${["", " \u00b7 mid", " \u00b7 side"][dynChannelsAt()]}`);
   if (selected === "dyn") dynPicker.refresh();
   const rg = $("read-glue");
-  if (rg) rg.textContent = P.bypass.getValue() ? "Bypassed" : !P.glueOn.getValue() ? "Off" : glueIsNeutral() ? neutralText("glue")
-    : glueRatioAt() <= 1.005 ? `Level ${fmtSigned(glueGainAt())}` : `${GLUE_CHARS[glueCharAt()]} ${glueRatioAt().toFixed(1)}:1 \u00b7 ${(M.glueGr || 0) > -0.05 ? "0.0" : fmtNum(M.glueGr)} dB`;
+  if (rg) setText(rg, P.bypass.getValue() ? "Bypassed" : !P.glueOn.getValue() ? "Off" : glueIsNeutral() ? neutralText("glue")
+    : glueRatioAt() <= 1.005 ? `Level ${fmtSigned(glueGainAt())}` : `${GLUE_CHARS[glueCharAt()]} ${glueRatioAt().toFixed(1)}:1 \u00b7 ${(M.glueGr || 0) > -0.05 ? "0.0" : fmtNum(M.glueGr)} dB`);
   const gf = $("gluemeter-fill");
   if (gf) {
     const active = P.glueOn.getValue() && !glueIsNeutral() && !P.bypass.getValue();
     const g = active ? Math.min(0, M.glueGr || 0) : 0;
-    gf.style.width = (clamp(-g / 12, 0, 1) * 100).toFixed(1) + "%";
-    $("gluemeter-val").textContent = !active ? "off" : g > -0.05 ? "0.0 dB" : `${fmtNum(g, 1)} dB`;
+    setWidth(gf, (clamp(-g / 12, 0, 1) * 100).toFixed(1) + "%");
+    setText($("gluemeter-val"), !active ? "off" : g > -0.05 ? "0.0 dB" : `${fmtNum(g, 1)} dB`);
   }
   const rul = $("read-ul");
-  if (rul) rul.textContent = P.bypass.getValue() ? "Bypassed" : !P.ulOn.getValue() ? "Off" : ulIsNeutral() ? neutralText("ul")
-    : `${Math.round(ulAmountAt())} % \u00b7 ${UL_FOCUS[comboIndex(P.ulFocus)]}`;
+  if (rul) setText(rul, P.bypass.getValue() ? "Bypassed" : !P.ulOn.getValue() ? "Off" : ulIsNeutral() ? neutralText("ul")
+    : `${Math.round(ulAmountAt())} % \u00b7 ${UL_FOCUS[comboIndex(P.ulFocus)]}`);
   const usf = $("ulsquash-fill");
   if (usf) {
     const sq = M.ulSquash || 0;
-    usf.style.width = (sq ? clamp((16 - sq) / 10, 0, 1) * 100 : 0).toFixed(1) + "%";
-    $("ulsquash-val").textContent = !sq ? "listening" : `${fmtNum(sq)} dB \u00b7 ${squashWord(sq)}`;
+    setWidth(usf, (sq ? clamp((16 - sq) / 10, 0, 1) * 100 : 0).toFixed(1) + "%");
+    setText($("ulsquash-val"), !sq ? "listening" : `${fmtNum(sq)} dB \u00b7 ${squashWord(sq)}`);
     const v = ulIsNeutral() || P.bypass.getValue() ? 0 : M.ulBoost || 0;
-    $("ulmeter-fill").style.width = (clamp(v / 10, 0, 1) * 100).toFixed(1) + "%";
-    $("ulmeter-val").textContent = v < 0.3 ? "resting" : `+${v.toFixed(1)} dB`;
+    setWidth($("ulmeter-fill"), (clamp(v / 10, 0, 1) * 100).toFixed(1) + "%");
+    setText($("ulmeter-val"), v < 0.3 ? "resting" : `+${v.toFixed(1)} dB`);
   }
   const rts = $("read-ts");
-  if (rts) rts.textContent = P.bypass.getValue() ? "Bypassed" : !P.tsOn.getValue() ? "Off" : tsIsNeutral() ? neutralText("ts")
-    : `${Math.round(tsAmountAt())} % \u00b7 ${MINUS}${P.tsRange.getScaledValue().toFixed(1)} dB${M.tsTarget ? " \u00b7 song" : ""}`;
+  if (rts) setText(rts, P.bypass.getValue() ? "Bypassed" : !P.tsOn.getValue() ? "Off" : tsIsNeutral() ? neutralText("ts")
+    : `${Math.round(tsAmountAt())} % \u00b7 ${MINUS}${P.tsRange.getScaledValue().toFixed(1)} dB${M.tsTarget ? " \u00b7 song" : ""}`);
   const rrt = $("read-rt");
-  if (rrt) rrt.textContent = P.bypass.getValue() ? "Bypassed" : !P.rtOn.getValue() ? "Off" : rtIsNeutral() ? neutralText("rt")
-    : `${Math.round(rtAmountAt())} % \u00b7 ${RT_FOCUS[comboIndex(P.rtFocus)]}`;
+  if (rrt) setText(rrt, P.bypass.getValue() ? "Bypassed" : !P.rtOn.getValue() ? "Off" : rtIsNeutral() ? neutralText("rt")
+    : `${Math.round(rtAmountAt())} % \u00b7 ${RT_FOCUS[comboIndex(P.rtFocus)]}`);
   const tsf = $("tsmeter-fill");
   if (tsf) {
     const v = tsIsNeutral() || P.bypass.getValue() ? 0 : Math.abs(M.tsDb || 0);
-    tsf.style.width = (clamp(v / 6, 0, 1) * 100).toFixed(1) + "%";
-    $("tsmeter-val").textContent = v < 0.3 ? "resting" : `${M.tsDb < 0 ? MINUS : "+"}${v.toFixed(1)} dB @ ${fmtHz(M.tsHz || 0)}`;
+    setWidth(tsf, (clamp(v / 6, 0, 1) * 100).toFixed(1) + "%");
+    setText($("tsmeter-val"), v < 0.3 ? "resting" : `${M.tsDb < 0 ? MINUS : "+"}${v.toFixed(1)} dB @ ${fmtHz(M.tsHz || 0)}`);
   }
   const rtf = $("rtmeter-fill");
   if (rtf) {
     const v = rtIsNeutral() || P.bypass.getValue() ? 0 : -(M.rtCut || 0);
-    rtf.style.width = (clamp(v / 12, 0, 1) * 100).toFixed(1) + "%";
-    $("rtmeter-val").textContent = v < 0.3 ? "resting" : `${MINUS}${v.toFixed(1)} dB @ ${fmtHz(M.rtHz || 0)}`;
+    setWidth(rtf, (clamp(v / 12, 0, 1) * 100).toFixed(1) + "%");
+    setText($("rtmeter-val"), v < 0.3 ? "resting" : `${MINUS}${v.toFixed(1)} dB @ ${fmtHz(M.rtHz || 0)}`);
   }
   const skv = $("stemkeep-val");
-  if (skv) skv.textContent = stemKeepText();
+  if (skv) setText(skv, stemKeepText());
   const rst = $("read-stem");
-  if (rst) rst.textContent = P.bypass.getValue() ? "Bypassed" : !P.stemOn.getValue() ? "Off" : stemSuggestion() ? "Suggestion ready"
+  if (rst) setText(rst, P.bypass.getValue() ? "Bypassed" : !P.stemOn.getValue() ? "Off" : stemSuggestion() ? "Suggestion ready"
     : stemIsNeutral() ? neutralText("stem")
-    : stemMoves().map((k) => `${["Vox", "Drm", "Bass", "Oth"][k]} ${fmtSigned(stemGainAt(k)).replace(" dB", "")}`).join("\u00b7");
+    : stemMoves().map((k) => `${["Vox", "Drm", "Bass", "Oth"][k]} ${fmtSigned(stemGainAt(k)).replace(" dB", "")}`).join("\u00b7"));
   for (let k = 0; k < 4; k++) {
     const f = $("sh-fill-" + k);
     if (!f) break;
     const v = clamp((M.stemShare || [])[k] || 0, 0, 100);
-    f.style.width = v.toFixed(0) + "%";
+    setWidth(f, v.toFixed(0) + "%");
     $("sh-val-" + k).textContent = `${Math.round(v)} %`;
   }
   const rs = $("read-sat");
-  if (rs) rs.textContent = P.bypass.getValue() ? "Bypassed" : !P.satOn.getValue() ? "Off" : satIsNeutral() ? neutralText("sat") : `${SAT_MODES[satModeIndex()]} +${satDriveAt().toFixed(1)} dB${SAT_FOCUS_TAG[satFocusIndex()].toLowerCase()}${["", " \u00b7 mid", " \u00b7 side"][satChannelsAt()]}`;
+  if (rs) setText(rs, P.bypass.getValue() ? "Bypassed" : !P.satOn.getValue() ? "Off" : satIsNeutral() ? neutralText("sat") : `${SAT_MODES[satModeIndex()]} +${satDriveAt().toFixed(1)} dB${SAT_FOCUS_TAG[satFocusIndex()].toLowerCase()}${["", " \u00b7 mid", " \u00b7 side"][satChannelsAt()]}`);
   const hf = $("harmmeter-fill");
   if (hf) {
     const active = P.satOn.getValue() && !satIsNeutral() && !P.bypass.getValue();
-    hf.style.width = (active ? clamp((M.satHarm + 60) / 50, 0, 1) * 100 : 0).toFixed(1) + "%";
-    $("harmmeter-val").textContent = !active ? "off" : M.satHarm <= -60 ? `< ${MINUS}60 dB` : `${fmtNum(M.satHarm, 0)} dB`;
+    setWidth(hf, (active ? clamp((M.satHarm + 60) / 50, 0, 1) * 100 : 0).toFixed(1) + "%");
+    setText($("harmmeter-val"), !active ? "off" : M.satHarm <= -60 ? `< ${MINUS}60 dB` : `${fmtNum(M.satHarm, 0)} dB`);
   }
   const re = $("read-eq");
   if (re) {
     const moved = EQ_BANDS.filter((_, b) => Math.abs(eqGainAt(b)) >= 0.05).length;
-    re.textContent = P.bypass.getValue() ? "Bypassed" : !eqEnabled() ? "Off" : moved ? `${moved} band${moved > 1 ? "s" : ""} shaped` : "Flat";
+    setText(re, P.bypass.getValue() ? "Bypassed" : !eqEnabled() ? "Off" : moved ? `${moved} band${moved > 1 ? "s" : ""} shaped` : "Flat");
   }
   const rc = $("read-clip");
-  if (rc) rc.textContent = P.bypass.getValue() ? "Bypassed" : clipOn ? `Clip ${clipText} dB` : "Off";
+  if (rc) setText(rc, P.bypass.getValue() ? "Bypassed" : clipOn ? `Clip ${clipText} dB` : "Off");
   const fill = $("clipmeter-fill"), val = $("clipmeter-val");
   if (fill) {
-    fill.style.width = (clipOn ? clamp(-M.clip / 6, 0, 1) * 100 : 0).toFixed(1) + "%";
-    val.textContent = clipOn ? `${clipText} dB` : "off";
+    setWidth(fill, (clipOn ? clamp(-M.clip / 6, 0, 1) * 100 : 0).toFixed(1) + "%");
+    setText(val, clipOn ? `${clipText} dB` : "off");
   }
 }
 
 // ---------------------------------------------------------------------------------------------
 // Meter events from the plug-in (30 per second).
-window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
+// A frame made safe to use. JUCE sends a NaN or infinite number as null, and one odd field mustn't stop the
+// whole window: a number that isn't finite keeps its last value, a list keeps its length (a spectrum point that
+// isn't finite sits at the bottom), and the shared choices and Mixology's hand-off are checked field by field.
+const str = (v, d = "") => (typeof v === "string" ? v : d);
+const num = (v, d) => (Number.isFinite(v) ? v : d);
+function cleanFrame(f) {
+  const out = {};
+  if (!f || typeof f !== "object") return out;
+  for (const [k, v] of Object.entries(f)) {
+    const was = M[k];
+    if (typeof was === "number") { if (Number.isFinite(v)) out[k] = v; }
+    else if (typeof was === "boolean") out[k] = !!v;
+    else if (typeof was === "string") { if (typeof v === "string") out[k] = v; }
+    else if (Array.isArray(was) && typeof was[0] === "number") { if (Array.isArray(v)) out[k] = was.map((old, n) => num(v[n], old)); }
+  }
+  if (!(out.sr > 0)) delete out.sr;
+  if (Array.isArray(f.snaps)) out.snaps = f.snaps.map((x) => (x && typeof x === "object" ? { filled: !!x.filled, time: str(x.time), note: str(x.note) } : { filled: false, time: "", note: "" }));
+  for (const k of ["mix", "master"]) if (Array.isArray(f[k])) out[k] = f[k].map((v) => num(v, -120));
+  if (f.songStyle && typeof f.songStyle === "object")
+    out.songStyle = { key: str(f.songStyle.key), name: str(f.songStyle.name), from: num(f.songStyle.from, 0), version: num(f.songStyle.version, 0) };
+  if (f.daw && typeof f.daw === "object")
+    out.daw = { key: str(f.daw.key), picked: !!f.daw.picked, detected: str(f.daw.detected), from: num(f.daw.from, 0) };
+  if ("fromMixology" in f) {
+    const h = f.fromMixology;
+    out.fromMixology = h && typeof h === "object" ? {
+      style: str(h.style), genre: Number.isInteger(h.genre) && h.genre >= 0 && h.genre < GENRES.length ? h.genre : -1,
+      peak: num(h.peak, -100), lufs: num(h.lufs, -100), analysed: !!h.analysed, mono: !!h.mono, limited: !!h.limited,
+      tone: [0, 1, 2, 3].map((n) => num(Array.isArray(h.tone) ? h.tone[n] : 0, 0)),
+    } : null;
+  }
+  return out;
+}
+// Each part of the handler on its own: one that throws is reported once (see reportOnce) and the rest carry on.
+function part(name, fn) { try { fn(); } catch (e) { reportOnce(name, e); } }
+window.__JUCE__.backend.addEventListener("polisherMeters", (raw) => {
+  const frame = cleanFrame(raw);
   const srChanged = frame.sr && frame.sr !== M.sr;
   const wasAm = M.amState, wasTarget = M.tsTarget, wasFail = M.tsLearnFail, wasFar = M.tsFar, wasMixology = mixologyKey();
   const wasAa = M.aaOn, wasAaHeard = M.aaHeard;
   Object.assign(M, frame);
-  if (mixologyKey() !== wasMixology && learnView === "module") renderLearn();   // Mixology came, went, or changed
-  // The DAW: found from the host, or picked in any of the three. Learn says it again in that DAW's words.
-  if (frame.daw && (frame.daw.key !== DAW.key || !!frame.daw.picked !== DAW.picked || frame.daw.detected !== DAW.detected)) {
-    Object.assign(DAW, { key: frame.daw.key || "other", picked: !!frame.daw.picked, detected: frame.daw.detected || "other", from: frame.daw.from || 0 });
-    fillDawSelect();
-    renderLearn();
-  }
-  // The song's style: this project's, or one just picked in Mixology or Voxology.
-  if (frame.songStyle && frame.songStyle.version !== SONG.version) {
-    const first = SONG.version === -1, ss = frame.songStyle;
-    SONG.version = ss.version;
-    if (ss.key !== SONG.key) {
-      SONG.key = ss.key;
-      SONG.name = ss.name;
-      refreshAmChoices();
-      if (!first && ss.key && ss.from !== 3)
-        toast(`Style: ${ss.name}, picked in ${ss.from === 2 ? "Mixology" : "Voxology"}. Auto-Master masters it as ${GENRES[amGenreFor(ss.key)]}.`);
+  part("suite", () => {
+    if (mixologyKey() !== wasMixology && learnView === "module") refreshLearn();   // Mixology came, went, or changed
+    // The DAW: found from the host, or picked in any of the three. Learn says it again in that DAW's words.
+    if (frame.daw && (frame.daw.key !== DAW.key || !!frame.daw.picked !== DAW.picked || frame.daw.detected !== DAW.detected)) {
+      Object.assign(DAW, { key: frame.daw.key || "other", picked: !!frame.daw.picked, detected: frame.daw.detected || "other", from: frame.daw.from || 0 });
+      fillDawSelect();
+      fillDawTexts();
+      refreshLearn();
     }
-  }
-  if (M.amState === 2 && wasAm !== 2) amThinkSince = performance.now();   // the analysis started: time it
-  else if (M.amState !== 2) amThinkSince = 0;
-  watchListening(wasAm, wasTarget, wasFail, wasFar);
-  if (srChanged) { drawEq(); fetchGenreCurve(); }
-  refreshHistory();
-  refreshSnapshots();
-  if (M.aaVersion !== aaSeenVersion || (!!frame.aaOn) !== (!!wasAa)) {
-    aaSeenVersion = M.aaVersion;
-    fetchAutoAnalyze();
-  } else if (learnOn && learnView === "auto" && M.aaPause !== "" && Math.floor(M.aaHeard || 0) !== Math.floor(wasAaHeard || 0)) renderLearn();   // the heard count moves on
-  if (M.amReport !== amSeenVersion) {
-    const first = amSeenVersion === -1;
-    amSeenVersion = M.amReport;
-    fetchReport(!first);
-  }
-  if (wasAm !== M.amState || M.amState === 1 || M.amState === 2) updateAmButton();
-  if (M.refVersion !== refSeenVersion) { refSeenVersion = M.refVersion; fetchReference(); }
-  else if (M.refState === 1) refreshRefPill();
-  if (P.levelMatch.getValue()) refreshMatch();
-  // Listening aids: the plug-in's state wins (it switches them off itself, e.g. for a new window), except
-  // for a moment after a click here, while the click is on its way.
-  if (frame.listen !== undefined && performance.now() - MON.sentAt > 500
-      && (frame.listen !== MON.listen || !!frame.mono !== MON.mono || !!frame.phone !== MON.phone)) {
-    MON.listen = frame.listen; MON.mono = !!frame.mono; MON.phone = !!frame.phone;
-    refreshMonitor();
-  } else if (MON.listen) $("monitor-level").textContent = monitorLevelText();
-  watchLouderPart();
-  if (M.momentary > -70 || M.peakL > -80) lastAudioTime = performance.now();
-  grWindow.push(M.gr);
-  if (grWindow.length > 90) grWindow.shift();
-  clipWindow.push(M.clip);
-  if (clipWindow.length > 90) clipWindow.shift();
-  tameWindow.push(M.tame || 0);
-  if (tameWindow.length > 90) tameWindow.shift();
-  punchWindow.push(M.punch || 0);
-  if (punchWindow.length > 90) punchWindow.shift();
-  updateMeters();
-  updateOutputMeter();
-  updateLiveReadouts();
-  histFrame(performance.now());
-  if (histView) { drawHistory(); if (learnOn && learnView === "history") scheduleHistLearn(); }
-  $("sp-mix").setAttribute("d", spectrumPath(M.mix));
-  drawRefCurve();
-  drawGenreCurve();
-  const master = spectrumPath(M.master);
-  $("sp-master").setAttribute("d", master);
-  $("sp-master-glow").setAttribute("d", master);
+    // The song's style: this project's, or one just picked in Mixology or Voxology.
+    if (frame.songStyle && frame.songStyle.version !== SONG.version) {
+      const first = SONG.version === -1, ss = frame.songStyle;
+      SONG.version = ss.version;
+      if (ss.key !== SONG.key) {
+        SONG.key = ss.key;
+        SONG.name = ss.name;
+        refreshAmChoices();
+        if (!first && ss.key && ss.from !== 3)
+          toast(`Style: ${ss.name}, picked in ${ss.from === 2 ? "Mixology" : "Voxology"}. Auto-Master masters it as ${GENRES[amGenreFor(ss.key)]}.`);
+      }
+    }
+  });
+  part("auto-master", () => {
+    if (M.amState === 2 && wasAm !== 2) amThinkSince = performance.now();   // the analysis started: time it
+    else if (M.amState !== 2) amThinkSince = 0;
+    watchListening(wasAm, wasTarget, wasFail, wasFar);
+    if (srChanged) { drawEq(); fetchGenreCurve(); }
+  });
+  part("undo and snapshots", () => { refreshHistory(); refreshSnapshots(); });
+  part("auto analyze", () => {
+    if (M.aaVersion !== aaSeenVersion || (!!frame.aaOn) !== (!!wasAa)) {
+      aaSeenVersion = M.aaVersion;
+      fetchAutoAnalyze();
+    } else if (learnOn && learnView === "auto" && M.aaPause !== "" && Math.floor(M.aaHeard || 0) !== Math.floor(wasAaHeard || 0)) refreshLearn();   // the heard count moves on
+  });
+  part("report and reference", () => {
+    if (M.amReport !== amSeenVersion) {
+      const first = amSeenVersion === -1;
+      amSeenVersion = M.amReport;
+      fetchReport(!first);
+    }
+    if (wasAm !== M.amState || M.amState === 1 || M.amState === 2) updateAmButton();
+    if (M.refVersion !== refSeenVersion) { refSeenVersion = M.refVersion; fetchReference(); }
+    else if (M.refState === 1) refreshRefPill();
+    if (P.levelMatch.getValue()) refreshMatch();
+  });
+  part("listening aids", () => {
+    // Listening aids: the plug-in's state wins (it switches them off itself, e.g. for a new window), except
+    // for a moment after a click here, while the click is on its way.
+    if (frame.listen !== undefined && performance.now() - MON.sentAt > 500
+        && (frame.listen !== MON.listen || !!frame.mono !== MON.mono || !!frame.phone !== MON.phone)) {
+      MON.listen = frame.listen; MON.mono = !!frame.mono; MON.phone = !!frame.phone;
+      refreshMonitor();
+    } else if (MON.listen) setText($("monitor-level"), monitorLevelText());   // (a live region: written only when it changes)
+    watchLouderPart();
+  });
+  part("meters", () => {
+    if (M.momentary > -70 || M.peakL > -80) lastAudioTime = performance.now();
+    grWindow.push(M.gr);
+    if (grWindow.length > 90) grWindow.shift();
+    clipWindow.push(M.clip);
+    if (clipWindow.length > 90) clipWindow.shift();
+    tameWindow.push(M.tame || 0);
+    if (tameWindow.length > 90) tameWindow.shift();
+    punchWindow.push(M.punch || 0);
+    if (punchWindow.length > 90) punchWindow.shift();
+    updateMeters();
+    updateOutputMeter();
+  });
+  part("readouts", updateLiveReadouts);
+  part("history", () => {
+    histFrame(performance.now());
+    if (histView) { drawHistory(); if (learnOn && learnView === "history") scheduleHistLearn(); }
+  });
+  part("spectrum", () => {
+    $("sp-mix").setAttribute("d", spectrumPath(M.mix));
+    drawRefCurve();
+    drawGenreCurve();
+    const master = spectrumPath(M.master);
+    $("sp-master").setAttribute("d", master);
+    $("sp-master-glow").setAttribute("d", master);
+  });
 });
-setInterval(() => { if (learnOn && learnView === "module" && ["max", "clip", "bass", "img", "glue", "dyn", "sat", "stem", "ts", "rt", "ul"].includes(selected)) renderLearn(); }, 1000);
+// Every module page has live numbers: once a second Learn checks them (nothing changes on screen unless one did).
+setInterval(() => { if (learnOn && learnView === "module") refreshLearn(); }, 1000);
 // The history's Learn page follows the graph, but only as often as a new point can change it.
 let histLearnAt = 0;
-function scheduleHistLearn() { const now = performance.now(); if (now - histLearnAt > 1000) { histLearnAt = now; renderLearn(); } }
+function scheduleHistLearn() { const now = performance.now(); if (now - histLearnAt > 1000) { histLearnAt = now; refreshLearn(); } }
 
 // ---------------------------------------------------------------------------------------------
 buildSpectrumGrid();
@@ -3810,7 +4144,7 @@ buildHistoryGrid();
 buildMeters();
 renderChain();
 renderModule();
-setLearn(true);
+setLearn(UI_MEM.learn !== false);
 refreshAmChoices();
 updateAmButton();
 refreshHistory();

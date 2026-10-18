@@ -36,6 +36,28 @@ const toggles = () => page.evaluate(async (ids) => {
   const juce = await import('./juce/index.js');
   return Object.fromEntries(ids.map((id) => [id, !!juce.getToggleState(id).getValue()]));
 }, Object.values(SWITCH));
+// Waits (up to ms) until fn() in the page is true: for checks of what Learn shows after a change (it follows live
+// changes within about a tenth of a second, so a fixed short wait can be too short on a busy machine).
+const until = async (fn, arg, ms = 3000) => {
+  for (let t = 0; t < ms; t += 50) { if (await page.evaluate(fn, arg)) return true; await page.waitForTimeout(50); }
+  return false;
+};
+// A press on a Learn button the way a person makes it: down, a moment, up, at the button's centre. Learn may
+// redraw its numbers meanwhile (the listening view does, several times a second here); the press must still land.
+// (Playwright's click() re-checks the element before it presses and can keep missing a panel that redraws.)
+const press = async (selector) => {
+  let box = null;
+  for (let t = 0; t < 5000 && !box; t += 50) {
+    const ready = await page.evaluate((sel) => { const el = document.querySelector(sel); return !!el && !el.disabled; }, selector);
+    box = ready ? await page.locator(selector).first().boundingBox().catch(() => null) : null;
+    if (!box) await page.waitForTimeout(50);
+  }
+  if (!box) throw new Error(`${selector} not found (or never enabled)`);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(60);
+  await page.mouse.up();
+};
 const names = await page.evaluate(() => [...document.querySelectorAll('.row-btn .row-name')].map((x) => x.textContent));
 check(names.length === 12, `signal chain lists 12 modules (${names.length})`);
 
@@ -107,7 +129,7 @@ const f0 = await satFocusState();
 check(f0.found && f0.buttons.join('/') === 'FULL/BASS/HIGHS/BASS+HI', `Saturation shows a Focus choice (${f0.buttons.join(' / ')})`);
 check(f0.focus === 0 && f0.pressed === 'FULL' && f0.note === 'whole mix', `Focus starts on Full ("${f0.pressed}", "${f0.note}")`);
 await clickFocus('BASS');
-await page.waitForTimeout(150);
+await until(() => /Bass only, Tube, Drive \+9/.test(document.getElementById('learn-body').textContent));   // (its own TRY THIS: "Focus Bass only" is in Full's too)
 const f1 = await satFocusState();
 check(f1.focus === 1 && f1.mode === f0.mode && f1.pressed === 'BASS', `BASS sets satFocus only ("${f1.pressed}", mode ${f1.mode})`);
 check(/Focus\s*Bass only/.test(f1.learn) && /phone/.test(f1.learn), 'Learn explains Bass only');
@@ -115,7 +137,7 @@ check(/Bass only, Tube, Drive \+9/.test(f1.learn) && /MATCH/.test(f1.learn), 'Le
 for (const [label, index, words] of [['HIGHS', 2, /Highs only/], ['BASS+HI', 3, /Bass \+ Highs/]])
 {
   await clickFocus(label);
-  await page.waitForTimeout(150);
+  await until((v) => document.getElementById('learn-body').textContent.includes(`Focus${v}`), index === 2 ? 'Highs only' : 'Bass + Highs');
   const fx = await satFocusState();
   check(fx.focus === index && fx.pressed === label && words.test(fx.learn), `${label} sets satFocus ${index} and Learn explains it ("${fx.pressed}")`);
 }
@@ -235,6 +257,7 @@ for (const [name, [mode, label, what]] of Object.entries(LISTEN)) {
   check(m.listenShown && m.listenLabel === label && !m.listenOn, `${name}: shows its ${label} button`);
   check(/HEAR WHAT IT DOES/.test(m.learn), `${name}: Learn points to the Listen button`);
   await page.click('#btn-listen'); await page.waitForTimeout(200);
+  await until(() => /WHAT YOU'RE HEARING/.test(document.getElementById('learn-body').textContent));
   m = await mon();
   check(m.listen === mode && m.listenOn, `${name}: Listen asks for mode ${mode} (${m.listen})`);
   check(m.banner && what.test(m.text) && /not the master/.test(m.text), `${name}: banner says what you hear ("${m.text}")`);
@@ -488,7 +511,7 @@ const preApply = await hist();
 const applyBtn = page.locator('#learn-body .stem-apply');
 check(await applyBtn.count() === 1, 'Learn offers the Stem EQ suggestion\'s APPLY');
 if (await applyBtn.count()) {
-  await applyBtn.click(); await page.waitForTimeout(250);
+  await press('#learn-body .stem-apply'); await page.waitForTimeout(250);
   h = await hist();
   check(h.pos === preApply.pos + 1 && h.undoTitle === 'Undo: Apply Stem EQ suggestion (Ctrl+Z)' && (await stemVoc()) === 2, `APPLY is one undo step ("${h.undoTitle}")`);
   await page.click('#btn-undo'); await page.waitForTimeout(250);
@@ -567,24 +590,26 @@ a = await amView();
 check(a.finish && !a.finish.disabled, 'FINISH NOW is ready after 12 s of music');
 check(/heard/.test(a.sub) && /click to finish/.test(a.sub), `the button says what it heard ("${a.sub}")`);
 check(/Loudest part so far/.test(a.learn), 'Learn shows the loudest part so far');
-await page.click('#am-finish');
+await press('#am-finish');
 check(await waitForLearn(/Listened to \d:\d\d of your song/, 5000), 'FINISH NOW uses what it heard and opens the report');
 a = await amView();
 check(/Listened to 0:\d\d of your song; the loudest part \(0:\d\d–0:\d\d/.test(a.learn), 'the report quotes the part it heard');
 
-// While it chooses the settings: an honest duration and CANCEL, which changes nothing.
-const versionBefore = await page.evaluate(() => window.__mockAm.version);
+// While it chooses the settings: an honest duration and CANCEL, which changes nothing. (The mock thinks for 4 s here,
+// so a busy machine still finds CANCEL there.)
+const versionBefore = await page.evaluate(() => { window.__mockAm.thinkMs = 4000; return window.__mockAm.version; });
 await page.click('#btn-automaster');
 await page.waitForFunction(() => window.__mockAm.heard >= 13, null, { timeout: 5000 });
-await page.click('#am-finish');
+await press('#am-finish');
 await page.waitForTimeout(250);
 a = await amView();
 check(a.state === 2 && a.title === 'THINKING' && /usually 5–15 seconds/.test(a.sub), `the button says how long choosing takes ("${a.sub}")`);
 check(/choosing every setting/.test(a.learn) && await page.locator('#am-cancel').count() === 1, 'Learn offers CANCEL while it chooses');
-await page.click('#am-cancel');
+await press('#am-cancel');
 await page.waitForTimeout(1200);
 a = await amView();
 check(a.state === 0 && a.title === 'AUTO-MASTER' && await page.evaluate(() => window.__mockAm.version) === versionBefore, 'CANCEL stops it and changes nothing');
+await page.evaluate(() => { window.__mockAm.thinkMs = 900; });
 
 // Tone Steady's target: LEARN (a tone-only listen), CLEAR, and Learn says which reference it uses.
 await pick('Tone Steady'); await page.waitForTimeout(150);
@@ -612,7 +637,7 @@ check((await tsView()).learnBtn === 'LEARNING', 'the LEARN button shows it is le
 const driveBefore = await page.evaluate(async () => (await import('./juce/index.js')).getSliderState('drive').getScaledValue());
 await page.waitForFunction(() => window.__mockAm.heard >= 12, null, { timeout: 5000 });
 await page.waitForTimeout(150);
-await page.click('#am-finish');
+await press('#am-finish');
 await page.waitForTimeout(400);
 tv = await tsView();
 check(tv.target >= 12 && /^your song · \d:\d\d$/.test(tv.val), `LEARN stores the song's tone ("${tv.val}")`);
@@ -740,7 +765,7 @@ await restarts('LEARN of the song\'s tone', async () => {
   await page.click('#ts-learn');
   await page.waitForFunction(() => window.__mockAm.heard >= 12, null, { timeout: 5000 });
   await page.waitForTimeout(150);
-  await page.click('#am-finish');
+  await press('#am-finish');
 });
 await restarts('CLEAR', () => page.click('#ts-clear'));
 await restarts('an Auto-Master run', async () => {
@@ -748,7 +773,7 @@ await restarts('an Auto-Master run', async () => {
   await page.click('#btn-automaster');
   await page.waitForFunction(() => window.__mockAm.heard >= 12, null, { timeout: 5000 });
   await page.waitForTimeout(150);
-  await page.click('#am-finish');
+  await press('#am-finish');
   await page.waitForFunction((x) => window.__mockAm.version > x && window.__mockAm.state === 0, v, { timeout: 5000 });
 }, 1300);
 
@@ -781,7 +806,7 @@ await page.evaluate(async () => (await import('./juce/index.js')).getComboBoxSta
 await pick('Maximizer');
 await page.waitForTimeout(200);
 check(await page.evaluate(() => !!document.getElementById('btn-autoanalyze')), 'Learn shows the AUTO ANALYZE switch once Auto-Master has run');
-await page.click('#btn-autoanalyze');
+await press('#btn-autoanalyze');
 check(await waitForLearn(/HOW IT WORKS/), 'switching it on opens its Learn page');
 check(await page.evaluate(() => window.__mockAa.on), 'the switch reaches the plug-in');
 await page.evaluate(() => window.__polisherMock.aaCheck());
@@ -804,11 +829,180 @@ check(await waitForLearn(/YOUR SETTINGS STILL FIT/), 'KEEP MINE clears the last 
 await pick('Tonal EQ');
 await page.waitForTimeout(200);
 check(await page.evaluate(() => /WHAT IT HEARS/.test(document.querySelector('#learn-body .aa-strip').textContent)), 'module pages keep the switch at the top');
-await page.click('#btn-autoanalyze');
+await press('#btn-autoanalyze');
 await page.waitForTimeout(300);
 check(await page.evaluate(() => !window.__mockAa.on), 'the switch turns it off again');
 await pick('Maximizer');
 await page.waitForTimeout(150);
+
+// ---------------------------------------------------------------------------------------------
+// Interface audit fixes.
+const sliderVal = (id) => page.evaluate(async (i) => (await import('./juce/index.js')).getSliderState(i).getScaledValue(), id);
+const knobOf = (label) => cellOf(label).locator('.knob');
+const wheelAt = (label, init) => knobOf(label).evaluate((el, i) => el.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, ...i })), init);
+await page.mouse.click(5, 5);
+
+// Learn is redrawn only when it changes, and a press that spans a redraw still lands.
+await pick('Glue'); await page.waitForTimeout(300);
+const learnSwaps = await page.evaluate(() => new Promise((res) => {
+  let n = 0; const o = new MutationObserver((ms) => { n += ms.length; });
+  o.observe(document.getElementById('learn-body'), { childList: true }); setTimeout(() => { o.disconnect(); res(n); }, 2500);
+}));
+check(learnSwaps === 0, `an idle module page's Learn isn't redrawn (${learnSwaps} redraws in 2.5 s)`);
+await pick('Maximizer'); await page.waitForTimeout(150);
+await page.evaluate(() => window.__polisherMock.setMixology({ style: 'R&B & Soul - Modern', genre: 1, peak: -5.8, lufs: -16.2, analysed: true, mono: false, limited: false, tone: [0, 0, 0, 0] }));
+check(await waitForLearn(/MIXOLOGY'S STYLE/), 'Learn offers Mixology\'s genre');
+{
+  const b = await page.locator('#learn-body button', { hasText: "MIXOLOGY'S STYLE" }).boundingBox();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.evaluate(async () => { for (let k = 0; k < 6; k++) { window.__JUCE__.backend.emitByBackend('__juce__sliderdrive', JSON.stringify({ eventType: 'valueChanged', value: 4 + k / 10 })); await new Promise((r) => setTimeout(r, 30)); } });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  const g = await page.evaluate(async () => (await import('./juce/index.js')).getComboBoxState('amGenre').getChoiceIndex());
+  check(g === 1, `a press on a Learn button lands although Learn redrew under it (genre ${g})`);
+}
+await page.evaluate(() => window.__polisherMock.setMixology(null));
+await page.evaluate(async () => (await import('./juce/index.js')).getComboBoxState('amGenre').setChoiceIndex(0));
+await page.waitForTimeout(200);
+
+// Wheel: Shift+wheel arrives sideways (deltaX only) and follows the wheel; trackpad scrolls add up (~100 px a step).
+const d0 = await sliderVal('drive');
+await wheelAt('Drive', { deltaX: -100, deltaY: 0, shiftKey: true });
+await page.waitForTimeout(450);
+const dUp = await sliderVal('drive');
+await wheelAt('Drive', { deltaX: 100, deltaY: 0, shiftKey: true });
+await page.waitForTimeout(100);
+check(dUp > d0 && (await sliderVal('drive')) === d0, `Shift+wheel up turns Drive up, down turns it down (${d0} -> ${dUp} -> ${await sliderVal('drive')})`);
+await page.waitForTimeout(450);
+const c0 = await sliderVal('ceiling');
+await knobOf('Ceiling').evaluate(async (el) => { for (let i = 0; i < 40; i++) { el.dispatchEvent(new WheelEvent('wheel', { deltaY: 3, bubbles: true, cancelable: true })); await new Promise((r) => setTimeout(r, 5)); } });
+await page.waitForTimeout(100);
+const c1 = await sliderVal('ceiling');
+check(Math.abs(c1 - (c0 - 0.03)) < 1e-6, `forty 3-px trackpad scrolls are one step, not forty (Ceiling ${c0} -> ${c1})`);
+
+// Arrow keys and wheel move a Ratio off 1:1 (the bottom of a skewed range), and whole-number controls with Shift.
+await pick('Glue'); await page.waitForTimeout(200);
+await knobOf('Ratio').focus();
+await page.keyboard.press('ArrowUp'); await page.waitForTimeout(100);
+const ratio = await sliderVal('glueRatio');
+check(ratio > 1, `ArrowUp moves Glue Ratio off 1:1 (${ratio})`);
+await page.keyboard.press('ArrowDown'); await page.waitForTimeout(100);
+check((await sliderVal('glueRatio')) === 1, 'ArrowDown puts it back to 1:1');
+await pick('Maximizer'); await page.waitForTimeout(200);
+await knobOf('Bass First').focus();
+await page.keyboard.press('Shift+ArrowUp'); await page.waitForTimeout(100);
+check((await sliderVal('maxBassFirst')) === 1, `Shift+ArrowUp moves Bass First by one (${await sliderVal('maxBassFirst')})`);
+await page.keyboard.press('Shift+ArrowDown'); await page.waitForTimeout(100);
+
+// JUCE's late echoes of values the page sent don't cost steps.
+await page.evaluate(() => window.__polisherMock.setEcho(150));
+await page.waitForTimeout(1100);
+const e0 = await sliderVal('ceiling');
+await knobOf('Ceiling').focus();
+for (let i = 0; i < 5; i++) { await page.keyboard.press('ArrowUp'); await page.waitForTimeout(20); }
+await page.waitForTimeout(400);
+const e1 = await sliderVal('ceiling');
+check(Math.abs(e1 - (e0 + 0.15)) < 1e-6, `five quick ArrowUp with echoes coming back late are five steps (Ceiling ${e0} -> ${e1})`);
+await page.evaluate(() => window.__JUCE__.backend.emitByBackend('__juce__sliderceiling', JSON.stringify({ eventType: 'valueChanged', value: -1 })));
+await page.waitForTimeout(150);
+check((await sliderVal('ceiling')) === -1, 'a value from the host still comes through');
+await page.evaluate(() => window.__polisherMock.setEcho(15));
+
+// A clicked knob takes the keyboard, without a focus ring.
+const rk = await knobOf('Release').boundingBox();
+await page.mouse.click(rk.x + rk.width / 2, rk.y + rk.height / 2);
+await page.waitForTimeout(100);
+const kf = await page.evaluate(() => ({ label: document.activeElement.getAttribute('aria-label'), ring: document.activeElement.matches(':focus-visible') }));
+const rel0 = await sliderVal('release');
+await page.keyboard.press('ArrowUp'); await page.waitForTimeout(100);
+check(kf.label === 'Release' && !kf.ring && (await sliderVal('release')) > rel0, `a clicked knob takes the arrow keys, with no ring (${JSON.stringify(kf)})`);
+check(await page.evaluate(() => { const k = document.querySelector('.knob[aria-label="Release"]'); return k.getAttribute('aria-valuemin') === '10' && k.getAttribute('aria-valuemax') === '1000' && !!k.getAttribute('aria-valuenow'); }),
+      'knobs report aria-valuenow / min / max');
+
+// The type-in box: left unchanged it changes nothing; 1,200 is 1200.
+await page.mouse.click(5, 5);
+await page.evaluate(() => window.__JUCE__.backend.emitByBackend('__juce__slidereqGain4', JSON.stringify({ eventType: 'valueChanged', value: 2.37 })));
+await pick('Tonal EQ'); await page.waitForTimeout(200);
+h = await hist();
+await cellOf('Mid').locator('.cell-value').dblclick(); await page.waitForTimeout(100);
+await page.mouse.click(5, 5); await page.waitForTimeout(200);
+h2 = await hist();
+check((await sliderVal('eqGain4')) === 2.37 && h2.pos === h.pos, `opening the type-in box and leaving changes nothing (${await sliderVal('eqGain4')}, ${h2.pos - h.pos} new steps)`);
+await page.evaluate(() => window.__JUCE__.backend.emitByBackend('__juce__slidereqGain4', JSON.stringify({ eventType: 'valueChanged', value: 0 })));
+await pick('Dynamics'); await page.waitForTimeout(200);
+await page.evaluate(() => document.querySelectorAll('.band-pick .band-btn')[1].click()); await page.waitForTimeout(150);
+await typeInto('Split', '1,200');
+check((await sliderVal('dynX2')) === 1200, `"1,200" types 1200 (Low Mid Split ${await sliderVal('dynX2')})`);
+await page.evaluate(() => document.querySelectorAll('.band-pick .band-btn')[0].click()); await page.waitForTimeout(100);
+
+// EQ points: no jump when grabbed off-centre; the keyboard moves frequency and gain.
+await pick('Tonal EQ'); await page.waitForTimeout(250);
+{
+  const nb4 = await page.locator('.eq-node').nth(3).boundingBox();
+  const f0 = await sliderVal('eqFreq4');
+  await page.mouse.move(nb4.x + nb4.width / 2 + 5, nb4.y + nb4.height / 2 + 5);
+  await page.mouse.down();
+  await page.mouse.move(nb4.x + nb4.width / 2 + 6, nb4.y + nb4.height / 2 + 5);
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+  const f1 = await sliderVal('eqFreq4'), g1 = await sliderVal('eqGain4');
+  check(g1 === 0 && f1 / f0 < 1.03, `an EQ point grabbed 5 px off-centre doesn't jump (gain ${g1}, ${f0} -> ${f1} Hz)`);
+  await page.locator('.eq-node').nth(3).focus();
+  await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowUp'); await page.waitForTimeout(150);
+  check((await sliderVal('eqFreq4')) > f1 && (await sliderVal('eqGain4')) === 0.5, 'an EQ point takes the arrow keys (frequency and gain)');
+  await page.locator('.eq-node').nth(3).dblclick(); await page.waitForTimeout(150);
+}
+
+// The browser's own menu and keys stay out of the plug-in window.
+const prevented = (type, init, sel) => page.evaluate(([t, i, sl]) => {
+  const ev = t === 'contextmenu' ? new MouseEvent(t, { bubbles: true, cancelable: true, ...i }) : new KeyboardEvent(t, { bubbles: true, cancelable: true, ...i });
+  (sl ? document.querySelector(sl) : document.body).dispatchEvent(ev); return ev.defaultPrevented; }, [type, init, sel]);
+check(await prevented('contextmenu', {}, '.knob') && !(await prevented('contextmenu', {}, '#manual-body')), 'no browser right-click menu (except over the manual\'s text)');
+check(await prevented('keydown', { key: 'F5' }) && await prevented('keydown', { key: 'F3' }) && await prevented('keydown', { key: 'p', ctrlKey: true })
+      && await prevented('keydown', { key: 'r', ctrlKey: true }) && !(await prevented('keydown', { key: 'a' })), 'F3, F5, Ctrl+P and Ctrl+R are not the browser\'s');
+
+// Keyboard: Esc closes Settings and Help; the style name opens the picker; the manual's contents are links.
+await page.click('#btn-settings'); await page.waitForTimeout(100);
+await page.keyboard.press('Escape'); await page.waitForTimeout(100);
+await page.click('#btn-help'); await page.waitForTimeout(100);
+const helpOpen = await page.evaluate(() => !document.getElementById('pop-help').hidden);
+await page.keyboard.press('Escape'); await page.waitForTimeout(100);
+check(helpOpen && await page.evaluate(() => document.getElementById('pop-settings').hidden && document.getElementById('pop-help').hidden), 'Esc closes Settings and Quick Help');
+await page.focus('#genre-name'); await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
+await page.keyboard.press('Enter'); await page.waitForTimeout(200);
+check(await page.evaluate(() => !document.getElementById('style-picker').hidden && document.getElementById('style-picker').contains(document.activeElement)),
+      'Enter on the style name opens the picker, with the keyboard in it');
+await page.keyboard.press('Escape'); await page.waitForTimeout(100);
+check(await page.evaluate(() => document.getElementById('style-picker').hidden && document.activeElement.id === 'genre-name'), 'Esc closes it and gives the keyboard back');
+await page.mouse.click(5, 5);
+check(await page.evaluate(() => !/v0\.\d/.test(document.querySelector('.pop-foot').textContent)), 'Settings shows no typed-in version (the plug-in hands it over)');
+check(await page.evaluate(() => [...document.querySelectorAll('[data-daw], [data-daw-title]')].every((e) => !/\{daw/.test(e.textContent + e.title))), 'the window\'s {daw} texts are filled in');
+
+// One odd field in a frame (JUCE sends NaN as null) doesn't freeze the window.
+await page.evaluate(() => window.__polisherMock.setFrame({ range: null, dynGr: null, gr: null, mix: Array(96).fill(null),
+  fromMixology: { style: 'X', genre: 9, peak: null, lufs: -14, analysed: true, mono: false, limited: false, tone: [null, 1] } }));
+await pick('Dynamics'); await page.waitForTimeout(200);
+const sp0 = await page.evaluate(() => document.getElementById('sp-master').getAttribute('d'));
+await page.waitForTimeout(500);
+const sp1 = await page.evaluate(() => document.getElementById('sp-master').getAttribute('d'));
+check(sp0 !== sp1 && /6\.8 LU/.test(await page.evaluate(() => document.getElementById('mv-range').textContent)), 'a frame with null fields keeps the meters and spectrum moving');
+await pick('Maximizer');
+check(await waitForLearn(/FROM MIXOLOGY/), 'and Learn still shows (an unknown Mixology genre is ignored)');
+await page.evaluate(() => { window.__polisherMock.setFrame(null); window.__polisherMock.setMixology(null); });
+
+// The window reopens where it was: module, LEARN, loudness history (mock.js keeps them like the plug-in does).
+await pick('Glue'); await page.waitForTimeout(150);
+await page.click('#learn-toggle'); await page.waitForTimeout(100);
+await page.click('#view-history'); await page.waitForTimeout(6500);
+const histBefore = await page.evaluate(() => (document.getElementById('hist-master').getAttribute('d') || '').split(/[ML]/).filter(Boolean).length);
+await page.reload(); await page.waitForTimeout(900);
+const reopened = await page.evaluate(() => ({ module: document.getElementById('module-name').textContent, learn: document.getElementById('learn-toggle').textContent,
+  points: (document.getElementById('hist-master').getAttribute('d') || '').split(/[ML]/).filter(Boolean).length }));
+// (a point or two may join between the count and the reload: the window hands over what it has as it goes)
+check(reopened.module === 'GLUE' && reopened.learn === 'LEARN OFF' && reopened.points >= Math.min(3, histBefore) && reopened.points <= histBefore + 2,
+      `reopened on Glue with LEARN off and the history (${JSON.stringify(reopened)}, ${histBefore} before)`);
+await page.click('#learn-toggle'); await page.click('#view-spectrum'); await pick('Maximizer'); await page.waitForTimeout(200);
 
 check(errors.length === 0, `no script errors (${errors.join(' | ')})`);
 await browser.close();

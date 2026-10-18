@@ -113,8 +113,14 @@
   window.__mockResets = resets;
   // The suite link: Mixology's hand-off for the song (null = no Mixology in the project). The smoke test sets it.
   let fromMixology = null;
+  // Echoes: JUCE sends every slider value the page sets back to it. setEcho(ms) delays them (a busy message
+  // thread sends them late, after newer ones went out); a negative ms switches them off.
+  const echo = { ms: 15 };
+  // setFrame(fields): every meter frame carries these from now on, e.g. { range: null } (JUCE sends a NaN or an
+  // infinite number as null); setFrame(null) goes back to normal frames.
+  let framePatch = null;
   window.__polisherMock = { setPlaying: (on) => { transport.playing = !!on; }, setMixology: (h) => { fromMixology = h; },
-                            aaCheck: () => aaCheck() };
+                            aaCheck: () => aaCheck(), setEcho: (ms) => { echo.ms = ms; }, setFrame: (f) => { framePatch = f; } };
   // Simulated Auto Analyze: once on (after an Auto-Master run) it "hears" 3 s of song per 0.1 s while playing,
   // checks after 20 s (0.6 s of thinking) and offers two edits: the mix arrived 1.8 dB louder with more low end.
   // aaCheck() (the smoke test) skips straight to the advice.
@@ -163,7 +169,8 @@
   // as an undo step of its own. toneFar: the music sits far from the stored tone (another song's?);
   // the smoke test sets it.
   const SONG = 150, LOUD_AT = 54;
-  const am = { state: 0, mode: 0, heard: 0, byItself: false, version: 0, report: "", toneTarget: 0, toneFail: 0, toneFar: false };
+  // thinkMs: how long it "chooses the settings" (the smoke test makes it longer to press CANCEL meanwhile).
+  const am = { state: 0, mode: 0, heard: 0, byItself: false, version: 0, report: "", toneTarget: 0, toneFail: 0, toneFar: false, thinkMs: 900 };
   window.__mockAm = am;
   const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
   function amDecide(byItself) {
@@ -176,7 +183,7 @@
       return;
     }
     am.state = 2;
-    setTimeout(amFinish, 900);
+    setTimeout(amFinish, am.thinkMs || 900);
   }
   const setSlider = (name, v) => { sliders[name].value = v; send("__juce__slider" + name, { eventType: "valueChanged", value: v }); };
   const setToggle = (name, v) => { toggles[name] = v; send("__juce__toggle" + name, { eventType: "valueChanged", value: v }); };
@@ -362,7 +369,10 @@
     if (am.heard >= SONG) amDecide(true);            // the song ended: it finishes by itself
   }, 100);
 
-  const send = (id, obj) => setTimeout(() => window.__JUCE__.backend.emitByBackend(id, JSON.stringify(obj)), 0);
+  // What the plug-in remembers for the window (rememberUi): here kept in sessionStorage, so a reload is a reopen.
+  let uiMemory = {};
+  try { uiMemory = JSON.parse(sessionStorage.getItem("polisher.mockUi") || "{}") || {}; } catch (_) { uiMemory = {}; }
+  const send = (id, obj, ms = 0) => setTimeout(() => window.__JUCE__.backend.emitByBackend(id, JSON.stringify(obj)), ms);
 
   window.__JUCE__ = {
     initialisationData: {
@@ -370,11 +380,12 @@
       __juce__functions: ["resetMeter", "startAutoMaster", "finishAutoMaster", "cancelAutoMaster", "getAutoMasterReport", "clearToneTarget",
                           "setAutoAnalyze", "getAutoAnalyze", "applyAutoEdit", "keepAutoEdit",
                           "loadReference", "clearReference", "getReference", "setMonitor",
-                          "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve", "pickStyle", "pickDaw"],
+                          "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve", "pickStyle", "pickDaw", "rememberUi", "showParameterMenu"],
       __juce__registeredGlobalEventIds: [],
       __juce__sliders: Object.keys(sliders),
       __juce__toggles: Object.keys(toggles),
       __juce__comboBoxes: Object.keys(combos),
+      polisherUi: [uiMemory],
     },
     postMessage(message) {
       const { eventId, payload } = JSON.parse(message);
@@ -384,7 +395,14 @@
           send(eventId, { eventType: "propertiesChanged", start: s.start, end: s.end, skew: s.skew, name, label: s.label,
                           numSteps: 1000, interval: s.interval, parameterIndex: 0 });
           send(eventId, { eventType: "valueChanged", value: s.value });
-        } else if (payload.eventType === "valueChanged") s.value = payload.value;
+        } else if (payload.eventType === "valueChanged") {
+          s.value = payload.value;
+          // Like JUCE: the value comes straight back (the parameter keeps it as a 32-bit float, 0..1).
+          if (echo.ms >= 0) {
+            const n = Math.pow((payload.value - s.start) / (s.end - s.start), s.skew);
+            send(eventId, { eventType: "valueChanged", value: s.start + (s.end - s.start) * Math.pow(Math.fround(n), 1 / s.skew) }, echo.ms);
+          }
+        }
         else if (payload.eventType === "sliderDragStarted") gestureBegin(name);
         else if (payload.eventType === "sliderDragEnded") gestureEnd(name);
       } else if (eventId.startsWith("__juce__toggle")) {
@@ -455,6 +473,11 @@
         }
         if (payload.name === "pickDaw") Object.assign(daw, { key: (payload.params || [])[0] || "cubase", picked: !!(payload.params || [])[0], from: 3 });
         if (payload.name === "snapshotStore") snapStore((payload.params || [])[0]);
+        if (payload.name === "showParameterMenu") result = false;   // no host here: no menu
+        if (payload.name === "rememberUi") {   // like the plug-in: kept for the next time the window opens (here: a reload)
+          Object.assign(uiMemory, (payload.params || [])[0] || {});
+          try { sessionStorage.setItem("polisher.mockUi", JSON.stringify(uiMemory)); } catch (_) {}
+        }
         if (payload.name === "snapshotRecall") result = snapRecall((payload.params || [])[0]);
         send("__juce__complete", { promiseId: payload.resultId, result });
       }
@@ -533,6 +556,7 @@
       listenGain: mon.listen && !bypass ? monGain[mon.listen] : 0, listenUnder: mon.listen && !bypass ? monUnder[mon.listen] : -100,
       mix, master, songStyle: song, daw,
     };
+    if (framePatch) Object.assign(frame, framePatch);
     window.__JUCE__.backend && window.__JUCE__.backend.emitByBackend("polisherMeters", JSON.stringify(frame));
   }, 1000 / 30);
 })();
