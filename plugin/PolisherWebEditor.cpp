@@ -409,7 +409,8 @@ void PolisherWebEditor::paint (juce::Graphics& g)
 void PolisherWebEditor::resized()
 {
     webView.setBounds (getLocalBounds());
-    audioProcessor.parameters.state.setProperty (uiWidthId, getWidth(), nullptr);   // opens at this size next time
+    if (getWidth() >= kMinWidth)   // (not a size the host passes through while it builds or closes the window)
+        audioProcessor.parameters.state.setProperty (uiWidthId, getWidth(), nullptr);   // opens at this size next time
 }
 
 std::optional<juce::WebBrowserComponent::Resource> PolisherWebEditor::getResource (const juce::String& url)
