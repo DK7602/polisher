@@ -475,6 +475,7 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
 
   let dragStart = null;
   knob.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;   // drags with the left button only (right-click is the host's menu)
     knob.setPointerCapture(e.pointerId);
     dragStart = { y: e.clientY, n: state.getNormalisedValue() };
     state.sliderDragStarted();
@@ -1096,6 +1097,7 @@ const nodeEls = EQ_BANDS.map((band, b) => {
     eqCells[b].refresh(); onParamsChanged(); userEdited();
   };
   n.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
     n.setPointerCapture(e.pointerId); dragging = true; n.classList.add("dragging");
     P.eqFreq[b].sliderDragStarted(); P.eqGain[b].sliderDragStarted();
     e.preventDefault(); e.stopPropagation();
@@ -2753,6 +2755,26 @@ function swallowKey(e) {
   e.stopPropagation();
 }
 for (const type of ["keydown", "keypress", "keyup"]) document.addEventListener(type, swallowKey, true);
+
+// The web view is a browser underneath. Its own right-click menu (Back, Reload, Save as, Print) has no place in a
+// plug-in: it stays shut, except over the manual's text and a value box (to copy, paste). On Windows, WebView2 also
+// takes browser keys while Masterology has the keyboard: F3 opens a Find bar (F3 is Cubase's MixConsole key),
+// Ctrl+P Print (Cubase's Pool), F5 / Ctrl+R reload the page (the module, Learn and the history start over), F7
+// caret browsing, Ctrl + / - / 0 and Ctrl+wheel zoom. Those are switched off. (On a Mac the web view has no such
+// keys, and Cmd-keys must reach the host: Cmd+S saves the project in Logic.)
+document.addEventListener("contextmenu", (e) => {
+  if (!(e.target.closest && e.target.closest("#manual-body, input, textarea"))) e.preventDefault();
+});
+const BROWSER_KEYS = new Set(["F3", "F5", "F7", "BrowserBack", "BrowserForward", "BrowserRefresh", "BrowserSearch"]);
+const BROWSER_CTRL_KEYS = new Set(["f", "g", "p", "r", "s", "u", "o", "j", "h", "+", "=", "-", "_", "0"]);
+if (!IS_MAC) {
+  document.addEventListener("keydown", (e) => {
+    const ctrl = e.ctrlKey && !e.altKey && !e.metaKey && BROWSER_CTRL_KEYS.has((e.key || "").toLowerCase());
+    const back = e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight") && !isTyping(e.target);
+    if (BROWSER_KEYS.has(e.key) || ctrl || back) e.preventDefault();
+  }, true);
+  document.addEventListener("wheel", (e) => { if (e.ctrlKey) e.preventDefault(); }, { capture: true, passive: false });
+}
 
 $("btn-undo").addEventListener("click", () => stepHistory(false));
 $("btn-redo").addEventListener("click", () => stepHistory(true));
