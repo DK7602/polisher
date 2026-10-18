@@ -227,8 +227,10 @@ private:
 
     template <typename Sample>
     void processInChunks (juce::AudioBuffer<Sample>& buffer);
+    /** hostOffset: where the buffer starts in the host's block (a block longer than prepared is processed
+        in parts), so each part is placed on the DAW's timeline where it really is. */
     template <typename Sample>
-    void processAnyPrecision (juce::AudioBuffer<Sample>& buffer);
+    void processAnyPrecision (juce::AudioBuffer<Sample>& buffer, int hostOffset = 0);
 
     int listenArmSamples (int mode) const noexcept;
     void startListenMode (int mode) noexcept;

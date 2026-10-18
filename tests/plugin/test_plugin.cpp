@@ -1597,6 +1597,24 @@ TEST_CASE ("Auto-Master's report says where the loudest part came from after jum
     }
 }
 
+TEST_CASE ("Plug-in: a host block longer than announced keeps Auto-Master's timeline right", "[plugin][automaster]")
+{
+    // Such a block is processed in parts, which all used to be dated at the block's start: every block
+    // then read as a jump of the playhead, and the loudest part's place on the timeline was lost.
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, false);   // announced 512, the host sends 4096
+    FakePlayHead head;
+    head.seconds = 30.0;
+    p->setPlayHead (&head);
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, testsig::musicLike (sr, 16.0, -14.0, 3), 4096);
+    INFO ("loudest part ends at " << p->autoMaster.getLoudestEndSeconds() << " s on the timeline");
+    CHECK_FALSE (p->autoMaster.loudestPartJumped());
+    CHECK (p->autoMaster.getLoudestEndSeconds() > 30.0);
+    CHECK (p->autoMaster.getLoudestEndSeconds() <= 46.0 + 0.01);
+    p->autoMaster.cancel();
+}
+
 TEST_CASE ("Auto-Master on a mono bus: the report's loudness is what the plug-in's own meters read", "[plugin][automaster]")
 {
     const double sr = 48000.0;

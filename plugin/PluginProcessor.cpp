@@ -605,7 +605,7 @@ void PolisherAudioProcessor::resetChain() noexcept
 }
 
 template <typename Sample>
-void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buffer)
+void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buffer, int hostOffset)
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -633,7 +633,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
             isPlaying = position->getIsPlaying();
             hostTransport = true;
             if (const auto t = position->getTimeInSeconds(); t.hasValue() && isPlaying)
-                hostSeconds = *t;
+                hostSeconds = *t + hostOffset / juce::jmax (1.0, getSampleRate());   // (the host gives the block's start)
         }
     const bool justStarted = isPlaying && ! wasPlaying;
     wasPlaying = isPlaying;
@@ -1080,11 +1080,13 @@ void PolisherAudioProcessor::processInChunks (juce::AudioBuffer<Sample>& buffer)
         return;
     }
     // A host block longer than prepareToPlay announced: process it in parts the monitoring buffers hold
-    // (the chain streams sample by sample, so the master is the same either way).
+    // (the chain streams sample by sample, so the master is the same either way). Each part is dated where
+    // it sits in the block: all dated at the block's start, Auto-Master took every block for a jump of the
+    // playhead.
     for (int start = 0; start < total; start += monCapacity)
     {
         juce::AudioBuffer<Sample> part (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), start, juce::jmin (monCapacity, total - start));
-        processAnyPrecision (part);
+        processAnyPrecision (part, start);
     }
 }
 
