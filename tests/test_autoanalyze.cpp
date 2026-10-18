@@ -442,7 +442,8 @@ TEST_CASE ("Auto Analyze judges like with like: whole parts, inside the hook", "
 TEST_CASE ("Auto Analyze offers nothing on an unchanged song with a quieter verse, wherever playback starts", "[autoanalyze][automaster]")
 {
     // The audit's songs: the verse 1, 2 or 3 dB under the chorus. Before, a check judged a window that was mostly
-    // verse and offered 1-2 dB more Drive on a mix that hadn't changed.
+    // verse and offered 1-2 dB more Drive on a mix that hadn't changed, and nearly every check on the chorus
+    // offered a Clip Level move (the same chorus measured +1.4 to +2.4 dB depending on where the 12 s started).
     const double sr = 44100.0;
     for (auto [verseDb, chorusStart] : { std::pair { -1.0, 24.0 }, std::pair { -2.0, 16.0 }, std::pair { -3.0, 16.0 } })
     {
@@ -477,14 +478,50 @@ TEST_CASE ("Auto Analyze offers nothing on an unchanged song with a quieter vers
         {
             const auto p = playAndJudge (song, a, b, st.hookSpans, check, planned);
             checks += p.checks;
-            std::vector<std::string> level;   // what the window's level drives (Clip Level's own noise aside)
+            // Nothing at all: no Drive for a part that is partly verse, and no Clip Level from where the 12 s
+            // happened to start (Learn says YOUR SETTINGS STILL FIT).
             for (const auto& o : p.offered)
-                if (o.rfind ("clip clipLevel", 0) != 0)
-                    level.push_back (o);
-            for (const auto& o : level)
                 UNSCOPED_INFO ("verse " << verseDb << " dB, playback " << a << "-" << b << " s: " << o);
-            CHECK (level.empty());
+            CHECK (p.offered.empty());
         }
         CHECK (checks >= 4);   // it does judge the choruses
     }
+}
+
+TEST_CASE ("Auto Analyze: KEEP MINE holds, and the opposite move doesn't come back for the same mix", "[autoanalyze]")
+{
+    // Auto-Master planned Clip Level +1.4; a check offered +2.4 and you kept +1.4. The plan moved to +2.4.
+    const Values planned { { "clipLevel", 2.4 }, { "satMode", 1.0 }, { "dynX1", 120.0 } };
+    const Values current { { "clipLevel", 1.4 }, { "satMode", 0.0 }, { "dynX1", 100.0 } };
+    const Kept kept { { "clipLevel", { 1.4, 2.4 } }, { "satMode", { 0.0, 1.0 } }, { "dynX1", { 100.0, 120.0 } } };
+
+    // The next check reads the same mix the other way (+1.4): without the kept range it offers 1.4 -> 0.4.
+    Values fresh = planned;
+    fresh["clipLevel"] = 1.4;
+    REQUIRE (find (planEdits (planned, fresh, current), "clip") != nullptr);
+    CHECK (planEdits (planned, fresh, current, &kept).empty());
+    // A choice going back to the one you kept, a crossover inside the kept range: nothing either.
+    fresh["satMode"] = 0.0;
+    fresh["dynX1"] = 105.0;
+    CHECK (planEdits (planned, fresh, current, &kept).empty());
+
+    // The mix really changed: a move beyond the range is offered, counted from its nearest edge.
+    fresh = planned;
+    fresh["clipLevel"] = 3.6;   // 1.2 dB past +2.4
+    auto edits = planEdits (planned, fresh, current, &kept);
+    REQUIRE (change (find (edits, "clip"), "clipLevel") != nullptr);
+    CHECK_THAT (change (find (edits, "clip"), "clipLevel")->to, WithinAbs (2.6, 1.0e-9));
+    fresh["clipLevel"] = 0.2;   // 1.2 dB under +1.4
+    edits = planEdits (planned, fresh, current, &kept);
+    REQUIRE (change (find (edits, "clip"), "clipLevel") != nullptr);
+    CHECK_THAT (change (find (edits, "clip"), "clipLevel")->to, WithinAbs (0.2, 1.0e-9));
+    fresh["clipLevel"] = 2.0;
+    fresh["satMode"] = 2.0;     // a choice you never declined
+    edits = planEdits (planned, fresh, current, &kept);
+    REQUIRE (find (edits, "sat") != nullptr);
+    CHECK (find (edits, "clip") == nullptr);
+
+    // Clip Level: a move under 1 dB is the same mix measured again, not a change.
+    CHECK (planEdits ({ { "clipLevel", 1.4 } }, { { "clipLevel", 2.3 } }, { { "clipLevel", 1.4 } }).empty());
+    CHECK_FALSE (planEdits ({ { "clipLevel", 1.4 } }, { { "clipLevel", 2.4 } }, { { "clipLevel", 1.4 } }).empty());
 }

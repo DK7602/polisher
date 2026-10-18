@@ -157,7 +157,8 @@ public:
     /** Applies one module's edit ("all": every edit) as one undo step. False when there is none. */
     bool applyAutoEdit (const juce::String& module);
     /** Keeps the settings as they are for that edit: Auto-Master's plan is moved to the new one without
-        changing a control, so the same advice doesn't come back. One undo step. */
+        changing a control, and both values are remembered (the report's "aaKeep"), so neither the same advice
+        nor its opposite comes back unless the mix really changed. One undo step. */
     bool keepAutoEdit (const juce::String& module);
 
 private:
@@ -173,6 +174,7 @@ private:
     void recomputeEdits (bool fromCheck);
     bool reportSettingsMatch() const;
     polisher::autoanalyze::Values plannedValues() const;
+    polisher::autoanalyze::Kept keptValues() const;   // the report's "aaKeep": what KEEP MINE declined, per control
     float paramValue (const juce::String& id) const;
     bool changeReport (const juce::String& module, bool applyParams);
     /** The edits still apply: not while Auto-Master's plan is for other choices, or there is no plan. */

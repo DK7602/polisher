@@ -7,6 +7,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdio>
+#include <functional>
 #include <numbers>
 #include <numeric>
 
@@ -215,32 +216,44 @@ double percentile (std::vector<double> v, double p)
 
 double toDb (double power) { return 10.0 * std::log10 (power + 1.0e-30); }
 
-/** The level of the peaks that keep coming back (99th percentile of 10 ms peaks in the loud parts),
-    in dBFS. One stray spike can be clipped hard unheard; what's audible is how deep the recurring
-    peaks are shaved. */
+/** The level of the peaks that keep coming back, in dBFS: the 10 ms peaks of the loud parts, the mean of the
+    loudest 2.5 % of them (about the 99th percentile, but not one single peak's level), on two 10 ms grids half a
+    block apart, averaged. One stray spike can be clipped hard unheard; what's audible is how deep the
+    recurring peaks are shaved. Steadier against where the clip starts (the plug-in's 12 s never start on the
+    same sample twice): on one chorus heard from 13 different starts, the 99th percentile on one grid moved by
+    0.65 dB and swung the Clip Level by 1 dB; this moves by 0.37 dB, the Clip Level by 0.4 dB (re-audit
+    2026-10, trap-like song with its stored tone). */
 double recurringPeakDb (const AudioClip& clip)
 {
-    const int n = clip.numSamples(), block = std::max (1, static_cast<int> (clip.sampleRate * 0.01));
-    std::vector<double> peaks, energy;
-    for (int start = 0; start + block <= n; start += block)
+    const int n = clip.numSamples(), block = std::max (2, static_cast<int> (clip.sampleRate * 0.01));
+    auto onGrid = [&] (int offset)
     {
-        double pk = 0.0, e = 0.0;
-        for (const auto& ch : clip.channels)
-            for (int i = start; i < start + block; ++i)
-            {
-                const double v = ch[static_cast<size_t> (i)];
-                pk = std::max (pk, std::abs (v));
-                e += v * v;
-            }
-        peaks.push_back (20.0 * std::log10 (pk + 1.0e-12));
-        energy.push_back (toDb (e / block));
-    }
-    if (peaks.empty()) return -100.0;
-    const double gate = percentile (energy, 0.95) - 20.0;
-    std::vector<double> loud;
-    for (size_t i = 0; i < peaks.size(); ++i)
-        if (energy[i] >= gate) loud.push_back (peaks[i]);
-    return percentile (loud.empty() ? peaks : loud, 0.99);
+        std::vector<double> peaks, energy;
+        for (int start = offset; start + block <= n; start += block)
+        {
+            double pk = 0.0, e = 0.0;
+            for (const auto& ch : clip.channels)
+                for (int i = start; i < start + block; ++i)
+                {
+                    const double v = ch[static_cast<size_t> (i)];
+                    pk = std::max (pk, std::abs (v));
+                    e += v * v;
+                }
+            peaks.push_back (20.0 * std::log10 (pk + 1.0e-12));
+            energy.push_back (toDb (e / block));
+        }
+        if (peaks.empty()) return -100.0;
+        const double gate = percentile (energy, 0.95) - 20.0;
+        std::vector<double> loud;
+        for (size_t i = 0; i < peaks.size(); ++i)
+            if (energy[i] >= gate) loud.push_back (peaks[i]);
+        if (loud.empty()) loud = peaks;
+        std::sort (loud.begin(), loud.end(), std::greater<double>());
+        const size_t top = std::max<size_t> (1, static_cast<size_t> (std::lround (0.025 * static_cast<double> (loud.size()))));
+        return std::accumulate (loud.begin(), loud.begin() + static_cast<std::ptrdiff_t> (top), 0.0) / static_cast<double> (top);
+    };
+    if (n < block) return -100.0;
+    return 0.5 * (onGrid (0) + onGrid (block / 2));
 }
 
 /** How far the hits jump out of what plays just before them (dB): the level of each 5 ms against

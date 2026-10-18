@@ -44,7 +44,9 @@ namespace polisher::autoanalyze
             if (id == "drive" || id == "inTrim") return { Kind::additive, 0.75, 0.1 };
             if (id == "ceiling") return { Kind::additive, 0.25, 0.1 };
             if (id == "satDrive") return { Kind::additive, 1.5, 0.1 };
-            if (id == "clipLevel") return { Kind::additive, 0.5, 0.1 };
+            // Clip Level follows the recurring peaks against the loudness, which the same chorus reads 0.4 dB apart
+            // from one playback to the next (re-audit 2026-10): 1 dB is a change in the mix.
+            if (id == "clipLevel") return { Kind::additive, 1.0, 0.1 };
             if (id == "tsRange") return { Kind::additive, 1.0, 0.1 };
             if (starts (id, "img")) return { Kind::additive, 5.0, 1.0 };
             // Percent knobs: Unlimiter / Tone Steady / Resonance Tamer amounts, sensitivity, Bass Tame / Punch,
@@ -145,7 +147,7 @@ namespace polisher::autoanalyze
         return {};
     }
 
-    std::vector<Edit> planEdits (const Values& planned, const Values& fresh, const Values& current)
+    std::vector<Edit> planEdits (const Values& planned, const Values& fresh, const Values& current, const Kept* kept)
     {
         std::map<std::string, Edit> byModule;
         std::map<std::string, bool> worth;
@@ -159,8 +161,25 @@ namespace polisher::autoanalyze
             const double cur = curIt->second;
             const auto planIt = planned.find (id);
             const bool known = planIt != planned.end();
-            const double plan = known ? planIt->second : f;
+            double plan = known ? planIt->second : f;
             const auto rule = ruleFor (id);
+            // KEEP MINE: Auto-Master's choices you declined for this mix count as the plan too.
+            if (const auto keptIt = kept != nullptr && known ? kept->find (id) : Kept::const_iterator {};
+                kept != nullptr && known && keptIt != kept->end() && ! keptIt->second.empty())
+            {
+                const auto& was = keptIt->second;
+                if (rule.kind == Kind::choice || id == "bassMono")
+                {
+                    if (std::any_of (was.begin(), was.end(), [f] (double v) { return std::abs (v - f) <= 1.0e-6; }))
+                        plan = f;   // back to a choice you declined the change from: nothing to do
+                }
+                else if (rule.kind != Kind::hidden)
+                {
+                    const double lo = std::min (plan, *std::min_element (was.begin(), was.end()));
+                    const double hi = std::max (plan, *std::max_element (was.begin(), was.end()));
+                    plan = std::clamp (f, lo, hi);   // inside the range: no change; outside: from its nearest edge
+                }
+            }
 
             double to = cur;
             bool significant = false;

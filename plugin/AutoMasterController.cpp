@@ -605,6 +605,17 @@ polisher::autoanalyze::Values AutoMasterController::plannedValues() const
     return v;
 }
 
+polisher::autoanalyze::Kept AutoMasterController::keptValues() const
+{
+    polisher::autoanalyze::Kept kept;
+    if (auto* o = aaReport["aaKeep"].getDynamicObject())
+        for (const auto& p : o->getProperties())
+            if (const auto* list = p.value.getArray())
+                for (const auto& v : *list)
+                    kept[p.name.toString().toStdString()].push_back (std::round (static_cast<double> (v) * 1.0e4) * 1.0e-4);
+    return kept;
+}
+
 void AutoMasterController::autoTick (double nowMs)
 {
     // A check that finished: its result becomes the advice (when it's about this report).
@@ -798,7 +809,8 @@ void AutoMasterController::recomputeEdits (bool fromCheck)
     for (const auto& [id, v] : fresh)
         if (state.getRawParameterValue (juce::String (id)) != nullptr)
             current[id] = paramValue (juce::String (id));
-    auto edits = polisher::autoanalyze::planEdits (plannedValues(), fresh, current);
+    const auto kept = keptValues();
+    auto edits = polisher::autoanalyze::planEdits (plannedValues(), fresh, current, &kept);
 
     // Within each control's range, on its steps (a choice: a valid index).
     for (auto& e : edits)
@@ -920,7 +932,11 @@ bool AutoMasterController::changeReport (const juce::String& module, bool applyP
         return false;
     if (! doc["aaPlan"].isObject())
         docObj->setProperty ("aaPlan", juce::var (new juce::DynamicObject()));
+    if (! doc["aaKeep"].isObject())
+        docObj->setProperty ("aaKeep", juce::var (new juce::DynamicObject()));
     auto* values = doc["aaPlan"].getDynamicObject();
+    auto* keep = doc["aaKeep"].getDynamicObject();
+    const auto planned = plannedValues();
     const bool grouped = onApplyBegin && onApplyEnd;
     if (grouped) onApplyBegin (label);
     bool stem = false;
@@ -931,8 +947,23 @@ bool AutoMasterController::changeReport (const juce::String& module, bool applyP
             if (applyParams)
                 setParam (id, static_cast<float> (c.to));
             stem = stem || e->module == "stem";
-            if (const auto f = fresh.find (c.id); f != fresh.end() && id != "ulSquashSet")
-                values->setProperty (id, static_cast<float> (f->second));
+            const auto f = fresh.find (c.id);
+            if (f == fresh.end() || id == "ulSquashSet")
+                continue;
+            if (applyParams)
+                keep->removeProperty (id);   // applied: the new value is the plan, nothing declined
+            else
+            {
+                // Kept: the plan before and the advice declined both count as "fits" from now on (KEEP MINE holds:
+                // the next check doesn't offer the opposite move because the same mix measured a little differently).
+                juce::Array<juce::var> was;
+                if (const auto* had = keep->getProperty (id).getArray()) was.addArray (*had);
+                for (const double v : { planned.count (c.id) != 0 ? planned.at (c.id) : f->second, f->second })
+                    if (! was.contains (juce::var (static_cast<float> (v))))
+                        was.add (static_cast<float> (v));
+                keep->setProperty (id, was);
+            }
+            values->setProperty (id, static_cast<float> (f->second));
         }
     if (stem && applyParams)
         setParam ("stemOn", 1.0f);

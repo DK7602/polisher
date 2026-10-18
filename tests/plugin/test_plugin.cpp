@@ -1773,6 +1773,8 @@ TEST_CASE ("Auto Analyze: hears the hook again, offers what changed in the mix, 
     CHECK (p->history.undoLabel().startsWith ("Auto Analyze: keep "));
     CHECK (p->parameters.copyState().toXmlString() == values);
     CHECK (autoAdvice (*p)["edits"].size() == 0);
+    // Both the plan before and the declined value count from now on, so the opposite move doesn't come back.
+    CHECK (reportOf (*p)["aaKeep"]["drive"].size() == 2);
 
     // A knob of yours keeps its offset: the edit moves it by Auto-Master's change, from where it is.
     p->history.undo();

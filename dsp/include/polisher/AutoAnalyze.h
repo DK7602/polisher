@@ -45,15 +45,24 @@ namespace polisher::autoanalyze
         controls Auto-Master always sets the same way, such as band frequencies, Glue, Impact and Sustain). */
     std::string moduleOf (const std::string& id);
 
+    /** Per control, the values Auto-Master has already chosen for this mix that you declined with KEEP MINE (the
+        plan before, and what it offered then). */
+    using Kept = std::map<std::string, std::vector<double>>;
+
     /** What to offer. planned: what Auto-Master chose last time (its report's values, updated as edits are
         applied or kept); fresh: what it chooses for the mix now; current: the controls now. Per control:
         a switch or choice Auto-Master changed its mind on goes to the new choice (so does a Stem EQ
         suggestion: planned is the suggestion already on offer); a knob moves by
         fresh - planned (frequencies and times by the ratio), from where it is now. A module is offered when
-        at least one of its controls moves by a step worth hearing (e.g. 0.75 dB of EQ or Drive, 1.5 dB of a
-        threshold); its smaller moves go with it. A control missing from planned goes to fresh; one missing
-        from fresh stays. Modules in signal-chain order. */
-    std::vector<Edit> planEdits (const Values& planned, const Values& fresh, const Values& current);
+        at least one of its controls moves by a step worth hearing (e.g. 0.75 dB of EQ or Drive, 1 dB of Clip
+        Level, 1.5 dB of a threshold: each larger than what the same mix measures from one playback to the
+        next); its smaller moves go with it. A control missing from planned goes to fresh; one missing from
+        fresh stays. Modules in signal-chain order.
+
+        kept (KEEP MINE): a knob counts from the nearest edge of the range its kept values and the plan span (a
+        new choice inside it moves nothing), and a choice or switch that goes back to a kept value moves
+        nothing: declined advice doesn't come back, nor its opposite, unless the mix really changed. */
+    std::vector<Edit> planEdits (const Values& planned, const Values& fresh, const Values& current, const Kept* kept = nullptr);
 
     /** Whether two lists offer the same edits (same modules, same targets within a small tolerance): Learn's
         cards change only when the advice really changed. */
