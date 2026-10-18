@@ -169,7 +169,8 @@
   // as an undo step of its own. toneFar: the music sits far from the stored tone (another song's?);
   // the smoke test sets it.
   const SONG = 150, LOUD_AT = 54;
-  const am = { state: 0, mode: 0, heard: 0, byItself: false, version: 0, report: "", toneTarget: 0, toneFail: 0, toneFar: false };
+  // thinkMs: how long it "chooses the settings" (the smoke test makes it longer to press CANCEL meanwhile).
+  const am = { state: 0, mode: 0, heard: 0, byItself: false, version: 0, report: "", toneTarget: 0, toneFail: 0, toneFar: false, thinkMs: 900 };
   window.__mockAm = am;
   const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
   function amDecide(byItself) {
@@ -182,7 +183,7 @@
       return;
     }
     am.state = 2;
-    setTimeout(amFinish, 900);
+    setTimeout(amFinish, am.thinkMs || 900);
   }
   const setSlider = (name, v) => { sliders[name].value = v; send("__juce__slider" + name, { eventType: "valueChanged", value: v }); };
   const setToggle = (name, v) => { toggles[name] = v; send("__juce__toggle" + name, { eventType: "valueChanged", value: v }); };

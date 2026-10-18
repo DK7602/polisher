@@ -129,7 +129,7 @@ const f0 = await satFocusState();
 check(f0.found && f0.buttons.join('/') === 'FULL/BASS/HIGHS/BASS+HI', `Saturation shows a Focus choice (${f0.buttons.join(' / ')})`);
 check(f0.focus === 0 && f0.pressed === 'FULL' && f0.note === 'whole mix', `Focus starts on Full ("${f0.pressed}", "${f0.note}")`);
 await clickFocus('BASS');
-await until(() => /Focus\s*Bass only/.test(document.getElementById('learn-body').textContent));
+await until(() => /Bass only, Tube, Drive \+9/.test(document.getElementById('learn-body').textContent));   // (its own TRY THIS: "Focus Bass only" is in Full's too)
 const f1 = await satFocusState();
 check(f1.focus === 1 && f1.mode === f0.mode && f1.pressed === 'BASS', `BASS sets satFocus only ("${f1.pressed}", mode ${f1.mode})`);
 check(/Focus\s*Bass only/.test(f1.learn) && /phone/.test(f1.learn), 'Learn explains Bass only');
@@ -137,7 +137,7 @@ check(/Bass only, Tube, Drive \+9/.test(f1.learn) && /MATCH/.test(f1.learn), 'Le
 for (const [label, index, words] of [['HIGHS', 2, /Highs only/], ['BASS+HI', 3, /Bass \+ Highs/]])
 {
   await clickFocus(label);
-  await until((w) => new RegExp(w).test(document.getElementById('learn-body').textContent), words.source);
+  await until((v) => document.getElementById('learn-body').textContent.includes(`Focus${v}`), index === 2 ? 'Highs only' : 'Bass + Highs');
   const fx = await satFocusState();
   check(fx.focus === index && fx.pressed === label && words.test(fx.learn), `${label} sets satFocus ${index} and Learn explains it ("${fx.pressed}")`);
 }
@@ -595,8 +595,9 @@ check(await waitForLearn(/Listened to \d:\d\d of your song/, 5000), 'FINISH NOW 
 a = await amView();
 check(/Listened to 0:\d\d of your song; the loudest part \(0:\d\d–0:\d\d/.test(a.learn), 'the report quotes the part it heard');
 
-// While it chooses the settings: an honest duration and CANCEL, which changes nothing.
-const versionBefore = await page.evaluate(() => window.__mockAm.version);
+// While it chooses the settings: an honest duration and CANCEL, which changes nothing. (The mock thinks for 4 s here,
+// so a busy machine still finds CANCEL there.)
+const versionBefore = await page.evaluate(() => { window.__mockAm.thinkMs = 4000; return window.__mockAm.version; });
 await page.click('#btn-automaster');
 await page.waitForFunction(() => window.__mockAm.heard >= 13, null, { timeout: 5000 });
 await press('#am-finish');
@@ -608,6 +609,7 @@ await press('#am-cancel');
 await page.waitForTimeout(1200);
 a = await amView();
 check(a.state === 0 && a.title === 'AUTO-MASTER' && await page.evaluate(() => window.__mockAm.version) === versionBefore, 'CANCEL stops it and changes nothing');
+await page.evaluate(() => { window.__mockAm.thinkMs = 900; });
 
 // Tone Steady's target: LEARN (a tone-only listen), CLEAR, and Learn says which reference it uses.
 await pick('Tone Steady'); await page.waitForTimeout(150);
