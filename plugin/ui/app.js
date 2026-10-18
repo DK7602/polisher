@@ -2794,6 +2794,7 @@ function updateAmButton() {
 // run, Apply and snapshot recall. The arrows say what they will undo / redo.
 const IS_MAC = /Mac/.test(navigator.platform || "");
 const KEY = IS_MAC ? "⌘" : "Ctrl+";
+if (IS_MAC) $("qh-undo-keys").textContent = "⌘Z undoes, ⇧⌘Z redoes";   // Quick Help, in a Mac's keys
 function refreshHistory() {
   for (const [id, label, verb, keys] of [["btn-undo", M.undo, "Undo", `${KEY}Z`], ["btn-redo", M.redo, "Redo", IS_MAC ? "⇧⌘Z" : "Ctrl+Shift+Z or Ctrl+Y"]]) {
     const b = $(id), on = !!label;
