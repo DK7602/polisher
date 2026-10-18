@@ -170,6 +170,20 @@ void Saturation::stopSlot (int index) noexcept
     }
 }
 
+void Saturation::guardState() noexcept
+{
+    double sum = resEnergy + sigEnergy + bend + mix;
+    for (const auto& ch : channelState)
+        for (const auto& st : ch.slot)
+        {
+            for (const auto& f : st.split) sum += f.stateSum();
+            for (const auto& f : st.hiSplit) sum += f.stateSum();
+            sum += st.bassHp.stateSum() + st.hiHp.stateSum() + st.fitXY + st.fitXX + st.hpX + st.hpY + st.dcSum;
+        }
+    if (! std::isfinite (sum))
+        reset();
+}
+
 void Saturation::reset() noexcept
 {
     for (auto& ch : channelState)

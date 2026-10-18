@@ -21,6 +21,10 @@ struct Biquad
 
     void reset() noexcept { z1 = z2 = 0.0; }
 
+    /** The state, summed (for the modules' NaN / inf guards: a non-finite sample gets into the state and
+        never leaves on its own, and a sum of states is non-finite exactly when one of them is). */
+    double stateSum() const noexcept { return z1 + z2; }
+
     /** Power gain |H|^2 at a normalised angular frequency w = 2 pi f / sampleRate. */
     double powerGain (double w) const noexcept
     {

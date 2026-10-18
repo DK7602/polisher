@@ -458,7 +458,8 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     // its settings even when they equal its defaults (updateLimiterParams skips unchanged ones), so it
     // knows it is configured and glides on the next change instead of jumping.
     eq.setParams (eq.getParams());
-    updateLimiterParams();
+    const bool bypassed = bypassParam->load() > 0.5f;
+    updateLimiterParams (bypassed);
     limiter.prepare (sampleRate, channels);
     dither.reset();
     clipper.prepare (channels, sampleRate);
@@ -472,12 +473,20 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     saturation.prepare (sampleRate, channels);
     autoMaster.prepare (sampleRate);
     levelMatch.prepare (sampleRate);
-    currentMatchGain = 1.0;
     outputMeter.prepare (sampleRate, channels);
     inputMeter.prepare (sampleRate, channels);
-    updateLimiterParams();
-    currentDriveGain = targetDriveGain();
-    currentTrimGain = targetTrimGain();
+    corrCoeff = 1.0 - std::exp (-1.0 / (0.3 * sampleRate));
+    corrLR = corrLL = corrRR = 0.0;
+    updateLimiterParams (bypassed);
+    trimGlide.prepare (sampleRate, kGainGlideSeconds);
+    driveGlide.prepare (sampleRate, kGainGlideSeconds);
+    matchGlide.prepare (sampleRate, kGainGlideSeconds);
+    trimGlide.jumpTo (targetTrimGain (bypassed));     // starts at the set gains (no glide from 0 dB at bar 1)
+    driveGlide.jumpTo (targetDriveGain (bypassed));
+    matchGlide.jumpTo (1.0);
+    matchSideA = matchPendingA = bypassed;
+    matchSwitchIn = -1;
+    matchDelay = polisher::SoftClipper::latencySamples() + limiter.latencySamples();
     // Constant latency whatever the settings: Unlimiter + Stem EQ look-ahead + saturation + clipper (all
     // oversampling modes) + limiter look-ahead.
     setLatencySamples (unlimiter.latencySamples() + stemEq.latencySamples() + polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples()
@@ -489,6 +498,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     for (auto* v : { &monPre, &monSig, &monAux })
         for (auto& ch : *v) ch.assign (static_cast<size_t> (monCapacity), 0.0);
     monLimGain.assign (static_cast<size_t> (monCapacity), 1.0);
+    monDrive.assign (static_cast<size_t> (monCapacity), 1.0);
     monGlueGain.assign (static_cast<size_t> (monCapacity), 1.0);
     monClipGain.assign (static_cast<size_t> (monCapacity), 1.0);
     const int longest = polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples() + limiter.latencySamples();
@@ -499,6 +509,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     monitorOut.prepare (sampleRate);
     stemEq.setTamerDelta (false);
     dynamics.setMonitorBand (-1, false);
+    hostResetRequested.store (false);   // everything above starts clean already
     suitePresence.start();   // on the suite link from the next tick (see updateSuite)
 }
 
@@ -540,7 +551,7 @@ void PolisherAudioProcessor::startListenMode (int mode) noexcept
     monClipDelay.setDelay (limiter.latencySamples());
 }
 
-void PolisherAudioProcessor::updateLimiterParams()
+void PolisherAudioProcessor::updateLimiterParams (bool bypassed)
 {
     // Drive is applied before the clipper (see processAnyPrecision), so the limiter gets none.
     polisher::LimiterParams p;
@@ -548,7 +559,7 @@ void PolisherAudioProcessor::updateLimiterParams()
     p.ceilingDbtp     = ceilingParam->load();
     p.releaseMs       = releaseParam->load();
     p.adaptiveRelease = adaptiveParam->load() > 0.5f;
-    p.bypassed        = bypassParam->load() > 0.5f;
+    p.bypassed        = bypassed;
     p.bassFirst       = juce::jlimit (0.0, 1.0, static_cast<double> (bassFirstParam->load()) / 100.0);
 
     const auto& cur = limiter.getParams();
@@ -623,23 +634,91 @@ void PolisherAudioProcessor::updateLimiterParams()
         clipper.setParams (c);
 }
 
-double PolisherAudioProcessor::targetTrimGain() const
+double PolisherAudioProcessor::targetTrimGain (bool bypassed) const
 {
-    return bypassParam->load() > 0.5f ? 1.0 : juce::Decibels::decibelsToGain (static_cast<double> (trimParam->load()));
+    return bypassed ? 1.0 : juce::Decibels::decibelsToGain (static_cast<double> (trimParam->load()));
 }
 
-double PolisherAudioProcessor::targetDriveGain() const
+double PolisherAudioProcessor::targetDriveGain (bool bypassed) const
 {
-    return bypassParam->load() > 0.5f ? 1.0 : juce::Decibels::decibelsToGain (static_cast<double> (driveParam->load()));
+    return bypassed ? 1.0 : juce::Decibels::decibelsToGain (static_cast<double> (driveParam->load()));
+}
+
+namespace
+{
+    /** Applies a glide's gain to every channel of samples [from, to): one multiply per sample while it
+        glides, the same multiply at rest, nothing at all at rest on 1 (bit for bit untouched). */
+    template <typename Sample>
+    void applyGlide (juce::AudioBuffer<Sample>& buffer, int from, int to, polisher::GainGlide& glide) noexcept
+    {
+        if (to <= from)
+            return;
+        if (! glide.isGliding())
+        {
+            if (glide.current() != 1.0)
+                buffer.applyGain (from, to - from, static_cast<Sample> (glide.current()));
+            return;
+        }
+        Sample* const* ch = buffer.getArrayOfWritePointers();
+        const int nch = buffer.getNumChannels();
+        for (int i = from; i < to; ++i)
+        {
+            const auto g = static_cast<Sample> (glide.next());
+            for (int c = 0; c < nch; ++c) ch[c][i] *= g;
+        }
+    }
+
+    /** True when every sample of the first numSamples is a number (no NaN, no inf). */
+    template <typename Sample>
+    bool allFinite (const Sample* const* channels, int numChannels, int numSamples) noexcept
+    {
+        for (int c = 0; c < numChannels; ++c)
+            for (int i = 0; i < numSamples; ++i)
+                if (! std::isfinite (channels[c][i]))
+                    return false;
+        return true;
+    }
+
+    /** Plays every NaN / inf sample as 0 (in place). */
+    template <typename Sample>
+    void cleanNonFinite (juce::AudioBuffer<Sample>& buffer, int numSamples) noexcept
+    {
+        for (int c = 0; c < buffer.getNumChannels(); ++c)
+            if (! allFinite (buffer.getArrayOfReadPointers() + c, 1, numSamples))
+            {
+                Sample* x = buffer.getWritePointer (c);
+                for (int i = 0; i < numSamples; ++i)
+                    if (! std::isfinite (x[i])) x[i] = Sample (0);
+            }
+    }
+}
+
+void PolisherAudioProcessor::resetChain() noexcept
+{
+    // Every module back to a clean start in its set state (look-ahead audio, filters, envelopes); none of
+    // this allocates. The monitored signals' delay lines are emptied too.
+    unlimiter.reset();
+    eq.reset();
+    stemEq.reset();
+    bass.reset();
+    glue.reset();
+    dynamics.reset();
+    imager.reset();
+    saturation.reset();
+    clipper.reset();
+    limiter.reset();
+    monForm.clear();
+    monOut.clear();
+    monClipDelay.clear();
 }
 
 template <typename Sample>
-void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buffer)
+void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buffer, int hostOffset)
 {
     juce::ScopedNoDenormals noDenormals;
 
-    // A host may call with no samples (e.g. only to hand over parameter changes). Nothing to do: the
-    // Drive, Trim and MATCH ramps would otherwise jump to their new gain without ramping.
+    // A host may call with no samples (e.g. only to hand over parameter changes). Nothing to do (the
+    // Drive, Trim and MATCH glides move on with the samples).
     if (buffer.getNumSamples() <= 0)
         return;
 
@@ -647,6 +726,11 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     const int numOut = getTotalNumOutputChannels();
     for (int c = numIn; c < numOut; ++c)
         buffer.clear (c, 0, buffer.getNumSamples());
+
+    // One NaN or inf from the host (a broken plug-in before this one, a corrupt region) would get into the
+    // filters and play NaN or silence from then on, until the project was reopened: it plays as 0, before
+    // anything (meters, spectrum, MATCH and Auto-Master included) hears it.
+    cleanNonFinite (buffer, buffer.getNumSamples());
 
     // Fresh loudness measurement each time the host transport starts (optional).
     bool isPlaying = wasPlaying, hostTransport = false;
@@ -657,7 +741,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
             isPlaying = position->getIsPlaying();
             hostTransport = true;
             if (const auto t = position->getTimeInSeconds(); t.hasValue() && isPlaying)
-                hostSeconds = *t;
+                hostSeconds = *t + hostOffset / juce::jmax (1.0, getSampleRate());   // (the host gives the block's start)
         }
     const bool justStarted = isPlaying && ! wasPlaying;
     wasPlaying = isPlaying;
@@ -683,7 +767,24 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
         inputMeter.resetStatistics();
     }
 
-    updateLimiterParams();
+    // A / B read once for the whole block: a click on A / B landing while a block is processed can't give
+    // half of it one side's settings and half the other's.
+    const bool bypassed = bypassParam->load() > 0.5f;
+    updateLimiterParams (bypassed);
+
+    // The host's reset (see reset()): every module starts afresh in the settings just handed over, the
+    // gains are where they are set, and the meters' L/R correlation starts over. MATCH's learned level,
+    // the loudness meters and Auto-Master's listen are kept.
+    if (hostResetRequested.exchange (false))
+    {
+        resetChain();
+        trimGlide.jumpTo (targetTrimGain (bypassed));
+        driveGlide.jumpTo (targetDriveGain (bypassed));
+        matchGlide.jumpTo (matchGlide.getTarget());
+        matchSideA = matchPendingA = bypassed;
+        matchSwitchIn = -1;
+        corrLR = corrLL = corrRR = 0.0;
+    }
 
     const int numChannels = buffer.getNumChannels();
     const int numSamples = buffer.getNumSamples();
@@ -733,12 +834,10 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     inputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     autoMaster.capture (buffer, hostSeconds);   // the untouched mix, while Auto-Master is listening
 
-    // Input Trim (ramped per block): turns a too-hot mix down before the whole chain. The input meter,
-    // the spectrum's "your mix" line, MATCH and Auto-Master all take the mix as it arrives, above.
-    const double newTrim = targetTrimGain();
-    if (newTrim != 1.0 || currentTrimGain != 1.0)
-        buffer.applyGainRamp (0, numSamples, static_cast<Sample> (currentTrimGain), static_cast<Sample> (newTrim));
-    currentTrimGain = newTrim;
+    // Input Trim (a 20 ms glide): turns a too-hot mix down before the whole chain. The input meter, the
+    // spectrum's "your mix" line, MATCH and Auto-Master all take the mix as it arrives, above.
+    trimGlide.glideTo (targetTrimGain (bypassed));
+    applyGlide (buffer, 0, numSamples, trimGlide);
 
     unlimiter.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     eq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
@@ -765,15 +864,17 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     if (lm == L::satAdded) copyPre();
     saturation.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
 
-    // Drive (ramped per block so knob moves don't click) -> Soft Clipper -> limiter.
-    const double newGain = targetDriveGain();
+    // Drive (a 20 ms glide, so knob moves and jumps never click) -> Soft Clipper -> limiter.
+    driveGlide.glideTo (targetDriveGain (bypassed));
     if (lm != L::off && lm != L::clipRemoved && lm != L::maxRemoved)
     {
         // Monitored signals formed before Drive: what Saturation added (output minus its aligned input),
         // or the tamer's cut / the Dynamics band (with mono input, channel 1 repeats channel 0). They get
         // the same Drive the master gets here, then travel on to the output (and get the Soft Clipper's
         // and the limiter's gain there, below).
-        const double driveStep = (newGain - currentDriveGain) / numSamples;
+        double* const driveGain = monDrive.data();
+        for (int i = 0; i < numSamples; ++i)
+            driveGain[i] = driveGlide.next();
         for (int i = 0; i < numSamples; ++i)
         {
             double l, r;
@@ -789,16 +890,24 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
                 l = aux[0][i];
                 r = numChannels > 1 ? aux[1][i] : l;
             }
-            const double g = currentDriveGain + driveStep * i;
+            const double g = driveGain[i];
             l *= g;
             r *= g;
             monOut.process (l, r);
             sig[0][i] = l;
             sig[1][i] = r;
         }
+        // The master gets the very same gains (and the same arithmetic as applyGlide, so it is the same
+        // master whether something is monitored or not).
+        for (int c = 0; c < numChannels; ++c)
+        {
+            Sample* x = buffer.getWritePointer (c);
+            for (int i = 0; i < numSamples; ++i)
+                x[i] *= static_cast<Sample> (driveGain[i]);
+        }
     }
-    buffer.applyGainRamp (0, numSamples, static_cast<Sample> (currentDriveGain), static_cast<Sample> (newGain));
-    currentDriveGain = newGain;
+    else
+        applyGlide (buffer, 0, numSamples, driveGlide);
 
     if (lm == L::clipRemoved) copyPre();
     clipper.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, lm != L::off && lm != L::maxRemoved ? monClipGain.data() : nullptr);
@@ -849,10 +958,27 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
         }
     }
     // Dither (16 / 24-bit exports): the master's last step, so the host's conversion to that depth is exact.
-    if (bypassParam->load() <= 0.5f)
+    if (! bypassed)
         dither.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+
+    // Nothing non-finite can come from the cleaned input, but if anything inside ever made some, it must not
+    // reach the host, the meters or a monitored signal, or stay in a filter: the chain starts afresh (no
+    // allocation) and this block plays silence.
+    if (! allFinite (buffer.getArrayOfReadPointers(), numChannels, numSamples))
+    {
+        resetChain();
+        buffer.clear();
+        if (lm != L::off)
+            for (auto* s : sig) std::fill (s, s + numSamples, 0.0);
+    }
+    else if (lm != L::off && ! allFinite (sig, 2, numSamples))
+    {
+        for (auto* s : sig) std::fill (s, s + numSamples, 0.0);
+        monOut.clear();
+    }
     outputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     outputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
+    measureCorrelation (buffer, numChannels, numSamples);
 
     // Output channel peaks for the L/R meter (held until the editor reads them).
     auto channelPeakDb = [&] (int ch)
@@ -872,12 +998,10 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     // Level-matched A/B. Learn the loudness gap while the master plays (both readings are taken
     // before this gain, so the meters and spectrum always show the real master)...
     handleMatchRequests();
-    const bool bypassed = bypassParam->load() > 0.5f;
     levelMatch.update (inputMeter.shortTermLufs(), outputMeter.shortTermLufs(), inputPeak, numSamples, ! bypassed,
                        inputMeter.momentaryLufs(), outputMeter.momentaryLufs());
     const double sideGainDb = bypassed ? levelMatch.gainForADb() : levelMatch.gainForBDb();
     meters.matchDb.store (static_cast<float> (sideGainDb));
-    meters.correlation.store (static_cast<float> (imager.correlation()));
 
     // Listen / Solo: the monitored signal takes the master's place (after every meter and the spectrum,
     // which keep showing the real master).
@@ -890,17 +1014,75 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     meters.listenUnderDb.store (static_cast<float> (listening ? listenMix.levelUnderMasterDb() : -100.0));
 
     // ...and while MATCH is on, turn the louder side down to the quieter one, with headroom so A
-    // doesn't clip the interface (never during offline export).
+    // doesn't clip the interface (never during offline export, not even the end of a glide). An A / B
+    // flip changes the sound only once Drive's and the limiter's change come out of the Soft Clipper and
+    // limiter delays (~6 ms): MATCH switches sides then, and glides there over 20 ms as Drive does.
+    // (Switching at the click played B's driven audio at A's gain for those ms on B -> A, a snap of up to
+    // +8 dB, and left a hole on A -> B.)
     const bool matching = levelMatchParam->load() > 0.5f && ! offline;
-    const double targetGain = matching ? juce::Decibels::decibelsToGain (sideGainDb) : 1.0;
-    if (targetGain != 1.0 || currentMatchGain != 1.0)
-        buffer.applyGainRamp (0, numSamples, static_cast<Sample> (currentMatchGain), static_cast<Sample> (targetGain));
-    currentMatchGain = targetGain;
+    const auto matchGain = [this, matching] (bool sideA)
+    {
+        return matching ? juce::Decibels::decibelsToGain (sideA ? levelMatch.gainForADb() : levelMatch.gainForBDb()) : 1.0;
+    };
+    int matchFrom = 0;
+    if (offline)
+    {
+        matchGlide.jumpTo (1.0);
+        matchSideA = matchPendingA = bypassed;
+        matchSwitchIn = -1;
+    }
+    else
+    {
+        if (bypassed != (matchSwitchIn >= 0 ? matchPendingA : matchSideA))
+        {
+            matchPendingA = bypassed;
+            matchSwitchIn = bypassed == matchSideA ? -1 : matchDelay;   // flipped back before it came out: nothing to do
+        }
+        if (matchSwitchIn >= 0 && matchSwitchIn < numSamples)
+        {
+            matchGlide.glideTo (matchGain (matchSideA));
+            applyGlide (buffer, 0, matchSwitchIn, matchGlide);
+            matchFrom = matchSwitchIn;
+            matchSideA = matchPendingA;
+            matchSwitchIn = -1;
+            matchGlide.glideTo (matchGain (matchSideA), true);
+        }
+        else
+        {
+            if (matchSwitchIn >= 0) matchSwitchIn -= numSamples;
+            matchGlide.glideTo (matchGain (matchSideA));
+        }
+    }
+    applyGlide (buffer, matchFrom, numSamples, matchGlide);
 
     // MONO / PHONE checks at the very end (after MATCH, so A and B get the same treatment), and the
     // 0 dBFS safety of all monitoring.
     if (! offline && (listening || monitorOut.isActive()))
         monitorOut.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, true);
+}
+
+template <typename Sample>
+void PolisherAudioProcessor::measureCorrelation (const juce::AudioBuffer<Sample>& buffer, int numChannels, int numSamples) noexcept
+{
+    // The output L/R correlation meter (+1 mono ... -1 out of phase) reads what the host gets: Saturation
+    // (Mid or Side alone), Drive, the per-channel Soft Clipper and the limiter all come after the Imager,
+    // where it was read before (and a mono bus read +1 there whatever played). ~0.3 s averages.
+    if (numChannels <= 0)
+        return;
+    const Sample* l = buffer.getReadPointer (0);
+    const Sample* r = buffer.getReadPointer (juce::jmin (1, numChannels - 1));
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const double a = static_cast<double> (l[i]), b = static_cast<double> (r[i]);
+        corrLR += (a * b - corrLR) * corrCoeff;
+        corrLL += (a * a - corrLL) * corrCoeff;
+        corrRR += (b * b - corrRR) * corrCoeff;
+    }
+    for (double* v : { &corrLL, &corrRR })
+        if (*v < 1.0e-30) *v = 0.0;   // no denormals in silence
+    if (std::abs (corrLR) < 1.0e-30) corrLR = 0.0;
+    const double d = std::sqrt (corrLL * corrRR);
+    meters.correlation.store (static_cast<float> (d > 1.0e-12 ? juce::jlimit (-1.0, 1.0, corrLR / d) : 1.0));
 }
 
 void PolisherAudioProcessor::clearToneTarget()
@@ -1061,11 +1243,13 @@ void PolisherAudioProcessor::processInChunks (juce::AudioBuffer<Sample>& buffer)
         return;
     }
     // A host block longer than prepareToPlay announced: process it in parts the monitoring buffers hold
-    // (the chain streams sample by sample, so the master is the same either way).
+    // (the chain streams sample by sample, so the master is the same either way). Each part is dated where
+    // it sits in the block: all dated at the block's start, Auto-Master took every block for a jump of the
+    // playhead.
     for (int start = 0; start < total; start += monCapacity)
     {
         juce::AudioBuffer<Sample> part (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), start, juce::jmin (monCapacity, total - start));
-        processAnyPrecision (part);
+        processAnyPrecision (part, start);
     }
 }
 
@@ -1086,7 +1270,8 @@ void PolisherAudioProcessor::publishMeters()
     meters.momentary.store (clampDb (outputMeter.momentaryLufs()));
     meters.shortTerm.store (clampDb (outputMeter.shortTermLufs()));
     meters.integrated.store (clampDb (outputMeter.integratedLufs()));
-    meters.loudnessRange.store (static_cast<float> (outputMeter.loudnessRangeLu()));
+    const double lra = outputMeter.loudnessRangeLu();
+    meters.loudnessRange.store (static_cast<float> (std::isfinite (lra) ? juce::jlimit (0.0, 100.0, lra) : 0.0));   // never NaN (the window can't show null)
     meters.truePeakMax.store (clampDb (outputMeter.truePeakDbtp()));
     meters.inputShortTerm.store (clampDb (inputMeter.shortTermLufs()));
     meters.inputIntegrated.store (clampDb (inputMeter.integratedLufs()));
@@ -1231,6 +1416,13 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
                 keep->setAttribute ("id", "stemKeep");
                 keep->setAttribute ("value", 0.0);
             }
+            // A damaged value ("nan", "inf": a broken preset or project file) must never become a control's
+            // value (a NaN setting plays as silence or noise from then on): the control's default instead.
+            for (auto* child : xml->getChildIterator())
+                if (child->hasTagName ("PARAM"))
+                    if (auto* param = parameters.getParameter (child->getStringAttribute ("id")))
+                        if (! std::isfinite (child->getDoubleAttribute ("value")))
+                            child->setAttribute ("value", static_cast<double> (param->convertFrom0to1 (param->getDefaultValue())));
             // MATCH is a listening aid, but the host saves it like any parameter: a song saved while
             // comparing would reopen with the master turned down (also in a Realtime Export, with no
             // window open to show it). A project always opens with MATCH off.

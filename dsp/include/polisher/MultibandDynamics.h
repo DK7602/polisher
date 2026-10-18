@@ -88,6 +88,9 @@ inline constexpr std::array<std::array<double, 2>, kDynBands - 1> kDynCrossoverR
       untouched, and L / R are rebuilt. A change fades the compression and band gains out, converts the
       filters' states to the new pair (they are linear, so nothing jumps), then fades them back in; the
       detectors keep their level (no fresh attack), Impact and Sustain warm up again.
+    - A NaN or inf input sample would stay in the split filters and the detectors for good: at the end of
+      a block that put one there, both are cleared, so the module plays and compresses again from the
+      next block.
 
     process() never allocates. Processes the first two channels (stereo) or one (mono). */
 class MultibandDynamics
@@ -378,6 +381,7 @@ public:
                 for (int c = 0; c < nch; ++c) monitorOut[c][i] = mon[static_cast<size_t> (c)];
             }
         }
+        guardState();
     }
 
     /** Largest Impact move in a band since the last call (dB, signed: + boost, - cut). */
@@ -468,6 +472,7 @@ private:
     void applyAuxCrossovers() noexcept;
     void resetFilters() noexcept;
     void resetDetectors() noexcept;
+    void guardState() noexcept;   // a NaN / inf got into the split or the detectors: clear them (end of each block)
 
     DynamicsParams params;
     double sampleRate = 48000.0;

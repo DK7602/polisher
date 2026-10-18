@@ -16,6 +16,7 @@
 #include "polisher/Unlimiter.h"
 #include "polisher/Dither.h"
 #include "polisher/Monitoring.h"
+#include "polisher/GainGlide.h"
 #include "ModuleParams.h"
 #include "SpectrumTap.h"
 #include "AutoMasterController.h"
@@ -42,6 +43,10 @@ public:
     // AudioProcessor
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
+    /** The host stopped or moved the playhead (AU Reset, VST3 setProcessing (false)): the audio still in the
+        look-ahead buffers and the modules' envelopes belong to where it was. Cleared at the start of the next
+        block, on the audio thread (no allocation, no lock), so playback starts as cleanly as an export. */
+    void reset() override { hostResetRequested.store (true); }
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
 
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
@@ -264,16 +269,22 @@ private:
 
     template <typename Sample>
     void processInChunks (juce::AudioBuffer<Sample>& buffer);
+    /** hostOffset: where the buffer starts in the host's block (a block longer than prepared is processed
+        in parts), so each part is placed on the DAW's timeline where it really is. */
     template <typename Sample>
-    void processAnyPrecision (juce::AudioBuffer<Sample>& buffer);
+    void processAnyPrecision (juce::AudioBuffer<Sample>& buffer, int hostOffset = 0);
 
     int listenArmSamples (int mode) const noexcept;
     void startListenMode (int mode) noexcept;
 
-    void updateLimiterParams();
-    double targetDriveGain() const;
-    double targetTrimGain() const;
+    void updateLimiterParams (bool bypassed);
+    void resetChain() noexcept;   // every module and monitoring delay back to a clean start (no allocation)
+    double targetDriveGain (bool bypassed) const;
+    double targetTrimGain (bool bypassed) const;
     void publishMeters();
+    template <typename Sample>
+    void measureCorrelation (const juce::AudioBuffer<Sample>& buffer, int numChannels, int numSamples) noexcept;
+    double corrLR = 0.0, corrLL = 0.0, corrRR = 0.0, corrCoeff = 0.0;   // the output's L/R correlation (~0.3 s averages)
 
     polisher::Unlimiter unlimiter;
     polisher::TonalEQ eq;
@@ -286,10 +297,18 @@ private:
     ModuleParams::Reader moduleParams;
     polisher::SoftClipper clipper;
     polisher::TruePeakLimiter limiter;
-    double currentDriveGain = 1.0, currentTrimGain = 1.0;
+    // Input Trim, Drive and MATCH glide to a new gain in a fixed time, whatever the host's block size
+    // (a jump in one block clicked at a 32-sample buffer and took 43 ms at 2048).
+    static constexpr double kGainGlideSeconds = 0.02;
+    polisher::GainGlide trimGlide, driveGlide, matchGlide;
+    // MATCH's side (A or B) follows the sound: a flip reaches the output only when Drive's and the limiter's
+    // change come out of the Soft Clipper and limiter delays, so MATCH switches that many samples later.
+    bool matchSideA = false, matchPendingA = false;   // the side whose MATCH gain plays now / the one it goes to
+    int matchSwitchIn = -1, matchDelay = 0;           // samples until it switches (-1: none); that delay
     polisher::LoudnessMeter outputMeter;
     polisher::LoudnessMeter inputMeter;   // the incoming mix, so Learn can say how much louder the master is
     std::atomic<bool> meterResetRequested { false }, statsResetRequested { false };
+    std::atomic<bool> hostResetRequested { false };   // see reset()
 
     std::atomic<float>* driveParam = nullptr;
     std::atomic<float>* trimParam = nullptr;
@@ -325,7 +344,6 @@ private:
     int songToneVersion = -1;
     polisher::TonalEQParams stageToneEq;
     double stageToneRate = 0.0, stageToneTrimDb = 0.0;
-    double currentMatchGain = 1.0;
 
     // MATCH per snapshot: the gap learned while a slot played unchanged, so flipping back to it is
     // level-matched at once. The audio thread owns matchMemory; recall / store post requests.
@@ -358,6 +376,7 @@ private:
     polisher::MonitorDelay monClipDelay;   // the Soft Clipper's clean gain, carried on past the limiter's look-ahead
     std::array<std::vector<double>, 2> monPre, monSig, monAux;
     std::vector<double> monLimGain, monClipGain, monGlueGain;
+    std::vector<double> monDrive;          // Drive's gain per sample, for the signals formed before it
     int monCapacity = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherAudioProcessor)

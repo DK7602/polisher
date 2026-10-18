@@ -194,6 +194,21 @@ void TonalEQ::reset() noexcept
     updateCountdown = 0;
 }
 
+void TonalEQ::guardState() noexcept
+{
+    double sum = 0.0;
+    for (const auto& band : bands)
+        if (band.running)
+            for (int c = 0; c < channelCount; ++c)
+                sum += band.filters[static_cast<size_t> (c)].stateSum();
+    if (sub.running)
+        for (int c = 0; c < channelCount; ++c)
+            for (const auto& f : sub.filters[static_cast<size_t> (c)])
+                sum += f.stateSum();
+    if (! std::isfinite (sum))
+        reset();
+}
+
 void TonalEQ::setParams (const TonalEQParams& p) noexcept
 {
     params = p;

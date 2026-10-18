@@ -52,6 +52,15 @@ void StereoImager::reset() noexcept
     lr = ll = rr = 0.0;
 }
 
+void StereoImager::guardState() noexcept
+{
+    double sum = lr + ll + rr;
+    for (const auto* g : { &lp250, &hp250, &lp5k, &hp5k, &apLp, &apHp, &mLp250, &mHp250, &mLp5k, &mHp5k })
+        for (const auto& f : *g) sum += f.stateSum();
+    if (! std::isfinite (sum))
+        reset();
+}
+
 void StereoImager::update() noexcept
 {
     const bool wanted = ! isNeutral (params);

@@ -27,7 +27,8 @@ struct ImagerParams
     5 kHz and 250 Hz (~0.1 s), and only then do the band widths move; switching off runs the other way
     (widths back to 100 %, crossovers up to the park, blend out). Blending plain and all-passed with the
     crossovers in place would cut a hole at 250 Hz and 5 kHz. Also measures the output's L/R
-    correlation (+1 mono, 0 wide, below 0 out of phase). */
+    correlation (+1 mono, 0 wide, below 0 out of phase). A NaN or inf input sample would stay in the
+    filters for good: at the end of a block that put one there, the imager is reset(). */
 class StereoImager
 {
 public:
@@ -81,6 +82,7 @@ public:
             ll += (l * l - ll) * corrCoeff;
             rr += (r * r - rr) * corrCoeff;
         }
+        guardState();
     }
 
     double correlation() const noexcept
@@ -93,6 +95,7 @@ public:
 private:
     void update() noexcept;
     void setCrossovers() noexcept;
+    void guardState() noexcept;   // a NaN / inf got into the filters or the correlation: reset() (end of each block)
 
     ImagerParams params;
     double sampleRate = 48000.0, glide = 0.0, corrCoeff = 0.0;

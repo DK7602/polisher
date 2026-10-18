@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <functional>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <new>
@@ -364,6 +365,355 @@ TEST_CASE ("Plug-in: every control jumping at random never produces NaN or goes 
     const double tp = testsig::truePeakOf (settled);
     INFO ("true peak " << tp << " dBTP");
     CHECK (tp <= -0.95);
+}
+
+// --- Audio-path audit fixes: NaN / inf, A/B and MATCH timing, fixed-time gain glides, host reset ------
+
+namespace {
+/** Plays a clip in fixed blocks; before each block, hook (position, buffer) may change settings or the input. */
+template <typename Sample = float>
+AudioClip renderWith (PolisherAudioProcessor& p, const AudioClip& in, int block,
+                      const std::function<void (int, juce::AudioBuffer<Sample>&)>& hook)
+{
+    AudioClip out = in;
+    juce::AudioBuffer<Sample> buf (2, block);
+    juce::MidiBuffer midi;
+    for (int pos = 0; pos + block <= in.numSamples(); pos += block)
+    {
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < block; ++i)
+                buf.setSample (c, i, (Sample) in.channels[(size_t) c][(size_t) (pos + i)]);
+        if (hook) hook (pos, buf);
+        p.processBlock (buf, midi);
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < block; ++i)
+                out.channels[(size_t) c][(size_t) (pos + i)] = (float) buf.getSample (c, i);
+    }
+    return out;
+}
+
+long nonFinite (const AudioClip& c)
+{
+    long n = 0;
+    for (const auto& ch : c.channels)
+        for (float v : ch) n += std::isfinite (v) ? 0 : 1;
+    return n;
+}
+
+double rmsDb (const AudioClip& c, int from, int to)
+{
+    double e = 0.0;
+    for (const auto& ch : c.channels)
+        for (int i = from; i < to; ++i) e += (double) ch[(size_t) i] * ch[(size_t) i];
+    return 10.0 * std::log10 (e / (c.numChannels() * (double) (to - from)) + 1.0e-30);
+}
+}
+
+TEST_CASE ("Plug-in: one NaN or inf from the host never reaches the output or sticks in the chain", "[plugin][nonfinite]")
+{
+    // It used to turn the busy chain's output into NaN for good (287744 of 287744 samples 4 s later), and a
+    // chain that only started working after it (Auto-Master applied) too.
+    const double sr = 48000.0;
+    const auto mix = testsig::trapLike (sr, 6.0);
+    const int at = (int) (1.0 * sr) / 256 * 256;
+    const int tailFrom = (int) (5.0 * sr), tailTo = mix.numSamples() / 256 * 256;
+    for (bool busy : { true, false })
+    {
+        auto ref = makeProcessor (sr, 256, true);
+        const auto clean = renderWith (*ref, mix, 256, {});
+        for (float bad : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() })
+        {
+            auto p = makeProcessor (sr, 256, busy);
+            const auto out = renderWith<float> (*p, mix, 256, [&] (int pos, juce::AudioBuffer<float>& b)
+            {
+                if (pos == at) { b.setSample (0, 5, bad); b.setSample (1, 77, -bad); }
+                if (pos == at + 256 * 40 && ! busy) busySettings (*p);   // the chain starts working after it
+            });
+            INFO ((busy ? "busy chain" : "neutral, then the busy settings") << ", " << (std::isnan (bad) ? "NaN" : "inf") << ": "
+                  << nonFinite (out) << " non-finite output samples; last second " << rmsDb (out, tailFrom, tailTo) << " dB, clean "
+                  << rmsDb (clean, tailFrom, tailTo) << " dB; meters: short-term " << p->meters.shortTerm.load() << " LUFS, true peak "
+                  << p->meters.truePeakMax.load() << " dBTP, input " << p->meters.inputShortTerm.load() << " LUFS");
+            CHECK (nonFinite (out) == 0);
+            CHECK (std::abs (rmsDb (out, tailFrom, tailTo) - rmsDb (clean, tailFrom, tailTo)) < 0.1);
+            CHECK (p->meters.shortTerm.load() > -30.0f);         // the meters keep measuring
+            CHECK (p->meters.inputShortTerm.load() > -30.0f);
+            CHECK (std::isfinite (p->meters.correlation.load()));
+            CHECK (std::isfinite (p->meters.loudnessRange.load()));   // (the window freezes on a NaN meter)
+            CHECK (p->meters.loudnessRange.load() >= 0.0f);
+        }
+    }
+
+    // A double-precision host gets the same protection.
+    auto pd = makeProcessor (sr, 256, true);
+    const auto outD = renderWith<double> (*pd, mix, 256, [&] (int pos, juce::AudioBuffer<double>& b)
+    {
+        if (pos == at) b.setSample (1, 9, std::numeric_limits<double>::quiet_NaN());
+    });
+    CHECK (nonFinite (outD) == 0);
+    CHECK (pd->meters.shortTerm.load() > -30.0f);
+}
+
+TEST_CASE ("Plug-in: if anything inside the chain goes non-finite, the block is silent and the chain starts afresh", "[plugin][nonfinite]")
+{
+    // The input is cleaned, so this is the last line of defence: a NaN made inside (here a setting forced to
+    // NaN behind the parameter's back) plays silence for as long as it lasts, never NaN, and the master comes
+    // back as soon as it is gone. Nothing of it allocates.
+    const double sr = 48000.0;
+    const auto mix = testsig::trapLike (sr, 4.0);
+    auto ref = makeProcessor (sr, 256, true);
+    const auto clean = renderWith (*ref, mix, 256, {});
+    auto p = makeProcessor (sr, 256, true);
+    auto* drive = p->parameters.getRawParameterValue ("satDrive");
+    const float before = drive->load();
+    const int from = (int) (1.0 * sr) / 256 * 256, to = (int) (1.5 * sr) / 256 * 256;
+    int worst = 0;
+    long silentBlocks = 0;
+    AudioClip out = mix;
+    {
+        juce::AudioBuffer<float> buf (2, 256);
+        juce::MidiBuffer midi;
+        for (int pos = 0; pos + 256 <= mix.numSamples(); pos += 256)
+        {
+            if (pos == from) drive->store (std::numeric_limits<float>::quiet_NaN());
+            if (pos == to) drive->store (before);
+            for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, mix.channels[(size_t) c].data() + pos, 256);
+            allocations = 0;
+            countAllocations = true;
+            p->processBlock (buf, midi);
+            countAllocations = false;
+            worst = std::max (worst, allocations.load());
+            if (pos >= from && pos < to && buf.getMagnitude (0, 256) == 0.0f && buf.getMagnitude (1, 256) == 0.0f) ++silentBlocks;
+            for (int c = 0; c < 2; ++c) std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + 256, out.channels[(size_t) c].begin() + pos);
+        }
+    }
+    const int tailFrom = (int) (3.0 * sr), tailTo = mix.numSamples() / 256 * 256;
+    INFO (nonFinite (out) << " non-finite samples; " << silentBlocks << " of " << (to - from) / 256 << " blocks silent while the setting was NaN; "
+          << "last second " << rmsDb (out, tailFrom, tailTo) << " dB, clean " << rmsDb (clean, tailFrom, tailTo) << " dB");
+    CHECK (nonFinite (out) == 0);
+    CHECK (silentBlocks == (to - from) / 256);
+    CHECK (std::abs (rmsDb (out, tailFrom, tailTo) - rmsDb (clean, tailFrom, tailTo)) < 0.5);
+    CHECK (p->meters.shortTerm.load() > -30.0f);
+    CHECK (worst == 0);
+}
+
+TEST_CASE ("Plug-in: Drive, Input Trim and MATCH glide over 20 ms whatever the host's block size", "[plugin][glide]")
+{
+    // They ramped over exactly one host block: a 12 dB Drive jump took 0.7 ms at a 32-sample buffer (a click,
+    // sharper than the snapshot test allows) and 43 ms at 2048. A steady input shows the gain itself.
+    const double sr = 48000.0;
+    for (int block : { 32, 2048 })
+        for (const char* id : { "drive", "inTrim" })
+        {
+            auto p = makeProcessor (sr, block, false);
+            set (*p, "ceiling", 0.0f);
+            const float to = juce::String (id) == "drive" ? 12.0f : -6.0f;
+            AudioClip steady = testsig::silence (sr, 2, 1.2);
+            for (auto& ch : steady.channels) std::fill (ch.begin(), ch.end(), 0.05f);
+            const int at = (int) (0.4 * sr) / block * block;
+            const auto out = renderWith<float> (*p, steady, block, [&] (int pos, juce::AudioBuffer<float>&) { if (pos == at) set (*p, id, to); });
+            const double end = std::pow (10.0, to / 20.0);
+            int first = -1, last = -1;
+            double steepest = 0.0, before = 1.0;
+            for (int i = p->getLatencySamples() + 1; i < out.numSamples() / block * block; ++i)
+            {
+                const double g = out.channels[0][(size_t) i] / 0.05;
+                if (first < 0 && std::abs (g - 1.0) > 1.0e-4) first = i;
+                if (last < 0 && first >= 0 && std::abs (g - end) < 1.0e-4 * end) last = i;
+                steepest = std::max (steepest, std::abs (20.0 * std::log10 (g / before)));
+                before = g;
+            }
+            const double ms = (last - first) / sr * 1000.0;
+            INFO (id << " to " << to << " dB at block " << block << ": glides in " << ms << " ms, steepest step " << steepest << " dB per sample");
+            REQUIRE (first > 0);
+            REQUIRE (last > first);
+            CHECK (ms > 18.0);
+            CHECK (ms < 21.0);
+            CHECK (steepest < 1.1 * std::abs (to) / (0.02 * sr));   // equal dB steps: never steeper than the average
+        }
+
+    // MATCH switched on: the same music through a twin without MATCH shows its gain, sample by sample.
+    auto mix = testsig::trapLike (sr, 6.0);
+    mix = polisher::withGain (mix, -17.0 - polisher::measure (mix).integratedLufs);
+    for (int block : { 32, 2048 })
+    {
+        auto withMatch = makeProcessor (sr, block, false), plain = makeProcessor (sr, block, false);
+        for (auto* q : { withMatch.get(), plain.get() }) set (*q, "drive", 8.0f);
+        const int at = (int) (4.5 * sr) / block * block;
+        const auto a = renderWith<float> (*withMatch, mix, block, [&] (int pos, juce::AudioBuffer<float>&) { if (pos == at) set (*withMatch, "levelMatch", 1.0f); });
+        const auto b = renderWith (*plain, mix, block, {});
+        auto gainAt = [&] (int i)
+        {
+            double num = 0.0, den = 0.0;   // over a few samples around i, where the music is loud enough to divide by
+            for (int k = i - 2; k <= i + 2; ++k)
+                for (size_t c = 0; c < 2; ++c) { num += (double) a.channels[c][(size_t) k] * b.channels[c][(size_t) k]; den += (double) b.channels[c][(size_t) k] * b.channels[c][(size_t) k]; }
+            return den > 1.0e-8 ? num / den : -1.0;
+        };
+        const double settled = gainAt (at + (int) (0.1 * sr));
+        int first = -1, last = -1;
+        for (int i = at - 10; i < at + (int) (0.1 * sr); ++i)
+        {
+            const double g = gainAt (i);
+            if (g < 0.0) continue;
+            if (first < 0 && g < 1.0 - 1.0e-3) first = i;
+            if (first >= 0 && last < 0 && std::abs (20.0 * std::log10 (g / settled)) < 0.05) last = i;
+        }
+        const double ms = (last - first) / sr * 1000.0;
+        INFO ("MATCH on at block " << block << ": " << 20.0 * std::log10 (settled) << " dB, reached in " << ms << " ms");
+        REQUIRE (settled < 0.8);
+        REQUIRE (last > first);
+        CHECK (first >= at);
+        CHECK (first < at + 16);
+        CHECK (ms > 15.0);
+        CHECK (ms < 21.0);
+    }
+}
+
+TEST_CASE ("Plug-in: with MATCH on, an A / B flip neither bursts out nor drops in", "[plugin][match]")
+{
+    // MATCH switched sides at the click, ~6 ms before Drive's change came out of the Soft Clipper and limiter
+    // delays: B's driven audio played at A's gain for those ms (+6 to +8 dB, a snap on every B -> A) and A's
+    // at B's on the way back (a hole). Judged in 1 ms windows against A and B played on their own, both at the
+    // gain MATCH gives them.
+    const double sr = 48000.0;
+    auto mix = testsig::trapLike (sr, 13.0);
+    mix = polisher::withGain (mix, -17.0 - polisher::measure (mix).integratedLufs);
+    for (int block : { 64, 512 })
+        for (float drive : { 6.0f, 10.0f })
+        {
+            const int b2a = (int) (8.0 * sr) / block * block, a2b = (int) (10.5 * sr) / block * block;
+            auto make = [&] (bool match, bool a)
+            {
+                auto q = std::make_unique<PolisherAudioProcessor>();
+                set (*q, "autoreset", 0.0f);
+                set (*q, "drive", drive);
+                if (match) set (*q, "levelMatch", 1.0f);
+                if (a) set (*q, "bypass", 1.0f);
+                q->setRateAndBufferSizeDetails (sr, block);
+                q->prepareToPlay (sr, block);
+                return q;
+            };
+            auto pf = make (true, false);
+            double gainA = 0.0;
+            const auto flipped = renderWith<float> (*pf, mix, block, [&] (int pos, juce::AudioBuffer<float>&)
+            {
+                if (pos == b2a) set (*pf, "bypass", 1.0f);
+                if (pos == a2b - block) gainA = pf->meters.matchDb.load();   // A's MATCH gain
+                if (pos == a2b) set (*pf, "bypass", 0.0f);
+            });
+            auto pb = make (true, false);   // B all along, MATCH on: it learns just as the flipped one did
+            const auto onlyB = renderWith (*pb, mix, block, {});
+            auto pa = make (false, true);   // A all along, at A's MATCH gain
+            auto onlyA = renderWith (*pa, mix, block, {});
+            for (auto& ch : onlyA.channels) for (auto& v : ch) v *= (float) std::pow (10.0, gainA / 20.0);
+
+            const int w = (int) (0.001 * sr);
+            auto level = [&] (const AudioClip& c, int from) { return rmsDb (c, from, from + w); };
+            double burst = -100.0, hole = 100.0;
+            for (int at : { b2a, a2b })
+                for (int s = at; s + w <= at + (int) (0.04 * sr); s += w / 2)
+                {
+                    const double x = level (flipped, s), a = level (onlyA, s), b = level (onlyB, s);
+                    burst = std::max (burst, x - std::max (a, b));
+                    hole = std::min (hole, x - std::min (a, b));
+                }
+            INFO ("Drive +" << drive << ", block " << block << ": A at " << gainA << " dB; within 40 ms of a flip the master is up to "
+                  << burst << " dB louder than the louder matched side, and at worst " << hole << " dB under the quieter one");
+            // (What is left at Drive +10: on A -> B Drive comes in unlimited at first and the limiter catches
+            // up only at the end of the glide, so for ~15 ms the master swells up to ~2.3 dB, where it used
+            // to burst by 6.5 to 8 dB on B -> A and drop by up to 7 dB on A -> B.)
+            CHECK (burst < (drive > 8.0f ? 3.0 : 1.0));
+            CHECK (hole > -1.0);
+        }
+}
+
+TEST_CASE ("Plug-in: the L/R correlation meter reads the master the host gets", "[plugin][meters]")
+{
+    // It was the Imager's, read before Saturation (here on the Side alone), Drive, the Soft Clipper and the
+    // limiter, which all change it; and on a mono bus it read +1 whatever played.
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, true);
+    set (*p, "satChannels", 2.0f); set (*p, "satDrive", 18.0f); set (*p, "satMix", 100.0f);
+    set (*p, "imgHigh", 200.0f); set (*p, "drive", 12.0f);
+    p->prepareToPlay (sr, 512);
+    const auto out = renderFixed (*p, testsig::musicLike (sr, 4.0, -6.0), 512);
+    // The same ~0.3 s averages over what came out.
+    const double k = 1.0 - std::exp (-1.0 / (0.3 * sr));
+    double lr = 0.0, ll = 0.0, rr = 0.0;
+    for (size_t i = 0; i < out.channels[0].size(); ++i)
+    {
+        const double a = out.channels[0][i], b = out.channels[1][i];
+        lr += (a * b - lr) * k; ll += (a * a - ll) * k; rr += (b * b - rr) * k;
+    }
+    const double expect = lr / std::sqrt (ll * rr);
+    INFO ("meter " << p->meters.correlation.load() << ", the output's own correlation " << expect);
+    CHECK (std::abs (p->meters.correlation.load() - expect) < 1.0e-3);
+}
+
+TEST_CASE ("Plug-in: the host's reset clears the look-ahead audio, so playback starts as cleanly as an export", "[plugin]")
+{
+    // Hosts call reset() on stop and locate (AU Reset, VST3 setProcessing (false)). The ~45 ms still in
+    // the look-ahead buffers (and the envelopes) belonged to where the playhead was: they played at the new
+    // place. Now it starts like a fresh instance, and none of it allocates or waits.
+    const double sr = 48000.0;
+    const auto before = testsig::musicLike (sr, 2.0, -6.0, 3), after = testsig::musicLike (sr, 3.0, -6.0, 8);
+    auto p = makeProcessor (sr, 512, true);
+    renderFixed (*p, before, 512);
+    p->reset();
+    juce::AudioBuffer<float> buf (2, 512);
+    juce::MidiBuffer midi;
+    buf.clear();
+    allocations = 0;
+    countAllocations = true;
+    p->processBlock (buf, midi);   // silence in: silence out, at once (nothing left from before)
+    countAllocations = false;
+    CHECK (allocations.load() == 0);
+    CHECK (buf.getMagnitude (0, 512) == 0.0f);
+    CHECK (buf.getMagnitude (1, 512) == 0.0f);
+
+    auto q = makeProcessor (sr, 512, true);
+    p->reset();
+    const auto resumed = renderFixed (*p, after, 512);
+    const auto fresh = renderFixed (*q, after, 512);
+    INFO ("after reset() against a fresh instance: largest difference " << maxAbsDiff (resumed, fresh));
+    CHECK (maxAbsDiff (resumed, fresh) < 1.0e-5);
+}
+
+TEST_CASE ("Plug-in: a damaged value in a saved project or snapshot never becomes a NaN setting", "[plugin]")
+{
+    const double sr = 48000.0;
+    auto a = makeProcessor (sr, 512, false);
+    set (*a, "drive", 6.0f);
+    a->snapshots.store (0);
+    juce::MemoryBlock state;
+    a->getStateInformation (state);
+    auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+    REQUIRE (xml != nullptr);
+    int damaged = 0;
+    for (auto* child : xml->getChildIterator())
+        if (child->hasTagName ("PARAM") && (child->getStringAttribute ("id") == "drive" || child->getStringAttribute ("id") == "satDrive"))
+        {
+            child->setAttribute ("value", child->getStringAttribute ("id") == "drive" ? "nan" : "inf");
+            ++damaged;
+        }
+    if (auto* snaps = xml->getChildByName (SettingsSnapshots::kTag))
+        for (auto* slot : snaps->getChildIterator())
+            for (auto* v : slot->getChildIterator())
+                if (v->getStringAttribute ("id") == "drive") { v->setAttribute ("v", "nan"); ++damaged; }
+    REQUIRE (damaged == 3);
+    juce::MemoryBlock broken;
+    juce::AudioProcessor::copyXmlToBinary (*xml, broken);
+
+    auto b = makeProcessor (sr, 512, false);
+    b->setStateInformation (broken.getData(), (int) broken.getSize());
+    auto plain = [&] (const char* id) { return b->parameters.getRawParameterValue (id)->load(); };
+    INFO ("drive " << plain ("drive") << " dB, Saturation Drive " << plain ("satDrive") << " dB");
+    CHECK (plain ("drive") == 0.0f);      // its default
+    CHECK (plain ("satDrive") == 0.0f);
+    REQUIRE (b->snapshots.recall (0));
+    CHECK (std::isfinite (plain ("drive")));
+    CHECK (plain ("drive") == 0.0f);
+    const auto out = renderFixed (*b, testsig::musicLike (sr, 1.0, -6.0), 512);
+    CHECK (nonFinite (out) == 0);
 }
 
 TEST_CASE ("Plug-in: double-precision hosts get the same master as single precision", "[plugin]")
@@ -1386,6 +1736,24 @@ TEST_CASE ("Auto-Master's report says where the loudest part came from after jum
         for (const char* never : { "1:17", "1:18", "1:19", "1:20", "1:21" })
             CHECK_FALSE (text.contains (never));
     }
+}
+
+TEST_CASE ("Plug-in: a host block longer than announced keeps Auto-Master's timeline right", "[plugin][automaster]")
+{
+    // Such a block is processed in parts, which all used to be dated at the block's start: every block
+    // then read as a jump of the playhead, and the loudest part's place on the timeline was lost.
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, false);   // announced 512, the host sends 4096
+    FakePlayHead head;
+    head.seconds = 30.0;
+    p->setPlayHead (&head);
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, testsig::musicLike (sr, 16.0, -14.0, 3), 4096);
+    INFO ("loudest part ends at " << p->autoMaster.getLoudestEndSeconds() << " s on the timeline");
+    CHECK_FALSE (p->autoMaster.loudestPartJumped());
+    CHECK (p->autoMaster.getLoudestEndSeconds() > 30.0);
+    CHECK (p->autoMaster.getLoudestEndSeconds() <= 46.0 + 0.01);
+    p->autoMaster.cancel();
 }
 
 TEST_CASE ("Auto-Master on a mono bus: the report's loudness is what the plug-in's own meters read", "[plugin][automaster]")

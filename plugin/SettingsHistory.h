@@ -558,7 +558,19 @@ public:
                 s.report = e->getStringAttribute ("report");
                 for (auto* ve : e->getChildWithTagNameIterator ("V"))
                     if (const auto id = ve->getStringAttribute ("id"); id.isNotEmpty())
-                        s.values.emplace_back (id, static_cast<float> (ve->getDoubleAttribute ("v")));
+                    {
+                        // A damaged value ("nan", "inf") must never reach a control (NaN would play as
+                        // silence or noise): the control's default instead.
+                        auto v = static_cast<float> (ve->getDoubleAttribute ("v"));
+                        if (! std::isfinite (v))
+                        {
+                            const auto it = byId.find (id);
+                            if (it == byId.end())
+                                continue;
+                            v = it->second->convertFrom0to1 (it->second->getDefaultValue());
+                        }
+                        s.values.emplace_back (id, v);
+                    }
             }
         }
         const juce::ScopedLock sl (lock);
