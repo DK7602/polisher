@@ -2795,6 +2795,11 @@ function updateAmButton() {
 const IS_MAC = /Mac/.test(navigator.platform || "");
 const KEY = IS_MAC ? "⌘" : "Ctrl+";
 if (IS_MAC) $("qh-undo-keys").textContent = "⌘Z undoes, ⇧⌘Z redoes";   // Quick Help, in a Mac's keys
+// The version in Settings comes from the plug-in (the build sets it), so it can't fall behind the release.
+{
+  const v = ((window.__JUCE__.initialisationData || {}).polisherVersion || [])[0];
+  if (typeof v === "string" && v) $("ui-version").textContent = ` v${v}`;
+}
 function refreshHistory() {
   for (const [id, label, verb, keys] of [["btn-undo", M.undo, "Undo", `${KEY}Z`], ["btn-redo", M.redo, "Redo", IS_MAC ? "⇧⌘Z" : "Ctrl+Shift+Z or Ctrl+Y"]]) {
     const b = $(id), on = !!label;

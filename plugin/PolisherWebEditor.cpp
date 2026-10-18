@@ -251,6 +251,8 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                                  o->setProperty ("displayDb", points);
                                  complete (juce::JSON::toString (juce::var (o), true));
                              })
+        // The page shows the plug-in's version (Settings) from here: the build sets it, so it can't go stale.
+        .withInitialisationData ("polisherVersion", juce::String (JucePlugin_VersionString))
         .withResourceProvider ([] (const auto& url) { return getResource (url); });
 }
 
