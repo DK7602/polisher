@@ -40,8 +40,9 @@ struct SongStats
     /** Every part of the timeline that plays at the loudest part's level: each 100 ms of music inside a
         windowSeconds stretch whose loudness is within kHookWithinLu of the loudest one's (the hook or drop
         and its repeats), joined into spans (split where playback jumped or music is missing for more than
-        0.5 s). Empty without timeline positions. Auto Analyze checks the settings again only on a part
-        that plays at this level, so it compares like with like. */
+        0.5 s). Pieces heard without a timeline position (a reverb tail after Stop) are left out and split
+        the span they sit in. Empty without timeline positions. Auto Analyze checks the settings again only
+        on a part that plays at this level, so it compares like with like. */
     std::vector<TimeSpan> hookSpans;
     int channels = 2;                   // 1: a mono bus (the loudness above counts one channel, as BS.1770 does)
 };
@@ -74,7 +75,10 @@ public:
     static constexpr double kSilencePeak = 0.003;       // about -50 dBFS: a 100 ms piece below it is not music
     static constexpr int kMinToneBlocks = 8;            // a tone needs at least 8 s of music at the song's level
     static constexpr double kJumpSeconds = 0.05;        // a block this far from where the last one ended: the playhead jumped
-    static constexpr double kHookWithinLu = 1.0;        // SongStats::hookSpans: windows this close to the loudest one's loudness
+    /** SongStats::hookSpans: windows this close to the loudest one's loudness. 1 LU reached about 7 s into a
+        verse 2 dB under the chorus (the whole song with a verse 1 dB under it), so a window that was mostly
+        verse passed for the hook; at 0.5 LU a window may hold at most about a quarter of such a verse. */
+    static constexpr double kHookWithinLu = 0.5;
 
     void prepare (double sampleRate, double windowSeconds, double maxSeconds);
     void reset() noexcept;
@@ -104,6 +108,9 @@ public:
     /** Where it ends on the timeline; -1 before there is one, without timeline positions, or when
         playback jumped inside it (then it is no single stretch of the song). */
     double loudestEndSeconds() const noexcept;
+    /** Music heard since the loudest window so far ended (s): 0 while the loudest part is the latest window
+        (it may still be growing into a louder part), -1 before there is one. */
+    double secondsAfterLoudest() const noexcept;
     /** Playback jumped inside the loudest window so far (its audio joins two or more places). */
     bool loudestJumped() const noexcept            { return hasWindow() && bestJumps.load (std::memory_order_relaxed) > 0; }
     bool loudestFromHost() const noexcept;

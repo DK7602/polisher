@@ -679,3 +679,36 @@ TEST_CASE ("Stem EQ Keep loudness: a quieter section after a loud one takes over
     CHECK (std::abs (next) < 1.0);   // was -2.3
     CHECK (std::abs (lu (out, 5.0 + lat, 15.0) - lu (song, 5.0, 15.0 - lat)) < 0.5);   // the loud part stays put
 }
+
+TEST_CASE ("Auto-Master's vocal suggestion starts from 0 dB for the other stems when Stem EQ is off", "[stemeq][automaster]")
+{
+    // A mix whose vocal sits well under the beat (the model hears it about 11 dB under the whole mix; trap
+    // masters around -3 dB), so Auto-Master suggests turning it up.
+    const double sr = 48000.0;
+    const auto mix = testsig::trapLike (sr, 14.0);
+
+    // You had tried Drums +4 / Bass -2, then switched Stem EQ off: the knobs keep their values.
+    AutoMasterSettings s;
+    s.stem.enabled = false;
+    s.stem.gainDb = { 0.0, 4.0, -2.0, 0.0 };
+    const auto off = autoMaster (mix, s);
+    REQUIRE (off.ok);
+    REQUIRE (off.hasStemSuggestion);
+    CHECK (off.stemSuggestion.enabled);
+    CHECK (off.stemSuggestion.gainDb[kStemVocals] > 0.0);
+    // Applying it switches Stem EQ on: the moves you switched off must not come back with it.
+    CHECK (off.stemSuggestion.gainDb[kStemDrums] == 0.0);
+    CHECK (off.stemSuggestion.gainDb[kStemBass] == 0.0);
+    CHECK (off.stemSuggestion.gainDb[kStemOther] == 0.0);
+    CHECK (off.chain.stem.gainDb == s.stem.gainDb);   // Auto-Master itself leaves the knobs alone
+
+    // With Stem EQ on, your moves are part of the mix it heard, so the suggestion keeps them.
+    s.stem.enabled = true;
+    const auto on = autoMaster (mix, s);
+    REQUIRE (on.ok);
+    if (on.hasStemSuggestion)
+    {
+        CHECK (on.stemSuggestion.gainDb[kStemDrums] == 4.0);
+        CHECK (on.stemSuggestion.gainDb[kStemBass] == -2.0);
+    }
+}

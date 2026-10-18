@@ -35,6 +35,8 @@ add_executable(polisher_tests
     test_gainglide.cpp)
 
 target_link_libraries(polisher_tests PRIVATE polisher_dsp Catch2::Catch2WithMain)
+# test_handoff.cpp reads plugin/ui/mixstyles.js (the suite's styles) to keep Masterology's copy of it equal.
+target_compile_definitions(polisher_tests PRIVATE POLISHER_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 set_target_properties(polisher_tests PROPERTIES FOLDER "Masterology")
 
 include(Catch)

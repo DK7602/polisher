@@ -1,5 +1,6 @@
 #include "AutoMasterController.h"
 #include "ModuleParams.h"
+#include "polisher/MixHandoff.h"
 
 #include <map>
 #include <thread>
@@ -189,6 +190,13 @@ float AutoMasterController::getProgress() const noexcept
 void AutoMasterController::tick()
 {
     const double now = juce::Time::getMillisecondCounterHiRes();
+    // Another state was loaded (a preset, the host's A/B compare or undo) since the last tick, maybe on another thread:
+    // what is listening or analysing now is for the settings before it, so its result must not land on the loaded ones.
+    if (const int loads = stateLoads.load(); loads != seenStateLoads)
+    {
+        seenStateLoads = loads;
+        stopForLoadedState();
+    }
     if (getState() == listening)
     {
         // The host changed the sample rate: start the listening over at the new rate.
@@ -279,6 +287,11 @@ void AutoMasterController::launchAnalysis()
     auto settings = currentSettings();
     settings.songTone = tone;                       // Tone Steady holds the song to its own tone
     settings.songSeconds = pendingStats.heardSeconds;   // the report says itself how much it heard
+    // The whole song played once through: Stream -14 can aim the whole song at -14 (how far its loudest part sits
+    // above it). After Finish, a jump or a short listen it can't know the whole song, and keeps the loudest part at -14.
+    if (autoFinished && pendingStats.timelineJumps == 0 && pendingStats.heardSeconds >= kWholeSongSeconds
+        && pendingStats.integratedLufs > -70.0 && pendingStats.loudestLufs > -70.0)
+        settings.songGapLu = std::max (0.0, pendingStats.loudestLufs - pendingStats.integratedLufs);
     pendingSettings = settings;
 
     const int thisSession = session;
@@ -309,6 +322,14 @@ void AutoMasterController::launchAnalysis()
     });
 }
 
+std::string AutoMasterController::styleKeyFor (int genre) const
+{
+    // The song's style, when Auto-Master masters it as this genre (else "": the genre alone).
+    const auto key = songStyleKey ? songStyleKey() : std::string();
+    const auto* style = polisher::handoff::mixStyle (key);
+    return style != nullptr && style->genre == genre ? key : std::string();
+}
+
 polisher::AutoMasterSettings AutoMasterController::currentSettings() const
 {
     auto choice = [this] (const char* id) { return juce::roundToInt (state.getRawParameterValue (id)->load()); };
@@ -322,6 +343,7 @@ polisher::AutoMasterSettings AutoMasterController::currentSettings() const
     for (int k = 0; k < polisher::kStems; ++k)
         settings.stem.gainDb[static_cast<size_t> (k)] = state.getRawParameterValue (ModuleParams::stemIds[k])->load();
     settings.reference = reference.getProfile();   // Match ref (invalid = none: genre targets)
+    settings.styleKey = styleKeyFor (static_cast<int> (settings.genre));
     return settings;
 }
 
@@ -338,12 +360,16 @@ void AutoMasterController::setParam (const juce::String& id, float value)
 void AutoMasterController::apply (const polisher::AutoMasterResult& r, const polisher::AutoMasterSettings& s)
 {
     auto* doc = new juce::DynamicObject();
+    const juce::var docHolder (doc);   // owns it (also when a try that didn't work keeps the old report)
     doc->setProperty ("ok", r.ok);
     doc->setProperty ("summary", juce::String::fromUTF8 (r.summary.c_str()));
     doc->setProperty ("notAFullMix", r.notAFullMix);
     doc->setProperty ("tipTitle", juce::String::fromUTF8 (r.tipTitle.c_str()));
     doc->setProperty ("tip", juce::String::fromUTF8 (r.tip.c_str()));
-    doc->setProperty ("genre", juce::String (polisher::genreName (s.genre)));
+    const auto* style = polisher::handoff::mixStyle (s.styleKey);
+    // What the master was made for: the song's style when it was used ("Hip Hop - Lo-Fi"), else the genre.
+    doc->setProperty ("genre", style != nullptr ? juce::String::fromUTF8 (style->name) : juce::String (polisher::genreName (s.genre)));
+    doc->setProperty ("style", juce::String (s.styleKey));
     doc->setProperty ("intensity", juce::String (kIntensityNames[static_cast<int> (s.intensity)]));
     doc->setProperty ("target", juce::String::fromUTF8 (kTargetNames[static_cast<int> (s.target)]));
     doc->setProperty ("time", juce::Time::getCurrentTime().toISO8601 (true));
@@ -372,6 +398,37 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         doc->setProperty ("listened", listenedText (st, kWindowSeconds));
     }
 
+    // A try that didn't work (not a full mix, too little music) changes no setting, so it doesn't replace the report
+    // that explains the settings playing now (Learn's module pages and Auto Analyze go on with it). That report says
+    // this try didn't work (a note at the top, and "lastTry" for the editor).
+    if (! r.ok)
+    {
+        auto previous = juce::JSON::parse (getReportJson());
+        if (auto* old = previous.getDynamicObject(); old != nullptr && static_cast<bool> (previous["ok"]))
+        {
+            auto* tried = new juce::DynamicObject();
+            tried->setProperty ("time", juce::Time::getCurrentTime().toISO8601 (true));
+            tried->setProperty ("summary", juce::String::fromUTF8 (r.summary.c_str()));
+            tried->setProperty ("tipTitle", juce::String::fromUTF8 (r.tipTitle.c_str()));
+            tried->setProperty ("tip", juce::String::fromUTF8 (r.tip.c_str()));
+            tried->setProperty ("notAFullMix", r.notAFullMix);
+            old->setProperty ("lastTry", juce::var (tried));
+            const juce::String title = "THIS TRY DIDN'T WORK:";
+            juce::Array<juce::var> notes;
+            notes.add (title + " " + juce::String::fromUTF8 (r.summary.c_str())
+                       + " Your settings and this report are still the ones from your last Auto-Master run."
+                       + "\nNEED: Only if you wanted a new master."
+                       + (r.tip.empty() ? juce::String() : "\nSTEP: " + juce::String::fromUTF8 (r.tip.c_str())));
+            if (const auto* had = previous["notes"].getArray())
+                for (const auto& n : *had)
+                    if (! n.toString().startsWith (title))
+                        notes.add (n);
+            old->setProperty ("notes", notes);
+            setReport (juce::JSON::toString (previous, true));
+            return;
+        }
+    }
+
     // Everything below (the settings, Tone Steady's target and the new report) is one undo step.
     const bool grouped = r.ok && onApplyBegin && onApplyEnd;
     if (grouped)
@@ -384,6 +441,10 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         toneTarget.set (s.songTone);
         if (s.songTone.valid)
             doc->setProperty ("toneTarget", s.songTone.seconds);
+
+        // What Auto-Master sets back for its plan (Glue to 1:1, Impact / Sustain / Bass First to 0): the report says
+        // so when you had them on, so your own moves aren't dropped without a word.
+        const auto resets = resetReasons (polisher::autoanalyze::chainValues (r.chain));
 
         // Every control Auto-Master decides (polisher::autoanalyze::chainValues: the same list Auto Analyze
         // compares with); the report keeps them, except the hidden ulSquashSet.
@@ -400,7 +461,9 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         for (const auto& n : r.notes)
             notes.add (juce::String::fromUTF8 (n.c_str()));
         doc->setProperty ("notes", notes);
-        doc->setProperty ("reasons", reasonsToVar (r.reasons));
+        auto reasons = r.reasons;
+        reasons.insert (reasons.end(), resets.begin(), resets.end());
+        doc->setProperty ("reasons", reasonsToVar (reasons));
         // Stem EQ is only ever suggested: the editor offers an Apply button with these values.
         if (r.hasStemSuggestion)
         {
@@ -412,6 +475,8 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         doc->setProperty ("outputLufs", r.output.integratedLufs);
         doc->setProperty ("outputTruePeak", r.output.truePeakDbtp);
         doc->setProperty ("targetLufs", r.targetLufs);
+        if (s.songGapLu >= 0.0)
+            doc->setProperty ("songGapLu", s.songGapLu);   // Auto Analyze's checks aim the same way (Stream: the whole song)
         doc->setProperty ("reachedTarget", r.reachedTarget);
         doc->setProperty ("inputLufs", r.analysis.loudness.integratedLufs);
         doc->setProperty ("capturedLufs", r.capturedLufs);
@@ -420,6 +485,7 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         // The choices it was made for: Auto Analyze stops when they change (run Auto-Master again instead).
         auto* chosen = new juce::DynamicObject();
         chosen->setProperty ("genre", static_cast<int> (s.genre));
+        chosen->setProperty ("style", juce::String (s.styleKey));   // "" when the genre alone was used
         chosen->setProperty ("intensity", static_cast<int> (s.intensity));
         chosen->setProperty ("target", static_cast<int> (s.target));
         chosen->setProperty ("reference", s.reference.valid ? juce::String::fromUTF8 (s.reference.name.c_str()) : juce::String());
@@ -442,6 +508,43 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         onApplyEnd();
 }
 
+std::vector<polisher::AutoMasterReason> AutoMasterController::resetReasons (const polisher::autoanalyze::Values& planned) const
+{
+    std::vector<polisher::AutoMasterReason> out;
+    auto text = [this] (const juce::String& id)
+    {
+        if (auto* p = dynamic_cast<juce::RangedAudioParameter*> (state.getParameter (id)))
+            return p->getText (p->getValue(), 64).toStdString();
+        return std::string();
+    };
+    auto changes = [&] (const std::string& id)
+    {
+        const auto it = planned.find (id);
+        return it != planned.end() && state.getRawParameterValue (juce::String (id)) != nullptr
+            && std::abs (paramValue (juce::String (id)) - static_cast<float> (it->second)) > 0.005f;
+    };
+    if (changes ("glueRatio") || changes ("glueGain"))
+        out.push_back ({ "glue", "Ratio", "1:1",
+                         "Auto-Master works out its loudness plan with Glue doing nothing, so it set Glue back to 1:1 (yours was " + text ("glueRatio") +
+                         (std::abs (paramValue ("glueGain")) > 0.05f ? ", gain " + text ("glueGain") : std::string()) + "). To use your Glue again, "
+                         "set it back after Auto-Master and compare with MATCH: the master gets a little denser and louder." });
+    const char* const bands[] = { "Low", "Low Mid", "High Mid", "High" };
+    std::string dyn;
+    for (int b = 0; b < polisher::kDynBands; ++b)
+        for (const char* what : { "Impact", "Sustain" })
+            if (const auto id = "dyn" + std::string (what) + std::to_string (b + 1); changes (id))
+                dyn += (dyn.empty() ? "" : ", ") + std::string (what) + " " + text (id) + " on " + bands[b];
+    if (! dyn.empty())
+        out.push_back ({ "dyn", "Impact / Sustain", "0 %",
+                         "Auto-Master plans the compression without Impact and Sustain, so they are back at 0 (yours: " + dyn + "). Turn them up again "
+                         "after Auto-Master if you liked them; Auto Analyze leaves them where you put them." });
+    if (changes ("maxBassFirst"))
+        out.push_back ({ "max", "Bass First", "0 %",
+                         "Auto-Master plans the plain limiter, so Bass First is back at 0 % (yours was " + text ("maxBassFirst") + "). Turn it up again "
+                         "after Auto-Master if you liked it; Auto Analyze leaves it where you put it." });
+    return out;
+}
+
 void AutoMasterController::setReport (const juce::String& json)
 {
     {
@@ -451,8 +554,24 @@ void AutoMasterController::setReport (const juce::String& json)
     ++reportVersion;
 }
 
+void AutoMasterController::stopForLoadedState()
+{
+    if (getState() != idle)
+        cancel();
+    if (checkCancel != nullptr)
+        checkCancel->store (true);   // an Auto Analyze check about the settings before
+}
+
 void AutoMasterController::onStateRestored (const juce::String& savedReport)
 {
+    // A preset, the host's A/B compare or its undo: an Auto-Master run going on now stops, so its result doesn't
+    // overwrite the state just loaded. Off the message thread the next tick() stops it (before it can apply anything).
+    ++stateLoads;
+    if (juce::MessageManager::existsAndIsCurrentThread())
+    {
+        seenStateLoads = stateLoads.load();
+        stopForLoadedState();
+    }
     setReport (savedReport);
 }
 
@@ -580,8 +699,10 @@ bool AutoMasterController::reportSettingsMatch() const
         return true;   // a report from before v0.27: nothing to compare with
     auto choice = [this] (const char* id) { return juce::roundToInt (paramValue (id)); };
     const juce::String refNow = reference.getState() == ReferenceTrack::loaded ? juce::String::fromUTF8 (reference.getProfile().name.c_str()) : juce::String();
+    // The song style counts too (a report from before styles has none: the genre alone).
+    const bool sameStyle = ! chosen.hasProperty ("style") || chosen["style"].toString() == juce::String (styleKeyFor (choice ("amGenre")));
     return static_cast<int> (chosen["genre"]) == choice ("amGenre") && static_cast<int> (chosen["intensity"]) == choice ("amIntensity")
-        && static_cast<int> (chosen["target"]) == choice ("amTarget") && chosen["reference"].toString() == refNow;
+        && static_cast<int> (chosen["target"]) == choice ("amTarget") && chosen["reference"].toString() == refNow && sameStyle;
 }
 
 polisher::autoanalyze::Values AutoMasterController::plannedValues() const
@@ -603,6 +724,17 @@ polisher::autoanalyze::Values AutoMasterController::plannedValues() const
         if (const auto* id = ModuleParams::stemIds[k]; v.count (id) == 0)
             v[id] = suggested != nullptr && suggested->size() == polisher::kStems ? static_cast<double> ((*suggested)[k]) : paramValue (id);
     return v;
+}
+
+polisher::autoanalyze::Kept AutoMasterController::keptValues() const
+{
+    polisher::autoanalyze::Kept kept;
+    if (auto* o = aaReport["aaKeep"].getDynamicObject())
+        for (const auto& p : o->getProperties())
+            if (const auto* list = p.value.getArray())
+                for (const auto& v : *list)
+                    kept[p.name.toString().toStdString()].push_back (std::round (static_cast<double> (v) * 1.0e4) * 1.0e-4);
+    return kept;
 }
 
 void AutoMasterController::autoTick (double nowMs)
@@ -683,7 +815,9 @@ void AutoMasterController::autoTick (double nowMs)
     }
     if (checkRunning)                                 { pause ("checking"); return; }
     if (heard == 0)                                   { pause ("stopped"); return; }
-    if (listener.heardSeconds() < kWatchEnoughSeconds || ! listener.hasWindow()) { pause ("listening"); return; }
+    // Only a loudest part that is over: one still growing at the playhead may be the end of a verse with the
+    // start of the hook (a quieter mix than the hook Auto-Master heard, though nothing changed).
+    if (! polisher::autoanalyze::loudestSettled (listener)) { pause ("listening"); return; }
 
     // Judge the loudest part heard once, and again only when another part becomes the loudest (and not
     // more often than every kWatchRefreshSeconds of music).
@@ -707,9 +841,7 @@ void AutoMasterController::autoTick (double nowMs)
                 hook.push_back ({ static_cast<double> (sp[0]), static_cast<double> (sp[1]) });
     if (hook.empty() && static_cast<bool> (listen["fromHost"]) && static_cast<int> (listen["loudPieces"]) <= 1)
         hook.push_back ({ static_cast<double> (listen["loudStart"]), static_cast<double> (listen["loudEnd"]) });
-    const bool atHook = hook.empty() || ! st.positionFromHost
-                     || polisher::autoanalyze::overlapSeconds (st.loudestSpans, hook) >= kHookOverlapSeconds;
-    if (! atHook)
+    if (! polisher::autoanalyze::atHook (st, hook))
     {
         startWatching (false);
         pause ("hook");
@@ -725,6 +857,8 @@ void AutoMasterController::launchCheck (polisher::AudioClip clip)
 {
     auto settings = currentSettings();
     settings.songTone = toneTarget.get();   // the song's tone as stored (what the master holds it to)
+    if (aaReport.hasProperty ("songGapLu"))      // Stream aimed at the whole song: the same aim for the same song
+        settings.songGapLu = static_cast<double> (aaReport["songGapLu"]);
     const int thisSession = aaSession;
     checkRunning = true;
     checkCancel = std::make_shared<std::atomic<bool>> (false);
@@ -798,7 +932,8 @@ void AutoMasterController::recomputeEdits (bool fromCheck)
     for (const auto& [id, v] : fresh)
         if (state.getRawParameterValue (juce::String (id)) != nullptr)
             current[id] = paramValue (juce::String (id));
-    auto edits = polisher::autoanalyze::planEdits (plannedValues(), fresh, current);
+    const auto kept = keptValues();
+    auto edits = polisher::autoanalyze::planEdits (plannedValues(), fresh, current, &kept);
 
     // Within each control's range, on its steps (a choice: a valid index).
     for (auto& e : edits)
@@ -920,7 +1055,11 @@ bool AutoMasterController::changeReport (const juce::String& module, bool applyP
         return false;
     if (! doc["aaPlan"].isObject())
         docObj->setProperty ("aaPlan", juce::var (new juce::DynamicObject()));
+    if (! doc["aaKeep"].isObject())
+        docObj->setProperty ("aaKeep", juce::var (new juce::DynamicObject()));
     auto* values = doc["aaPlan"].getDynamicObject();
+    auto* keep = doc["aaKeep"].getDynamicObject();
+    const auto planned = plannedValues();
     const bool grouped = onApplyBegin && onApplyEnd;
     if (grouped) onApplyBegin (label);
     bool stem = false;
@@ -931,8 +1070,23 @@ bool AutoMasterController::changeReport (const juce::String& module, bool applyP
             if (applyParams)
                 setParam (id, static_cast<float> (c.to));
             stem = stem || e->module == "stem";
-            if (const auto f = fresh.find (c.id); f != fresh.end() && id != "ulSquashSet")
-                values->setProperty (id, static_cast<float> (f->second));
+            const auto f = fresh.find (c.id);
+            if (f == fresh.end() || id == "ulSquashSet")
+                continue;
+            if (applyParams)
+                keep->removeProperty (id);   // applied: the new value is the plan, nothing declined
+            else
+            {
+                // Kept: the plan before and the advice declined both count as "fits" from now on (KEEP MINE holds:
+                // the next check doesn't offer the opposite move because the same mix measured a little differently).
+                juce::Array<juce::var> was;
+                if (const auto* had = keep->getProperty (id).getArray()) was.addArray (*had);
+                for (const double v : { planned.count (c.id) != 0 ? planned.at (c.id) : f->second, f->second })
+                    if (! was.contains (juce::var (static_cast<float> (v))))
+                        was.add (static_cast<float> (v));
+                keep->setProperty (id, was);
+            }
+            values->setProperty (id, static_cast<float> (f->second));
         }
     if (stem && applyParams)
         setParam ("stemOn", 1.0f);

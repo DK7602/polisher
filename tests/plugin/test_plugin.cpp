@@ -1615,6 +1615,109 @@ TEST_CASE ("Auto-Master listens to the whole song, finishes by itself when it en
     CHECK (p->toneTarget.get().bandDb == learned.bandDb);
 }
 
+TEST_CASE ("Auto-Master: Stream aims the whole song at -14 only when it heard the whole song", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    const auto song = songOf ({ testsig::musicLike (sr, 10.0, -30.0, 1), testsig::musicLike (sr, 20.0, -20.0, 2), testsig::musicLike (sr, 14.0, -12.0, 3),
+                                testsig::musicLike (sr, 20.0, -20.0, 4), testsig::musicLike (sr, 14.0, -12.0, 5) });
+    auto p = makeProcessor (sr, 512, false);
+    set (*p, "amTarget", 0.0f);   // Stream -14
+    FakePlayHead head;
+    p->setPlayHead (&head);
+
+    // Played to the end: the whole song was heard, so its loudest part is set above -14.
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, song);
+    play (*p, head, testsig::silence (sr, 2, 4.5));
+    REQUIRE (waitForAutoMaster (*p));
+    REQUIRE (p->autoMaster.finishedByItself());
+    auto r = reportOf (*p);
+    REQUIRE (static_cast<bool> (r["ok"]));
+    CHECK ((double) r["songGapLu"] > 1.0);
+    CHECK ((double) r["targetLufs"] > -13.5);
+    CHECK ((double) r["targetLufs"] <= -14.0 + polisher::kMaxStreamLiftLu + 1.0e-6);
+    CHECK (r["summary"].toString().contains ("whole song should read about"));
+
+    // Finish after part of it: it can't know the whole song, so the loudest part stays at -14.
+    head.seconds = 0.0;
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, songOf ({ testsig::musicLike (sr, 20.0, -20.0, 2), testsig::musicLike (sr, 14.0, -12.0, 3) }));
+    REQUIRE (p->autoMaster.finish());
+    REQUIRE (waitForAutoMaster (*p));
+    r = reportOf (*p);
+    REQUIRE (static_cast<bool> (r["ok"]));
+    CHECK_FALSE (r.hasProperty ("songGapLu"));
+    CHECK ((double) r["targetLufs"] == Catch::Approx (-14.0).margin (1.0e-6));
+    p->setPlayHead (nullptr);
+}
+
+TEST_CASE ("Auto-Master: a try that didn't work keeps the last good report; loading a state stops a run", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, false);
+    p->history.setMergeWindowMs (0.0);
+    FakePlayHead head;
+    p->setPlayHead (&head);
+    juce::MemoryBlock before;
+    p->getStateInformation (before);   // no report, Drive at its default
+
+    // Your Glue, Impact and Bass First: Auto-Master sets them back for its plan, and the report says so.
+    set (*p, "glueRatio", 2.0f);
+    set (*p, "dynImpact1", 30.0f);
+    set (*p, "maxBassFirst", 40.0f);
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, testsig::musicLike (sr, 13.0, -14.0, 1));
+    REQUIRE (p->autoMaster.finish());
+    REQUIRE (waitForAutoMaster (*p));
+    const auto good = reportOf (*p);
+    REQUIRE (static_cast<bool> (good["ok"]));
+    CHECK (p->parameters.getRawParameterValue ("glueRatio")->load() == Catch::Approx (1.0f));
+    juce::StringArray resets;
+    for (const auto& x : *good["reasons"].getArray())
+        if (x["why"].toString().contains ("(yours"))
+            resets.add (x["module"].toString() + " " + x["control"].toString() + ": " + x["why"].toString());
+    INFO (resets.joinIntoString ("\n"));
+    CHECK (resets.size() == 3);
+    CHECK (resets.joinIntoString ("|").contains ("glue Ratio: Auto-Master works out its loudness plan with Glue doing nothing, so it set Glue back to 1:1 (yours was 2.0:1)."));
+    CHECK (resets.joinIntoString ("|").contains ("Impact +30 % on Low"));
+    CHECK (resets.joinIntoString ("|").contains ("yours was 40"));
+    const int steps = p->history.size();
+    const auto settings = p->parameters.copyState().toXmlString();
+
+    // Again, on one instrument (a track soloed): nothing changes, and the report that explains the settings stays.
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, testsig::sine (sr, 2, 1000.0, -12.0, 13.0));
+    REQUIRE (p->autoMaster.finish());
+    REQUIRE (waitForAutoMaster (*p));
+    const auto kept = reportOf (*p);
+    CHECK (static_cast<bool> (kept["ok"]));
+    CHECK (kept["time"].toString() == good["time"].toString());
+    CHECK (juce::JSON::toString (kept["values"]) == juce::JSON::toString (good["values"]));
+    CHECK (static_cast<bool> (kept["lastTry"]["notAFullMix"]));
+    REQUIRE (kept["notes"].size() >= 1);
+    CHECK (kept["notes"][0].toString().startsWith ("THIS TRY DIDN'T WORK: This doesn't sound like a full mix."));
+    CHECK (p->history.size() == steps);
+    CHECK (p->parameters.copyState().toXmlString() == settings);
+    // Auto Analyze goes on with it.
+    p->autoMaster.setEditorOpen (true);
+    p->setAutoAnalyze (true);
+    p->autoMaster.tick();
+    CHECK (p->autoMaster.getAutoAnalyzeStatus() != "noReport");
+    p->setAutoAnalyze (false);
+
+    // A preset, the host's A/B compare or its undo while Auto-Master analyses: its result doesn't land on the loaded state.
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, testsig::musicLike (sr, 13.0, -8.0, 2));
+    REQUIRE (p->autoMaster.finish());
+    CHECK (p->autoMaster.getState() == AutoMasterController::analysing);
+    p->setStateInformation (before.getData(), static_cast<int> (before.getSize()));
+    REQUIRE (waitForAutoMaster (*p));
+    for (int i = 0; i < 50; ++i) { p->autoMaster.tick(); juce::Thread::sleep (20); }   // a result on its way is dropped
+    CHECK (p->autoMaster.getReportJson().isEmpty());
+    CHECK (p->parameters.getRawParameterValue ("drive")->load() == Catch::Approx (0.0f).margin (1.0e-6));
+    p->setPlayHead (nullptr);
+}
+
 TEST_CASE ("Auto-Master: Finish uses what it heard from 12 s of music on, not before; a pause doesn't end it", "[plugin][automaster]")
 {
     const double sr = 44100.0;
@@ -2129,10 +2232,11 @@ TEST_CASE ("Auto Analyze: hears the hook again, offers what changed in the mix, 
     p->autoMaster.tick();
     CHECK (p->autoMaster.getAutoAnalyzeStatus() == "stopped");
 
-    // Only the verse: not the part the master was set from, so nothing is judged.
+    // Only the verse (its loudest 12 s over well before the playhead): not the part the master was set from,
+    // so nothing is judged.
     head.seconds = 5.0;
-    play (*p, head, testsig::musicLike (sr, 20.0, -20.0, 1));
-    play (*p, head, testsig::musicLike (sr, 2.0, -20.0, 1));
+    play (*p, head, testsig::musicLike (sr, 14.0, -19.0, 1));
+    play (*p, head, testsig::musicLike (sr, 8.0, -21.0, 4));
     REQUIRE (waitForCheck (*p));
     CHECK (p->autoMaster.getAutoAnalyzeStatus() == "hook");
     play (*p, head, testsig::silence (sr, 2, 4.5));   // stop: the next play starts afresh
@@ -2189,6 +2293,8 @@ TEST_CASE ("Auto Analyze: hears the hook again, offers what changed in the mix, 
     CHECK (p->history.undoLabel().startsWith ("Auto Analyze: keep "));
     CHECK (controlsXml (*p) == values);
     CHECK (autoAdvice (*p)["edits"].size() == 0);
+    // Both the plan before and the declined value count from now on, so the opposite move doesn't come back.
+    CHECK (reportOf (*p)["aaKeep"]["drive"].size() == 2);
 
     // A knob of yours keeps its offset: the edit moves it by Auto-Master's change, from where it is.
     p->history.undo();

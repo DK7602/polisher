@@ -350,6 +350,14 @@ double SongListener::loudestEndSeconds() const noexcept
     return t0 >= 0.0 && t1 >= 0.0 ? t1 + kHopSeconds : -1.0;
 }
 
+double SongListener::secondsAfterLoudest() const noexcept
+{
+    const int b = bestStart.load (std::memory_order_acquire);
+    if (b < 0)
+        return -1.0;
+    return std::max (0, hopsDone.load (std::memory_order_acquire) - (b + windowHops)) * kHopSeconds;
+}
+
 bool SongListener::loudestFromHost() const noexcept
 {
     const int b = bestStart.load (std::memory_order_acquire);
@@ -491,15 +499,15 @@ SongStats SongListener::stats() const
                 coverUntil = j;
             }
         }
-        bool known = true;
-        for (int j = 0; j < H && known; ++j) known = hopTime[static_cast<size_t> (j)] >= 0.0;
-        for (int j = 0; known && j < H; ++j)
+        // A piece without a timeline position (the transport stopped: a reverb tail after Stop) has no place
+        // on the timeline, so it is left out and breaks the span it sits in; the other pieces keep theirs.
+        for (int j = 0; j < H; ++j)
         {
-            if (hook[static_cast<size_t> (j)] == 0) continue;
             const double t = hopTime[static_cast<size_t> (j)];
+            if (hook[static_cast<size_t> (j)] == 0 || t < 0.0) continue;
             auto& out = s.hookSpans;
-            const bool joins = ! out.empty() && j > 0 && hook[static_cast<size_t> (j - 1)] != 0 && hopJump[static_cast<size_t> (j)] == 0
-                            && t - out.back().end <= 0.5;
+            const bool joins = ! out.empty() && j > 0 && hook[static_cast<size_t> (j - 1)] != 0 && hopTime[static_cast<size_t> (j - 1)] >= 0.0
+                            && hopJump[static_cast<size_t> (j)] == 0 && t - out.back().end <= 0.5;
             if (joins) out.back().end = t + kHopSeconds;
             else       out.push_back ({ t, t + kHopSeconds });
         }

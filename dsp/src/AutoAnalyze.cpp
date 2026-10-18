@@ -44,7 +44,9 @@ namespace polisher::autoanalyze
             if (id == "drive" || id == "inTrim") return { Kind::additive, 0.75, 0.1 };
             if (id == "ceiling") return { Kind::additive, 0.25, 0.1 };
             if (id == "satDrive") return { Kind::additive, 1.5, 0.1 };
-            if (id == "clipLevel") return { Kind::additive, 0.5, 0.1 };
+            // Clip Level follows the recurring peaks against the loudness, which the same chorus reads 0.4 dB apart
+            // from one playback to the next (re-audit 2026-10): 1 dB is a change in the mix.
+            if (id == "clipLevel") return { Kind::additive, 1.0, 0.1 };
             if (id == "tsRange") return { Kind::additive, 1.0, 0.1 };
             if (starts (id, "img")) return { Kind::additive, 5.0, 1.0 };
             // Percent knobs: Unlimiter / Tone Steady / Resonance Tamer amounts, sensitivity, Bass Tame / Punch,
@@ -145,7 +147,7 @@ namespace polisher::autoanalyze
         return {};
     }
 
-    std::vector<Edit> planEdits (const Values& planned, const Values& fresh, const Values& current)
+    std::vector<Edit> planEdits (const Values& planned, const Values& fresh, const Values& current, const Kept* kept)
     {
         std::map<std::string, Edit> byModule;
         std::map<std::string, bool> worth;
@@ -159,8 +161,25 @@ namespace polisher::autoanalyze
             const double cur = curIt->second;
             const auto planIt = planned.find (id);
             const bool known = planIt != planned.end();
-            const double plan = known ? planIt->second : f;
+            double plan = known ? planIt->second : f;
             const auto rule = ruleFor (id);
+            // KEEP MINE: Auto-Master's choices you declined for this mix count as the plan too.
+            if (const auto keptIt = kept != nullptr && known ? kept->find (id) : Kept::const_iterator {};
+                kept != nullptr && known && keptIt != kept->end() && ! keptIt->second.empty())
+            {
+                const auto& was = keptIt->second;
+                if (rule.kind == Kind::choice || id == "bassMono")
+                {
+                    if (std::any_of (was.begin(), was.end(), [f] (double v) { return std::abs (v - f) <= 1.0e-6; }))
+                        plan = f;   // back to a choice you declined the change from: nothing to do
+                }
+                else if (rule.kind != Kind::hidden)
+                {
+                    const double lo = std::min (plan, *std::min_element (was.begin(), was.end()));
+                    const double hi = std::max (plan, *std::max_element (was.begin(), was.end()));
+                    plan = std::clamp (f, lo, hi);   // inside the range: no change; outside: from its nearest edge
+                }
+            }
 
             double to = cur;
             bool significant = false;
@@ -245,10 +264,9 @@ namespace polisher::autoanalyze
         return true;
     }
 
-    double overlapSeconds (const std::vector<TimeSpan>& a, const std::vector<TimeSpan>& b)
+    namespace
     {
-        // Each side merged first: a stretch heard twice (a cycle loop) counts once.
-        auto merged = [] (std::vector<TimeSpan> v)
+        std::vector<TimeSpan> merged (std::vector<TimeSpan> v)
         {
             std::sort (v.begin(), v.end(), [] (const TimeSpan& x, const TimeSpan& y) { return x.start < y.start; });
             std::vector<TimeSpan> out;
@@ -256,11 +274,38 @@ namespace polisher::autoanalyze
                 if (! out.empty() && s.start <= out.back().end) out.back().end = std::max (out.back().end, s.end);
                 else out.push_back (s);
             return out;
-        };
+        }
+    }
+
+    double overlapSeconds (const std::vector<TimeSpan>& a, const std::vector<TimeSpan>& b)
+    {
+        // Each side merged first: a stretch heard twice (a cycle loop) counts once.
         double total = 0.0;
         for (const auto& x : merged (a))
             for (const auto& y : merged (b))
                 total += std::max (0.0, std::min (x.end, y.end) - std::max (x.start, y.start));
         return total;
+    }
+
+    double insideSeconds (const std::vector<TimeSpan>& part, const std::vector<TimeSpan>& hook)
+    {
+        const auto h = merged (hook);
+        double total = 0.0;
+        for (const auto& x : part)
+            for (const auto& y : h)
+                total += std::max (0.0, std::min (x.end, y.end) - std::max (x.start, y.start));
+        return total;
+    }
+
+    bool loudestSettled (const SongListener& l) noexcept
+    {
+        return l.isPrepared() && l.hasWindow() && l.heardSeconds() >= kEnoughSeconds && l.secondsAfterLoudest() >= kSettledSeconds - 1.0e-9;
+    }
+
+    bool atHook (const SongStats& heard, const std::vector<TimeSpan>& hook)
+    {
+        if (hook.empty() || ! heard.positionFromHost || heard.loudestSpans.empty())
+            return true;
+        return insideSeconds (heard.loudestSpans, hook) >= std::min (kHookInsideSeconds, heard.loudestSeconds - 1.0) - 1.0e-6;
     }
 }

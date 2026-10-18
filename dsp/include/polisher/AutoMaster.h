@@ -26,6 +26,18 @@ double targetLufs (LoudnessTarget) noexcept;
     analysis ("Match ref"). */
 std::array<double, kEqBands> genreTargetCurve (Genre) noexcept;
 
+/** The most a song style moves its genre's target curve, per EQ band (dB). */
+inline constexpr std::array<double, kEqBands> kMaxStyleOffsetDb { 2.0, 1.5, 1.5, 1.0, 1.0, 1.5, 2.0 };
+
+/** How a song style (handoff::kMixStyles, the suite's 75 styles: "hiphop.lofi") moves its genre's target curve:
+    its own tonal target (Mixology's bass weight / low-mid scoop / top sheen curve) against the average of the
+    styles Auto-Master masters as that genre, averaged over each band, the mean of bands 2..6 taken out, at most
+    kMaxStyleOffsetDb. All 0 for an unknown style or one that Auto-Master masters as another genre. */
+std::array<double, kEqBands> styleToneOffsetDb (Genre, const std::string& styleKey) noexcept;
+
+/** genreTargetCurve() moved by the song style (styleToneOffsetDb): what Auto-Master's EQ aims for. */
+std::array<double, kEqBands> styleTargetCurve (Genre, const std::string& styleKey) noexcept;
+
 /** Where the lead vocal usually sits in a genre's masters, as Stem EQ's model hears it (dB relative to
     the whole mix, loudest section). Trap / Hip-Hop and R&B come from the user's own 13 released songs
     (median -2.8 dB, middle 60 % -3.8 ... -2.0); the others are starting points (MUSDB pop / rock
@@ -260,7 +272,22 @@ struct AutoMasterSettings
     /** How much of the song the plug-in listened to before handing over its loudest part (0: only this
         clip). The plug-in's report says that itself, so the summary doesn't repeat it. */
     double songSeconds = 0.0;
+    /** The song's style, shared by the suite ("hiphop.lofi"; "" = none). When Auto-Master masters it as this
+        genre, the EQ aims for the style's own tone (styleTargetCurve), and its feel (handoff::Feel) scales the
+        clipping and saturation a little; a style of another genre (you picked another genre) is left out. */
+    std::string styleKey;
+    /** How far the song's loudest 12 s sit above the whole song's loudness, as the mix arrives (LU), when the
+        plug-in heard the whole song played once through; negative: unknown. With it, Stream -14 aims the whole
+        song at -14 (streaming services measure the whole song): the loudest part is set higher by
+        kStreamGapShare of this, at most kMaxStreamLiftLu, within the intensity's limits as always. */
+    double songGapLu = -1.0;
 };
+
+/** Stream -14 with the whole song heard: the master's loudest part sits this share of the mix's gap (loudest 12 s
+    over the whole song) above -14, because the master's limiting narrows the gap a little (calibrated on songs
+    with verses 1 to 6 dB under the chorus, see test_automaster.cpp). */
+inline constexpr double kStreamGapShare = 0.8;
+inline constexpr double kMaxStreamLiftLu = 2.5;
 
 struct AutoMasterResult
 {
@@ -274,7 +301,7 @@ struct AutoMasterResult
     MixAnalysis masterAnalysis;                 // the master, measured the same way (only when matching a reference)
     MasterChainParams chain;                    // the settings to apply
     bool hasStemSuggestion = false;             // a Stem EQ move to offer (never applied automatically)
-    StemEQParams stemSuggestion;                // the full Stem EQ setting to offer (the user's, plus the move)
+    StemEQParams stemSuggestion;                // the full Stem EQ setting to offer (the user's, plus the move; 0 dB for the other stems when Stem EQ was off)
     LoudnessStats output;                       // what the master measures with them
     double targetLufs = 0.0;
     double capturedLufs = -100.0;               // the 12 s it heard, as it arrived (before Input Trim and every module)

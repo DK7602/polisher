@@ -1413,9 +1413,9 @@ function renderLearnBody(body) {
 
   if (louderPartDb > 0)
     body.appendChild(tip("LOUDER THAN WHAT AUTO-MASTER HEARD",
-      `This part of your mix is about ${fmtNum(louderPartDb, 1)} dB louder than the loudest part Auto-Master heard, so here the master is louder and more limited than it planned. It probably didn't hear this part.`, false,
-      { need: "Yes, if this is the chorus or drop: Auto-Master should hear the loudest part.",
-        steps: ["Click Auto-Master and play the whole song from the start.", "Let it play to the end: it finds the loudest part by itself and finishes when the song ends."] }));
+      `This part of your mix is about ${fmtNum(louderPartDb, 1)} dB louder than the loudest part Auto-Master heard, so here the master is louder and more limited than it planned. Either Auto-Master didn't hear this part, or your mix got louder since it listened.`, false,
+      { need: "Yes, if this is the chorus or drop, or if you turned your mix up: Auto-Master should hear the loudest part as it is now.",
+        steps: ["Click Auto-Master and play the whole song from the start.", "Let it play to the end: it finds the loudest part by itself and finishes when the song ends.", "Or turn on Auto Analyze: it offers the new Drive when your mix got louder."] }));
   body.appendChild(head("WHAT'S HAPPENING"));
   if (bypassed) {
     body.appendChild(para("l-p", "You're on A: the original mix, untouched. Switch to B to hear the Maximizer."));
@@ -2342,7 +2342,7 @@ function addMixologyLearn(body) {
   const otherGenre = h.genre >= 0 && h.genre !== g;
   const frag = document.createDocumentFragment();
   const peak = h.peak > -99 ? `peaks at ${fmtNum(h.peak)} dBTP` : "no peaks yet";
-  const room = h.peak <= -99 ? "" : h.peak > -1 ? ": almost no room left, so turn the mix down in Mixology (or Input Trim here) first" : h.peak <= -3 ? ": good room for mastering" : "";
+  const room = h.peak <= -99 ? "" : h.peak > -1 ? ": that's fine here, Masterology handles it (turn it down only to export the unmastered mix)" : h.peak <= -3 ? ": good room for mastering" : "";
   const level = h.lufs > -99 ? `${fmtNum(h.lufs)} LUFS with ` : "";
   let text = `Mixology mixed this song as ${h.style || "your style"}. Your mix comes in at ${level}${peak}${room}.`;
   // Its numbers are about another signal (a Mixology that isn't right before Masterology): say so instead.
@@ -2355,7 +2355,7 @@ function addMixologyLearn(body) {
     const names = ["low end", "low mids", "presence", "air"];
     const off = h.tone.map((d, i) => [d, names[i]]).filter(([d]) => Math.abs(d) >= 2);
     text += off.length
-      ? ` Against that style, Mixology heard ${off.map(([d, n]) => `${d > 0 ? "more" : "less"} ${n} (${fmtSigned(d)})`).join(" and ")}: Auto-Master's EQ evens out what's left.`
+      ? ` Against that style, Mixology heard ${off.map(([d, n]) => `${d > 0 ? "more" : "less"} ${n} (${fmtSigned(d)})`).join(" and ")}. ${otherGenre ? `Auto-Master compares with ${GENRES[g]} masters instead, so its EQ may not follow this.` : "Auto-Master's EQ aims for the same style and closes part of that gap (unless a reference is loaded); fixing it in the mix sounds best."}`
       : " Its tone sits close to that style.";
   }
   frag.appendChild(tip("FROM MIXOLOGY", text, !other));
@@ -3560,7 +3560,7 @@ function aaStatusText() {
   if (!M.aaOn) return "Off. Turn it on and Masterology keeps listening while your song plays: when your mix changes, it works out what Auto-Master would change and shows it here.";
   switch (p) {
     case "busy": return "Paused while Auto-Master listens and thinks.";
-    case "settings": return "Paused: you changed the genre, intensity, target or reference since Auto-Master ran, so its plan doesn't apply any more.";
+    case "settings": return "Paused: the genre, style, intensity, target or reference changed since Auto-Master ran (picking a style here, in Mixology or in Voxology changes it too), so its plan doesn't apply any more. Run Auto-Master again.";
     case "stopped": return `Waiting for the song (it starts listening afresh after every stop). Press play: it checks the hook or drop${hook ? ` (${hook})` : ""}, the part Auto-Master set your master from.`;
     case "listening": return `Listening · ${fmtTime(heard)} heard. It checks once it has heard 20 seconds, including the hook or drop${hook ? ` (${hook})` : ""}.`;
     case "hook": return `Listening · ${fmtTime(heard)} heard. Play the hook or drop${hook ? ` (${hook})` : ""}: Auto-Master set your master from that part, so that's where Auto Analyze compares, like with like.`;

@@ -4,6 +4,7 @@
 #include "Signals.h"
 #include "polisher/AutoMaster.h"
 #include "polisher/FilterDesign.h"
+#include "polisher/SongListener.h"
 
 #include <algorithm>
 #include <atomic>
@@ -832,4 +833,116 @@ TEST_CASE ("An Auto-Master analysis stops at once when it is cancelled", "[autom
     std::atomic<bool> down { false };
     const ScopedCancelFlag cancellable (&down);
     CHECK_NOTHROW (throwIfCancelled());
+}
+
+TEST_CASE ("Auto-Master masters to the song's style: Lo-Fi softer than Rage", "[automaster][handoff]")
+{
+    const auto mix = testsig::trapLike (44100.0, 12.0);
+    auto run = [&] (Genre g, const char* style)
+    {
+        AutoMasterSettings s;
+        s.genre = g;
+        s.target = LoudnessTarget::loud;
+        s.styleKey = style;
+        const auto r = autoMaster (mix, s);
+        REQUIRE (r.ok);
+        return r;
+    };
+    const auto lofi = run (Genre::trapHipHop, "hiphop.lofi"), rage = run (Genre::trapHipHop, "trap.rage");
+    // "Nothing sharp, nothing loud": less saturation and less clipping than Rage.
+    CHECK (lofi.chain.saturation.driveDb < rage.chain.saturation.driveDb - 1.0);
+    const double lofiClip = lofi.chain.clipper.thresholdDb - lofi.chain.limiter.ceilingDbtp;
+    const double rageClip = rage.chain.clipper.thresholdDb - rage.chain.limiter.ceilingDbtp;
+    CHECK ((! lofi.chain.clipper.enabled || ! rage.chain.clipper.enabled || lofiClip > rageClip + 1.0));
+    CHECK ((rage.chain.clipper.enabled || ! lofi.chain.clipper.enabled));
+    // Its tone: the EQ aims for less air than Rage's.
+    CHECK (lofi.chain.eq.gainDb[6] <= rage.chain.eq.gainDb[6]);
+    // The report says so, and suggests the softer target for a soft style.
+    CHECK (lofi.summary.find ("Hip Hop - Lo-Fi (mastered as Trap / Hip-Hop)") != std::string::npos);
+    bool soft = false;
+    for (const auto& n : lofi.notes) soft = soft || n.find ("meant to sound soft") != std::string::npos;
+    CHECK (soft);
+    bool versus = false;
+    for (const auto& x : lofi.reasons) versus = versus || (x.module == "eq" && x.why.find ("Hip Hop - Lo-Fi") != std::string::npos);
+    CHECK (versus);
+
+    // A style of another genre (you picked Rock for a Lo-Fi song) is left out: Rock alone.
+    const auto rock = run (Genre::rock, ""), rockLofi = run (Genre::rock, "hiphop.lofi");
+    CHECK (rockLofi.chain.eq.gainDb == rock.chain.eq.gainDb);
+    CHECK (rockLofi.chain.saturation.driveDb == rock.chain.saturation.driveDb);
+    CHECK (rockLofi.summary == rock.summary);
+}
+
+TEST_CASE ("Stream -14 aims the whole song at -14 when Auto-Master heard the whole song", "[automaster]")
+{
+    // Intro, then verse (4 dB under the chorus) and chorus three times, outro: the same trap-like beat.
+    const double sr = 44100.0;
+    const auto beat = testsig::trapLike (sr, 16.0, 11), beat2 = testsig::trapLike (sr, 16.0, 12);
+    auto part = [] (const AudioClip& c, double seconds, double db)
+    {
+        AudioClip o = withGain (c, db);
+        for (auto& ch : o.channels) ch.resize (static_cast<size_t> (std::lround (seconds * c.sampleRate)));
+        return o;
+    };
+    AudioClip song;
+    for (const auto& p : { part (beat, 8.0, -8.0), part (beat2, 8.0, -4.0), beat, part (beat2, 16.0, -4.0), beat,
+                           part (beat2, 16.0, -4.0), beat, part (beat, 8.0, -8.0) })
+    {
+        if (song.channels.empty()) { song = p; continue; }
+        for (size_t c = 0; c < 2; ++c) song.channels[c].insert (song.channels[c].end(), p.channels[c].begin(), p.channels[c].end());
+    }
+    SongListener l;
+    l.prepare (sr, 12.0, 900.0);
+    for (long i = 0; i + 512 <= static_cast<long> (song.numSamples()); i += 512)
+        l.process (song.channels[0].data() + i, song.channels[1].data() + i, 512, static_cast<double> (i) / sr);
+    const auto st = l.stats();
+    AutoMasterSettings s;
+    s.target = LoudnessTarget::stream;
+    s.songTone = l.toneTarget();
+    s.songSeconds = st.heardSeconds;
+
+    // Before (and still when the whole song wasn't heard): the loudest 12 s at -14, the whole song about 1.6 dB under.
+    const auto hookOnly = autoMaster (l.loudestWindow(), s);
+    REQUIRE (hookOnly.ok);
+    CHECK_THAT (hookOnly.targetLufs, WithinAbs (-14.0, 1.0e-9));
+    const double before = measure (renderMaster (song, hookOnly.chain)).integratedLufs;
+    CHECK (before < -15.0);
+
+    // The whole song heard: its loudest part goes up by 0.8 of the gap, and the whole song reads about -14.
+    s.songGapLu = st.loudestLufs - st.integratedLufs;
+    REQUIRE (s.songGapLu > 1.5);
+    const auto whole = autoMaster (l.loudestWindow(), s);
+    REQUIRE (whole.ok);
+    CHECK_THAT (whole.targetLufs, WithinAbs (-14.0 + std::round (kStreamGapShare * s.songGapLu * 10.0) / 10.0, 1.0e-9));
+    CHECK (whole.reachedTarget);
+    const auto master = measure (renderMaster (song, whole.chain));
+    UNSCOPED_INFO ("gap " << s.songGapLu << " LU; whole song before " << before << ", now " << master.integratedLufs << " LUFS, " << master.truePeakDbtp << " dBTP");
+    CHECK (std::abs (master.integratedLufs + 14.0) < 0.4);
+    CHECK (master.truePeakDbtp <= whole.chain.limiter.ceilingDbtp + 0.1);
+    CHECK (whole.summary.find ("whole song should read about") != std::string::npos);
+
+    // Loud: services turn it down anyway, so the loudest part stays on the target.
+    s.target = LoudnessTarget::loud;
+    CHECK_THAT (autoMaster (l.loudestWindow(), s).targetLufs, WithinAbs (-9.0, 1.0e-9));
+}
+
+TEST_CASE ("Punch's reason for played bass at Balanced says why it stays at 0", "[automaster]")
+{
+    // Rock / Acoustic at Balanced leave the kick as played: the reason must say so, not that the kick already hits.
+    const auto mix = testsig::trapLike (44100.0, 12.0);   // a sustained 808 under the kick
+    for (const auto g : { Genre::rock, Genre::acoustic })
+    {
+        AutoMasterSettings s;
+        s.genre = g;
+        const auto r = autoMaster (mix, s);
+        REQUIRE (r.ok);
+        REQUIRE (r.analysis.hasLowEnd);
+        REQUIRE (r.analysis.lowCrestDb < 9.0);
+        CHECK (r.chain.bass.punch == 0.0);
+        std::string why;
+        for (const auto& x : r.reasons) if (x.module == "bass" && x.control == "Punch") why = x.why;
+        INFO (why);
+        CHECK (why.find ("choose Punchy") != std::string::npos);
+        CHECK (why.find ("already hit clearly") == std::string::npos);
+    }
 }

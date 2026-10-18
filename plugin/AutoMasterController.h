@@ -26,7 +26,9 @@
     4. Back on the message thread the chosen values are set as normal host parameter changes (so the
        DAW sees them, and they can be automated), the song's tone goes to Tone Steady (toneTarget),
        all of it as one step of the processor's undo history (see onApplyBegin / onApplyEnd), and the
-       report is saved with the plug-in state so it's still there when the project is reopened.
+       report is saved with the plug-in state so it's still there when the project is reopened. A try that
+       doesn't work (not a full mix, too little music) changes nothing and keeps the report there was, with a
+       note that this try didn't work.
 
     start (toneOnly) listens the same way but only learns the song's tone for Tone Steady.
     A short Auto-Master listen (under kAutoFinishSeconds) keeps a stored tone learned from more of
@@ -41,9 +43,9 @@
     Auto Analyze (setAutoAnalyze): after a successful Auto-Master, while the window is open and the
     controller has nothing else to do, the same listener hears the mix as it arrives (one stretch of
     playback at a time: it starts again after a stop, when Mixology's hand-off changes, after
-    kWatchMaxSeconds, or for a new report). When the loudest part it heard plays at the hook's level of
-    the song Auto-Master heard (the report's hook spans), it runs Auto-Master again on that part in the
-    background and offers the difference as edits (polisher::autoanalyze::planEdits). It never changes
+    kWatchMaxSeconds, or for a new report). When the loudest part it heard is over and lies almost wholly
+    inside the hook spans of the song Auto-Master heard (the report's hook spans), it runs Auto-Master again
+    on that part in the background and offers the difference as edits (polisher::autoanalyze::planEdits). It never changes
     anything by itself: applyAutoEdit / keepAutoEdit, one undo step each. */
 class AutoMasterController final : private juce::Timer
 {
@@ -58,12 +60,16 @@ public:
     // can carry another song's tone. Synthetic songs: a 15 s listen reads 0.1-2.7 dB from its own
     // song's tone in steady songs, other songs 3-19 dB (see toneDistanceDb).
     static constexpr double kSameSongToneDb = 3.0;
+    // Stream -14 aims the whole song at -14 only when the listen heard the whole song: it ended by itself (the song
+    // ended), without timeline jumps, after at least this much music (polisher::AutoMasterSettings::songGapLu).
+    static constexpr double kWholeSongSeconds = 60.0;
     // Auto Analyze
-    static constexpr double kWatchEnoughSeconds = 20.0;     // music heard before the first check
+    static constexpr double kWatchEnoughSeconds = polisher::autoanalyze::kEnoughSeconds;   // music heard before the first check
     static constexpr double kWatchRefreshSeconds = 15.0;    // then at most every 15 s (when the loudest part heard changed)
     static constexpr double kWatchMaxSeconds = 90.0;        // a stretch of playback longer than this starts again (the mix as it is now)
     static constexpr double kWatchStopMs = 4000.0;          // this long without music: the song stopped (the next play starts afresh; as Auto-Master's song end)
-    static constexpr double kHookOverlapSeconds = 6.0;      // the loudest 12 s heard must share this much with the song's hook spans
+    // Like with like (polisher::autoanalyze::loudestSettled / atHook): the loudest part heard is judged once it is
+    // over (kSettledSeconds of music after it) and lies at least kHookInsideSeconds of its 12 s inside the song's hook spans.
     enum State { idle = 0, listening = 1, analysing = 2 };
     enum Mode { fullMaster = 0, toneOnly = 1 };
 
@@ -106,12 +112,16 @@ public:
         Hip-Hop, Balanced)" or "Tone Steady: learn the song's tone". */
     std::function<void (const juce::String& label)> onApplyBegin;
     std::function<void()> onApplyEnd;
+    /** The song's style shared by the suite ("hiphop.lofi"; "" = none), message thread: Auto-Master masters to it
+        when it belongs to the chosen genre (polisher::AutoMasterSettings::styleKey). */
+    std::function<std::string()> songStyleKey;
 
     /** Sets every module from a finished analysis and stores its report (message thread). Called by the
         timer when an analysis ends; public for the plug-in tests. */
     void apply (const polisher::AutoMasterResult& result, const polisher::AutoMasterSettings& settings);
 
-    /** After the host loads a preset or project state. */
+    /** After the host loads a preset or project state (any thread): an Auto-Master run going on stops, so its result
+        doesn't overwrite the loaded state. */
     void onStateRestored (const juce::String& savedReport);
     /** Undo / redo / snapshot recall: the report that explains the settings now playing. */
     void restoreReport (const juce::String& json) { setReport (json); }
@@ -156,13 +166,15 @@ public:
     /** Applies one module's edit ("all": every edit) as one undo step. False when there is none. */
     bool applyAutoEdit (const juce::String& module);
     /** Keeps the settings as they are for that edit: Auto-Master's plan is moved to the new one without
-        changing a control, so the same advice doesn't come back. One undo step. */
+        changing a control, and both values are remembered (the report's "aaKeep"), so neither the same advice
+        nor its opposite comes back unless the mix really changed. One undo step. */
     bool keepAutoEdit (const juce::String& module);
 
 private:
     void timerCallback() override { tick(); }
     void updateTimer();
     polisher::AutoMasterSettings currentSettings() const;
+    std::string styleKeyFor (int genre) const;   // the song's style if Auto-Master masters it as this genre, else ""
     void autoTick (double nowMs);
     void startWatching (bool fresh);
     void stopWatching();
@@ -172,6 +184,7 @@ private:
     void recomputeEdits (bool fromCheck);
     bool reportSettingsMatch() const;
     polisher::autoanalyze::Values plannedValues() const;
+    polisher::autoanalyze::Kept keptValues() const;   // the report's "aaKeep": what KEEP MINE declined, per control
     float paramValue (const juce::String& id) const;
     bool changeReport (const juce::String& module, bool applyParams);
     /** The edits still apply: not while Auto-Master's plan is for other choices, or there is no plan. */
@@ -179,6 +192,9 @@ private:
     /** Sets a new state and waits until the audio thread is out of capture(), so the listener is ours. */
     void takeListener (State newState);
     void launchAnalysis();
+    void stopForLoadedState();                    // a state was loaded: stop listening / analysing and any check
+    /** Report lines for what Auto-Master sets back for its plan (Glue, Impact / Sustain, Bass First) where yours differ. */
+    std::vector<polisher::AutoMasterReason> resetReasons (const polisher::autoanalyze::Values& planned) const;
     void setParam (const juce::String& id, float value);
     void setReport (const juce::String& json);
 
@@ -190,6 +206,8 @@ private:
     std::atomic<double> sampleRate { 0.0 };
     std::atomic<int> stateFlag { idle }, mode { fullMaster };
     std::atomic<bool> captureBusy { false };
+    std::atomic<int> stateLoads { 0 };            // states loaded (onStateRestored, any thread)
+    int seenStateLoads = 0;                       // message thread: the loads tick() has dealt with
     bool hearingAudio = false, autoFinished = false;
     std::int64_t lastHeard = 0;                   // message thread: music heard at the last tick
     double lastMusicMs = 0.0;                     // when it last grew
