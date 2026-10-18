@@ -170,6 +170,7 @@ const M = {
   // Auto Analyze: on, why it waits ("" = checked), music heard in this stretch of playback, edits on offer.
   aaOn: false, aaPause: "off", aaHeard: 0, aaEdits: 0, aaVersion: 0,
   listen: 0, mono: false, phone: false, listenNow: 0, listenGain: 0, listenUnder: -100,
+  bassCut: 0, playing: true,   // playing: the host's transport (builds before it didn't send it)
 };
 // Listening aids (Listen / Solo, MONO, PHONE): monitoring only. The plug-in keeps them out of the saved
 // parameters, switches them off when this window closes and never puts them in an offline export.
@@ -3838,77 +3839,127 @@ function updateLiveReadouts() {
 
 // ---------------------------------------------------------------------------------------------
 // Meter events from the plug-in (30 per second).
-window.__JUCE__.backend.addEventListener("polisherMeters", (frame) => {
+// A frame made safe to use. JUCE sends a NaN or infinite number as null, and one odd field mustn't stop the
+// whole window: a number that isn't finite keeps its last value, a list keeps its length (a spectrum point that
+// isn't finite sits at the bottom), and the shared choices and Mixology's hand-off are checked field by field.
+const str = (v, d = "") => (typeof v === "string" ? v : d);
+const num = (v, d) => (Number.isFinite(v) ? v : d);
+function cleanFrame(f) {
+  const out = {};
+  if (!f || typeof f !== "object") return out;
+  for (const [k, v] of Object.entries(f)) {
+    const was = M[k];
+    if (typeof was === "number") { if (Number.isFinite(v)) out[k] = v; }
+    else if (typeof was === "boolean") out[k] = !!v;
+    else if (typeof was === "string") { if (typeof v === "string") out[k] = v; }
+    else if (Array.isArray(was) && typeof was[0] === "number") { if (Array.isArray(v)) out[k] = was.map((old, n) => num(v[n], old)); }
+  }
+  if (!(out.sr > 0)) delete out.sr;
+  if (Array.isArray(f.snaps)) out.snaps = f.snaps.map((x) => (x && typeof x === "object" ? { filled: !!x.filled, time: str(x.time), note: str(x.note) } : { filled: false, time: "", note: "" }));
+  for (const k of ["mix", "master"]) if (Array.isArray(f[k])) out[k] = f[k].map((v) => num(v, -120));
+  if (f.songStyle && typeof f.songStyle === "object")
+    out.songStyle = { key: str(f.songStyle.key), name: str(f.songStyle.name), from: num(f.songStyle.from, 0), version: num(f.songStyle.version, 0) };
+  if (f.daw && typeof f.daw === "object")
+    out.daw = { key: str(f.daw.key), picked: !!f.daw.picked, detected: str(f.daw.detected), from: num(f.daw.from, 0) };
+  if ("fromMixology" in f) {
+    const h = f.fromMixology;
+    out.fromMixology = h && typeof h === "object" ? {
+      style: str(h.style), genre: Number.isInteger(h.genre) && h.genre >= 0 && h.genre < GENRES.length ? h.genre : -1,
+      peak: num(h.peak, -100), lufs: num(h.lufs, -100), analysed: !!h.analysed, mono: !!h.mono, limited: !!h.limited,
+      tone: [0, 1, 2, 3].map((n) => num(Array.isArray(h.tone) ? h.tone[n] : 0, 0)),
+    } : null;
+  }
+  return out;
+}
+// Each part of the handler on its own: one that throws is reported once (see reportOnce) and the rest carry on.
+function part(name, fn) { try { fn(); } catch (e) { reportOnce(name, e); } }
+window.__JUCE__.backend.addEventListener("polisherMeters", (raw) => {
+  const frame = cleanFrame(raw);
   const srChanged = frame.sr && frame.sr !== M.sr;
   const wasAm = M.amState, wasTarget = M.tsTarget, wasFail = M.tsLearnFail, wasFar = M.tsFar, wasMixology = mixologyKey();
   const wasAa = M.aaOn, wasAaHeard = M.aaHeard;
   Object.assign(M, frame);
-  if (mixologyKey() !== wasMixology && learnView === "module") refreshLearn();   // Mixology came, went, or changed
-  // The DAW: found from the host, or picked in any of the three. Learn says it again in that DAW's words.
-  if (frame.daw && (frame.daw.key !== DAW.key || !!frame.daw.picked !== DAW.picked || frame.daw.detected !== DAW.detected)) {
-    Object.assign(DAW, { key: frame.daw.key || "other", picked: !!frame.daw.picked, detected: frame.daw.detected || "other", from: frame.daw.from || 0 });
-    fillDawSelect();
-    refreshLearn();
-  }
-  // The song's style: this project's, or one just picked in Mixology or Voxology.
-  if (frame.songStyle && frame.songStyle.version !== SONG.version) {
-    const first = SONG.version === -1, ss = frame.songStyle;
-    SONG.version = ss.version;
-    if (ss.key !== SONG.key) {
-      SONG.key = ss.key;
-      SONG.name = ss.name;
-      refreshAmChoices();
-      if (!first && ss.key && ss.from !== 3)
-        toast(`Style: ${ss.name}, picked in ${ss.from === 2 ? "Mixology" : "Voxology"}. Auto-Master masters it as ${GENRES[amGenreFor(ss.key)]}.`);
+  part("suite", () => {
+    if (mixologyKey() !== wasMixology && learnView === "module") refreshLearn();   // Mixology came, went, or changed
+    // The DAW: found from the host, or picked in any of the three. Learn says it again in that DAW's words.
+    if (frame.daw && (frame.daw.key !== DAW.key || !!frame.daw.picked !== DAW.picked || frame.daw.detected !== DAW.detected)) {
+      Object.assign(DAW, { key: frame.daw.key || "other", picked: !!frame.daw.picked, detected: frame.daw.detected || "other", from: frame.daw.from || 0 });
+      fillDawSelect();
+      refreshLearn();
     }
-  }
-  if (M.amState === 2 && wasAm !== 2) amThinkSince = performance.now();   // the analysis started: time it
-  else if (M.amState !== 2) amThinkSince = 0;
-  watchListening(wasAm, wasTarget, wasFail, wasFar);
-  if (srChanged) { drawEq(); fetchGenreCurve(); }
-  refreshHistory();
-  refreshSnapshots();
-  if (M.aaVersion !== aaSeenVersion || (!!frame.aaOn) !== (!!wasAa)) {
-    aaSeenVersion = M.aaVersion;
-    fetchAutoAnalyze();
-  } else if (learnOn && learnView === "auto" && M.aaPause !== "" && Math.floor(M.aaHeard || 0) !== Math.floor(wasAaHeard || 0)) refreshLearn();   // the heard count moves on
-  if (M.amReport !== amSeenVersion) {
-    const first = amSeenVersion === -1;
-    amSeenVersion = M.amReport;
-    fetchReport(!first);
-  }
-  if (wasAm !== M.amState || M.amState === 1 || M.amState === 2) updateAmButton();
-  if (M.refVersion !== refSeenVersion) { refSeenVersion = M.refVersion; fetchReference(); }
-  else if (M.refState === 1) refreshRefPill();
-  if (P.levelMatch.getValue()) refreshMatch();
-  // Listening aids: the plug-in's state wins (it switches them off itself, e.g. for a new window), except
-  // for a moment after a click here, while the click is on its way.
-  if (frame.listen !== undefined && performance.now() - MON.sentAt > 500
-      && (frame.listen !== MON.listen || !!frame.mono !== MON.mono || !!frame.phone !== MON.phone)) {
-    MON.listen = frame.listen; MON.mono = !!frame.mono; MON.phone = !!frame.phone;
-    refreshMonitor();
-  } else if (MON.listen) $("monitor-level").textContent = monitorLevelText();
-  watchLouderPart();
-  if (M.momentary > -70 || M.peakL > -80) lastAudioTime = performance.now();
-  grWindow.push(M.gr);
-  if (grWindow.length > 90) grWindow.shift();
-  clipWindow.push(M.clip);
-  if (clipWindow.length > 90) clipWindow.shift();
-  tameWindow.push(M.tame || 0);
-  if (tameWindow.length > 90) tameWindow.shift();
-  punchWindow.push(M.punch || 0);
-  if (punchWindow.length > 90) punchWindow.shift();
-  updateMeters();
-  updateOutputMeter();
-  updateLiveReadouts();
-  histFrame(performance.now());
-  if (histView) { drawHistory(); if (learnOn && learnView === "history") scheduleHistLearn(); }
-  $("sp-mix").setAttribute("d", spectrumPath(M.mix));
-  drawRefCurve();
-  drawGenreCurve();
-  const master = spectrumPath(M.master);
-  $("sp-master").setAttribute("d", master);
-  $("sp-master-glow").setAttribute("d", master);
+    // The song's style: this project's, or one just picked in Mixology or Voxology.
+    if (frame.songStyle && frame.songStyle.version !== SONG.version) {
+      const first = SONG.version === -1, ss = frame.songStyle;
+      SONG.version = ss.version;
+      if (ss.key !== SONG.key) {
+        SONG.key = ss.key;
+        SONG.name = ss.name;
+        refreshAmChoices();
+        if (!first && ss.key && ss.from !== 3)
+          toast(`Style: ${ss.name}, picked in ${ss.from === 2 ? "Mixology" : "Voxology"}. Auto-Master masters it as ${GENRES[amGenreFor(ss.key)]}.`);
+      }
+    }
+  });
+  part("auto-master", () => {
+    if (M.amState === 2 && wasAm !== 2) amThinkSince = performance.now();   // the analysis started: time it
+    else if (M.amState !== 2) amThinkSince = 0;
+    watchListening(wasAm, wasTarget, wasFail, wasFar);
+    if (srChanged) { drawEq(); fetchGenreCurve(); }
+  });
+  part("undo and snapshots", () => { refreshHistory(); refreshSnapshots(); });
+  part("auto analyze", () => {
+    if (M.aaVersion !== aaSeenVersion || (!!frame.aaOn) !== (!!wasAa)) {
+      aaSeenVersion = M.aaVersion;
+      fetchAutoAnalyze();
+    } else if (learnOn && learnView === "auto" && M.aaPause !== "" && Math.floor(M.aaHeard || 0) !== Math.floor(wasAaHeard || 0)) refreshLearn();   // the heard count moves on
+  });
+  part("report and reference", () => {
+    if (M.amReport !== amSeenVersion) {
+      const first = amSeenVersion === -1;
+      amSeenVersion = M.amReport;
+      fetchReport(!first);
+    }
+    if (wasAm !== M.amState || M.amState === 1 || M.amState === 2) updateAmButton();
+    if (M.refVersion !== refSeenVersion) { refSeenVersion = M.refVersion; fetchReference(); }
+    else if (M.refState === 1) refreshRefPill();
+    if (P.levelMatch.getValue()) refreshMatch();
+  });
+  part("listening aids", () => {
+    // Listening aids: the plug-in's state wins (it switches them off itself, e.g. for a new window), except
+    // for a moment after a click here, while the click is on its way.
+    if (frame.listen !== undefined && performance.now() - MON.sentAt > 500
+        && (frame.listen !== MON.listen || !!frame.mono !== MON.mono || !!frame.phone !== MON.phone)) {
+      MON.listen = frame.listen; MON.mono = !!frame.mono; MON.phone = !!frame.phone;
+      refreshMonitor();
+    } else if (MON.listen) $("monitor-level").textContent = monitorLevelText();
+    watchLouderPart();
+  });
+  part("meters", () => {
+    if (M.momentary > -70 || M.peakL > -80) lastAudioTime = performance.now();
+    grWindow.push(M.gr);
+    if (grWindow.length > 90) grWindow.shift();
+    clipWindow.push(M.clip);
+    if (clipWindow.length > 90) clipWindow.shift();
+    tameWindow.push(M.tame || 0);
+    if (tameWindow.length > 90) tameWindow.shift();
+    punchWindow.push(M.punch || 0);
+    if (punchWindow.length > 90) punchWindow.shift();
+    updateMeters();
+    updateOutputMeter();
+  });
+  part("readouts", updateLiveReadouts);
+  part("history", () => {
+    histFrame(performance.now());
+    if (histView) { drawHistory(); if (learnOn && learnView === "history") scheduleHistLearn(); }
+  });
+  part("spectrum", () => {
+    $("sp-mix").setAttribute("d", spectrumPath(M.mix));
+    drawRefCurve();
+    drawGenreCurve();
+    const master = spectrumPath(M.master);
+    $("sp-master").setAttribute("d", master);
+    $("sp-master-glow").setAttribute("d", master);
+  });
 });
 // Every module page has live numbers: once a second Learn checks them (nothing changes on screen unless one did).
 setInterval(() => { if (learnOn && learnView === "module") refreshLearn(); }, 1000);

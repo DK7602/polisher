@@ -116,8 +116,11 @@
   // Echoes: JUCE sends every slider value the page sets back to it. setEcho(ms) delays them (a busy message
   // thread sends them late, after newer ones went out); a negative ms switches them off.
   const echo = { ms: 15 };
+  // setFrame(fields): every meter frame carries these from now on, e.g. { range: null } (JUCE sends a NaN or an
+  // infinite number as null); setFrame(null) goes back to normal frames.
+  let framePatch = null;
   window.__polisherMock = { setPlaying: (on) => { transport.playing = !!on; }, setMixology: (h) => { fromMixology = h; },
-                            aaCheck: () => aaCheck(), setEcho: (ms) => { echo.ms = ms; } };
+                            aaCheck: () => aaCheck(), setEcho: (ms) => { echo.ms = ms; }, setFrame: (f) => { framePatch = f; } };
   // Simulated Auto Analyze: once on (after an Auto-Master run) it "hears" 3 s of song per 0.1 s while playing,
   // checks after 20 s (0.6 s of thinking) and offers two edits: the mix arrived 1.8 dB louder with more low end.
   // aaCheck() (the smoke test) skips straight to the advice.
@@ -543,6 +546,7 @@
       listenGain: mon.listen && !bypass ? monGain[mon.listen] : 0, listenUnder: mon.listen && !bypass ? monUnder[mon.listen] : -100,
       mix, master, songStyle: song, daw,
     };
+    if (framePatch) Object.assign(frame, framePatch);
     window.__JUCE__.backend && window.__JUCE__.backend.emitByBackend("polisherMeters", JSON.stringify(frame));
   }, 1000 / 30);
 })();
