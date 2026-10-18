@@ -1712,10 +1712,11 @@ TEST_CASE ("Auto Analyze: hears the hook again, offers what changed in the mix, 
     p->autoMaster.tick();
     CHECK (p->autoMaster.getAutoAnalyzeStatus() == "stopped");
 
-    // Only the verse: not the part the master was set from, so nothing is judged.
+    // Only the verse (its loudest 12 s over well before the playhead): not the part the master was set from,
+    // so nothing is judged.
     head.seconds = 5.0;
-    play (*p, head, testsig::musicLike (sr, 20.0, -20.0, 1));
-    play (*p, head, testsig::musicLike (sr, 2.0, -20.0, 1));
+    play (*p, head, testsig::musicLike (sr, 14.0, -19.0, 1));
+    play (*p, head, testsig::musicLike (sr, 8.0, -21.0, 4));
     REQUIRE (waitForCheck (*p));
     CHECK (p->autoMaster.getAutoAnalyzeStatus() == "hook");
     play (*p, head, testsig::silence (sr, 2, 4.5));   // stop: the next play starts afresh

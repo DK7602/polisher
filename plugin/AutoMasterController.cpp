@@ -683,7 +683,9 @@ void AutoMasterController::autoTick (double nowMs)
     }
     if (checkRunning)                                 { pause ("checking"); return; }
     if (heard == 0)                                   { pause ("stopped"); return; }
-    if (listener.heardSeconds() < kWatchEnoughSeconds || ! listener.hasWindow()) { pause ("listening"); return; }
+    // Only a loudest part that is over: one still growing at the playhead may be the end of a verse with the
+    // start of the hook (a quieter mix than the hook Auto-Master heard, though nothing changed).
+    if (! polisher::autoanalyze::loudestSettled (listener)) { pause ("listening"); return; }
 
     // Judge the loudest part heard once, and again only when another part becomes the loudest (and not
     // more often than every kWatchRefreshSeconds of music).
@@ -707,9 +709,7 @@ void AutoMasterController::autoTick (double nowMs)
                 hook.push_back ({ static_cast<double> (sp[0]), static_cast<double> (sp[1]) });
     if (hook.empty() && static_cast<bool> (listen["fromHost"]) && static_cast<int> (listen["loudPieces"]) <= 1)
         hook.push_back ({ static_cast<double> (listen["loudStart"]), static_cast<double> (listen["loudEnd"]) });
-    const bool atHook = hook.empty() || ! st.positionFromHost
-                     || polisher::autoanalyze::overlapSeconds (st.loudestSpans, hook) >= kHookOverlapSeconds;
-    if (! atHook)
+    if (! polisher::autoanalyze::atHook (st, hook))
     {
         startWatching (false);
         pause ("hook");

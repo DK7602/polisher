@@ -350,6 +350,14 @@ double SongListener::loudestEndSeconds() const noexcept
     return t0 >= 0.0 && t1 >= 0.0 ? t1 + kHopSeconds : -1.0;
 }
 
+double SongListener::secondsAfterLoudest() const noexcept
+{
+    const int b = bestStart.load (std::memory_order_acquire);
+    if (b < 0)
+        return -1.0;
+    return std::max (0, hopsDone.load (std::memory_order_acquire) - (b + windowHops)) * kHopSeconds;
+}
+
 bool SongListener::loudestFromHost() const noexcept
 {
     const int b = bestStart.load (std::memory_order_acquire);

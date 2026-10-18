@@ -61,4 +61,26 @@ namespace polisher::autoanalyze
 
     /** Seconds two sets of timeline spans share. */
     double overlapSeconds (const std::vector<TimeSpan>& a, const std::vector<TimeSpan>& b);
+
+    // ---- When to judge: like with like ------------------------------------------------------------------
+    // Auto-Master set the master from the song's loudest 12 s (the hook or drop). A check on a part that is
+    // partly verse hears a quieter mix and asks for more Drive although nothing changed, so a check judges
+    // only a loudest part that is over (not still growing at the playhead into the hook) and lies almost
+    // wholly inside the report's hook spans.
+    inline constexpr double kEnoughSeconds = 20.0;       // music heard on this playback before the first check
+    inline constexpr double kSettledSeconds = 3.0;       // the loudest part heard ended at least this much music ago
+    inline constexpr double kHookInsideSeconds = 11.0;   // of the 12 s judged, at least this much inside the hook spans
+
+    /** Seconds of `part` that lie inside `hook`: each of part's spans counts on its own (a cycle loop over the
+        hook heard twice is all hook), hook's spans merged. */
+    double insideSeconds (const std::vector<TimeSpan>& part, const std::vector<TimeSpan>& hook);
+
+    /** The loudest part a listener heard is ready to be judged: a whole window of it, at least kEnoughSeconds
+        of music heard, and the part ended at least kSettledSeconds of music ago. Safe while it listens. */
+    bool loudestSettled (const SongListener& listener) noexcept;
+
+    /** A part heard (heard.loudestSpans) plays where the report's hook does: at least kHookInsideSeconds of it
+        inside the hook spans. True when there's nothing to compare with (no hook spans, or no timeline
+        positions while it listened). */
+    bool atHook (const SongStats& heard, const std::vector<TimeSpan>& hook);
 }

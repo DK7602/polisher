@@ -49,6 +49,80 @@ void listen (SongListener& l, const AudioClip& clip, double startSeconds)
     }
 }
 
+AudioClip slice (const AudioClip& c, double t0, double t1)
+{
+    AudioClip o;
+    o.sampleRate = c.sampleRate;
+    const auto a = static_cast<size_t> (std::lround (t0 * c.sampleRate));
+    const auto b = std::min (static_cast<size_t> (std::lround (t1 * c.sampleRate)), c.channels[0].size());
+    for (const auto& ch : c.channels) o.channels.emplace_back (ch.begin() + static_cast<std::ptrdiff_t> (a), ch.begin() + static_cast<std::ptrdiff_t> (b));
+    return o;
+}
+
+/** A song with a quieter verse: intro (8 s, -8 dB), verse up to chorusStart (verseDb), chorus (16 s), verse
+    (16 s, verseDb), chorus (16 s), outro (8 s, -8 dB). The chorus and verse are the same trap-like beat. */
+AudioClip verseChorusSong (double sr, double verseDb, double chorusStart)
+{
+    const auto beat = testsig::trapLike (sr, 16.0, 11), beat2 = testsig::trapLike (sr, 16.0, 12);
+    AudioClip song;
+    append (song, withGain (slice (beat, 0.0, 8.0), -8.0));
+    append (song, withGain (slice (beat2, 0.0, chorusStart - 8.0), verseDb));
+    append (song, beat);
+    append (song, withGain (beat2, verseDb));
+    append (song, beat);
+    append (song, withGain (slice (beat, 0.0, 8.0), -8.0));
+    return song;
+}
+
+/** Plays [from, to) of a song into a fresh listener in 512-sample blocks at their timeline positions and judges
+    it as the plug-in's Auto Analyze does (AutoMasterController::autoTick, ticking every 0.2 s): the loudest part
+    once it is settled and at the hook, again only when another part becomes the loudest, at most every 15 s of
+    music. Each check runs Auto-Master on that part and collects the edits planEdits offers against the plan. */
+struct Playback
+{
+    int checks = 0, hookPauses = 0;
+    std::vector<std::string> offered;   // "module control from -> to"
+};
+
+Playback playAndJudge (const AudioClip& song, double from, double to, const std::vector<TimeSpan>& hook,
+                       const AutoMasterSettings& settings, const Values& planned)
+{
+    Playback out;
+    const double sr = song.sampleRate;
+    SongListener w;
+    w.prepare (sr, 12.0, 900.0);
+    double checkedStart = -1.0, checkedLufs = -100.0, checkedAt = 0.0;
+    auto i = static_cast<long> (std::lround (from * sr));
+    const auto end = std::min (static_cast<long> (std::lround (to * sr)), static_cast<long> (song.numSamples()));
+    for (double tick = from + 0.2; i + 512 <= end; tick += 0.2)
+    {
+        for (; i + 512 <= end && i < std::lround (tick * sr); i += 512)
+            w.process (song.channels[0].data() + i, song.channels[1].data() + i, 512, static_cast<double> (i) / sr);
+        if (! loudestSettled (w))
+            continue;
+        const double ls = w.loudestStartSeconds(), ll = w.loudestLufs();
+        const bool same = std::abs (ls - checkedStart) < 0.05 && std::abs (ll - checkedLufs) < 0.3;
+        if (same || (checkedStart >= 0.0 && w.heardSeconds() - checkedAt < 15.0))
+            continue;
+        checkedStart = ls;
+        checkedLufs = ll;
+        checkedAt = w.heardSeconds();
+        if (! atHook (w.stats(), hook))
+        {
+            ++out.hookPauses;
+            continue;
+        }
+        ++out.checks;
+        const auto r = autoMaster (w.loudestWindow(), settings);
+        for (const auto& e : planEdits (planned, chainValues (r.chain), planned))
+            for (const auto& c : e.changes)
+                if (c.shown)
+                    out.offered.push_back (e.module + " " + c.id + " " + std::to_string (c.from) + " -> " + std::to_string (c.to)
+                                           + " (window " + std::to_string (ls) + " s, at " + std::to_string (tick) + " s)");
+    }
+    return out;
+}
+
 } // namespace
 
 TEST_CASE ("Auto Analyze: what each control belongs to, and what it never moves", "[autoanalyze]")
@@ -231,9 +305,9 @@ TEST_CASE ("Song listener marks the parts that play at the hook's level, repeats
     const auto st = l.stats();
     REQUIRE (st.positionFromHost);
     REQUIRE (st.hookSpans.size() == 2);
-    // Both choruses .
+    // Both choruses.
     // (timeline = song + 5 s: the choruses play at 0:35-0:55 and 1:25-1:45; a window reaching a few seconds
-    // into the verse next to a chorus is still within 1 LU of it)
+    // into the verse next to a chorus is still within 0.5 LU of it)
     CHECK (st.hookSpans[0].start >= 31.0);
     CHECK (st.hookSpans[0].start <= 35.5);
     CHECK (st.hookSpans[0].end >= 54.5);
@@ -326,4 +400,91 @@ TEST_CASE ("Auto Analyze offers nothing for the same mix and follows a mix that 
     const auto* g6 = change (find (toneEdits, "eq"), "eqGain6");
     REQUIRE (g6 != nullptr);
     CHECK (g6->to < g6->from - 0.7);
+}
+
+TEST_CASE ("Auto Analyze judges like with like: whole parts, inside the hook", "[autoanalyze]")
+{
+    // A part's spans count one by one: a cycle loop over the hook is all hook.
+    CHECK_THAT (insideSeconds ({ { 10.0, 22.0 } }, { { 11.0, 40.0 } }), WithinAbs (11.0, 1.0e-9));
+    CHECK_THAT (insideSeconds ({ { 30.0, 36.0 }, { 30.0, 36.0 } }, { { 25.0, 40.0 } }), WithinAbs (12.0, 1.0e-9));
+    CHECK_THAT (insideSeconds ({ { 10.0, 22.0 } }, { { 0.0, 12.0 }, { 11.0, 15.0 } }), WithinAbs (5.0, 1.0e-9));
+
+    SongStats heard;
+    heard.positionFromHost = true;
+    heard.loudestSeconds = 12.0;
+    heard.loudestSpans = { { 20.0, 32.0 } };
+    CHECK (atHook (heard, { { 19.5, 40.0 } }));
+    CHECK (atHook (heard, { { 21.0, 40.0 } }));          // 11 s inside
+    CHECK_FALSE (atHook (heard, { { 22.0, 40.0 } }));    // 10 s inside: two seconds of something else
+    CHECK (atHook (heard, {}));                          // nothing to compare with
+    heard.positionFromHost = false;
+    CHECK (atHook (heard, { { 22.0, 40.0 } }));
+
+    // Settled: a loudest part still growing at the playhead isn't judged yet.
+    const double sr = 44100.0;
+    const auto song = verseChorusSong (sr, -2.0, 16.0);
+    SongListener l;
+    l.prepare (sr, 12.0, 900.0);
+    auto play = [&] (double t0, double t1)
+    {
+        for (auto i = std::lround (t0 * sr); i + 512 <= std::lround (t1 * sr); i += 512)
+            l.process (song.channels[0].data() + i, song.channels[1].data() + i, 512, static_cast<double> (i) / sr);
+    };
+    play (0.0, 25.0);   // the chorus started at 16 s: the loudest 12 s so far end at the playhead
+    CHECK (l.heardSeconds() >= kEnoughSeconds);
+    CHECK (l.secondsAfterLoudest() < kSettledSeconds);
+    CHECK_FALSE (loudestSettled (l));
+    play (25.0, 36.5);  // the chorus ended at 32 s
+    CHECK (l.secondsAfterLoudest() >= kSettledSeconds);
+    CHECK (loudestSettled (l));
+}
+
+TEST_CASE ("Auto Analyze offers nothing on an unchanged song with a quieter verse, wherever playback starts", "[autoanalyze][automaster]")
+{
+    // The audit's songs: the verse 1, 2 or 3 dB under the chorus. Before, a check judged a window that was mostly
+    // verse and offered 1-2 dB more Drive on a mix that hadn't changed.
+    const double sr = 44100.0;
+    for (auto [verseDb, chorusStart] : { std::pair { -1.0, 24.0 }, std::pair { -2.0, 16.0 }, std::pair { -3.0, 16.0 } })
+    {
+        const auto song = verseChorusSong (sr, verseDb, chorusStart);
+        const double len = song.numSamples() / sr;
+        // Auto-Master hears the whole song (the plug-in's way: 512-sample blocks at their timeline positions).
+        SongListener l;
+        l.prepare (sr, 12.0, 900.0);
+        for (long i = 0; i + 512 <= static_cast<long> (song.numSamples()); i += 512)
+            l.process (song.channels[0].data() + i, song.channels[1].data() + i, 512, static_cast<double> (i) / sr);
+        const auto st = l.stats();
+        AutoMasterSettings s;
+        s.target = LoudnessTarget::loud;
+        s.songTone = l.toneTarget();
+        s.songSeconds = st.heardSeconds;
+        const auto first = autoMaster (l.loudestWindow(), s);
+        REQUIRE (first.ok);
+        REQUIRE_FALSE (st.hookSpans.empty());
+        auto planned = chainValues (first.chain);
+        planned.erase ("ulSquashSet");
+        // A check: the stored tone, and only the 12 s it heard.
+        AutoMasterSettings check = s;
+        check.songSeconds = 0.0;
+
+        int checks = 0;
+        // The whole song, the audit's stretch that stopped in the chorus (0:06-0:36), and 30 s stretches starting at
+        // ordinary moments before the first chorus and before the second.
+        std::vector<std::pair<double, double>> stretches { { 0.0, len }, { 6.0, 36.0 } };
+        for (double at : { -10.0, -5.963, -3.717, 26.071, 28.467 })
+            stretches.push_back ({ chorusStart + at, std::min (len, chorusStart + at + 30.0) });
+        for (auto [a, b] : stretches)
+        {
+            const auto p = playAndJudge (song, a, b, st.hookSpans, check, planned);
+            checks += p.checks;
+            std::vector<std::string> level;   // what the window's level drives (Clip Level's own noise aside)
+            for (const auto& o : p.offered)
+                if (o.rfind ("clip clipLevel", 0) != 0)
+                    level.push_back (o);
+            for (const auto& o : level)
+                UNSCOPED_INFO ("verse " << verseDb << " dB, playback " << a << "-" << b << " s: " << o);
+            CHECK (level.empty());
+        }
+        CHECK (checks >= 4);   // it does judge the choruses
+    }
 }

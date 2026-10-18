@@ -245,10 +245,9 @@ namespace polisher::autoanalyze
         return true;
     }
 
-    double overlapSeconds (const std::vector<TimeSpan>& a, const std::vector<TimeSpan>& b)
+    namespace
     {
-        // Each side merged first: a stretch heard twice (a cycle loop) counts once.
-        auto merged = [] (std::vector<TimeSpan> v)
+        std::vector<TimeSpan> merged (std::vector<TimeSpan> v)
         {
             std::sort (v.begin(), v.end(), [] (const TimeSpan& x, const TimeSpan& y) { return x.start < y.start; });
             std::vector<TimeSpan> out;
@@ -256,11 +255,38 @@ namespace polisher::autoanalyze
                 if (! out.empty() && s.start <= out.back().end) out.back().end = std::max (out.back().end, s.end);
                 else out.push_back (s);
             return out;
-        };
+        }
+    }
+
+    double overlapSeconds (const std::vector<TimeSpan>& a, const std::vector<TimeSpan>& b)
+    {
+        // Each side merged first: a stretch heard twice (a cycle loop) counts once.
         double total = 0.0;
         for (const auto& x : merged (a))
             for (const auto& y : merged (b))
                 total += std::max (0.0, std::min (x.end, y.end) - std::max (x.start, y.start));
         return total;
+    }
+
+    double insideSeconds (const std::vector<TimeSpan>& part, const std::vector<TimeSpan>& hook)
+    {
+        const auto h = merged (hook);
+        double total = 0.0;
+        for (const auto& x : part)
+            for (const auto& y : h)
+                total += std::max (0.0, std::min (x.end, y.end) - std::max (x.start, y.start));
+        return total;
+    }
+
+    bool loudestSettled (const SongListener& l) noexcept
+    {
+        return l.isPrepared() && l.hasWindow() && l.heardSeconds() >= kEnoughSeconds && l.secondsAfterLoudest() >= kSettledSeconds - 1.0e-9;
+    }
+
+    bool atHook (const SongStats& heard, const std::vector<TimeSpan>& hook)
+    {
+        if (hook.empty() || ! heard.positionFromHost || heard.loudestSpans.empty())
+            return true;
+        return insideSeconds (heard.loudestSpans, hook) >= std::min (kHookInsideSeconds, heard.loudestSeconds - 1.0) - 1.0e-6;
     }
 }

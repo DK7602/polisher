@@ -41,9 +41,9 @@
     Auto Analyze (setAutoAnalyze): after a successful Auto-Master, while the window is open and the
     controller has nothing else to do, the same listener hears the mix as it arrives (one stretch of
     playback at a time: it starts again after a stop, when Mixology's hand-off changes, after
-    kWatchMaxSeconds, or for a new report). When the loudest part it heard plays at the hook's level of
-    the song Auto-Master heard (the report's hook spans), it runs Auto-Master again on that part in the
-    background and offers the difference as edits (polisher::autoanalyze::planEdits). It never changes
+    kWatchMaxSeconds, or for a new report). When the loudest part it heard is over and lies almost wholly
+    inside the hook spans of the song Auto-Master heard (the report's hook spans), it runs Auto-Master again
+    on that part in the background and offers the difference as edits (polisher::autoanalyze::planEdits). It never changes
     anything by itself: applyAutoEdit / keepAutoEdit, one undo step each. */
 class AutoMasterController final : private juce::Timer
 {
@@ -59,11 +59,12 @@ public:
     // song's tone in steady songs, other songs 3-19 dB (see toneDistanceDb).
     static constexpr double kSameSongToneDb = 3.0;
     // Auto Analyze
-    static constexpr double kWatchEnoughSeconds = 20.0;     // music heard before the first check
+    static constexpr double kWatchEnoughSeconds = polisher::autoanalyze::kEnoughSeconds;   // music heard before the first check
     static constexpr double kWatchRefreshSeconds = 15.0;    // then at most every 15 s (when the loudest part heard changed)
     static constexpr double kWatchMaxSeconds = 90.0;        // a stretch of playback longer than this starts again (the mix as it is now)
     static constexpr double kWatchStopMs = 4000.0;          // this long without music: the song stopped (the next play starts afresh; as Auto-Master's song end)
-    static constexpr double kHookOverlapSeconds = 6.0;      // the loudest 12 s heard must share this much with the song's hook spans
+    // Like with like (polisher::autoanalyze::loudestSettled / atHook): the loudest part heard is judged once it is
+    // over (kSettledSeconds of music after it) and lies at least kHookInsideSeconds of its 12 s inside the song's hook spans.
     enum State { idle = 0, listening = 1, analysing = 2 };
     enum Mode { fullMaster = 0, toneOnly = 1 };
 
