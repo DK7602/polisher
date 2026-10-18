@@ -42,6 +42,10 @@ public:
     // AudioProcessor
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
+    /** The host stopped or moved the playhead (AU Reset, VST3 setProcessing (false)): the audio still in the
+        look-ahead buffers and the modules' envelopes belong to where it was. Cleared at the start of the next
+        block, on the audio thread (no allocation, no lock), so playback starts as cleanly as an export. */
+    void reset() override { hostResetRequested.store (true); }
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
 
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
@@ -266,6 +270,7 @@ private:
     polisher::LoudnessMeter outputMeter;
     polisher::LoudnessMeter inputMeter;   // the incoming mix, so Learn can say how much louder the master is
     std::atomic<bool> meterResetRequested { false }, statsResetRequested { false };
+    std::atomic<bool> hostResetRequested { false };   // see reset()
 
     std::atomic<float>* driveParam = nullptr;
     std::atomic<float>* trimParam = nullptr;

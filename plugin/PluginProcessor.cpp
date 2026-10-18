@@ -405,6 +405,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     monitorOut.prepare (sampleRate);
     stemEq.setTamerDelta (false);
     dynamics.setMonitorBand (-1, false);
+    hostResetRequested.store (false);   // everything above starts clean already
 }
 
 namespace
@@ -665,6 +666,20 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     // half of it one side's settings and half the other's.
     const bool bypassed = bypassParam->load() > 0.5f;
     updateLimiterParams (bypassed);
+
+    // The host's reset (see reset()): every module starts afresh in the settings just handed over, the
+    // gains are where they are set, and the meters' L/R correlation starts over. MATCH's learned level,
+    // the loudness meters and Auto-Master's listen are kept.
+    if (hostResetRequested.exchange (false))
+    {
+        resetChain();
+        trimGlide.jumpTo (targetTrimGain (bypassed));
+        driveGlide.jumpTo (targetDriveGain (bypassed));
+        matchGlide.jumpTo (matchGlide.getTarget());
+        matchSideA = matchPendingA = bypassed;
+        matchSwitchIn = -1;
+        corrLR = corrLL = corrRR = 0.0;
+    }
 
     const int numChannels = buffer.getNumChannels();
     const int numSamples = buffer.getNumSamples();

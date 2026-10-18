@@ -637,6 +637,35 @@ TEST_CASE ("Plug-in: the L/R correlation meter reads the master the host gets", 
     CHECK (std::abs (p->meters.correlation.load() - expect) < 1.0e-3);
 }
 
+TEST_CASE ("Plug-in: the host's reset clears the look-ahead audio, so playback starts as cleanly as an export", "[plugin]")
+{
+    // Hosts call reset() on stop and locate (AU Reset, VST3 setProcessing (false)). The ~45 ms still in
+    // the look-ahead buffers (and the envelopes) belonged to where the playhead was: they played at the new
+    // place. Now it starts like a fresh instance, and none of it allocates or waits.
+    const double sr = 48000.0;
+    const auto before = testsig::musicLike (sr, 2.0, -6.0, 3), after = testsig::musicLike (sr, 3.0, -6.0, 8);
+    auto p = makeProcessor (sr, 512, true);
+    renderFixed (*p, before, 512);
+    p->reset();
+    juce::AudioBuffer<float> buf (2, 512);
+    juce::MidiBuffer midi;
+    buf.clear();
+    allocations = 0;
+    countAllocations = true;
+    p->processBlock (buf, midi);   // silence in: silence out, at once (nothing left from before)
+    countAllocations = false;
+    CHECK (allocations.load() == 0);
+    CHECK (buf.getMagnitude (0, 512) == 0.0f);
+    CHECK (buf.getMagnitude (1, 512) == 0.0f);
+
+    auto q = makeProcessor (sr, 512, true);
+    p->reset();
+    const auto resumed = renderFixed (*p, after, 512);
+    const auto fresh = renderFixed (*q, after, 512);
+    INFO ("after reset() against a fresh instance: largest difference " << maxAbsDiff (resumed, fresh));
+    CHECK (maxAbsDiff (resumed, fresh) < 1.0e-5);
+}
+
 TEST_CASE ("Plug-in: double-precision hosts get the same master as single precision", "[plugin]")
 {
     const double sr = 48000.0;
