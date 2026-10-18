@@ -2342,7 +2342,7 @@ function addMixologyLearn(body) {
   const otherGenre = h.genre >= 0 && h.genre !== g;
   const frag = document.createDocumentFragment();
   const peak = h.peak > -99 ? `peaks at ${fmtNum(h.peak)} dBTP` : "no peaks yet";
-  const room = h.peak <= -99 ? "" : h.peak > -1 ? ": that's fine here, Masterology handles it (turn it down only to export the unmastered mix)" : h.peak <= -3 ? ": good room for mastering" : "";
+  const room = h.peak <= -99 ? "" : h.peak > -1 ? ": little room left. Masterology copes (Auto-Master turns it down with Input Trim), but peaks under −3 dBTP in Mixology leave the master more room" : h.peak <= -3 ? ": good room for mastering" : "";
   const level = h.lufs > -99 ? `${fmtNum(h.lufs)} LUFS with ` : "";
   let text = `Mixology mixed this song as ${h.style || "your style"}. Your mix comes in at ${level}${peak}${room}.`;
   // Its numbers are about another signal (a Mixology that isn't right before Masterology): say so instead.
@@ -4036,6 +4036,7 @@ function cleanFrame(f) {
     out.fromMixology = h && typeof h === "object" ? {
       style: str(h.style), genre: Number.isInteger(h.genre) && h.genre >= 0 && h.genre < GENRES.length ? h.genre : -1,
       peak: num(h.peak, -100), lufs: num(h.lufs, -100), analysed: !!h.analysed, mono: !!h.mono, limited: !!h.limited,
+      notThisMix: [1, 2].includes(h.notThisMix) ? h.notThisMix : 0,   // 1: another signal's numbers, 2: Mixology hears nothing
       tone: [0, 1, 2, 3].map((n) => num(Array.isArray(h.tone) ? h.tone[n] : 0, 0)),
     } : null;
   }
