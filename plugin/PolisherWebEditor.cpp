@@ -30,7 +30,13 @@ namespace
         return *rp;
     }
 
-    float roundTo (float v, float step) { return std::round (v / step) * step; }
+    // Rounded in double and divided by a whole number (10 for a step of 0.1), so the frame's JSON says -12.3, not
+    // -12.300000190734863 (a float rounded, then widened to double): the frames are much shorter.
+    double roundTo (double v, double step)
+    {
+        const double perStep = std::round (1.0 / step);
+        return std::round (v * perStep) / perStep;
+    }
 
     // The window remembers where you were. The size, the open module and LEARN on / off are properties of the
     // processor's state, so they are saved with the project. The loudness history the page draws is kept only
