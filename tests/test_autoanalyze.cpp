@@ -249,6 +249,44 @@ TEST_CASE ("Song listener marks the parts that play at the hook's level, repeats
     n.prepare (sr, 12.0, 600.0);
     listen (n, song, -1.0);
     CHECK (n.stats().hookSpans.empty());
+
+    // A reverb tail heard after Stop (no timeline position) doesn't erase them: the second chorus still counts.
+    SongListener t;
+    t.prepare (sr, 12.0, 600.0);
+    listen (t, song, 5.0);
+    listen (t, testsig::musicLike (sr, 0.4, -26.0, 9), -1.0);
+    const auto tail = t.stats();
+    REQUIRE (tail.hookSpans.size() == 2);
+    for (size_t i = 0; i < 2; ++i)
+    {
+        CHECK_THAT (tail.hookSpans[i].start, WithinAbs (st.hookSpans[i].start, 1.0e-9));
+        CHECK_THAT (tail.hookSpans[i].end, WithinAbs (st.hookSpans[i].end, 1.0e-9));
+    }
+
+    // A piece without a position inside the second chorus splits its span there; the rest keeps its place.
+    SongListener m;
+    m.prepare (sr, 12.0, 600.0);
+    AudioClip first, second;
+    first.sampleRate = second.sampleRate = sr;
+    const auto cut = static_cast<size_t> (90.0 * sr), gap = static_cast<size_t> (0.3 * sr);
+    for (const auto& ch : song.channels)
+    {
+        first.channels.emplace_back (ch.begin(), ch.begin() + static_cast<std::ptrdiff_t> (cut));
+        second.channels.emplace_back (ch.begin() + static_cast<std::ptrdiff_t> (cut + gap), ch.end());
+    }
+    AudioClip hole;
+    hole.sampleRate = sr;
+    for (const auto& ch : song.channels)
+        hole.channels.emplace_back (ch.begin() + static_cast<std::ptrdiff_t> (cut), ch.begin() + static_cast<std::ptrdiff_t> (cut + gap));
+    listen (m, first, 5.0);
+    listen (m, hole, -1.0);
+    listen (m, second, 5.0 + (cut + gap) / sr);
+    const auto split = m.stats();
+    REQUIRE (split.hookSpans.size() == 3);
+    CHECK_THAT (split.hookSpans[0].start, WithinAbs (st.hookSpans[0].start, 0.2));
+    CHECK_THAT (split.hookSpans[1].start, WithinAbs (st.hookSpans[1].start, 0.2));
+    CHECK (split.hookSpans[1].end <= 95.0 + 1.0e-6);
+    CHECK (split.hookSpans[2].start >= 95.3 - 1.0e-6);
 }
 
 TEST_CASE ("Auto Analyze offers nothing for the same mix and follows a mix that got louder or brighter", "[autoanalyze][automaster]")

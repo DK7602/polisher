@@ -40,8 +40,9 @@ struct SongStats
     /** Every part of the timeline that plays at the loudest part's level: each 100 ms of music inside a
         windowSeconds stretch whose loudness is within kHookWithinLu of the loudest one's (the hook or drop
         and its repeats), joined into spans (split where playback jumped or music is missing for more than
-        0.5 s). Empty without timeline positions. Auto Analyze checks the settings again only on a part
-        that plays at this level, so it compares like with like. */
+        0.5 s). Pieces heard without a timeline position (a reverb tail after Stop) are left out and split
+        the span they sit in. Empty without timeline positions. Auto Analyze checks the settings again only
+        on a part that plays at this level, so it compares like with like. */
     std::vector<TimeSpan> hookSpans;
     int channels = 2;                   // 1: a mono bus (the loudness above counts one channel, as BS.1770 does)
 };
