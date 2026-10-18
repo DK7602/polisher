@@ -20,6 +20,10 @@ juce_add_plugin(Polisher
     COPY_PLUGIN_AFTER_BUILD     FALSE
     NEEDS_WEB_BROWSER           TRUE                        # (Linux builds need it to find WebKitGTK)
     NEEDS_WEBVIEW2              TRUE
+    # macOS: the Standalone app may listen to the audio input only with a reason in its Info.plist (10.14 and
+    # later); without one the system silently gives it no input at all.
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT  "The Masterology app masters the audio coming in from your audio interface."
     VST3_CATEGORIES             Fx Mastering Dynamics
     AU_MAIN_TYPE                kAudioUnitType_Effect)
 

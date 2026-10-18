@@ -18,6 +18,7 @@
 #include <numbers>
 #include <new>
 #include <random>
+#include <thread>
 
 // --- Allocation counter: every operator new on the thread that set `countAllocations` is counted ----
 // (per thread, so a background analysis or file read running meanwhile is never counted as the audio
@@ -50,6 +51,15 @@ void set (PolisherAudioProcessor& p, const juce::String& id, float plain)
     auto* param = p.parameters.getParameter (id);
     REQUIRE (param != nullptr);
     param->setValueNotifyingHost (param->convertTo0to1 (plain));
+}
+
+/** The controls as the host saves them, without the hidden State Revision (it moves whenever the project changed). */
+juce::String controlsXml (PolisherAudioProcessor& p)
+{
+    auto state = p.parameters.copyState();
+    if (auto rev = state.getChildWithProperty ("id", PolisherAudioProcessor::kStateRevisionId); rev.isValid())
+        state.removeChild (rev, nullptr);
+    return state.toXmlString();
 }
 
 /** Every module doing real work, as after an Auto-Master run on a loud trap mix. */
@@ -678,6 +688,35 @@ TEST_CASE ("Plug-in: the Match ref reference is saved with the project and comes
     CHECK_FALSE (b->reference.getProfile().valid);
 }
 
+TEST_CASE ("Plug-in: a reference file with a damaged sample rate is refused before anything is sized from it", "[plugin][reference]")
+{
+    // A 16-bit stereo WAV whose header says 4 GHz (WAV allows up to 4.29 GHz): no buffers of gigabytes, a plain message.
+    const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("PolisherRefRateTest");
+    dir.createDirectory();
+    for (const juce::uint32 rate : { 4000000000u, 1000000u, 7999u })
+    {
+        INFO (rate);
+        const auto file = dir.getChildFile ("damaged " + juce::String ((juce::int64) rate) + ".wav");
+        file.deleteFile();
+        {
+            juce::FileOutputStream out (file);
+            REQUIRE (out.openedOk());
+            const int frames = 4800, dataBytes = frames * 4;
+            out.write ("RIFF", 4); out.writeInt (36 + dataBytes); out.write ("WAVE", 4);
+            out.write ("fmt ", 4); out.writeInt (16); out.writeShort (1); out.writeShort (2);
+            out.writeInt ((int) rate); out.writeInt (0); out.writeShort (4); out.writeShort (16);
+            out.write ("data", 4); out.writeInt (dataBytes);
+            for (int i = 0; i < frames * 2; ++i) out.writeShort ((short) ((i * 37) % 2000 - 1000));
+        }
+        juce::String error;
+        const auto p = ReferenceTrack::analyseFile (file, error);
+        CHECK_FALSE (p.valid);
+        CHECK (error.contains ("no audio Masterology can use"));
+    }
+    CHECK_FALSE (ReferenceTrack::isOnlineOnly (dir));   // an ordinary folder on disk
+    dir.deleteRecursively();
+}
+
 TEST_CASE ("Plug-in: a reference file is read in the background and its loudest part measured", "[plugin][reference]")
 {
     // MP3 support is compiled in (JUCE_USE_MP3AUDIOFORMAT), next to WAV, AIFF and FLAC.
@@ -746,6 +785,16 @@ TEST_CASE ("Plug-in: a reference file is read in the background and its loudest 
     ref.clear();
     CHECK (ref.getState() == ReferenceTrack::empty);
     CHECK_FALSE (ref.getProfile().valid);
+
+    // Closed while a load runs: it doesn't wait for the reading thread, and the load never reaches it afterwards.
+    {
+        auto closing = std::make_unique<ReferenceTrack>();
+        closing->load (file);
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        closing.reset();
+        CHECK (juce::Time::getMillisecondCounterHiRes() - t0 < 100.0);
+        juce::Thread::sleep (300);   // the shared thread drops it at its next chunk
+    }
     dir.deleteRecursively();
 }
 
@@ -1767,10 +1816,10 @@ TEST_CASE ("Auto Analyze: hears the hook again, offers what changed in the mix, 
     CHECK (editFor (autoAdvice (*p), "max").isObject());
 
     // Keep: nothing moves, the advice goes away.
-    const auto values = p->parameters.copyState().toXmlString();
+    const auto values = controlsXml (*p);
     REQUIRE (p->autoMaster.keepAutoEdit ("all"));
     CHECK (p->history.undoLabel().startsWith ("Auto Analyze: keep "));
-    CHECK (p->parameters.copyState().toXmlString() == values);
+    CHECK (controlsXml (*p) == values);
     CHECK (autoAdvice (*p)["edits"].size() == 0);
 
     // A knob of yours keeps its offset: the edit moves it by Auto-Master's change, from where it is.
@@ -1956,8 +2005,11 @@ float plainOf (PolisherAudioProcessor& p, const juce::String& id) { return p.par
 /** Every control's 0..1 value, in parameter order. */
 std::vector<float> allValues (PolisherAudioProcessor& p)
 {
+    // Every control (not the hidden State Revision: it moves whenever the project changed, e.g. a report undone).
     std::vector<float> v;
-    for (auto* param : p.getParameters()) v.push_back (param->getValue());
+    for (auto* param : p.getParameters())
+        if (dynamic_cast<juce::AudioProcessorParameterWithID*> (param)->paramID != PolisherAudioProcessor::kStateRevisionId)
+            v.push_back (param->getValue());
     return v;
 }
 
@@ -2541,9 +2593,9 @@ TEST_CASE ("Plug-in: storing a snapshot or loading / clearing a reference marks 
     CHECK (changes.nonParameter == 3);
     for (int i = 0; i < 600 && p->reference.getState() == ReferenceTrack::loading; ++i)
         juce::Thread::sleep (20);
-    p->pollReference();
+    p->tick();            // the processor's own timer: also with the window closed
     CHECK (changes.nonParameter == 4);
-    p->pollReference();
+    p->pollReference();   // (the window's timer asks too)
     CHECK (changes.nonParameter == 4);   // once per load
     dir.deleteRecursively();
 
@@ -2553,6 +2605,54 @@ TEST_CASE ("Plug-in: storing a snapshot or loading / clearing a reference marks 
     p->setStateInformation (state.getData(), (int) state.getSize());
     CHECK (changes.nonParameter == 4);
     p->removeListener (&changes);
+}
+
+TEST_CASE ("Plug-in: a change that isn't a parameter also moves the hidden State Revision (Logic, and VST3 hosts that ignore setDirty)", "[plugin][snapshots]")
+{
+    auto p = makeProcessor (48000.0, 512, false);
+    auto* rev = p->parameters.getParameter (PolisherAudioProcessor::kStateRevisionId);
+    REQUIRE (rev != nullptr);
+    CHECK_FALSE (rev->isAutomatable());
+    CHECK_FALSE (SettingsScope::isSetting (PolisherAudioProcessor::kStateRevisionId));
+
+    struct Gestures final : juce::AudioProcessorListener
+    {
+        int index = -1, begun = 0, ended = 0, changed = 0;
+        void audioProcessorParameterChanged (juce::AudioProcessor*, int i, float) override { changed += i == index; }
+        void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override {}
+        void audioProcessorParameterChangeGestureBegin (juce::AudioProcessor*, int i) override { begun += i == index; }
+        void audioProcessorParameterChangeGestureEnd (juce::AudioProcessor*, int i) override { ended += i == index; }
+    } gestures;
+    gestures.index = rev->getParameterIndex();
+    p->addListener (&gestures);
+
+    // A snapshot stored: the parameter moves, inside a begin / end gesture (as VST3 hosts expect)...
+    const float before = rev->getValue();
+    const int steps = p->history.size();
+    p->snapshots.store (0);
+    CHECK (rev->getValue() != before);
+    CHECK (gestures.changed == 1);
+    CHECK (gestures.begun == 1);
+    CHECK (gestures.ended == 1);
+    // ... and it is no undo step, nor part of the snapshot (the slot still counts as the settings in place).
+    CHECK (p->history.size() == steps);
+    CHECK (p->snapshots.getStatus().active == 0);
+    CHECK_FALSE (p->snapshots.getStatus().modified);
+
+    // Each change moves it again; it wraps around at the top.
+    p->clearReference();
+    CHECK (gestures.changed == 2);
+    rev->setValueNotifyingHost (1.0f);
+    p->markStateChanged();
+    CHECK (rev->getValue() == 0.0f);
+
+    // From another thread: the processor's timer moves it, on the message thread.
+    const float now = rev->getValue();
+    std::thread ([&] { p->markStateChanged(); }).join();
+    CHECK (rev->getValue() == now);
+    p->tick();
+    CHECK (rev->getValue() != now);
+    p->removeListener (&gestures);
 }
 
 TEST_CASE ("Plug-in: a host call with no samples changes nothing (Drive still ramps)", "[plugin]")
@@ -3081,14 +3181,87 @@ TEST_CASE ("Plug-in: the suite link (Masterology's goal reaches Mixology, Mixolo
     CHECK ((got.flags & suite::MixInfo::monoMix) != 0);
     CHECK (got.peakDbtp == -5.5f);
 
+    // Bypassed (A, or the host's bypass): a few seconds to compare change nothing; for longer, Mixology no longer
+    // sees a Masterology (it isn't processing), until B is back.
+    set (*p, "bypass", 1.0f);
+    const auto t0 = suite::nowMs();
+    p->updateSuite (t0);
+    p->updateSuite (t0 + 2000);
+    CHECK (link.masters (t0 + 2000).size() == 1);
+    p->updateSuite (t0 + PolisherAudioProcessor::kBypassedHideMs + 1);
+    CHECK (link.masters (t0 + PolisherAudioProcessor::kBypassedHideMs + 1).empty());
+    set (*p, "bypass", 0.0f);
+    p->updateSuite (t0 + PolisherAudioProcessor::kBypassedHideMs + 250);
+    CHECK (link.masters (t0 + PolisherAudioProcessor::kBypassedHideMs + 250).size() == 1);
+
     p.reset();   // removed: its goal goes with it
     CHECK (link.masters (suite::nowMs()).empty());
+}
+
+TEST_CASE ("Plug-in: Mixology's hand-off is checked against what reaches Masterology (Mixology right before it, or not)", "[plugin][suite]")
+{
+    using P = suitecheck::Placement;
+    const auto run = [] (P& p, int ms, bool music, float ours, float theirs)
+    {
+        for (int t = 0; t < ms; t += 250) p.update (250, music, ours, theirs);
+    };
+    P p;
+    // Right before Masterology: the same short-term loudness, give or take a little (and the first seconds of a
+    // play, while the 3 s windows fill, don't count at all).
+    run (p, 1000, true, -14.0f, -30.0f);
+    CHECK (p.get() == P::thisMix);
+    run (p, 20000, true, -14.0f, -14.4f);
+    CHECK (p.get() == P::thisMix);
+
+    // On a group (or after Masterology): 3 LU apart. A moment apart is fine, a while apart is another signal.
+    run (p, 2000, true, -14.0f, -17.0f);
+    CHECK (p.get() == P::thisMix);
+    run (p, 3000, true, -14.0f, -17.0f);
+    CHECK (p.get() == P::otherSignal);
+    // Stopped, or a silent stretch: the verdict stays (nothing to compare).
+    run (p, 10000, false, -100.0f, -100.0f);
+    CHECK (p.get() == P::otherSignal);
+    // Fixed (Mixology moved to the master channel): back once they agree for a while after the windows fill.
+    run (p, 3500 + 2000, true, -12.0f, -12.2f);
+    CHECK (p.get() == P::thisMix);
+
+    // Mixology hears nothing (bypassed, or in another open project) while music plays here.
+    run (p, 3500 + 4000, true, -12.0f, -100.0f);
+    CHECK (p.get() == P::mixologySilent);
+    p.forget();   // no hand-off any more
+    CHECK (p.get() == P::thisMix);
+
+    // The processor: no verdict without a hand-off, and nothing while nothing plays.
+    auto proc = makeProcessor (48000.0, 512, false);
+    proc->updateSuite();
+    CHECK (proc->handoffPlacement() == P::thisMix);
+    CHECK_FALSE (proc->inputSoundsMono());   // not known before music played: Mixology's "mono" isn't shown
+}
+
+TEST_CASE ("Plug-in: \"YOUR MIX IS MONO\" only when Masterology's own input sounds mono too", "[plugin][suite]")
+{
+    using M = suitecheck::InputMono;
+    const auto run = [] (M& m, int ms, bool music, float corr) { for (int t = 0; t < ms; t += 250) m.update (250, music, corr); };
+    M m;
+    CHECK_FALSE (m.soundsMono());            // nothing heard yet
+    run (m, 10000, false, 1.0f);             // silence reads as correlation 1: not judged
+    CHECK_FALSE (m.soundsMono());
+    run (m, 2000, true, 1.0f);               // a mono bus
+    CHECK (m.soundsMono());
+    run (m, 1000, true, 0.6f);               // fixed: stereo again, a moment...
+    CHECK (m.soundsMono());
+    run (m, 1000, true, 0.6f);               // ... and for a while
+    CHECK_FALSE (m.soundsMono());
+    run (m, 5000, true, 0.993f);             // in between: stays as it was
+    CHECK_FALSE (m.soundsMono());
 }
 
 TEST_CASE ("Plug-in: the song's style is shared (picked here or in Mixology), sets Auto-Master's genre, saved with the song", "[plugin][suite]")
 {
     auto& link = suite::Link::process();
     auto a = makeProcessor (48000.0, 512, false);
+    a->updateSuite();
+    juce::Thread::sleep ((int) suite::Presence::kSettleMs + 20);   // joined a moment ago: the shared choices wait that long
     a->updateSuite();
     CHECK (a->songStyleNow().key.empty());   // none chosen yet
     CHECK (plainOf (*a, "amGenre") == Catch::Approx (0.0).margin (1.0e-4));
@@ -3125,8 +3298,124 @@ TEST_CASE ("Plug-in: the song's style is shared (picked here or in Mixology), se
     CHECK (b->songStyleNow().key == "electronic.house");
     CHECK (b->songStyleNow().from == suite::StyleInfo::From::mixology);
     b->updateSuite();
+    juce::Thread::sleep ((int) suite::Presence::kSettleMs + 20);
+    b->updateSuite();
     REQUIRE (link.readStyle (shared, suite::nowMs()));
     CHECK (shared.key == "electronic.house");
+}
+
+TEST_CASE ("Plug-in: loading a preset doesn't switch the song's style for the whole suite", "[plugin][suite]")
+{
+    auto& link = suite::Link::process();
+    const auto settle = [] { juce::Thread::sleep ((int) suite::Presence::kSettleMs + 20); };
+    // A preset saved from a trap song (picked "later" than this song's style).
+    juce::MemoryBlock preset;
+    {
+        auto other = makeProcessor (48000.0, 512, false);
+        other->pickStyle ("trap.drill", "Trap & Drill - Drill");
+        other->getStateInformation (preset);
+    }
+    // This song: R&B, picked in Mixology a while ago and live.
+    suite::SongStyle mixology (suite::StyleInfo::From::mixology);
+    REQUIRE (mixology.restore ("rnb.modern|R&B & Soul - Modern|1000|2"));
+    mixology.sync (link, 993, suite::nowMs());
+    auto p = makeProcessor (48000.0, 512, false);
+    p->setStateInformation (preset.getData(), (int) preset.getSize());
+    CHECK (p->songStyleNow().pickedAt == 0);   // the preset's style comes back as "not picked"...
+    p->updateSuite();
+    settle();
+    p->updateSuite();
+    suite::StyleInfo shared;
+    REQUIRE (link.readStyle (shared, suite::nowMs()));
+    CHECK (shared.key == "rnb.modern");         // ... so the song keeps its style, and Masterology follows it
+    CHECK (p->songStyleNow().key == "rnb.modern");
+    CHECK_FALSE (mixology.sync (link, 993, suite::nowMs()));
+    mixology.leave (link, 993);
+    p.reset();
+
+    // Nothing live (a project opening): the saved pick is the song's style, as always.
+    CHECK_FALSE (link.readStyle (shared, suite::nowMs()));
+    auto q = makeProcessor (48000.0, 512, false);
+    q->setStateInformation (preset.getData(), (int) preset.getSize());
+    CHECK (q->songStyleNow().key == "trap.drill");
+    CHECK (q->songStyleNow().pickedAt != 0);
+}
+
+TEST_CASE ("Plug-in: Settings > DAW \"Found\" is a fresh pick of the DAW found, so it sticks and the others follow", "[plugin][suite]")
+{
+    auto& link = suite::Link::process();
+    auto p = makeProcessor (48000.0, 512, false);
+    p->updateSuite();
+    juce::Thread::sleep ((int) suite::Presence::kSettleMs + 20);
+    const auto found = p->dawDetected();
+    p->pickDaw ("fl");   // the wrong DAW picked; Mixology follows it
+    suite::SharedChoice mixology (suite::StyleInfo::From::mixology, suite::Choice::daw);
+    mixology.setUnpicked (found, suite::dawName (found));
+    CHECK (mixology.sync (link, 992, suite::nowMs()));
+    CHECK (mixology.style().key == "fl");
+
+    p->pickDaw ("");     // "Found: ..."
+    CHECK (p->dawNow().key == found);
+    CHECK (p->dawNow().pickedAt != 0);
+    for (int i = 0; i < 3; ++i) p->updateSuite();   // not undone by the pick before, still alive in the shared slot
+    CHECK (p->dawNow().key == found);
+    CHECK (mixology.sync (link, 992, suite::nowMs()));
+    CHECK (mixology.style().key == found);
+    suite::StyleInfo shared;
+    REQUIRE (link.readChoice (suite::Choice::daw, shared, suite::nowMs()));
+    CHECK (shared.key == found);
+    mixology.leave (link, 992);
+}
+
+TEST_CASE ("Plug-in: the suite link only while the host runs Masterology (another open project doesn't reach it)", "[plugin][suite]")
+{
+    auto& link = suite::Link::process();
+    const auto settle = [] { juce::Thread::sleep ((int) suite::Presence::kSettleMs + 20); };
+    auto songA = makeProcessor (48000.0, 512, false);   // prepared: on the link
+    songA->updateSuite();
+    settle();
+    songA->pickStyle ("trap.drill", "Trap & Drill - Drill");
+    REQUIRE (link.masters (suite::nowMs()).size() == 1);
+    suite::StyleInfo shared;
+    REQUIRE (link.readStyle (shared, suite::nowMs()));
+
+    // Song A's project made inactive (the host releases its plug-ins): off the link at once, its style lapses.
+    songA->releaseResources();
+    songA->updateSuite();
+    CHECK (link.masters (suite::nowMs()).empty());
+    CHECK_FALSE (link.readStyle (shared, suite::nowMs()));
+    suite::MixInfo mix;
+    mix.styleKey = "pop.modern";
+    mix.styleName = "Pop - Modern";
+    mix.version = 1;
+    link.publishMix (mix, suite::nowMs());
+    songA->updateSuite();
+    CHECK_FALSE (songA->mixologyHandoff (mix));   // a Mixology in the other song isn't this song's
+
+    // Song B, a new project: its Masterology doesn't take song A's style...
+    auto songB = makeProcessor (48000.0, 512, false);
+    songB->updateSuite();
+    settle();
+    songB->updateSuite();
+    CHECK (songB->songStyleNow().key.empty());
+    // ... and a pick in song B doesn't change song A.
+    songB->pickStyle ("rnb.modern", "R&B & Soul - Modern");
+    songA->updateSuite();
+    CHECK (songA->songStyleNow().key == "trap.drill");
+    CHECK (plainOf (*songA, "amGenre") == 0.0f);   // Trap / Hip-Hop, as picked
+    REQUIRE (link.masters (suite::nowMs()).size() == 1);
+
+    // Back to song A (song B's plug-ins released first): A joins again and its own pick is the song's style again.
+    songB->releaseResources();
+    songB->updateSuite();
+    songA->prepareToPlay (48000.0, 512);
+    songA->updateSuite();
+    CHECK (link.masters (suite::nowMs()).size() == 1);
+    settle();
+    songA->updateSuite();
+    REQUIRE (link.readStyle (shared, suite::nowMs()));
+    CHECK (shared.key == "trap.drill");
+    CHECK (songA->songStyleNow().key == "trap.drill");
 }
 
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:

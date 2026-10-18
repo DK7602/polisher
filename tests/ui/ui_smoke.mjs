@@ -768,6 +768,11 @@ check(genreNow === 1, `the button sets Auto-Master's genre (now ${genreNow})`);
 check(await page.evaluate(() => ![...document.querySelectorAll('#learn-body button')].some((b) => /MIXOLOGY'S STYLE/.test(b.textContent))), 'the offer goes once the genre matches');
 await page.evaluate(() => window.__polisherMock.setMixology({ style: 'R&B & Soul - Modern', genre: 1, peak: -0.4, lufs: -9.1, analysed: false, mono: true, limited: true, tone: [0, 0, 0, 0] }));
 check(await waitForLearn(/YOUR MIX IS MONO/) && /MIXOLOGY'S LIMITER IS ON/.test(await learnText()) && /almost no room left/.test(await learnText()), 'a mono mix, Mixology\'s limiter and no headroom are flagged');
+// A hand-off that isn't this mix (Mixology on a group, in another project...): said so, without its numbers and tips.
+await page.evaluate(() => window.__polisherMock.setMixology({ style: 'R&B & Soul - Modern', genre: 1, peak: -0.4, lufs: -9.1, analysed: false, mono: true, limited: true, tone: [0, 0, 0, 0], notThisMix: 1 }));
+check(await waitForLearn(/aren't the mix reaching Masterology/) && !/YOUR MIX IS MONO|MIXOLOGY'S LIMITER IS ON|almost no room left/.test(await learnText()), 'a hand-off from another signal is called so, without its numbers');
+await page.evaluate(() => window.__polisherMock.setMixology({ style: 'R&B & Soul - Modern', genre: 1, peak: -0.4, lufs: -9.1, analysed: false, mono: false, limited: false, tone: [0, 0, 0, 0], notThisMix: 2 }));
+check(await waitForLearn(/Mixology hears nothing/), 'a silent Mixology (bypassed, another project) is called so');
 await page.evaluate(() => window.__polisherMock.setMixology(null));
 check(await waitForLearn(/^(?![\s\S]*FROM MIXOLOGY)/), 'without Mixology the note goes');
 await page.evaluate(async () => (await import('./juce/index.js')).getComboBoxState('amGenre').setChoiceIndex(0));
@@ -808,10 +813,11 @@ await page.waitForTimeout(150);
 check(errors.length === 0, `no script errors (${errors.join(' | ')})`);
 await browser.close();
 
-// The listening banner at the window sizes Masterology opens at (1280 x 720) and its smallest (1120 x 630):
-// the longest description (a Dynamics band on PHONE) is shown whole, "— not the master" included.
+// The listening banner at the window sizes Masterology opens at (1280 x 720), 1120 x 630 and its smallest (800 x 450,
+// for 1080p laptops at 150 % and more): the longest description (a Dynamics band on PHONE) is shown whole,
+// "— not the master" included.
 const browser2 = await chromium.launch();
-for (const [w, hgt] of [[1280, 720], [1120, 630]]) {
+for (const [w, hgt] of [[1280, 720], [1120, 630], [800, 450]]) {
   const pg = await browser2.newPage({ viewport: { width: w, height: hgt } });
   pg.on('pageerror', (e) => errors.push(String(e)));
   await pg.goto(url);
@@ -828,7 +834,8 @@ for (const [w, hgt] of [[1280, 720], [1120, 630]]) {
              px: parseFloat(getComputedStyle(t).fontSize) * document.getElementById('stage').getBoundingClientRect().width / 1600 };
   });
   check(/not the master$/.test(b.text) && b.hidden <= 1 && b.cut <= 1 && b.inside, `${w} x ${hgt}: the banner shows its whole text ("${b.text}", hidden ${b.hidden} px)`);
-  check(b.px >= 9, `${w} x ${hgt}: banner text is ${b.px.toFixed(1)} px`);
+  // 9 points down to 1120 x 630; the smallest size is for screens at 150 % or more, where 6 points are 9+ pixels.
+  check(b.px >= (w <= 800 ? 6 : 9), `${w} x ${hgt}: banner text is ${b.px.toFixed(1)} px`);
   await pg.close();
 }
 await browser2.close();

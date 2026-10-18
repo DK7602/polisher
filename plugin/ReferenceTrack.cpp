@@ -1,8 +1,23 @@
 #include "ReferenceTrack.h"
 
+#if JUCE_MAC
+ #include <sys/stat.h>
+#elif JUCE_WINDOWS
+ extern "C" __declspec (dllimport) unsigned long __stdcall GetFileAttributesW (const wchar_t*);   // <windows.h>, without its macros
+#endif
+
 namespace
 {
     constexpr int kChunk = 1 << 16;   // samples read at a time (~1.4 s at 48 kHz)
+    constexpr double kMinRate = 8000.0, kMaxRate = 768000.0;   // a damaged header (NaN, 4 GHz) never sizes a buffer
+
+    /** One reading thread for every Masterology in the process, living as long as the plug-in library. A plug-in that
+        closes doesn't wait for it: a read that blocks finishes on its own, and its result is thrown away. */
+    juce::ThreadPool& loader()
+    {
+        static juce::ThreadPool pool { juce::ThreadPoolOptions{}.withThreadName ("Masterology reference").withNumberOfThreads (1) };
+        return pool;
+    }
 
     juce::String quoted (const juce::File& f)
     {
@@ -24,17 +39,45 @@ namespace
     }
 }
 
-ReferenceTrack::ReferenceTrack() = default;
+struct ReferenceTrack::Shared
+{
+    std::atomic<int> job { 0 };
+    std::atomic<bool> closed { false };
+    std::mutex ownerLock;
+    ReferenceTrack* owner = nullptr;   // under ownerLock; nullptr once the ReferenceTrack is gone
+};
+
+ReferenceTrack::ReferenceTrack() : shared (std::make_shared<Shared>())
+{
+    shared->owner = this;
+}
 
 ReferenceTrack::~ReferenceTrack()
 {
-    shuttingDown.store (true);
-    pool.removeAllJobs (true, 30000);
+    // A load still running stops at its next chunk (or when a blocking read returns), and never reaches this object.
+    shared->closed.store (true);
+    const std::lock_guard<std::mutex> g (shared->ownerLock);
+    shared->owner = nullptr;
+}
+
+bool ReferenceTrack::isOnlineOnly (const juce::File& file)
+{
+   #if JUCE_WINDOWS
+    // FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS (OneDrive "online only").
+    const auto attributes = GetFileAttributesW (file.getFullPathName().toWideCharPointer());
+    return attributes != 0xFFFFFFFFul && (attributes & (0x1000ul | 0x40000ul | 0x400000ul)) != 0;
+   #elif JUCE_MAC && defined (SF_DATALESS)
+    struct stat st {};
+    return stat (file.getFullPathName().toRawUTF8(), &st) == 0 && (st.st_flags & SF_DATALESS) != 0;   // iCloud, not downloaded
+   #else
+    juce::ignoreUnused (file);
+    return false;
+   #endif
 }
 
 void ReferenceTrack::load (const juce::File& file)
 {
-    const int myJob = ++job;
+    const int myJob = ++shared->job;
     {
         const juce::ScopedLock sl (lock);
         lastFolder = file.getParentDirectory();
@@ -42,30 +85,41 @@ void ReferenceTrack::load (const juce::File& file)
     }
     state.store (loading);
     ++version;
-    pool.addJob ([this, file, myJob]
+    if (isOnlineOnly (file))
     {
+        finish (myJob, {}, quoted (file) + " is only in the cloud (OneDrive or iCloud), not on this computer yet. Make it available "
+                           "offline (OneDrive: right-click it > Always keep on this device; iCloud: Download Now), then load it again.");
+        return;
+    }
+    loader().addJob ([s = shared, file, myJob]
+    {
+        const auto keepGoing = [&s, myJob] { return ! s->closed.load() && s->job.load() == myJob; };
+        if (! keepGoing())
+            return;   // closed or replaced before it started
         juce::String error;
         polisher::ReferenceProfile p;
         try
         {
-            p = analyseFile (file, error, [this, myJob] { return ! shuttingDown.load() && job.load() == myJob; });
+            p = analyseFile (file, error, keepGoing);
         }
         catch (...)
         {
             p = {};
             error = "Something went wrong while reading " + quoted (file) + ". Please try another file.";
         }
-        finish (myJob, p, error);
+        const std::lock_guard<std::mutex> g (s->ownerLock);
+        if (s->owner != nullptr)
+            s->owner->finish (myJob, p, error);
     });
 }
 
 void ReferenceTrack::finish (int myJob, const polisher::ReferenceProfile& p, const juce::String& error)
 {
-    if (shuttingDown.load() || job.load() != myJob)
+    if (shared->closed.load() || shared->job.load() != myJob)
         return;   // a newer load, clear or restore came in meanwhile
     {
         const juce::ScopedLock sl (lock);
-        if (job.load() != myJob)
+        if (shared->job.load() != myJob)
             return;
         if (p.valid)
         {
@@ -88,7 +142,7 @@ void ReferenceTrack::clear()
 
 void ReferenceTrack::setProfile (const polisher::ReferenceProfile& p)
 {
-    ++job;   // any load still running is now stale
+    ++shared->job;   // any load still running is now stale
     {
         const juce::ScopedLock sl (lock);
         profile = p.valid ? p : polisher::ReferenceProfile {};
@@ -206,7 +260,7 @@ polisher::ReferenceProfile ReferenceTrack::analyseFile (const juce::File& file, 
         return {};
     }
     const double sr = reader->sampleRate;
-    if (sr < 8000.0 || reader->lengthInSamples <= 0 || reader->numChannels == 0)
+    if (! std::isfinite (sr) || sr < kMinRate || sr > kMaxRate || reader->lengthInSamples <= 0 || reader->numChannels == 0)
     {
         error = quoted (file) + " has no audio Masterology can use.";
         return {};

@@ -34,8 +34,11 @@ public:
 
     static constexpr int kDesignWidth = 1600;
     static constexpr int kDesignHeight = 900;
-    static constexpr int kMinWidth = 1120;    // 70 % of the design (smaller and the small texts can't be read)
-    static constexpr int kMinHeight = 630;
+    // Half the design: still fits a 1080p laptop at 150 % or 175 % (1280 x 720 / 1097 x 617 points, less the
+    // taskbar and the host's title bar). The page scales as a whole; its smallest texts are then 5 points, 7.5 to
+    // 9 pixels on such a screen (what 70 % gave on a 100 % screen).
+    static constexpr int kMinWidth = 800;
+    static constexpr int kMinHeight = 450;
 
 private:
     static constexpr int kFftOrder = 12;
@@ -104,6 +107,16 @@ private:
 
     std::unique_ptr<juce::FileChooser> referenceChooser;   // Match ref: the open dialog, while it's open
     bool pageGroupOpen = false;                            // the page opened an undo group (historyGroup)
+
+    // WebView2 can still fail after isSupported() (a second environment that won't start, a locked or mismatched
+    // user-data folder, a crashed runtime): the page then never runs, and the window would stay blank. Once the
+    // window has been on screen kPageTimeoutFrames without the page answering, the BASIC VIEW takes it over.
+    static constexpr int kPageTimeoutFrames = 15 * 30;     // 15 s of the 30 Hz timer
+    void checkPageStarted();
+    void showBasicView();
+    bool pageAnswered = false;
+    int framesShownWithoutPage = 0;
+    std::unique_ptr<juce::AudioProcessorEditor> basicView;
 
     // Same size and points as polisher::spectrumDisplayCurve, so a reference's curve lines up with the live ones.
     static_assert (kFftSize == polisher::kDisplayFftSize && kSpectrumPoints == polisher::kDisplayPoints);

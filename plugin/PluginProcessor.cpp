@@ -39,6 +39,17 @@ namespace
     {
         return v >= 1000.0f ? juce::String (v / 1000.0f, v >= 10000.0f ? 1 : 2) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz";
     }
+
+    /** A pick restored from a preset (or the host's A/B compare, or a default preset) carries the time it was made,
+        often newer than this song's pick: it would switch the style (or DAW) of all three plug-ins. When another one
+        is live in the suite, it comes back as "not picked" and follows that one. Opening a project is unaffected:
+        nothing holds a choice then (a closed or inactive project left it). Any thread. */
+    void followLiveChoice (suite::SharedChoice& c, suite::Choice which)
+    {
+        suite::StyleInfo live;
+        if (c.style().pickedAt != 0 && suite::Link::process().readChoice (which, live, suite::nowMs()) && live.key != c.style().key)
+            c.setUnpicked (c.style().key, c.style().name);
+    }
 }
 
 PolisherAudioProcessor::PolisherAudioProcessor()
@@ -62,6 +73,7 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     clipOversamplingParam = parameters.getRawParameterValue (ParamIDs::clipOversampling);
     eqOnParam = parameters.getRawParameterValue (ParamIDs::eqOn);
     levelMatchParam = parameters.getRawParameterValue (ParamIDs::levelMatch);
+    stateRevisionParam = parameters.getParameter (kStateRevisionId);
     moduleParams.attach (parameters);
     imgOnParam   = parameters.getRawParameterValue ("imgOn");
     imgLowParam  = parameters.getRawParameterValue ("imgLow");
@@ -109,17 +121,58 @@ PolisherAudioProcessor::PolisherAudioProcessor()
 PolisherAudioProcessor::~PolisherAudioProcessor()
 {
     stopTimer();
-    suite::Link::process().releaseMaster (suiteSlot, suiteId);
-    const juce::ScopedLock sl (styleLock);
-    songStyle.leave (suite::Link::process(), suiteId);
-    daw.leave (suite::Link::process(), suiteId);
+    leaveSuite();
 }
 
-void PolisherAudioProcessor::updateSuite()
+void PolisherAudioProcessor::releaseResources()
+{
+    suitePresence.stop();   // off the suite link at the next tick (see updateSuite)
+}
+
+void PolisherAudioProcessor::leaveSuite()
+{
+    // Mixology stops seeing this Masterology at once, and a style or DAW only this instance kept alive lapses
+    // straight away (another project, or the next one opened, doesn't take it).
+    auto& link = suite::Link::process();
+    link.releaseMaster (suiteSlot, suiteId);
+    suiteSlot = -1;
+    hasHandoff = false;
+    placement.forget();
+    lastSuiteMs = 0;
+    bypassedSinceMs = 0;
+    const juce::ScopedLock sl (styleLock);
+    songStyle.leave (link, suiteId);
+    daw.leave (link, suiteId);
+}
+
+void PolisherAudioProcessor::updateSuite (std::uint64_t now)
 {
     auto& link = suite::Link::process();
-    const auto now = suite::nowMs();
+    // Only while the host runs this Masterology. The block is one per host process, and a project that is open but
+    // not active (or an insert switched off) keeps its timer running: it must neither take another song's style nor
+    // look present to Mixology. It joins again at the next prepareToPlay; the newest pick still wins.
+    const auto step = suitePresence.update (now);
+    if (step == suite::Presence::Step::leave)
+        leaveSuite();
+    if (! suitePresence.takingPart())
+        return;
+    if (step == suite::Presence::Step::join)
+        findDawAgain();
     hasHandoff = link.readMix (handoff, now);
+    // Is the hand-off about the mix this Masterology hears? It comes from whichever Mixology publishes (on a group, after
+    // Masterology, in another open project...): Mixology right before Masterology measures the same short-term loudness.
+    const auto dt = lastSuiteMs == 0 ? std::uint64_t { 0 } : std::min<std::uint64_t> (now - lastSuiteMs, 1000);
+    lastSuiteMs = now;
+    const float inShort = meters.inputShortTerm.load();
+    const bool music = meters.transport.load() != 0 && inShort > suitecheck::Placement::kMusicLufs;
+    inputMono.update (dt, music, meters.correlation.load());   // (L/R stay as they come in: mono in, mono there)
+    if (hasHandoff)
+    {
+        lastHandoffMs = now;
+        placement.update (dt, music, inShort, handoff.shortTermLufs);
+    }
+    else if (now - lastHandoffMs > 3000)
+        placement.forget();   // (a read that fails now and then keeps the verdict)
     // Auto Analyze hears the mix afresh when Mixology's word on it changes (what its Analyze Mix found). A read
     // that fails now and then (Mixology busy, or silent a moment) keeps the last key, so the listen isn't restarted.
     if (hasHandoff)
@@ -132,8 +185,10 @@ void PolisherAudioProcessor::updateSuite()
         mixIn (suite::nameHash (handoff.styleKey));
         autoMaster.setMixKey (key);
     }
-    // The song's style: the newest choice in Voxology, Mixology or Masterology wins.
+    // The song's style: the newest choice in Voxology, Mixology or Masterology wins (from a moment after joining,
+    // so the plug-ins of a project just switched away from have left first).
     bool adopted = false;
+    if (suitePresence.settled (now))
     {
         const juce::ScopedLock sl (styleLock);
         adopted = songStyle.sync (link, suiteId, now);
@@ -143,6 +198,18 @@ void PolisherAudioProcessor::updateSuite()
     {
         ++styleVersion;
         applyStyleGenre();
+    }
+    // Bypassed (A, or the host's bypass button) for a while: Masterology isn't processing, so Mixology mustn't say
+    // "Masterology is on". It shows no Masterology until B is back. A few seconds on A to compare don't count.
+    if (bypassParam->load() <= 0.5f)
+        bypassedSinceMs = 0;
+    else if (bypassedSinceMs == 0)
+        bypassedSinceMs = now;
+    if (bypassedSinceMs != 0 && now - bypassedSinceMs >= kBypassedHideMs)
+    {
+        link.releaseMaster (suiteSlot, suiteId);
+        suiteSlot = -1;
+        return;
     }
     if (suiteSlot < 0) suiteSlot = link.claimMaster (suiteId, now);
     if (suiteSlot < 0) return;   // four Masterologys already
@@ -174,6 +241,28 @@ void PolisherAudioProcessor::updateSuite()
     if (! link.publishMaster (suiteSlot, suiteId, g, now)) suiteSlot = -1;   // taken over while silent: claim again
 }
 
+std::string PolisherAudioProcessor::findDaw()
+{
+    return suite::dawFromHost (juce::PluginHostType::getHostPath().toStdString(), juce::PluginHostType().getHostDescription());
+}
+
+void PolisherAudioProcessor::findDawAgain()
+{
+    if (dawDetected() != "other")
+        return;
+    const auto found = findDaw();
+    if (found == "other")
+        return;
+    {
+        const juce::ScopedLock sl (styleLock);
+        detectedDaw = found;
+        if (daw.style().pickedAt != 0)
+            return;   // you picked one: that stays
+        daw.setUnpicked (detectedDaw, suite::dawName (detectedDaw));
+    }
+    ++styleVersion;
+}
+
 void PolisherAudioProcessor::pickStyle (const std::string& key, const std::string& name)
 {
     {
@@ -191,9 +280,12 @@ void PolisherAudioProcessor::pickDaw (const std::string& key)
 {
     {
         const juce::ScopedLock sl (styleLock);
-        if (key.empty()) daw.setUnpicked (detectedDaw, suite::dawName (detectedDaw));
-        else if (key != daw.style().key || daw.style().pickedAt == 0) daw.pick (key, suite::dawName (key));
-        else return;
+        // "Found: <your DAW>" ("") is a fresh pick of the DAW found from the host: the newest pick, so every plug-in
+        // follows. Going back to "not picked" would be undone at once: the earlier pick is still alive in the shared
+        // slot (this very instance kept it there), and a choice that isn't picked always takes the shared one.
+        const auto& wanted = key.empty() ? detectedDaw : key;
+        if (wanted == daw.style().key && daw.style().pickedAt != 0) return;
+        daw.pick (wanted, suite::dawName (wanted));
     }
     ++styleVersion;
     markStateChanged();
@@ -208,7 +300,12 @@ void PolisherAudioProcessor::applyStyleGenre()
     if (genre < 0) return;
     auto* p = parameters.getParameter ("amGenre");
     const float v = p->convertTo0to1 (static_cast<float> (genre));
-    if (std::abs (p->getValue() - v) > 1e-4f) p->setValueNotifyingHost (v);
+    if (std::abs (p->getValue() - v) > 1e-4f)
+    {
+        p->beginChangeGesture();   // VST3 hosts expect beginEdit / endEdit around a change the plug-in makes
+        p->setValueNotifyingHost (v);
+        p->endChangeGesture();
+    }
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::createParameterLayout()
@@ -334,6 +431,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout PolisherAudioProcessor::crea
     choice ("amIntensity", "Auto-Master Intensity", { "Gentle", "Balanced", "Punchy" }, 1);
     choice ("amTarget", "Auto-Master Target", { "Stream -14", "Loud -9", "Club -7" }, 1);
 
+    // Not a control: it goes up by one whenever something saved with the project that isn't a parameter changes
+    // (markStateChanged). Logic (AU) ignores JUCE's "state changed" call, and so does a VST3 host that ignores
+    // setDirty, but every host marks the project changed when a parameter moves. Not automatable (Logic and Cubase
+    // don't offer it), and not a setting: undo, snapshots and A/B ignore it (SettingsScope::isSetting). Version hint 14.
+    layout.add (std::make_unique<AudioParameterInt> (ParameterID { kStateRevisionId, 14 }, "State Revision", 0, kStateRevisions - 1, 0,
+                                                     AudioParameterIntAttributes().withAutomatable (false)));
+
     return layout;
 }
 
@@ -395,6 +499,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     monitorOut.prepare (sampleRate);
     stemEq.setTamerDelta (false);
     dynamics.setMonitorBand (-1, false);
+    suitePresence.start();   // on the suite link from the next tick (see updateSuite)
 }
 
 namespace
@@ -810,7 +915,24 @@ void PolisherAudioProcessor::clearToneTarget()
 
 void PolisherAudioProcessor::markStateChanged()
 {
+    // VST3: JUCE passes this on as the host's setDirty. The AU wrapper drops it (Logic never hears of it), and some
+    // VST3 hosts ignore setDirty: the hidden State Revision parameter moving marks the project changed there too.
     updateHostDisplay (juce::AudioProcessor::ChangeDetails().withNonParameterStateChanged (true));
+    if (juce::MessageManager::existsAndIsCurrentThread())
+        bumpStateRevision();
+    else
+        stateRevisionPending.store (true);   // the timer moves it, on the message thread
+}
+
+void PolisherAudioProcessor::bumpStateRevision()
+{
+    // As one gesture, like a control moved in the window (VST3 hosts expect beginEdit / endEdit around a change the
+    // plug-in makes). The value only has to differ from the saved one; it wraps around.
+    auto* p = stateRevisionParam;
+    const int next = (juce::roundToInt (p->convertFrom0to1 (p->getValue())) + 1) % kStateRevisions;
+    p->beginChangeGesture();
+    p->setValueNotifyingHost (p->convertTo0to1 (static_cast<float> (next)));
+    p->endChangeGesture();
 }
 
 void PolisherAudioProcessor::loadReference (const juce::File& file)
@@ -1078,6 +1200,7 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
                 const juce::ScopedLock sl (styleLock);
                 songStyle = suite::SongStyle { suite::StyleInfo::From::masterology };
                 songStyle.restore (xml->getStringAttribute ("songStyle").toStdString());
+                followLiveChoice (songStyle, suite::Choice::style);   // a preset doesn't change the song's style
                 ++styleVersion;
             }
             xml->removeAttribute ("songStyle");
@@ -1086,6 +1209,7 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
                 daw = suite::SharedChoice { suite::StyleInfo::From::masterology, suite::Choice::daw };
                 if (! daw.restore (xml->getStringAttribute ("daw").toStdString()))
                     daw.setUnpicked (detectedDaw, suite::dawName (detectedDaw));
+                followLiveChoice (daw, suite::Choice::daw);   // nor the DAW (a preset made in another one)
             }
             xml->removeAttribute ("daw");
             // Snapshots: their own element ("" in states from before snapshots: every slot empty).

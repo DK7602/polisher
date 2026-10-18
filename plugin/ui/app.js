@@ -2149,7 +2149,7 @@ function listenTip(m) {
 // something to do (another genre, a mono mix, Mixology's limiter on), else at the bottom, for information.
 function mixologyKey() {
   const h = M.fromMixology;
-  return h ? [h.style, h.genre, h.analysed, h.mono, h.limited, comboIndex(P.amGenre)].join("|") : "";
+  return h ? [h.style, h.genre, h.analysed, h.mono, h.limited, h.notThisMix, comboIndex(P.amGenre)].join("|") : "";
 }
 function addMixologyLearn(body) {
   const h = M.fromMixology;
@@ -2161,14 +2161,20 @@ function addMixologyLearn(body) {
   const room = h.peak <= -99 ? "" : h.peak > -1 ? ": almost no room left, so turn the mix down in Mixology (or Input Trim here) first" : h.peak <= -3 ? ": good room for mastering" : "";
   const level = h.lufs > -99 ? `${fmtNum(h.lufs)} LUFS with ` : "";
   let text = `Mixology mixed this song as ${h.style || "your style"}. Your mix comes in at ${level}${peak}${room}.`;
-  if (h.analysed && h.tone) {
+  // Its numbers are about another signal (a Mixology that isn't right before Masterology): say so instead.
+  const other = !!h.notThisMix;
+  if (other)
+    text = `Mixology mixed this song as ${h.style || "your style"}, but its numbers aren't the mix reaching Masterology: `
+      + (h.notThisMix === 2 ? "Mixology hears nothing while your song plays here. It's bypassed or switched off, or it sits in another open project."
+        : "its loudness doesn't match. Mixology isn't right before Masterology on the {daw:master} channel: it's on a group, after Masterology, or in another open project.");
+  else if (h.analysed && h.tone) {
     const names = ["low end", "low mids", "presence", "air"];
     const off = h.tone.map((d, i) => [d, names[i]]).filter(([d]) => Math.abs(d) >= 2);
     text += off.length
       ? ` Against that style, Mixology heard ${off.map(([d, n]) => `${d > 0 ? "more" : "less"} ${n} (${fmtSigned(d)})`).join(" and ")}: Auto-Master's EQ evens out what's left.`
       : " Its tone sits close to that style.";
   }
-  frag.appendChild(tip("FROM MIXOLOGY", text, true));
+  frag.appendChild(tip("FROM MIXOLOGY", text, !other));
   if (otherGenre) {
     const b = document.createElement("button");
     b.type = "button";
@@ -2183,13 +2189,13 @@ function addMixologyLearn(body) {
     });
     frag.appendChild(b);
   }
-  if (h.mono)
+  if (h.mono && !other)
     frag.appendChild(tip("YOUR MIX IS MONO", "Mixology heard the same thing on the left and the right at the {daw:master} channel: every pan and stereo effect is lost.", false,
       { need: "Yes, unless the song is meant to be mono.", steps: ["{daw:monoMeter}: a mono group or output folds everything to the middle.", "Mixology's Stereo page shows when it's fixed."] }));
-  if (h.limited)
+  if (h.limited && !other)
     frag.appendChild(tip("MIXOLOGY'S LIMITER IS ON", "Two limiters in a row squash the mix twice: Masterology's Maximizer is the one that should set the final loudness.", false,
       { need: "Usually yes.", steps: ["Open Mixology on the {daw:master} channel, go to the Dynamics page and switch the Limiter off (or keep it only as a safety that never touches the music)."] }));
-  if (otherGenre || h.mono || h.limited) body.prepend(frag);
+  if (otherGenre || other || h.mono || h.limited) body.prepend(frag);
   else { body.appendChild(sep()); body.appendChild(frag); }
 }
 

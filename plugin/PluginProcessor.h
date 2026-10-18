@@ -22,6 +22,7 @@
 #include "ReferenceTrack.h"
 #include "ToneTargetStore.h"
 #include "SettingsHistory.h"
+#include "HandoffCheck.h"
 #include "suite/SuiteLink.h"
 
 #include <array>
@@ -40,7 +41,7 @@ public:
 
     // AudioProcessor
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
-    void releaseResources() override {}
+    void releaseResources() override;
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
 
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
@@ -147,11 +148,22 @@ public:
 
     // --- The suite link (Voxology, Mixology, Masterology) --------------------------------------------
     /** Tells Mixology what this Masterology aims for (target loudness, ceiling, genre) and reads Mixology's
-        hand-off for the song. Message thread; the plug-in's timer calls it four times a second. */
-    void updateSuite();
+        hand-off for the song. Message thread; the plug-in's timer calls it four times a second. Only while the
+        host runs this Masterology (prepareToPlay .. releaseResources, see suite::Presence): in a project that
+        is open but not active, or switched off, it neither shows itself nor follows the others. Bypassed
+        for kBypassedHideMs, it doesn't show itself either (it isn't processing). */
+    void updateSuite() { updateSuite (suite::nowMs()); }
+    void updateSuite (std::uint64_t nowMs);   // (tests: at a given time on suite::nowMs()'s clock)
+    static constexpr std::uint64_t kBypassedHideMs = 8000;
     /** Mixology's hand-off (the style it mixed in, the mix's peaks and loudness, its tone), when a Mixology
         is in this project. Message thread. */
     bool mixologyHandoff (suite::MixInfo& out) const { if (! hasHandoff) return false; out = handoff; return true; }
+    /** Whether that hand-off is about the mix this Masterology hears (suitecheck::Placement::Verdict: 0 yes, 1 another
+        signal, 2 Mixology hears nothing): Mixology's short-term loudness against this input's, while music plays. */
+    int handoffPlacement() const { return placement.get(); }
+    /** This Masterology's own input sounds mono (its L/R correlation while music plays), so Mixology's "mono mix"
+        (maybe from an old Analyze Mix) is shown only when it is still true. */
+    bool inputSoundsMono() const { return inputMono.soundsMono(); }
 
     /** The song's style (Mixology's list of 75, the same in Voxology and Mixology): you picked it here. Sets the
         Auto-Master genre it belongs to; the other plug-ins in the project follow. Message thread. */
@@ -161,10 +173,11 @@ public:
     std::uint32_t songStyleVersion() const { return styleVersion.load(); }
 
     /** The DAW you work in, shared the same way: found from the host, or picked here / in Mixology / in Voxology.
-        Every tip then says how to do things in it. "" = back to the one found. Message thread. */
+        Every tip then says how to do things in it. "" = the one found ("Found: ..."), as a pick of its own, so
+        the other plug-ins follow it too. Message thread. */
     void pickDaw (const std::string& key);
     suite::StyleInfo dawNow() const { const juce::ScopedLock sl (styleLock); return daw.style(); }
-    std::string dawDetected() const { return detectedDaw; }
+    std::string dawDetected() const { const juce::ScopedLock sl (styleLock); return detectedDaw; }
 
     /** The reference song for Match ref (its measurements only), saved with the state. */
     ReferenceTrack reference;
@@ -172,14 +185,19 @@ public:
         (the reference is saved with it, not a parameter). Message thread. */
     void loadReference (const juce::File& file);
     void clearReference();
-    /** Message thread, regularly (the editor's timer): when a load started here has ended, marks the
-        project changed again (the host may have saved while it was still being measured). */
+    /** Message thread, regularly (the processor's own timer, so also with the window closed): when a load
+        started here has ended, marks the project changed again (the host may have saved while it was still
+        being measured). */
     void pollReference();
 
     /** Tells the host the project changed although no parameter did (a snapshot stored, a reference
         loaded or cleared, Tone Steady's target learned or cleared), so it asks to save it. A VST3 host
-        marks a project changed only for parameter edits or this call. Message thread. */
+        marks a project changed only for parameter edits or setDirty, and Logic (AU) only for parameter
+        edits: this calls setDirty and moves the hidden State Revision parameter (kStateRevisionId).
+        Message thread (from another thread the parameter moves at the next timer tick). */
     void markStateChanged();
+    static constexpr const char* kStateRevisionId = "stateRev";
+    static constexpr int kStateRevisions = 1000;
 
     /** Auto Analyze on / off (see AutoMasterController), saved with the project: marks it changed. Message thread. */
     void setAutoAnalyze (bool on);
@@ -202,24 +220,44 @@ public:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-private:
-    void timerCallback() override
+    /** The processor's own work, four times a second on the message thread (its timer; tests call it directly):
+        what other threads left for the message thread, a Match ref load that ended, then the suite link. */
+    void tick()
     {
         // A project opened on another thread: Auto Analyze's saved switch is applied here, on the message thread.
         if (const int pending = pendingAutoAnalyze.exchange (-1); pending >= 0)
             autoMaster.setAutoAnalyze (pending != 0);
+        if (stateRevisionPending.exchange (false))
+            bumpStateRevision();
+        pollReference();   // a Match ref that finished measuring after the window closed still marks the project
         updateSuite();
     }
+
+private:
+    void timerCallback() override { tick(); }
     std::atomic<int> pendingAutoAnalyze { -1 };   // -1: nothing waiting
+    suite::Presence suitePresence;                // taking part in the suite link (prepareToPlay .. releaseResources)
+    void leaveSuite();                            // stopped or closing: off the link at once
+    juce::RangedAudioParameter* stateRevisionParam = nullptr;
+    std::atomic<bool> stateRevisionPending { false };   // markStateChanged ran off the message thread
+    void bumpStateRevision();
     int suiteSlot = -1;
     std::uint64_t suiteId = 0;
     suite::MixInfo handoff;
     bool hasHandoff = false;
+    suitecheck::Placement placement;          // is the hand-off this mix? (message thread)
+    suitecheck::InputMono inputMono;          // does the input sound mono? (message thread)
+    std::uint64_t lastSuiteMs = 0, lastHandoffMs = 0, bypassedSinceMs = 0;
     mutable juce::CriticalSection styleLock;
     suite::SongStyle songStyle { suite::StyleInfo::From::masterology };   // under styleLock
     std::atomic<std::uint32_t> styleVersion { 0 };
     void applyStyleGenre();   // the Auto-Master genre the song's style belongs to
-    const std::string detectedDaw = suite::dawFromHostPath (juce::PluginHostType::getHostPath().toStdString());
+    // The DAW found from the host (under styleLock): its path, else JUCE's own detection (Logic hosting the plug-in
+    // out of process, Fender Studio Pro). Looked for again when the plug-in starts, while it is still "other": Logic
+    // tells an AU who it is only after creating it.
+    static std::string findDaw();
+    void findDawAgain();
+    std::string detectedDaw = findDaw();
     suite::SharedChoice daw { suite::StyleInfo::From::masterology, suite::Choice::daw };   // under styleLock
     int suiteRefVersion = -1;
     polisher::ReferenceProfile suiteRef;

@@ -332,6 +332,43 @@ TEST_CASE ("Suite: the beat key goes from Voxology on the beat to Honey Tune", "
     CHECK (when == 123456);
 }
 
+TEST_CASE ("Suite: a plug-in takes part only while the host runs it (prepareToPlay .. releaseResources)", "[suite]")
+{
+    using Step = suite::Presence::Step;
+    suite::Presence p;
+    CHECK (p.update (100) == Step::away);   // created, not started yet
+    CHECK_FALSE (p.takingPart());
+    p.start();                               // prepareToPlay
+    CHECK (p.update (200) == Step::join);
+    CHECK (p.takingPart());
+    CHECK_FALSE (p.settled (200));           // the shared choices wait a moment...
+    CHECK (p.update (300) == Step::here);
+    CHECK (p.settled (200 + suite::Presence::kSettleMs));   // ... then follow
+    p.stop();                                // releaseResources (an inactive project, an insert switched off)
+    CHECK (p.update (900) == Step::leave);
+    CHECK_FALSE (p.takingPart());
+    CHECK_FALSE (p.settled (5000));
+    CHECK (p.update (1000) == Step::away);
+    p.stop(); p.start(); p.stop();           // stopped and started between two ticks: still away, nothing to do
+    CHECK (p.update (1100) == Step::away);
+    p.start();
+    CHECK (p.update (1200) == Step::join);   // back: joins again, and waits again before syncing
+    CHECK_FALSE (p.settled (1300));
+    CHECK (p.settled (1200 + suite::Presence::kSettleMs));
+
+    // Away, a plug-in neither holds the shared style nor follows it: another project's pick doesn't reach it.
+    Memory mem;
+    suite::Link link (mem.data());
+    suite::SongStyle songA (suite::StyleInfo::From::masterology), songB (suite::StyleInfo::From::mixology);
+    songA.pick ("trap.drill", "Trap & Drill - Drill");
+    songA.sync (link, 1, 2000);
+    songA.leave (link, 1);                   // song A's project made inactive: it leaves the choice at once
+    suite::StyleInfo got;
+    CHECK_FALSE (link.readStyle (got, 2100));
+    CHECK_FALSE (songB.sync (link, 2, 2100));   // song B (nothing picked yet) doesn't get song A's style
+    CHECK (songB.style().key.empty());
+}
+
 TEST_CASE ("Suite: the DAW is found from the host program", "[suite]")
 {
     CHECK (suite::dawFromHostPath ("C:\\Program Files\\Steinberg\\Cubase 14\\Cubase14.exe") == "cubase");
@@ -346,6 +383,25 @@ TEST_CASE ("Suite: the DAW is found from the host program", "[suite]")
     CHECK (suite::dawFromHostPath ("C:\\Program Files\\Cakewalk\\Sonar\\Sonar.exe") == "cakewalk");
     CHECK (suite::dawFromHostPath ("C:\\Tools\\pluginval.exe") == "other");
     CHECK (suite::dawFromHostPath ("") == "other");
+    // Fender Studio Pro (Studio One's successor), FL Studio's plug-in bridge, and an FL folder that says "Studio Pro...".
+    CHECK (suite::dawFromHostPath ("C:\\Program Files\\Fender\\Studio Pro 8\\Studio Pro.exe") == "studioone");
+    CHECK (suite::dawFromHostPath ("/Applications/Studio Pro 8.app/Contents/MacOS/Studio Pro") == "studioone");
+    CHECK (suite::dawFromHostPath ("C:\\Program Files\\Image-Line\\Shared\\Plugins\\ILBridge.exe") == "fl");
+    CHECK (suite::dawFromHostPath ("C:\\Program Files (x86)\\Image-Line\\FL Studio Producer Edition\\FL.exe") == "fl");
+    // The path first, else JUCE's name for the host: Logic running the plug-in in AUHostingService, Fender Studio Pro.
+    const std::string xpc = "/System/Library/Frameworks/AudioToolbox.framework/XPCServices/AUHostingService.xpc/Contents/MacOS/AUHostingService";
+    CHECK (suite::dawFromHostPath (xpc) == "other");
+    CHECK (suite::dawFromHost (xpc, "Apple Logic") == "logic");
+    CHECK (suite::dawFromHost ("C:\\Program Files\\Fender\\Studio\\Host.exe", "Fender Studio Pro") == "studioone");
+    CHECK (suite::dawFromHost ("C:\\Program Files\\Steinberg\\Cubase 14\\Cubase14.exe", "Unknown") == "cubase");
+    CHECK (suite::dawFromHost ("C:\\Tools\\pluginval.exe", "pluginval") == "other");
+    CHECK (suite::dawFromHost ("", "Unknown") == "other");
+    for (const auto& [name, key] : { std::pair { "Steinberg Cubase", "cubase" }, std::pair { "Steinberg Nuendo", "cubase" },
+                                     std::pair { "Studio One", "studioone" }, std::pair { "FL Studio", "fl" },
+                                     std::pair { "Ableton Live", "ableton" }, std::pair { "Reaper", "reaper" },
+                                     std::pair { "Bitwig Studio", "bitwig" }, std::pair { "Apple Logic", "logic" },
+                                     std::pair { "Cakewalk by Bandlab", "cakewalk" }, std::pair { "Cakewalk Sonar", "cakewalk" } })
+        CHECK (suite::dawFromHost ("", name) == key);
     CHECK (std::string (suite::dawName ("studioone")) == "Studio One");
     CHECK (std::string (suite::dawName ("nope")) == "Other DAW");
 }

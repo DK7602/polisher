@@ -1,4 +1,5 @@
 #include "PolisherWebEditor.h"
+#include "PluginEditor.h"
 #include "polisher/MixHandoff.h"
 
 #include "PolisherUIData.h"
@@ -30,6 +31,19 @@ namespace
     }
 
     float roundTo (float v, float step) { return std::round (v / step) * step; }
+
+    /** The window's first width: 1280 (x 720) where that fits, else as large as fits the screen it opens on, under
+        the host's title and plug-in bars (16:9, not below the minimum). */
+    int initialWidth()
+    {
+        int w = 1280;
+        if (const auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForPoint (juce::Desktop::getMousePosition().toFloat()))
+        {
+            const auto area = d->userBounds.toNearestInt();   // the screen less the taskbar / menu bar, in points
+            w = std::min ({ w, area.getWidth() - 40, (area.getHeight() - 100) * PolisherWebEditor::kDesignWidth / PolisherWebEditor::kDesignHeight });
+        }
+        return std::max (w, PolisherWebEditor::kMinWidth);
+    }
 }
 
 juce::WebBrowserComponent::Options PolisherWebEditor::makeBaseOptions()
@@ -37,8 +51,9 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeBaseOptions()
     using Options = juce::WebBrowserComponent::Options;
     return Options{}
        #if JUCE_WINDOWS
-        // WebView2 (Chromium) on Windows. The legacy IE backend can't run this UI, so it is never
-        // used; if WebView2 is missing, isSupported() is false and the basic editor is shown instead.
+        // WebView2 (Chromium) on Windows. The legacy IE backend can't run this UI: if WebView2 is
+        // missing, isSupported() is false and the basic editor is shown instead; if it fails later
+        // (JUCE then falls back to IE, or the page never loads), checkPageStarted() shows it.
         .withBackend (Options::Backend::webview2)
        #endif
         .withWinWebView2Options (Options::WinWebView2{}
@@ -305,13 +320,14 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
     addAndMakeVisible (webView);
     webView.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
 
-    // Fixed 16:9 design, freely resizable; the page scales itself to fit. Not smaller than 70 % of the
-    // design: below that the smallest texts (meter labels, Learn) shrink under ~8 px and can't be read.
+    // Fixed 16:9 design, freely resizable; the page scales itself to fit. Not smaller than half the design
+    // (kMinWidth), and it opens no larger than the screen.
     setResizable (true, true);
     setResizeLimits (kMinWidth, kMinHeight, 2400, 1350);
     if (auto* c = getConstrainer())
         c->setFixedAspectRatio (static_cast<double> (kDesignWidth) / kDesignHeight);
-    setSize (1280, 720);
+    const int width = initialWidth();
+    setSize (width, width * kDesignHeight / kDesignWidth);
 
     // Energy meters piled up while the editor was closed: start fresh.
     for (auto& e : audioProcessor.meters.stemEnergy) e.store (0.0f);
@@ -328,7 +344,11 @@ PolisherWebEditor::~PolisherWebEditor()
     // Level match is a listening aid: switch it off when the window closes so it can't end up in a bounce.
     if (auto* p = audioProcessor.parameters.getParameter ("levelMatch"))
         if (p->getValue() > 0.5f)
+        {
+            p->beginChangeGesture();   // as a click on MATCH would (VST3: beginEdit / endEdit)
             p->setValueNotifyingHost (0.0f);
+            p->endChangeGesture();
+        }
     // So are Listen / Solo and the MONO / PHONE checks: back to the plain master.
     audioProcessor.resetMonitoring();
     if (pageGroupOpen)
@@ -343,6 +363,36 @@ void PolisherWebEditor::paint (juce::Graphics& g)
 void PolisherWebEditor::resized()
 {
     webView.setBounds (getLocalBounds());
+    if (basicView != nullptr)
+        basicView->setBounds (getLocalBounds());
+}
+
+void PolisherWebEditor::checkPageStarted()
+{
+    if (! isShowing())
+        return;   // the web view only starts once the window is on screen
+    ++framesShownWithoutPage;
+    if (framesShownWithoutPage % 30 == 0)   // once a second: is the page running? (the legacy IE view never answers)
+    {
+        juce::Component::SafePointer<PolisherWebEditor> safe (this);
+        webView.evaluateJavascript ("!!(window.__JUCE__ && document.getElementById ('stage'))",
+                                    [safe] (juce::WebBrowserComponent::EvaluationResult result)
+                                    {
+                                        if (const auto* v = result.getResult(); safe != nullptr && v != nullptr && static_cast<bool> (*v))
+                                            safe->pageAnswered = true;
+                                    });
+    }
+    if (! pageAnswered && framesShownWithoutPage >= kPageTimeoutFrames)
+        showBasicView();
+}
+
+void PolisherWebEditor::showBasicView()
+{
+    webView.setVisible (false);
+    audioProcessor.autoMaster.setEditorOpen (false);   // Auto Analyze shows its advice in the full screen only
+    basicView = std::make_unique<PolisherAudioProcessorEditor> (audioProcessor, PolisherAudioProcessorEditor::Reason::webViewFailed);
+    addAndMakeVisible (*basicView);
+    resized();
 }
 
 std::optional<juce::WebBrowserComponent::Resource> PolisherWebEditor::getResource (const juce::String& url)
@@ -443,6 +493,10 @@ juce::var PolisherWebEditor::makeSpectrum (const SpectrumTap& tap, Analyser& sta
 
 void PolisherWebEditor::timerCallback()
 {
+    if (! pageAnswered && basicView == nullptr)
+        checkPageStarted();
+    if (basicView != nullptr)
+        return;   // the BASIC VIEW has the window (and reads the meters itself)
     auto& m = audioProcessor.meters;
 
     const float gr = m.gainReduction.exchange (0.0f);
@@ -601,7 +655,8 @@ void PolisherWebEditor::timerCallback()
         const auto d = audioProcessor.dawNow();
         auto* dw = new juce::DynamicObject();
         dw->setProperty ("key", juce::String::fromUTF8 (d.key.c_str()));
-        dw->setProperty ("picked", d.pickedAt != 0);   // false: found from the host
+        // false: the one found from the host (Settings shows "Found: ..."), also once it was picked that way
+        dw->setProperty ("picked", d.pickedAt != 0 && d.key != audioProcessor.dawDetected());
         dw->setProperty ("from", static_cast<int> (d.from));
         dw->setProperty ("detected", juce::String::fromUTF8 (audioProcessor.dawDetected().c_str()));
         frame->setProperty ("daw", juce::var (dw));
@@ -615,8 +670,11 @@ void PolisherWebEditor::timerCallback()
         mo->setProperty ("peak", roundTo (h.peakDbtp, 0.1f));
         mo->setProperty ("lufs", roundTo (h.integratedLufs, 0.1f));
         mo->setProperty ("analysed", (h.flags & suite::MixInfo::analysed) != 0);
-        mo->setProperty ("mono", (h.flags & suite::MixInfo::monoMix) != 0);
+        // Mixology's "mono mix" may be from an Analyze Mix made before the bus was fixed: only when this input agrees.
+        mo->setProperty ("mono", (h.flags & suite::MixInfo::monoMix) != 0 && audioProcessor.inputSoundsMono());
         mo->setProperty ("limited", (h.flags & suite::MixInfo::limited) != 0);
+        // 0: about this mix; 1: Mixology's loudness isn't what reaches Masterology; 2: Mixology hears nothing.
+        mo->setProperty ("notThisMix", audioProcessor.handoffPlacement());
         juce::Array<juce::var> tone;   // low, low mids, presence, air against the style (dB)
         for (float d : { h.lowDb, h.lowMidDb, h.presenceDb, h.airDb }) tone.add (roundTo (d, 0.1f));
         mo->setProperty ("tone", tone);

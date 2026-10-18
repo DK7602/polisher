@@ -16,12 +16,17 @@ namespace
     const char* const webView2Url = "https://developer.microsoft.com/microsoft-edge/webview2/";
 
    #if JUCE_WINDOWS
-    const char* const noticeText = "BASIC VIEW: Masterology's full screen needs the Microsoft Edge WebView2 Runtime. Click GET WEBVIEW2, "
-                                   "install it (free), then reopen Masterology. All 12 modules keep working meanwhile; Auto-Master and "
-                                   "Learn need the full screen.";
+    const char* const noWebViewText = "BASIC VIEW: Masterology's full screen needs the Microsoft Edge WebView2 Runtime. Click GET WEBVIEW2, "
+                                      "install it (free), then reopen Masterology. All 12 modules keep working meanwhile; Auto-Master and "
+                                      "Learn need the full screen.";
+    const char* const failedText = "BASIC VIEW: Masterology's full screen didn't start (WebView2 failed to open). Close and reopen this "
+                                   "window; if it stays like this, restart the computer or reinstall WebView2 (GET WEBVIEW2). All 12 "
+                                   "modules keep working; Auto-Master and Learn need the full screen.";
    #else
-    const char* const noticeText = "BASIC VIEW: Masterology's full screen couldn't start because this system has no web view. "
-                                   "All 12 modules keep working with their saved settings; Auto-Master and Learn need the full screen.";
+    const char* const noWebViewText = "BASIC VIEW: Masterology's full screen couldn't start because this system has no web view. "
+                                      "All 12 modules keep working with their saved settings; Auto-Master and Learn need the full screen.";
+    const char* const failedText = "BASIC VIEW: Masterology's full screen didn't start. Close and reopen this window. All 12 modules "
+                                   "keep working with their saved settings; Auto-Master and Learn need the full screen.";
    #endif
 
     juce::String formatLufs (float v, const char* unit)
@@ -30,8 +35,8 @@ namespace
     }
 }
 
-PolisherAudioProcessorEditor::PolisherAudioProcessorEditor (PolisherAudioProcessor& p)
-    : AudioProcessorEditor (&p), audioProcessor (p)
+PolisherAudioProcessorEditor::PolisherAudioProcessorEditor (PolisherAudioProcessor& p, Reason reason)
+    : AudioProcessorEditor (&p), audioProcessor (p), noticeText (reason == Reason::webViewFailed ? failedText : noWebViewText)
 {
     lookAndFeel.setColourScheme ({ Colours::navy, Colours::panel, Colours::panel, Colours::powder.withAlpha (0.4f),
                                    Colours::pearl, Colours::red, Colours::pearl, Colours::red, Colours::pearl });
