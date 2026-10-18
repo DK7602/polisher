@@ -833,3 +833,41 @@ TEST_CASE ("An Auto-Master analysis stops at once when it is cancelled", "[autom
     const ScopedCancelFlag cancellable (&down);
     CHECK_NOTHROW (throwIfCancelled());
 }
+
+TEST_CASE ("Auto-Master masters to the song's style: Lo-Fi softer than Rage", "[automaster][handoff]")
+{
+    const auto mix = testsig::trapLike (44100.0, 12.0);
+    auto run = [&] (Genre g, const char* style)
+    {
+        AutoMasterSettings s;
+        s.genre = g;
+        s.target = LoudnessTarget::loud;
+        s.styleKey = style;
+        const auto r = autoMaster (mix, s);
+        REQUIRE (r.ok);
+        return r;
+    };
+    const auto lofi = run (Genre::trapHipHop, "hiphop.lofi"), rage = run (Genre::trapHipHop, "trap.rage");
+    // "Nothing sharp, nothing loud": less saturation and less clipping than Rage.
+    CHECK (lofi.chain.saturation.driveDb < rage.chain.saturation.driveDb - 1.0);
+    const double lofiClip = lofi.chain.clipper.thresholdDb - lofi.chain.limiter.ceilingDbtp;
+    const double rageClip = rage.chain.clipper.thresholdDb - rage.chain.limiter.ceilingDbtp;
+    CHECK ((! lofi.chain.clipper.enabled || ! rage.chain.clipper.enabled || lofiClip > rageClip + 1.0));
+    CHECK ((rage.chain.clipper.enabled || ! lofi.chain.clipper.enabled));
+    // Its tone: the EQ aims for less air than Rage's.
+    CHECK (lofi.chain.eq.gainDb[6] <= rage.chain.eq.gainDb[6]);
+    // The report says so, and suggests the softer target for a soft style.
+    CHECK (lofi.summary.find ("Hip Hop - Lo-Fi (mastered as Trap / Hip-Hop)") != std::string::npos);
+    bool soft = false;
+    for (const auto& n : lofi.notes) soft = soft || n.find ("meant to sound soft") != std::string::npos;
+    CHECK (soft);
+    bool versus = false;
+    for (const auto& x : lofi.reasons) versus = versus || (x.module == "eq" && x.why.find ("Hip Hop - Lo-Fi") != std::string::npos);
+    CHECK (versus);
+
+    // A style of another genre (you picked Rock for a Lo-Fi song) is left out: Rock alone.
+    const auto rock = run (Genre::rock, ""), rockLofi = run (Genre::rock, "hiphop.lofi");
+    CHECK (rockLofi.chain.eq.gainDb == rock.chain.eq.gainDb);
+    CHECK (rockLofi.chain.saturation.driveDb == rock.chain.saturation.driveDb);
+    CHECK (rockLofi.summary == rock.summary);
+}

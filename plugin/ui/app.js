@@ -2165,7 +2165,7 @@ function addMixologyLearn(body) {
     const names = ["low end", "low mids", "presence", "air"];
     const off = h.tone.map((d, i) => [d, names[i]]).filter(([d]) => Math.abs(d) >= 2);
     text += off.length
-      ? ` Against that style, Mixology heard ${off.map(([d, n]) => `${d > 0 ? "more" : "less"} ${n} (${fmtSigned(d)})`).join(" and ")}: Auto-Master's EQ evens out what's left.`
+      ? ` Against that style, Mixology heard ${off.map(([d, n]) => `${d > 0 ? "more" : "less"} ${n} (${fmtSigned(d)})`).join(" and ")}. ${otherGenre ? `Auto-Master compares with ${GENRES[g]} masters instead, so its EQ may not follow this.` : "Auto-Master's EQ aims for the same style and closes part of that gap (unless a reference is loaded); fixing it in the mix sounds best."}`
       : " Its tone sits close to that style.";
   }
   frag.appendChild(tip("FROM MIXOLOGY", text, true));

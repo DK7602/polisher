@@ -107,6 +107,9 @@ public:
         Hip-Hop, Balanced)" or "Tone Steady: learn the song's tone". */
     std::function<void (const juce::String& label)> onApplyBegin;
     std::function<void()> onApplyEnd;
+    /** The song's style shared by the suite ("hiphop.lofi"; "" = none), message thread: Auto-Master masters to it
+        when it belongs to the chosen genre (polisher::AutoMasterSettings::styleKey). */
+    std::function<std::string()> songStyleKey;
 
     /** Sets every module from a finished analysis and stores its report (message thread). Called by the
         timer when an analysis ends; public for the plug-in tests. */
@@ -165,6 +168,7 @@ private:
     void timerCallback() override { tick(); }
     void updateTimer();
     polisher::AutoMasterSettings currentSettings() const;
+    std::string styleKeyFor (int genre) const;   // the song's style if Auto-Master masters it as this genre, else ""
     void autoTick (double nowMs);
     void startWatching (bool fresh);
     void stopWatching();

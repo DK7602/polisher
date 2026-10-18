@@ -1,6 +1,7 @@
 #include "polisher/AutoMaster.h"
 #include "polisher/Denormals.h"
 #include "polisher/FilterDesign.h"
+#include "polisher/MixHandoff.h"
 #include "polisher/SongListener.h"
 
 #include <algorithm>
@@ -294,6 +295,72 @@ double hitJumpAtTargetDb (const AudioClip& clip, double targetLufs, double ceili
 }
 
 } // namespace
+
+// =================================================================================================
+// Song styles: the suite's 75 styles move their genre's target curve
+// =================================================================================================
+
+namespace {
+
+/** Mixology's style curve without its common parts (Analysis::targetDb / the Tone page): bass weight around
+    55 Hz, the low-mid scoop around 350 Hz, the top sheen rising from 4 kHz. */
+double mixologyShapeDb (double bass, double scoop, double air, double hz) noexcept
+{
+    const double lf = std::log2 (hz / 1000.0);
+    return bass * std::exp (-std::pow (std::log2 (hz / 55.0), 2.0) / 2.2)
+         - scoop * std::exp (-std::pow (std::log2 (hz / 350.0), 2.0) / 1.2)
+         + air * std::clamp ((lf - 2.0) / 3.0, 0.0, 1.0);
+}
+
+/** That curve averaged over each analysis band (log-spaced points). */
+std::array<double, kEqBands> mixologyBandsDb (double bass, double scoop, double air) noexcept
+{
+    std::array<double, kEqBands> out {};
+    constexpr int points = 32;
+    for (size_t b = 0; b < out.size(); ++b)
+    {
+        const double lo = std::log2 (kEdges[b]), hi = std::log2 (kEdges[b + 1]);
+        double sum = 0.0;
+        for (int j = 0; j < points; ++j)
+            sum += mixologyShapeDb (bass, scoop, air, std::exp2 (lo + (hi - lo) * (j + 0.5) / points));
+        out[b] = sum / points;
+    }
+    return out;
+}
+
+} // namespace
+
+std::array<double, kEqBands> styleToneOffsetDb (Genre g, const std::string& styleKey) noexcept
+{
+    std::array<double, kEqBands> off {};
+    const auto* style = handoff::mixStyle (styleKey);
+    if (style == nullptr || style->genre != static_cast<int> (g))
+        return off;
+    // The genre's curve stands for its styles on average.
+    double bass = 0.0, scoop = 0.0, air = 0.0;
+    int n = 0;
+    for (const auto& st : handoff::kMixStyles)
+        if (st.genre == style->genre) { bass += st.bass; scoop += st.scoop; air += st.air; ++n; }
+    const auto mine = mixologyBandsDb (style->bass, style->scoop, style->air);
+    const auto usual = mixologyBandsDb (bass / n, scoop / n, air / n);
+    double ref = 0.0;
+    for (size_t b = 0; b < off.size(); ++b)
+    {
+        off[b] = mine[b] - usual[b];
+        if (b >= 1 && b <= 5) ref += off[b] / 5.0;
+    }
+    for (size_t b = 0; b < off.size(); ++b)
+        off[b] = std::clamp (off[b] - ref, -kMaxStyleOffsetDb[b], kMaxStyleOffsetDb[b]);
+    return off;
+}
+
+std::array<double, kEqBands> styleTargetCurve (Genre g, const std::string& styleKey) noexcept
+{
+    auto curve = genreTargetCurve (g);
+    const auto off = styleToneOffsetDb (g, styleKey);
+    for (size_t b = 0; b < curve.size(); ++b) curve[b] += off[b];
+    return curve;
+}
 
 // =================================================================================================
 // Analysis
@@ -1192,6 +1259,14 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         (stemPush ? ", and your Stem EQ moves raise it to about " + num (arrivesLufs + stemLiftDb) + " LUFS before the rest of the chain" : std::string());
     const auto rules = rulesFor (s.intensity);
     const std::string genre = genreName (s.genre);
+    // The song's style (shared by the suite) when Auto-Master masters it as this genre: the EQ aims for the style's
+    // own tone, and its feel scales the clipping and saturation a little. A style of another genre (you picked a
+    // different genre here) is left out.
+    const auto* style = handoff::mixStyle (s.styleKey);
+    if (style != nullptr && style->genre != static_cast<int> (s.genre))
+        style = nullptr;
+    const std::string styleName = style != nullptr ? std::string (style->name) : genre;   // what the sound is compared with
+    const auto feel = style != nullptr ? style->feel : handoff::Feel::normal;
 
     if (! a.usable)
     {
@@ -1342,9 +1417,9 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     // neighbouring bands overlap, so setting each band on its own would over- or under-shoot. A
     // reference's balance is measured exactly like the mix's, so it drops in for the genre curve; the
     // same intensity limits apply, so the EQ still only goes part of the way.
-    const auto target = useRef ? ref.bandDb : genreTargetCurve (s.genre);
+    const auto target = useRef ? ref.bandDb : styleTargetCurve (s.genre, s.styleKey);
     // What the report compares the mix with.
-    const std::string versus = useRef ? refName : "typical " + genre + " masters";
+    const std::string versus = useRef ? refName : "typical " + styleName + " masters";
     const double tRef = (target[1] + target[2] + target[3] + target[4] + target[5]) / 5.0;
     std::array<double, kEqBands> diffs {}, wanted {}, limits {};
     for (int b = 0; b < kEqBands; ++b)
@@ -1423,7 +1498,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         std::string list;
         for (size_t k = 0; k < flat.size(); ++k)
             list += (k ? (k + 1 == flat.size() ? " and " : ", ") : "") + flat[k];
-        reason ("eq", "Other bands", "0 dB", list + (flat.size() > 1 ? " are" : " is") + " already close to " + (useRef ? "the reference's" : "the " + genre) +
+        reason ("eq", "Other bands", "0 dB", list + (flat.size() > 1 ? " are" : " is") +  " already close to " + (useRef ? "the reference's" : "the " + styleName) +
                 " balance, so " + (flat.size() > 1 ? "they stay" : "it stays") + " flat.");
     }
     else if (flat.size() == static_cast<size_t> (kEqBands))
@@ -1790,6 +1865,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
             case Genre::acoustic:                    harmTarget = -37.0; break;
         }
         harmTarget += s.intensity == Intensity::gentle ? -7.0 : s.intensity == Intensity::punchy ? 3.0 : 0.0;
+        harmTarget += feel == handoff::Feel::soft ? -5.0 : feel == handoff::Feel::natural ? -2.0 : feel == handoff::Feel::hard ? 1.0 : 0.0;
         const bool dense = a.peakToLoudnessDb < 9.0;
         if (dense) harmTarget -= 4.0;
 
@@ -1868,6 +1944,9 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         case Genre::rock:                        clipShare = 2.0; break;
         case Genre::acoustic:                    clipShare = 1.5; break;
     }
+    // The style's feel: a soft style (Lo-Fi, Ambient) hides less clipping than its genre, a hard one (Rage, Metal) a little more.
+    clipShare = feel == handoff::Feel::soft ? clipShare * 0.5 : feel == handoff::Feel::natural ? clipShare * 0.75
+              : feel == handoff::Feel::hard ? clipShare + 0.5 : clipShare;
     clipShare *= tier == LoudnessTarget::stream ? 0.6 : tier == LoudnessTarget::club ? 1.3 : 1.0;
     if (punchy) clipShare += 1.5;
     const double minLevel = (punchy || tier == LoudnessTarget::club) ? -2.0 : 0.0;   // below 0 = extra density
@@ -1994,7 +2073,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                 ". Sharing the work this way gets you loud without either one being heard.");
         reason ("clip", "Clip Level", num (clipLevel, true) + " dB",
                 clipLevel > 0.05 ? "Clipping starts " + num (clipLevel) + " dB above the ceiling, so only the biggest peaks are touched: about as much clipping as " +
-                                   genre + " hides well (" + num (clipShare) + " dB)."
+                                   styleName + " hides well (" + num (clipShare) + " dB)."
                 : clipLevel > -0.05 ? "The clip level sits right at the ceiling (Softness starts rounding peaks a few dB below it): the clipper takes the peaks and the Maximizer just polishes what's left."
                 : "Clipping starts " + num (-clipLevel) + " dB below the ceiling for extra density (" + std::string (rules.name) + ", " +
                   tname + "); the level comes back up so peaks still use the full headroom.");
@@ -2091,9 +2170,11 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                                                                : "In your mix, put a compressor on the peakiest tracks (strums, drums or vocal) taking 2\xE2\x80\x93" "3 dB off.") +
                            "\nSTEP: Run Auto-Master again: it will get closer to your target."
                            "\nSTEP: Or choose Punchy (it allows more peak control) and run Auto-Master again.");
-    if (s.genre == Genre::acoustic && ! useRef && tier != LoudnessTarget::stream)
-        r.notes.push_back ("HEADS UP: acoustic releases usually sit around \xE2\x88\x92" "14 to \xE2\x88\x92" "11 LUFS. "
-                           "Stream \xE2\x88\x92" "14 keeps the most life in the guitars and vocal; streaming services turn louder masters down anyway."
+    if ((s.genre == Genre::acoustic || feel == handoff::Feel::soft) && ! useRef && tier != LoudnessTarget::stream)
+        r.notes.push_back ("HEADS UP: " + (feel == handoff::Feel::soft ? styleName + " is meant to sound soft: its releases usually sit around "
+                                           : style != nullptr ? styleName + " releases usually sit around " : std::string ("acoustic releases usually sit around ")) +
+                           "\xE2\x88\x92" "14 to \xE2\x88\x92" "11 LUFS. Stream \xE2\x88\x92" "14 keeps the most life in " +
+                           (feel == handoff::Feel::soft ? std::string ("it") : std::string ("the guitars and vocal")) + "; streaming services turn louder masters down anyway."
                            "\nNEED: Your choice. Louder is fine if that's the sound you want."
                            "\nSTEP: For a more natural sound, click Stream \xE2\x88\x92" "14 as the Target."
                            "\nSTEP: Run Auto-Master again and compare with MATCH on.");
@@ -2153,14 +2234,14 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     const bool wholeSong = s.songSeconds >= a.seconds + 2.0;
     if (useRef)
         r.summary = std::string (head) + "Matched to your reference " + refName + " (its loudest 12 seconds measure " + num (refLufs) +
-                    " LUFS, compared with the loudest 12 seconds of your song) instead of typical " + genre + " masters: tone, loudness, "
+                    " LUFS, compared with the loudest 12 seconds of your song) instead of typical " + styleName + " masters: tone, loudness, "
                     "stereo width and low end aim for it, part of the way. "
                     "The genre still sets what a reference can't show: compression, saturation, clipping and punch. ";
     else
         r.summary = head;
     r.summary += std::string ("Your mix measured ") + num (arrivesLufs) + " LUFS with peaks at " +
                 num (arrivesPeak) + " dBTP" + (stemPush ? " (about " + num (arrivesLufs + stemLiftDb) + " LUFS with your Stem EQ moves)" : std::string()) +
-                ". Settings: " + genre + ", " + rules.name + ", " + tname +
+                ". Settings: " + (style != nullptr ? styleName + " (mastered as " + genre + ")" : genre) + ", " + rules.name + ", " + tname +
                 (trimDb < 0.0 ? ". To land on the target, Input Trim turns it down " + num (-trimDb) + " dB first" : std::string()) +
                 ". The master now measures " + num (out.integratedLufs) + " LUFS with true peak " + num (out.truePeakDbtp) +
                 (wholeSong ? " dBTP in this loudest part. The whole song reads lower than its loudest part, which is normal."

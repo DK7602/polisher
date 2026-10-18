@@ -1,5 +1,6 @@
 #include "AutoMasterController.h"
 #include "ModuleParams.h"
+#include "polisher/MixHandoff.h"
 
 #include <map>
 #include <thread>
@@ -309,6 +310,14 @@ void AutoMasterController::launchAnalysis()
     });
 }
 
+std::string AutoMasterController::styleKeyFor (int genre) const
+{
+    // The song's style, when Auto-Master masters it as this genre (else "": the genre alone).
+    const auto key = songStyleKey ? songStyleKey() : std::string();
+    const auto* style = polisher::handoff::mixStyle (key);
+    return style != nullptr && style->genre == genre ? key : std::string();
+}
+
 polisher::AutoMasterSettings AutoMasterController::currentSettings() const
 {
     auto choice = [this] (const char* id) { return juce::roundToInt (state.getRawParameterValue (id)->load()); };
@@ -322,6 +331,7 @@ polisher::AutoMasterSettings AutoMasterController::currentSettings() const
     for (int k = 0; k < polisher::kStems; ++k)
         settings.stem.gainDb[static_cast<size_t> (k)] = state.getRawParameterValue (ModuleParams::stemIds[k])->load();
     settings.reference = reference.getProfile();   // Match ref (invalid = none: genre targets)
+    settings.styleKey = styleKeyFor (static_cast<int> (settings.genre));
     return settings;
 }
 
@@ -343,7 +353,10 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
     doc->setProperty ("notAFullMix", r.notAFullMix);
     doc->setProperty ("tipTitle", juce::String::fromUTF8 (r.tipTitle.c_str()));
     doc->setProperty ("tip", juce::String::fromUTF8 (r.tip.c_str()));
-    doc->setProperty ("genre", juce::String (polisher::genreName (s.genre)));
+    const auto* style = polisher::handoff::mixStyle (s.styleKey);
+    // What the master was made for: the song's style when it was used ("Hip Hop - Lo-Fi"), else the genre.
+    doc->setProperty ("genre", style != nullptr ? juce::String::fromUTF8 (style->name) : juce::String (polisher::genreName (s.genre)));
+    doc->setProperty ("style", juce::String (s.styleKey));
     doc->setProperty ("intensity", juce::String (kIntensityNames[static_cast<int> (s.intensity)]));
     doc->setProperty ("target", juce::String::fromUTF8 (kTargetNames[static_cast<int> (s.target)]));
     doc->setProperty ("time", juce::Time::getCurrentTime().toISO8601 (true));
@@ -420,6 +433,7 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         // The choices it was made for: Auto Analyze stops when they change (run Auto-Master again instead).
         auto* chosen = new juce::DynamicObject();
         chosen->setProperty ("genre", static_cast<int> (s.genre));
+        chosen->setProperty ("style", juce::String (s.styleKey));   // "" when the genre alone was used
         chosen->setProperty ("intensity", static_cast<int> (s.intensity));
         chosen->setProperty ("target", static_cast<int> (s.target));
         chosen->setProperty ("reference", s.reference.valid ? juce::String::fromUTF8 (s.reference.name.c_str()) : juce::String());
@@ -580,8 +594,10 @@ bool AutoMasterController::reportSettingsMatch() const
         return true;   // a report from before v0.27: nothing to compare with
     auto choice = [this] (const char* id) { return juce::roundToInt (paramValue (id)); };
     const juce::String refNow = reference.getState() == ReferenceTrack::loaded ? juce::String::fromUTF8 (reference.getProfile().name.c_str()) : juce::String();
+    // The song style counts too (a report from before styles has none: the genre alone).
+    const bool sameStyle = ! chosen.hasProperty ("style") || chosen["style"].toString() == juce::String (styleKeyFor (choice ("amGenre")));
     return static_cast<int> (chosen["genre"]) == choice ("amGenre") && static_cast<int> (chosen["intensity"]) == choice ("amIntensity")
-        && static_cast<int> (chosen["target"]) == choice ("amTarget") && chosen["reference"].toString() == refNow;
+        && static_cast<int> (chosen["target"]) == choice ("amTarget") && chosen["reference"].toString() == refNow && sameStyle;
 }
 
 polisher::autoanalyze::Values AutoMasterController::plannedValues() const

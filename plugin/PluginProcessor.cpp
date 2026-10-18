@@ -84,6 +84,7 @@ PolisherAudioProcessor::PolisherAudioProcessor()
     history.setExtraState ([this] { return captureExtraState(); },
                            [this] (const juce::String& extra) { restoreExtraState (extra); });
     autoMaster.onApplyBegin = [this] (const juce::String& label) { history.beginGroup (label); };
+    autoMaster.songStyleKey = [this] { return songStyleNow().key; };   // Auto-Master masters to the song's style
     // Auto-Master usually moves the level by several dB: MATCH learns it afresh (matched within about half
     // a second of B, exactly from ~3 s) instead of sliding there from the old level over ~20 s.
     autoMaster.onApplyEnd = [this]
