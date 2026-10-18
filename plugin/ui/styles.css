@@ -517,3 +517,45 @@ body.theme-mono #btn-redo:not(.is-disabled) { filter: drop-shadow(0 0 8px rgba(2
 .aa-why { font-size: 12px; color: var(--dim); margin: 0; }
 body.theme-mono .aa-toggle[aria-pressed="true"] .aa-lamp { background: #fff; box-shadow: 0 0 6px rgba(255,255,255,.8); }
 body.theme-mono .aa-see.has { background: rgba(255,255,255,.2); box-shadow: inset 0 0 0 1px rgba(255,255,255,.7); }
+
+/* ---------- older macOS (WebKit before Safari 14.1, macOS 11.0 to 11.2): no flex gap ----------
+   app.js gives the page the class no-flex-gap only there. These margins stand in for the gaps that keep controls
+   and text apart; elsewhere a missing gap only brings things a little closer. Never applies where gap works. */
+.no-flex-gap .header-row > * + * { margin-left: 7px; }
+.no-flex-gap .footer-row > * + * { margin-left: 16px; }
+.no-flex-gap .choices > * + * { margin-top: 10px; }
+.no-flex-gap .choice-row > * + * { margin-left: 6px; }
+.no-flex-gap .module-inner > * + * { margin-top: 6px; }
+.no-flex-gap .module-head > * + * { margin-left: 12px; }
+.no-flex-gap .spectrum-row > * + * { margin-left: 10px; }
+.no-flex-gap .spectrum-screen > * + * { margin-top: 3px; }
+.no-flex-gap .plot-row > * + * { margin-left: 6px; }
+.no-flex-gap .legend > * + * { margin-left: 16px; }
+.no-flex-gap .legend span > i:first-child, .no-flex-gap .legend-btn > i:first-child { margin-right: 6px; }
+.no-flex-gap .outmeter-lr > * + * { margin-left: 22px; }
+.no-flex-gap .learn-head > * + * { margin-left: 10px; }
+.no-flex-gap .listen > * + * { margin-left: 6px; }
+.no-flex-gap .aa-toggle > * + * { margin-left: 7px; }
+.no-flex-gap .pop-note > * + * { margin-left: 8px; }
+.no-flex-gap .cell > * + * { margin-top: 3px; }
+.no-flex-gap .seg > * + * { margin-left: 4px; }
+.no-flex-gap .seg-v > * + * { margin: 5px 0 0; }
+.no-flex-gap .band-pick > * + * { margin-top: 5px; }
+.no-flex-gap .band-pick .band-row > * + * { margin-left: 4px; }
+.no-flex-gap .stemhear > * + * { margin-top: 7px; }
+.no-flex-gap .sh-row > * + * { margin-left: 5px; }
+.no-flex-gap .snaps > * + *, .no-flex-gap .checks > * + * { margin-top: 3px; }
+.no-flex-gap .snap-row > * + * { margin-left: 3px; }
+.no-flex-gap .row-btn > * + * { margin-left: 8px; }
+.no-flex-gap .outmeter > * + * { margin-top: 6px; }
+.no-flex-gap .outmeter-bars > * + * { margin-left: 8px; }
+.no-flex-gap .meter > * + * { margin-top: 4px; }
+.no-flex-gap .automaster > * + * { margin-top: 3px; }
+.no-flex-gap .learn-inner > * + * { margin-top: 8px; }
+.no-flex-gap .learn-body > * + * { margin-top: 11px; }
+.no-flex-gap .l-tip > * + * { margin-top: 4px; }
+.no-flex-gap .l-item > * + * { margin-top: 3px; }
+.no-flex-gap .l-item-head > * + *, .no-flex-gap .l-actions > * + *, .no-flex-gap .aa-strip > * + * { margin-left: 8px; }
+.no-flex-gap .popover > * + * { margin-top: 12px; }
+.no-flex-gap .popover ul > * + * { margin-top: 8px; }
+.no-flex-gap .check > * + *, .no-flex-gap .daw-row > * + *, .no-flex-gap .monitor-banner > * + * { margin-left: 10px; }

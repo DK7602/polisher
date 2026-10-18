@@ -22,6 +22,17 @@ const setWidth = (el, v) => { if (el && el.style.width !== v) el.style.width = v
 const setHeight = (el, v) => { if (el && el.style.height !== v) el.style.height = v; };
 const setBottom = (el, v) => { if (el && el.style.bottom !== v) el.style.bottom = v; };
 
+// Flex gap arrived in WebKit with Safari 14.1 (macOS 11.3). On an older one the page gets the class no-flex-gap,
+// and styles.css keeps the controls and the text apart with margins instead.
+{
+  const probe = document.createElement("div");
+  probe.style.cssText = "display:flex;flex-direction:column;row-gap:1px;position:absolute;visibility:hidden";
+  probe.append(document.createElement("div"), document.createElement("div"));
+  document.body.appendChild(probe);
+  if (probe.scrollHeight !== 1) document.documentElement.classList.add("no-flex-gap");
+  probe.remove();
+}
+
 // ---------------------------------------------------------------------------------------------
 // Scale the fixed 1600x900 design to the window.
 const stage = $("stage");
