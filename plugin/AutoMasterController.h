@@ -26,7 +26,9 @@
     4. Back on the message thread the chosen values are set as normal host parameter changes (so the
        DAW sees them, and they can be automated), the song's tone goes to Tone Steady (toneTarget),
        all of it as one step of the processor's undo history (see onApplyBegin / onApplyEnd), and the
-       report is saved with the plug-in state so it's still there when the project is reopened.
+       report is saved with the plug-in state so it's still there when the project is reopened. A try that
+       doesn't work (not a full mix, too little music) changes nothing and keeps the report there was, with a
+       note that this try didn't work.
 
     start (toneOnly) listens the same way but only learns the song's tone for Tone Steady.
     A short Auto-Master listen (under kAutoFinishSeconds) keeps a stored tone learned from more of
@@ -118,7 +120,8 @@ public:
         timer when an analysis ends; public for the plug-in tests. */
     void apply (const polisher::AutoMasterResult& result, const polisher::AutoMasterSettings& settings);
 
-    /** After the host loads a preset or project state. */
+    /** After the host loads a preset or project state (any thread): an Auto-Master run going on stops, so its result
+        doesn't overwrite the loaded state. */
     void onStateRestored (const juce::String& savedReport);
     /** Undo / redo / snapshot recall: the report that explains the settings now playing. */
     void restoreReport (const juce::String& json) { setReport (json); }
@@ -189,6 +192,7 @@ private:
     /** Sets a new state and waits until the audio thread is out of capture(), so the listener is ours. */
     void takeListener (State newState);
     void launchAnalysis();
+    void stopForLoadedState();                    // a state was loaded: stop listening / analysing and any check
     void setParam (const juce::String& id, float value);
     void setReport (const juce::String& json);
 
@@ -200,6 +204,8 @@ private:
     std::atomic<double> sampleRate { 0.0 };
     std::atomic<int> stateFlag { idle }, mode { fullMaster };
     std::atomic<bool> captureBusy { false };
+    std::atomic<int> stateLoads { 0 };            // states loaded (onStateRestored, any thread)
+    int seenStateLoads = 0;                       // message thread: the loads tick() has dealt with
     bool hearingAudio = false, autoFinished = false;
     std::int64_t lastHeard = 0;                   // message thread: music heard at the last tick
     double lastMusicMs = 0.0;                     // when it last grew

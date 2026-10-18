@@ -190,6 +190,13 @@ float AutoMasterController::getProgress() const noexcept
 void AutoMasterController::tick()
 {
     const double now = juce::Time::getMillisecondCounterHiRes();
+    // Another state was loaded (a preset, the host's A/B compare or undo) since the last tick, maybe on another thread:
+    // what is listening or analysing now is for the settings before it, so its result must not land on the loaded ones.
+    if (const int loads = stateLoads.load(); loads != seenStateLoads)
+    {
+        seenStateLoads = loads;
+        stopForLoadedState();
+    }
     if (getState() == listening)
     {
         // The host changed the sample rate: start the listening over at the new rate.
@@ -390,6 +397,37 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         doc->setProperty ("listened", listenedText (st, kWindowSeconds));
     }
 
+    // A try that didn't work (not a full mix, too little music) changes no setting, so it doesn't replace the report
+    // that explains the settings playing now (Learn's module pages and Auto Analyze go on with it). That report says
+    // this try didn't work (a note at the top, and "lastTry" for the editor).
+    if (! r.ok)
+    {
+        auto previous = juce::JSON::parse (getReportJson());
+        if (auto* old = previous.getDynamicObject(); old != nullptr && static_cast<bool> (previous["ok"]))
+        {
+            auto* tried = new juce::DynamicObject();
+            tried->setProperty ("time", juce::Time::getCurrentTime().toISO8601 (true));
+            tried->setProperty ("summary", juce::String::fromUTF8 (r.summary.c_str()));
+            tried->setProperty ("tipTitle", juce::String::fromUTF8 (r.tipTitle.c_str()));
+            tried->setProperty ("tip", juce::String::fromUTF8 (r.tip.c_str()));
+            tried->setProperty ("notAFullMix", r.notAFullMix);
+            old->setProperty ("lastTry", juce::var (tried));
+            const juce::String title = "THIS TRY DIDN'T WORK:";
+            juce::Array<juce::var> notes;
+            notes.add (title + " " + juce::String::fromUTF8 (r.summary.c_str())
+                       + " Your settings and this report are still the ones from your last Auto-Master run."
+                       + "\nNEED: Only if you wanted a new master."
+                       + (r.tip.empty() ? juce::String() : "\nSTEP: " + juce::String::fromUTF8 (r.tip.c_str())));
+            if (const auto* had = previous["notes"].getArray())
+                for (const auto& n : *had)
+                    if (! n.toString().startsWith (title))
+                        notes.add (n);
+            old->setProperty ("notes", notes);
+            setReport (juce::JSON::toString (previous, true));
+            return;
+        }
+    }
+
     // Everything below (the settings, Tone Steady's target and the new report) is one undo step.
     const bool grouped = r.ok && onApplyBegin && onApplyEnd;
     if (grouped)
@@ -472,8 +510,24 @@ void AutoMasterController::setReport (const juce::String& json)
     ++reportVersion;
 }
 
+void AutoMasterController::stopForLoadedState()
+{
+    if (getState() != idle)
+        cancel();
+    if (checkCancel != nullptr)
+        checkCancel->store (true);   // an Auto Analyze check about the settings before
+}
+
 void AutoMasterController::onStateRestored (const juce::String& savedReport)
 {
+    // A preset, the host's A/B compare or its undo: an Auto-Master run going on now stops, so its result doesn't
+    // overwrite the state just loaded. Off the message thread the next tick() stops it (before it can apply anything).
+    ++stateLoads;
+    if (juce::MessageManager::existsAndIsCurrentThread())
+    {
+        seenStateLoads = stateLoads.load();
+        stopForLoadedState();
+    }
     setReport (savedReport);
 }
 

@@ -1252,6 +1252,59 @@ TEST_CASE ("Auto-Master: Stream aims the whole song at -14 only when it heard th
     p->setPlayHead (nullptr);
 }
 
+TEST_CASE ("Auto-Master: a try that didn't work keeps the last good report; loading a state stops a run", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, false);
+    p->history.setMergeWindowMs (0.0);
+    FakePlayHead head;
+    p->setPlayHead (&head);
+    juce::MemoryBlock before;
+    p->getStateInformation (before);   // no report, Drive at its default
+
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, testsig::musicLike (sr, 13.0, -14.0, 1));
+    REQUIRE (p->autoMaster.finish());
+    REQUIRE (waitForAutoMaster (*p));
+    const auto good = reportOf (*p);
+    REQUIRE (static_cast<bool> (good["ok"]));
+    const int steps = p->history.size();
+    const auto settings = p->parameters.copyState().toXmlString();
+
+    // Again, on one instrument (a track soloed): nothing changes, and the report that explains the settings stays.
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, testsig::sine (sr, 2, 1000.0, -12.0, 13.0));
+    REQUIRE (p->autoMaster.finish());
+    REQUIRE (waitForAutoMaster (*p));
+    const auto kept = reportOf (*p);
+    CHECK (static_cast<bool> (kept["ok"]));
+    CHECK (kept["time"].toString() == good["time"].toString());
+    CHECK (juce::JSON::toString (kept["values"]) == juce::JSON::toString (good["values"]));
+    CHECK (static_cast<bool> (kept["lastTry"]["notAFullMix"]));
+    REQUIRE (kept["notes"].size() >= 1);
+    CHECK (kept["notes"][0].toString().startsWith ("THIS TRY DIDN'T WORK: This doesn't sound like a full mix."));
+    CHECK (p->history.size() == steps);
+    CHECK (p->parameters.copyState().toXmlString() == settings);
+    // Auto Analyze goes on with it.
+    p->autoMaster.setEditorOpen (true);
+    p->setAutoAnalyze (true);
+    p->autoMaster.tick();
+    CHECK (p->autoMaster.getAutoAnalyzeStatus() != "noReport");
+    p->setAutoAnalyze (false);
+
+    // A preset, the host's A/B compare or its undo while Auto-Master analyses: its result doesn't land on the loaded state.
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, testsig::musicLike (sr, 13.0, -8.0, 2));
+    REQUIRE (p->autoMaster.finish());
+    CHECK (p->autoMaster.getState() == AutoMasterController::analysing);
+    p->setStateInformation (before.getData(), static_cast<int> (before.getSize()));
+    REQUIRE (waitForAutoMaster (*p));
+    for (int i = 0; i < 50; ++i) { p->autoMaster.tick(); juce::Thread::sleep (20); }   // a result on its way is dropped
+    CHECK (p->autoMaster.getReportJson().isEmpty());
+    CHECK (p->parameters.getRawParameterValue ("drive")->load() == Catch::Approx (0.0f).margin (1.0e-6));
+    p->setPlayHead (nullptr);
+}
+
 TEST_CASE ("Auto-Master: Finish uses what it heard from 12 s of music on, not before; a pause doesn't end it", "[plugin][automaster]")
 {
     const double sr = 44100.0;
