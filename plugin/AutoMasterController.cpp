@@ -360,6 +360,7 @@ void AutoMasterController::setParam (const juce::String& id, float value)
 void AutoMasterController::apply (const polisher::AutoMasterResult& r, const polisher::AutoMasterSettings& s)
 {
     auto* doc = new juce::DynamicObject();
+    const juce::var docHolder (doc);   // owns it (also when a try that didn't work keeps the old report)
     doc->setProperty ("ok", r.ok);
     doc->setProperty ("summary", juce::String::fromUTF8 (r.summary.c_str()));
     doc->setProperty ("notAFullMix", r.notAFullMix);
