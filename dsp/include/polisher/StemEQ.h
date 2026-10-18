@@ -152,6 +152,8 @@ static_assert (StemNet::kBands == kToneBands, "Tone Steady measures in the model
       glide (30 ms). The model keeps running while neutral, so turning a knob never waits for it.
     - Channels 0 and 1 are processed (a mono input is analysed as L = R); further channels are
       only delayed, so every channel keeps the same latency.
+    - A NaN or inf input sample is heard as silence by the analysis (spectra, model, averages), so it
+      can't stay there for good; the dry path just delays it. The model's memory is guarded too.
     - Keep loudness (StemEQParams::keepLoudness): per frame, the K-weighted (BS.1770) energy of the
       frame is credited to the stems by the model's shares, as a 4 x 4 matrix of share products
       (sum over bands of E_b * share_s,b * share_t,b) averaged over ~2 s, its weight held to the
@@ -318,6 +320,7 @@ public:
 
 private:
     void hop() noexcept;
+    void guardState() noexcept;   // a non-finite average or output: reset() (after each hop)
     void fft (std::complex<double>* data, bool inverse) const noexcept;
     void spectrum (const double* ring, int start, std::complex<double>* out) const noexcept;
     void bandEnergies (const std::complex<double>* a, const std::complex<double>* b, double sign, float* out) const noexcept;

@@ -528,6 +528,52 @@ double PolisherAudioProcessor::targetDriveGain() const
     return bypassParam->load() > 0.5f ? 1.0 : juce::Decibels::decibelsToGain (static_cast<double> (driveParam->load()));
 }
 
+namespace
+{
+    /** True when every sample of the first numSamples is a number (no NaN, no inf). */
+    template <typename Sample>
+    bool allFinite (const Sample* const* channels, int numChannels, int numSamples) noexcept
+    {
+        for (int c = 0; c < numChannels; ++c)
+            for (int i = 0; i < numSamples; ++i)
+                if (! std::isfinite (channels[c][i]))
+                    return false;
+        return true;
+    }
+
+    /** Plays every NaN / inf sample as 0 (in place). */
+    template <typename Sample>
+    void cleanNonFinite (juce::AudioBuffer<Sample>& buffer, int numSamples) noexcept
+    {
+        for (int c = 0; c < buffer.getNumChannels(); ++c)
+            if (! allFinite (buffer.getArrayOfReadPointers() + c, 1, numSamples))
+            {
+                Sample* x = buffer.getWritePointer (c);
+                for (int i = 0; i < numSamples; ++i)
+                    if (! std::isfinite (x[i])) x[i] = Sample (0);
+            }
+    }
+}
+
+void PolisherAudioProcessor::resetChain() noexcept
+{
+    // Every module back to a clean start in its set state (look-ahead audio, filters, envelopes); none of
+    // this allocates. The monitored signals' delay lines are emptied too.
+    unlimiter.reset();
+    eq.reset();
+    stemEq.reset();
+    bass.reset();
+    glue.reset();
+    dynamics.reset();
+    imager.reset();
+    saturation.reset();
+    clipper.reset();
+    limiter.reset();
+    monForm.clear();
+    monOut.clear();
+    monClipDelay.clear();
+}
+
 template <typename Sample>
 void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buffer)
 {
@@ -542,6 +588,11 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     const int numOut = getTotalNumOutputChannels();
     for (int c = numIn; c < numOut; ++c)
         buffer.clear (c, 0, buffer.getNumSamples());
+
+    // One NaN or inf from the host (a broken plug-in before this one, a corrupt region) would get into the
+    // filters and play NaN or silence from then on, until the project was reopened: it plays as 0, before
+    // anything (meters, spectrum, MATCH and Auto-Master included) hears it.
+    cleanNonFinite (buffer, buffer.getNumSamples());
 
     // Fresh loudness measurement each time the host transport starts (optional).
     bool isPlaying = wasPlaying, hostTransport = false;
@@ -746,6 +797,22 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     // Dither (16 / 24-bit exports): the master's last step, so the host's conversion to that depth is exact.
     if (bypassParam->load() <= 0.5f)
         dither.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
+
+    // Nothing non-finite can come from the cleaned input, but if anything inside ever made some, it must not
+    // reach the host, the meters or a monitored signal, or stay in a filter: the chain starts afresh (no
+    // allocation) and this block plays silence.
+    if (! allFinite (buffer.getArrayOfReadPointers(), numChannels, numSamples))
+    {
+        resetChain();
+        buffer.clear();
+        if (lm != L::off)
+            for (auto* s : sig) std::fill (s, s + numSamples, 0.0);
+    }
+    else if (lm != L::off && ! allFinite (sig, 2, numSamples))
+    {
+        for (auto* s : sig) std::fill (s, s + numSamples, 0.0);
+        monOut.clear();
+    }
     outputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     outputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
 

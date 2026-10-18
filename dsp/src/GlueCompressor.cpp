@@ -58,6 +58,17 @@ void GlueCompressor::reset() noexcept
     update();
 }
 
+void GlueCompressor::guardDetector() noexcept
+{
+    double sum = meanSquare[0] + meanSquare[1] + grDb + grAverage;
+    for (const auto& ch : sidechain) for (const auto& f : ch) sum += f.stateSum();
+    if (std::isfinite (sum))
+        return;
+    for (auto& ch : sidechain) for (auto& f : ch) f.reset();
+    meanSquare = {};
+    grDb = grAverage = 0.0;
+}
+
 void GlueCompressor::setTimes() noexcept
 {
     const auto& v = voiceOf (params.character);

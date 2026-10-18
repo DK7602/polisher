@@ -54,6 +54,9 @@ struct LimiterParams
     never lets an unlimited peak out: the output stays at or under the ceiling until the glide, and
     the glide only fades the plain input in.
 
+    A NaN or inf input sample would stay in Bass First's split filters for good (the output turned to NaN
+    from then on): at the end of a block that put one there, the limiter is reset().
+
     prepare() allocates; process() does not. */
 class TruePeakLimiter
 {
@@ -134,12 +137,15 @@ public:
             if (gainOut != nullptr)
                 gainOut[i] = lastGain;
         }
+        guardState();
     }
 
     /** Processes one multichannel frame. Exposed for offline rendering and tests. */
     void processFrame (const double* in, double* out, int numChannels) noexcept;
 
 private:
+    void guardState() noexcept;   // a NaN / inf got into Bass First's split or the gain: reset() (end of each block)
+
     /** After a switch to bypass, how long the limiter keeps limiting: the delay line, the samples of
         the block that came with the switch, and kBypassDrainMs. */
     void armDrain (int blockSamples) noexcept

@@ -46,6 +46,8 @@ struct BassParams
       starts with no click, so it isn't boosted.
 
     Also measures how stereo the incoming bass is (below 150 Hz), for Learn and Auto-Master.
+    A NaN or inf input sample would stay in the filters and detectors for good: at the end of a block
+    that put one there, the module is reset(), so it plays again from the next block.
     Zero latency. process() never allocates. Up to kMaxChannels channels; Mono Below needs 2. */
 class BassControl
 {
@@ -124,6 +126,7 @@ public:
             for (int c = 0; c < nch; ++c)
                 channels[c][i] = static_cast<Sample> (x[static_cast<size_t> (c)]);
         }
+        guardState();
     }
 
     /** Deepest Sub Tame cut since the last call (dB, <= 0). */
@@ -138,6 +141,7 @@ public:
 private:
     void update() noexcept;
     void setMonoFilters() noexcept;
+    void guardState() noexcept;   // a NaN / inf got into a filter or detector: reset() (end of each block)
 
     inline void measure (const double* x, int nch) noexcept
     {

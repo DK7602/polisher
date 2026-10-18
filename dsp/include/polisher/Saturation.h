@@ -72,6 +72,8 @@ struct SaturationParams
     - Channels Mid / Side: the curve hears only the centre ((L + R) / 2) or only the edges ((L - R) / 2) and
       what it adds goes back onto that part alone (mid: the same on L and R; side: opposite), so the other
       part passes untouched. Changing Channels cross-fades like Focus and Mode.
+    - A NaN or inf input sample would stay in the split, DC and fit filters for good: at the end of a
+      process() block that put one there, the module is reset(), so it plays again from the next block.
 
     prepare() allocates; process() does not. */
 class Saturation
@@ -137,6 +139,7 @@ public:
             processFrame (frame.data(), nch);
             for (int c = 0; c < nch; ++c) channels[c][i] = static_cast<Sample> (frame[static_cast<size_t> (c)]);
         }
+        guardState();
     }
 
     /** Energy of the added harmonics and of the signal since the last call (for meters that
@@ -195,6 +198,7 @@ private:
     /** One slot's residual for this frame, per channel (mid / side: worked out on the one part, put back on L and R). */
     void slotWetFrame (int index, const double* x, int nch, double* wet, double dcWeight, bool measuringDc, bool seedDc, double dcCoeff) noexcept;
     void stopSlot (int index) noexcept;
+    void guardState() noexcept;   // a NaN / inf got into a filter: reset() (end of each process() block)
     double slotWet (const Slot& slot, SlotState& st, double x, double dcWeight, bool measuringDc, bool seedDc, double dcCoeff) const noexcept;
 
     SaturationParams params;

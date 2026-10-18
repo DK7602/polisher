@@ -43,6 +43,10 @@ struct GlueParams
     - Output: (dry * (1 - mix) + compressed * mix) * gain. Mix and gain glide (20 ms).
     - Neutral (ratio 1:1 and gain 0 dB) or off: an exact pass-through. Switching fades the whole effect
       in or out over 20 ms; once faded out the audio is not touched at all.
+    - A NaN or inf input sample would stay in the detector for good (the output turns to NaN, or with
+      both channels hit, compression silently stops): at the end of a block that put one there, the
+      detector starts afresh (sidechain filters, levels and gain cleared), so it compresses again from
+      the next block.
 
     Zero latency. process() never allocates. The same gain goes on every channel; the first two are
     detected. */
@@ -128,11 +132,13 @@ public:
                 ch[c][i] = static_cast<Sample> (static_cast<double> (ch[c][i]) * g);
             if (gainOut != nullptr) gainOut[i] = g;
         }
+        guardDetector();
     }
 
 private:
     void update() noexcept;
     void setTimes() noexcept;
+    void guardDetector() noexcept;   // a NaN / inf got into the detector: start it afresh (end of each block)
 
     GlueParams params;
     double sampleRate = 48000.0;

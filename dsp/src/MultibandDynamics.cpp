@@ -113,6 +113,34 @@ void MultibandDynamics::resetDetectors() noexcept
     }
 }
 
+void MultibandDynamics::guardState() noexcept
+{
+    double sum = 0.0;
+    const auto addSplit = [&sum] (const Split& c) noexcept
+    {
+        for (const auto* g : { &c.x1lp, &c.x1hp, &c.x2lp, &c.x2hp, &c.x3lp, &c.x3hp })
+            for (const auto& f : *g) sum += f.stateSum();
+        sum += c.apX1.stateSum() + c.apX3.stateSum();
+    };
+    for (const auto& c : chan)
+    {
+        addSplit (c);
+        addSplit (c.a);
+    }
+    for (const auto& d : det)
+        sum += d.channelMeanSquare[0] + d.channelMeanSquare[1] + d.meanSquare + d.grDb + d.grAverage + d.makeupDb
+             + d.fastPow + d.slowPow + d.impactDb + d.powIn + d.powOut + d.impactKeepDb + d.impactPow[0] + d.impactPow[1]
+             + d.tailFastPow + d.tailSlowPow + d.sustainDb;
+    if (std::isfinite (sum))
+        return;
+    resetFilters();
+    for (auto& c : chan)
+        resetSplit (c.a);
+    resetDetectors();
+    for (auto& d : det)
+        if (! std::isfinite (d.makeupDb)) d.makeupDb = d.targetMakeupDb;
+}
+
 void MultibandDynamics::switchDomain (DynChannels to) noexcept
 {
     // The split filters are linear and the same on both channels, so their states convert like the audio:

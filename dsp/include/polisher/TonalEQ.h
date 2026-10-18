@@ -67,6 +67,8 @@ struct BiquadCoefficients
       every 16 samples, so moving a knob or dragging a band never clicks.
     - A band at 0 dB is skipped once it has settled, so a flat or disabled EQ is an exact, bit-for-bit
       pass-through. Turning the EQ off glides every band to 0 dB first.
+    - A NaN or inf input sample would stay in the filters for good: at the end of a block that put one
+      there, the filters are cleared (reset()), so the EQ plays again from the next block.
     - Mid / side per band: a mid band filters only (L + R) / 2, a side band only (L - R) / 2, and the
       pair is rebuilt (L = M + S, R = M - S), so the other part passes untouched. Changing a band's
       channels glides it to 0 dB, switches, and glides back (no click). Mono input: a mid band works
@@ -152,6 +154,7 @@ public:
             done += n;
             updateCountdown -= n;
         }
+        guardState();
     }
 
     /** True if any band is currently filtering (false = exact pass-through). */
@@ -190,6 +193,7 @@ private:
 
     void advanceSmoothing() noexcept;
     void applyCoefficients (int bandIndex) noexcept;
+    void guardState() noexcept;   // a NaN / inf got into the filters: clear them (end of each block)
 
     TonalEQParams params;
     std::array<Band, kEqBands> bands;

@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <functional>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <new>
@@ -354,6 +355,133 @@ TEST_CASE ("Plug-in: every control jumping at random never produces NaN or goes 
     const double tp = testsig::truePeakOf (settled);
     INFO ("true peak " << tp << " dBTP");
     CHECK (tp <= -0.95);
+}
+
+// --- Audio-path audit fixes: NaN / inf, A/B and MATCH timing, fixed-time gain glides, host reset ------
+
+namespace {
+/** Plays a clip in fixed blocks; before each block, hook (position, buffer) may change settings or the input. */
+template <typename Sample = float>
+AudioClip renderWith (PolisherAudioProcessor& p, const AudioClip& in, int block,
+                      const std::function<void (int, juce::AudioBuffer<Sample>&)>& hook)
+{
+    AudioClip out = in;
+    juce::AudioBuffer<Sample> buf (2, block);
+    juce::MidiBuffer midi;
+    for (int pos = 0; pos + block <= in.numSamples(); pos += block)
+    {
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < block; ++i)
+                buf.setSample (c, i, (Sample) in.channels[(size_t) c][(size_t) (pos + i)]);
+        if (hook) hook (pos, buf);
+        p.processBlock (buf, midi);
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < block; ++i)
+                out.channels[(size_t) c][(size_t) (pos + i)] = (float) buf.getSample (c, i);
+    }
+    return out;
+}
+
+long nonFinite (const AudioClip& c)
+{
+    long n = 0;
+    for (const auto& ch : c.channels)
+        for (float v : ch) n += std::isfinite (v) ? 0 : 1;
+    return n;
+}
+
+double rmsDb (const AudioClip& c, int from, int to)
+{
+    double e = 0.0;
+    for (const auto& ch : c.channels)
+        for (int i = from; i < to; ++i) e += (double) ch[(size_t) i] * ch[(size_t) i];
+    return 10.0 * std::log10 (e / (c.numChannels() * (double) (to - from)) + 1.0e-30);
+}
+}
+
+TEST_CASE ("Plug-in: one NaN or inf from the host never reaches the output or sticks in the chain", "[plugin][nonfinite]")
+{
+    // It used to turn the busy chain's output into NaN for good (287744 of 287744 samples 4 s later), and a
+    // chain that only started working after it (Auto-Master applied) too.
+    const double sr = 48000.0;
+    const auto mix = testsig::trapLike (sr, 6.0);
+    const int at = (int) (1.0 * sr) / 256 * 256;
+    const int tailFrom = (int) (5.0 * sr), tailTo = mix.numSamples() / 256 * 256;
+    for (bool busy : { true, false })
+    {
+        auto ref = makeProcessor (sr, 256, true);
+        const auto clean = renderWith (*ref, mix, 256, {});
+        for (float bad : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() })
+        {
+            auto p = makeProcessor (sr, 256, busy);
+            const auto out = renderWith<float> (*p, mix, 256, [&] (int pos, juce::AudioBuffer<float>& b)
+            {
+                if (pos == at) { b.setSample (0, 5, bad); b.setSample (1, 77, -bad); }
+                if (pos == at + 256 * 40 && ! busy) busySettings (*p);   // the chain starts working after it
+            });
+            INFO ((busy ? "busy chain" : "neutral, then the busy settings") << ", " << (std::isnan (bad) ? "NaN" : "inf") << ": "
+                  << nonFinite (out) << " non-finite output samples; last second " << rmsDb (out, tailFrom, tailTo) << " dB, clean "
+                  << rmsDb (clean, tailFrom, tailTo) << " dB; meters: short-term " << p->meters.shortTerm.load() << " LUFS, true peak "
+                  << p->meters.truePeakMax.load() << " dBTP, input " << p->meters.inputShortTerm.load() << " LUFS");
+            CHECK (nonFinite (out) == 0);
+            CHECK (std::abs (rmsDb (out, tailFrom, tailTo) - rmsDb (clean, tailFrom, tailTo)) < 0.1);
+            CHECK (p->meters.shortTerm.load() > -30.0f);         // the meters keep measuring
+            CHECK (p->meters.inputShortTerm.load() > -30.0f);
+            CHECK (std::isfinite (p->meters.correlation.load()));
+        }
+    }
+
+    // A double-precision host gets the same protection.
+    auto pd = makeProcessor (sr, 256, true);
+    const auto outD = renderWith<double> (*pd, mix, 256, [&] (int pos, juce::AudioBuffer<double>& b)
+    {
+        if (pos == at) b.setSample (1, 9, std::numeric_limits<double>::quiet_NaN());
+    });
+    CHECK (nonFinite (outD) == 0);
+    CHECK (pd->meters.shortTerm.load() > -30.0f);
+}
+
+TEST_CASE ("Plug-in: if anything inside the chain goes non-finite, the block is silent and the chain starts afresh", "[plugin][nonfinite]")
+{
+    // The input is cleaned, so this is the last line of defence: a NaN made inside (here a setting forced to
+    // NaN behind the parameter's back) plays silence for as long as it lasts, never NaN, and the master comes
+    // back as soon as it is gone. Nothing of it allocates.
+    const double sr = 48000.0;
+    const auto mix = testsig::trapLike (sr, 4.0);
+    auto ref = makeProcessor (sr, 256, true);
+    const auto clean = renderWith (*ref, mix, 256, {});
+    auto p = makeProcessor (sr, 256, true);
+    auto* drive = p->parameters.getRawParameterValue ("satDrive");
+    const float before = drive->load();
+    const int from = (int) (1.0 * sr) / 256 * 256, to = (int) (1.5 * sr) / 256 * 256;
+    int worst = 0;
+    long silentBlocks = 0;
+    AudioClip out = mix;
+    {
+        juce::AudioBuffer<float> buf (2, 256);
+        juce::MidiBuffer midi;
+        for (int pos = 0; pos + 256 <= mix.numSamples(); pos += 256)
+        {
+            if (pos == from) drive->store (std::numeric_limits<float>::quiet_NaN());
+            if (pos == to) drive->store (before);
+            for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, mix.channels[(size_t) c].data() + pos, 256);
+            allocations = 0;
+            countAllocations = true;
+            p->processBlock (buf, midi);
+            countAllocations = false;
+            worst = std::max (worst, allocations.load());
+            if (pos >= from && pos < to && buf.getMagnitude (0, 256) == 0.0f && buf.getMagnitude (1, 256) == 0.0f) ++silentBlocks;
+            for (int c = 0; c < 2; ++c) std::copy (buf.getReadPointer (c), buf.getReadPointer (c) + 256, out.channels[(size_t) c].begin() + pos);
+        }
+    }
+    const int tailFrom = (int) (3.0 * sr), tailTo = mix.numSamples() / 256 * 256;
+    INFO (nonFinite (out) << " non-finite samples; " << silentBlocks << " of " << (to - from) / 256 << " blocks silent while the setting was NaN; "
+          << "last second " << rmsDb (out, tailFrom, tailTo) << " dB, clean " << rmsDb (clean, tailFrom, tailTo) << " dB");
+    CHECK (nonFinite (out) == 0);
+    CHECK (silentBlocks == (to - from) / 256);
+    CHECK (std::abs (rmsDb (out, tailFrom, tailTo) - rmsDb (clean, tailFrom, tailTo)) < 0.5);
+    CHECK (p->meters.shortTerm.load() > -30.0f);
+    CHECK (worst == 0);
 }
 
 TEST_CASE ("Plug-in: double-precision hosts get the same master as single precision", "[plugin]")

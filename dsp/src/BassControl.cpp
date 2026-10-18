@@ -109,6 +109,20 @@ void BassControl::reset() noexcept
     updateCountdown = 0;
 }
 
+void BassControl::guardState() noexcept
+{
+    double sum = fastEnergy + longEnergy + warmEnergy + fastPeak + slowPeak + clickFast + clickSlow + clickHold + clickLevel
+               + airFast + airLevel + midEnergy + sideEnergy + tameGainDb + punchGainDb;
+    for (const auto* group : { &detectLp, &widthLpM, &widthLpS, &monoHp, &monoLp, &clickHp, &clickLp, &airHp })
+        for (const auto& f : *group)
+            sum += f.stateSum();
+    sum += monoAp.stateSum() + monoApSide.stateSum();
+    for (int c = 0; c < channelCount; ++c)
+        sum += tameFilter[static_cast<size_t> (c)].stateSum() + punchFilter[static_cast<size_t> (c)].stateSum();
+    if (! std::isfinite (sum))
+        reset();
+}
+
 void BassControl::setParams (const BassParams& p) noexcept
 {
     params = p;

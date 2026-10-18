@@ -142,6 +142,16 @@ void TruePeakLimiter::reset() noexcept
     limitedSinceReset = false;
 }
 
+void TruePeakLimiter::guardState() noexcept
+{
+    double sum = gain + sustain + bassGain + smoother.sum + bassSmooth.sum;
+    for (int c = 0; c < channelCount; ++c)
+        for (size_t k = 0; k < 2; ++k)
+            sum += bassLp[static_cast<size_t> (c)][k].stateSum() + bassHp[static_cast<size_t> (c)][k].stateSum();
+    if (! std::isfinite (sum))
+        reset();
+}
+
 void TruePeakLimiter::setParams (const LimiterParams& p) noexcept
 {
     // Into bypass: what is in the delay line was pushed for B, so it is still limited (armDrain). Back

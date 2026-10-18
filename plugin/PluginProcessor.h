@@ -233,6 +233,7 @@ private:
     void startListenMode (int mode) noexcept;
 
     void updateLimiterParams();
+    void resetChain() noexcept;   // every module and monitoring delay back to a clean start (no allocation)
     double targetDriveGain() const;
     double targetTrimGain() const;
     void publishMeters();
