@@ -379,9 +379,28 @@ function knobMarkup(angle) {
   return `<img src="assets/knob.png" alt=""><div class="pointer" style="transform: rotate(${angle}deg)"><span></span></div>`;
 }
 const angleFor = (norm) => -135 + 270 * clamp(norm, 0, 1);
-// Which way a wheel turn goes: up (or left) = more. Shift+wheel arrives as a sideways scroll (deltaY 0), so the
-// direction comes from the larger of the two; a scroll with neither is ignored.
-const wheelDir = (e) => { const d = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX; return d < 0 ? 1 : d > 0 ? -1 : 0; };
+// Mouse wheel and trackpad, as steps: up (or left) = more. Shift+wheel arrives as a sideways scroll (deltaY 0), so
+// the direction comes from the larger of the two; a scroll with neither is ignored. A notch of a classic wheel
+// (wheelDelta 120) is one step. A trackpad, or a free-spinning or high-resolution wheel, sends many small scrolls
+// (and momentum): those add up, one step per ~100 px, so a swipe moves a knob about as far as a notch or two.
+function wheelStepper() {
+  let acc = 0, at = 0;
+  return (e) => {
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;   // lines / pages, in pixels
+    const dx = e.deltaX * unit, dy = e.deltaY * unit, vertical = Math.abs(dy) >= Math.abs(dx);
+    const d = -(vertical ? dy : dx);
+    if (!d) return 0;
+    const now = performance.now();
+    if (now - at > 400 || acc * d < 0) acc = 0;                            // a new gesture, or the other way
+    at = now;
+    const ticks = Math.abs((vertical ? e.wheelDeltaY : e.wheelDeltaX) || 0) / 120;
+    if (e.deltaMode !== 0 || (ticks >= 1 && Number.isInteger(ticks))) { acc = 0; return Math.sign(d) * Math.max(1, ticks); }
+    acc += d;
+    const n = Math.trunc(acc / 100);
+    acc -= n * 100;
+    return n;
+  };
+}
 
 // A typed value -> the control's own units. Accepts "−3", "-3 dB", "1.2k" / "1.2 kHz", "2.5:1", "120 ms",
 // "off" (the control's minimum); keeps it in range. A control that only goes up from a positive start
@@ -435,12 +454,13 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   knob.addEventListener("pointercancel", end);
   knob.addEventListener("lostpointercapture", end);   // e.g. the window lost the mouse mid-drag: the undo step still closes
   knob.addEventListener("dblclick", () => { state.sliderDragStarted(); setNorm(scaledToNorm(state, def)); state.sliderDragEnded(); });
+  const wheel = wheelStepper();
   knob.addEventListener("wheel", (e) => {
     e.preventDefault();
-    const dir = wheelDir(e);
-    if (!dir) return;
+    const steps = wheel(e);
+    if (!steps) return;
     state.sliderDragStarted();
-    setNorm(state.getNormalisedValue() + dir * (e.shiftKey ? 0.002 : 0.01));
+    setNorm(state.getNormalisedValue() + steps * (e.shiftKey ? 0.002 : 0.01));
     state.sliderDragEnded();
   }, { passive: false });
   // Double-click the number (or press Enter on the knob) to type an exact value.
@@ -1058,13 +1078,14 @@ const nodeEls = EQ_BANDS.map((band, b) => {
     for (const [s] of reset) s.sliderDragEnded();
     eqCells[b].refresh(); onParamsChanged(); userEdited();
   });
+  const wheel = wheelStepper();
   n.addEventListener("wheel", (e) => {
     e.preventDefault();
-    const dir = wheelDir(e);
-    if (!dir) return;
+    const steps = wheel(e);
+    if (!steps) return;
     const gs = P.eqGain[b];
     gs.sliderDragStarted();
-    gs.setNormalisedValue(scaledToNorm(gs, clamp(eqGainAt(b) + dir * (e.shiftKey ? 0.1 : 0.5), -EQ_MAX, EQ_MAX)));
+    gs.setNormalisedValue(scaledToNorm(gs, clamp(eqGainAt(b) + steps * (e.shiftKey ? 0.1 : 0.5), -EQ_MAX, EQ_MAX)));
     gs.sliderDragEnded();
     eqCells[b].refresh(); onParamsChanged(); userEdited();
   }, { passive: false });
