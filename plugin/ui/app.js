@@ -417,6 +417,20 @@ function parseTyped(text, state) {
   return clamp(v, Math.min(start, end), Math.max(start, end));
 }
 
+// One step of a knob, in normalised units (1 %, Shift 0.2 %), but at least far enough that its value changes: near
+// the bottom of a skewed range (Ratio at 1:1, short attack and release times) or with whole-number values (Bass
+// First, Impact), 1 % rounds back to the same value and the wheel and arrow keys would do nothing.
+function stepNorm(state, from, dir, size) {
+  const legal = (n) => state.snapToLegalValue(state.normalisedToScaledValue(clamp(n, 0, 1)));
+  const was = legal(from);
+  let n = from;
+  for (let i = 0; i < 1000; i++) {
+    n = clamp(n + dir * size, 0, 1);
+    if (legal(n) !== was || n <= 0 || n >= 1) break;
+  }
+  return n;
+}
+
 function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   const cell = document.createElement("div");
   cell.className = "cell";
@@ -460,7 +474,9 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
     const steps = wheel(e);
     if (!steps) return;
     state.sliderDragStarted();
-    setNorm(state.getNormalisedValue() + steps * (e.shiftKey ? 0.002 : 0.01));
+    let n = state.getNormalisedValue();
+    for (let i = 0; i < Math.abs(steps); i++) n = stepNorm(state, n, Math.sign(steps), e.shiftKey ? 0.002 : 0.01);
+    setNorm(n);
     state.sliderDragEnded();
   }, { passive: false });
   // Double-click the number (or press Enter on the knob) to type an exact value.
@@ -495,11 +511,11 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   value.title = "Double-click to type a value";
   value.addEventListener("dblclick", typeIn);
   // Each key press is one gesture (the plug-in's undo merges quick repeats into one step).
-  const nudge = (d) => { state.sliderDragStarted(); setNorm(state.getNormalisedValue() + d); state.sliderDragEnded(); };
+  const nudge = (dir, size) => { state.sliderDragStarted(); setNorm(stepNorm(state, state.getNormalisedValue(), dir, size)); state.sliderDragEnded(); };
   knob.addEventListener("keydown", (e) => {
-    const step = e.shiftKey ? 0.002 : 0.01;
-    if (e.key === "ArrowUp" || e.key === "ArrowRight") nudge(step);
-    else if (e.key === "ArrowDown" || e.key === "ArrowLeft") nudge(-step);
+    const size = e.shiftKey ? 0.002 : 0.01;
+    if (e.key === "ArrowUp" || e.key === "ArrowRight") nudge(1, size);
+    else if (e.key === "ArrowDown" || e.key === "ArrowLeft") nudge(-1, size);
     else if (e.key === "Enter") typeIn();
     else return;
     e.preventDefault();
