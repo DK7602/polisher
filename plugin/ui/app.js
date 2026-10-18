@@ -18,6 +18,9 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // Writes only what changed, so live readouts don't rewrite the page (or make a screen reader repeat itself).
 const setText = (el, text) => { if (el && el.textContent !== text) el.textContent = text; };
 const setAttr = (el, name, value) => { if (el && el.getAttribute(name) !== value) el.setAttribute(name, value); };
+const setWidth = (el, v) => { if (el && el.style.width !== v) el.style.width = v; };
+const setHeight = (el, v) => { if (el && el.style.height !== v) el.style.height = v; };
+const setBottom = (el, v) => { if (el && el.style.bottom !== v) el.style.bottom = v; };
 
 // ---------------------------------------------------------------------------------------------
 // Scale the fixed 1600x900 design to the window.
@@ -2182,10 +2185,10 @@ $("learn-toggle").addEventListener("click", () => setLearn(!learnOn));
 // Level-matched A/B
 function refreshMatch() {
   const on = !!P.levelMatch.getValue();
-  const b = $("btn-match");
-  b.className = "pill match " + (on ? "pill-red" : "pill-blue");
-  b.setAttribute("aria-pressed", String(on));
-  b.textContent = on ? `MATCH ${M.matchDb < -0.05 ? fmtNum(M.matchDb) : "0.0"}` : "MATCH";
+  const b = $("btn-match"), cls = "pill match " + (on ? "pill-red" : "pill-blue");
+  if (b.className !== cls) b.className = cls;
+  setAttr(b, "aria-pressed", String(on));
+  setText(b, on ? `MATCH ${M.matchDb < -0.05 ? fmtNum(M.matchDb) : "0.0"}` : "MATCH");
 }
 $("btn-match").addEventListener("click", () => {
   const on = !P.levelMatch.getValue();
@@ -2785,20 +2788,20 @@ function updateAmButton() {
   const btn = $("btn-automaster"), title = $("am-title"), sub = $("am-sub");
   const busy = M.amState === 1 || M.amState === 2;
   btn.classList.toggle("busy", busy);
-  $("am-progress").hidden = M.amState !== 1;
+  if ($("am-progress").hidden !== (M.amState !== 1)) $("am-progress").hidden = M.amState !== 1;
   $("am-progress").classList.toggle("ready", !!M.amCanFinish);
-  $("am-progress-fill").style.width = (clamp(M.amProgress, 0, 1) * 100).toFixed(0) + "%";
+  setWidth($("am-progress-fill"), (clamp(M.amProgress, 0, 1) * 100).toFixed(0) + "%");
   if (M.amState === 1) {
-    title.textContent = M.amMode === 1 ? "LEARNING TONE" : "LISTENING";
-    sub.textContent = amListenText();
+    setText(title, M.amMode === 1 ? "LEARNING TONE" : "LISTENING");
+    setText(sub, amListenText());
   } else if (M.amState === 2) {
-    title.textContent = "THINKING";
-    sub.textContent = `Choosing every setting (${amThinkTime()})…`;
+    setText(title, "THINKING");
+    setText(sub, `Choosing every setting (${amThinkTime()})…`);
   } else {
-    title.textContent = "AUTO-MASTER";
-    sub.textContent = !(amReport && amReport.ok) ? "Click, then play your whole song"
+    setText(title, "AUTO-MASTER");
+    setText(sub, !(amReport && amReport.ok) ? "Click, then play your whole song"
       : M.aaOn && M.aaEdits ? `Auto Analyze: ${M.aaEdits} new edit${M.aaEdits === 1 ? "" : "s"} in Learn`
-      : M.aaOn ? "Done · Auto Analyze listening" : "Done · click to run again";
+      : M.aaOn ? "Done · Auto Analyze listening" : "Done · click to run again");
   }
   if (tsTarget.refresh) tsTarget.refresh();
 }
@@ -3826,11 +3829,11 @@ function buildMeters() {
 function updateMeters() {
   for (const d of meterDefs) {
     const v = M[d.key];
-    $("mv-" + d.key).textContent = d.plain ? `${v.toFixed(1)} ${d.unit}`
-      : d.key === "integrated" && v <= -99 ? `— ${d.unit}` : fmtDb(v, d.unit);
+    setText($("mv-" + d.key), d.plain ? `${v.toFixed(1)} ${d.unit}`
+      : d.key === "integrated" && v <= -99 ? `— ${d.unit}` : fmtDb(v, d.unit));
     const pct = v <= -99 ? 0 : clamp(((v - d.lo) / (d.hi - d.lo)) * 100, 0, 100);
     const fill = $("mf-" + d.key);
-    fill.style.width = pct.toFixed(1) + "%";
+    setWidth(fill, pct.toFixed(1) + "%");
     fill.classList.toggle("hot", !!(d.hot && d.hot(v)));
   }
 }
@@ -3843,12 +3846,12 @@ function updateOutputMeter() {
     const cur = hold[ch + "Disp"] ?? -100;
     const disp = val > cur ? val : Math.max(val, cur - 1.2);   // smooth fall
     hold[ch + "Disp"] = disp;
-    $("bar-" + ch).style.height = (100 - levelPct(disp)).toFixed(1) + "%";
+    setHeight($("bar-" + ch), (100 - levelPct(disp)).toFixed(1) + "%");
     if (val > hold[ch] || now - hold[ch + "T"] > 1500) { hold[ch] = val; hold[ch + "T"] = now; }
-    $("hold-" + ch).style.bottom = levelPct(hold[ch]).toFixed(1) + "%";
+    setBottom($("hold-" + ch), levelPct(hold[ch]).toFixed(1) + "%");
   }
   if (M.peakRecent > hold.peak || now - hold.peakT > 2000) { hold.peak = M.peakRecent; hold.peakT = now; }
-  $("out-peak").textContent = hold.peak <= -99 ? `${MINUS}inf` : fmtNum(hold.peak, 1);
+  setText($("out-peak"), hold.peak <= -99 ? `${MINUS}inf` : fmtNum(hold.peak, 1));
 }
 
 // After Auto-Master looked at a module and chose to leave it untouched, say so instead of "Neutral".
@@ -3861,8 +3864,8 @@ function updateLiveReadouts() {
   const m = modules.find((x) => x.id === selected);
   const clipOn = !!P.clipOn.getValue();
   const clipText = M.clip > -0.05 ? "0.0" : fmtNum(M.clip);
-  chip.hidden = !m.live;
-  chip.textContent = selected === "clip" ? (clipOn ? `CLIP ${clipText} dB` : "OFF")
+  if (chip.hidden !== !m.live) chip.hidden = !m.live;
+  setText(chip, selected === "clip" ? (clipOn ? `CLIP ${clipText} dB` : "OFF")
                    : selected === "eq" ? (!eqEnabled() ? "OFF" : eqIsFlat() ? "FLAT" : "SHAPING")
  : selected === "img" ? (!P.imgOn.getValue() ? "OFF" : `CORR ${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`)
                    : selected === "dyn" ? (!P.dynOn.getValue() ? "OFF" : dynIsNeutral() ? "1:1" : `GR ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB`)
@@ -3874,9 +3877,9 @@ function updateLiveReadouts() {
                    : selected === "rt" ? (!P.rtOn.getValue() ? "OFF" : rtIsNeutral() ? "IDLE" : (M.rtCut || 0) > -0.3 ? "RESTING" : `CUT ${fmtNum(M.rtCut)} dB`)
                    : selected === "stem" ? (!P.stemOn.getValue() ? "OFF" : stemIsNeutral() ? "FLAT" : `${stemMoves().length} MOVE${stemMoves().length > 1 ? "S" : ""}`)
                    : selected === "bass" ? (!P.bassOn.getValue() ? "OFF" : `WIDTH ${Math.round(M.bassWidth || 0)} %`)
-                   : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
+                   : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`);
   const r = $("read-max");
-  if (r) r.textContent = P.bypass.getValue() ? "Bypassed" : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`;
+  if (r) setText(r, P.bypass.getValue() ? "Bypassed" : `GR ${gr > -0.05 ? "0.0" : fmtNum(gr)} dB`);
   const bassOn = !!P.bassOn.getValue();
   const tameSet = P.bassTame.getScaledValue() > 0.5, punchSet = P.bassPunch.getScaledValue() > 0.5;
   const rb = $("read-bass");
@@ -3885,100 +3888,100 @@ function updateLiveReadouts() {
     if (bassMonoOn()) parts.push(parts.length || tameSet || punchSet ? "Mono" : `Mono ${Math.round(bassMonoHz())} Hz`);
     if (tameSet) parts.push("Tame");
     if (punchSet) parts.push("Punch");
-    rb.textContent = P.bypass.getValue() ? "Bypassed" : !bassOn ? "Off" : parts.length ? parts.join("\u00b7") : "Neutral";
+    setText(rb, P.bypass.getValue() ? "Bypassed" : !bassOn ? "Off" : parts.length ? parts.join("\u00b7") : "Neutral");
   }
   const tf = $("tamemeter-fill");
   if (tf) {
-    tf.style.width = (bassOn && tameSet ? clamp(-M.tame / 12, 0, 1) * 100 : 0).toFixed(1) + "%";
-    $("tamemeter-val").textContent = !bassOn || !tameSet ? "off" : `${M.tame < -0.05 ? fmtNum(M.tame) : "0.0"} dB`;
-    $("widthmeter-fill").style.width = clamp(M.bassWidth || 0, 0, 100).toFixed(0) + "%";
-    $("widthmeter-val").textContent = `${Math.round(M.bassWidth || 0)} % stereo`;
+    setWidth(tf, (bassOn && tameSet ? clamp(-M.tame / 12, 0, 1) * 100 : 0).toFixed(1) + "%");
+    setText($("tamemeter-val"), !bassOn || !tameSet ? "off" : `${M.tame < -0.05 ? fmtNum(M.tame) : "0.0"} dB`);
+    setWidth($("widthmeter-fill"), clamp(M.bassWidth || 0, 0, 100).toFixed(0) + "%");
+    setText($("widthmeter-val"), `${Math.round(M.bassWidth || 0)} % stereo`);
   }
   const ri = $("read-img");
   const imgW = [P.imgLow, P.imgMid, P.imgHigh].map((x) => x.getScaledValue());
   const imgNeutral = imgW.every((v) => Math.abs(v - 100) < 0.5);
-  if (ri) ri.textContent = P.bypass.getValue() ? "Bypassed" : !P.imgOn.getValue() ? "Off" : imgNeutral ? neutralText("img") : imgW.map((v) => Math.round(v)).join("/") + " %";
+  if (ri) setText(ri, P.bypass.getValue() ? "Bypassed" : !P.imgOn.getValue() ? "Off" : imgNeutral ? neutralText("img") : imgW.map((v) => Math.round(v)).join("/") + " %");
   const cf = $("corr-fill");
   if (cf) {
-    cf.style.width = (((clamp(M.corr, -1, 1) + 1) / 2) * 100).toFixed(0) + "%";
-    $("corr-val").textContent = `${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`;
+    setWidth(cf, (((clamp(M.corr, -1, 1) + 1) / 2) * 100).toFixed(0) + "%");
+    setText($("corr-val"), `${M.corr < 0 ? MINUS : "+"}${Math.abs(M.corr).toFixed(2)}`);
   }
   const rd = $("read-dyn");
-  if (rd) rd.textContent = P.bypass.getValue() ? "Bypassed" : !P.dynOn.getValue() ? "Off" : dynIsNeutral() ? neutralText("dyn")
-    : `${[0, 1, 2, 3].filter(dynBandActive).length} band${[0, 1, 2, 3].filter(dynBandActive).length > 1 ? "s" : ""} \u00b7 ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB${["", " \u00b7 mid", " \u00b7 side"][dynChannelsAt()]}`;
+  if (rd) setText(rd, P.bypass.getValue() ? "Bypassed" : !P.dynOn.getValue() ? "Off" : dynIsNeutral() ? neutralText("dyn")
+    : `${[0, 1, 2, 3].filter(dynBandActive).length} band${[0, 1, 2, 3].filter(dynBandActive).length > 1 ? "s" : ""} \u00b7 ${dynWorst() > -0.05 ? "0.0" : fmtNum(dynWorst())} dB${["", " \u00b7 mid", " \u00b7 side"][dynChannelsAt()]}`);
   if (selected === "dyn") dynPicker.refresh();
   const rg = $("read-glue");
-  if (rg) rg.textContent = P.bypass.getValue() ? "Bypassed" : !P.glueOn.getValue() ? "Off" : glueIsNeutral() ? neutralText("glue")
-    : glueRatioAt() <= 1.005 ? `Level ${fmtSigned(glueGainAt())}` : `${GLUE_CHARS[glueCharAt()]} ${glueRatioAt().toFixed(1)}:1 \u00b7 ${(M.glueGr || 0) > -0.05 ? "0.0" : fmtNum(M.glueGr)} dB`;
+  if (rg) setText(rg, P.bypass.getValue() ? "Bypassed" : !P.glueOn.getValue() ? "Off" : glueIsNeutral() ? neutralText("glue")
+    : glueRatioAt() <= 1.005 ? `Level ${fmtSigned(glueGainAt())}` : `${GLUE_CHARS[glueCharAt()]} ${glueRatioAt().toFixed(1)}:1 \u00b7 ${(M.glueGr || 0) > -0.05 ? "0.0" : fmtNum(M.glueGr)} dB`);
   const gf = $("gluemeter-fill");
   if (gf) {
     const active = P.glueOn.getValue() && !glueIsNeutral() && !P.bypass.getValue();
     const g = active ? Math.min(0, M.glueGr || 0) : 0;
-    gf.style.width = (clamp(-g / 12, 0, 1) * 100).toFixed(1) + "%";
-    $("gluemeter-val").textContent = !active ? "off" : g > -0.05 ? "0.0 dB" : `${fmtNum(g, 1)} dB`;
+    setWidth(gf, (clamp(-g / 12, 0, 1) * 100).toFixed(1) + "%");
+    setText($("gluemeter-val"), !active ? "off" : g > -0.05 ? "0.0 dB" : `${fmtNum(g, 1)} dB`);
   }
   const rul = $("read-ul");
-  if (rul) rul.textContent = P.bypass.getValue() ? "Bypassed" : !P.ulOn.getValue() ? "Off" : ulIsNeutral() ? neutralText("ul")
-    : `${Math.round(ulAmountAt())} % \u00b7 ${UL_FOCUS[comboIndex(P.ulFocus)]}`;
+  if (rul) setText(rul, P.bypass.getValue() ? "Bypassed" : !P.ulOn.getValue() ? "Off" : ulIsNeutral() ? neutralText("ul")
+    : `${Math.round(ulAmountAt())} % \u00b7 ${UL_FOCUS[comboIndex(P.ulFocus)]}`);
   const usf = $("ulsquash-fill");
   if (usf) {
     const sq = M.ulSquash || 0;
-    usf.style.width = (sq ? clamp((16 - sq) / 10, 0, 1) * 100 : 0).toFixed(1) + "%";
-    $("ulsquash-val").textContent = !sq ? "listening" : `${fmtNum(sq)} dB \u00b7 ${squashWord(sq)}`;
+    setWidth(usf, (sq ? clamp((16 - sq) / 10, 0, 1) * 100 : 0).toFixed(1) + "%");
+    setText($("ulsquash-val"), !sq ? "listening" : `${fmtNum(sq)} dB \u00b7 ${squashWord(sq)}`);
     const v = ulIsNeutral() || P.bypass.getValue() ? 0 : M.ulBoost || 0;
-    $("ulmeter-fill").style.width = (clamp(v / 10, 0, 1) * 100).toFixed(1) + "%";
-    $("ulmeter-val").textContent = v < 0.3 ? "resting" : `+${v.toFixed(1)} dB`;
+    setWidth($("ulmeter-fill"), (clamp(v / 10, 0, 1) * 100).toFixed(1) + "%");
+    setText($("ulmeter-val"), v < 0.3 ? "resting" : `+${v.toFixed(1)} dB`);
   }
   const rts = $("read-ts");
-  if (rts) rts.textContent = P.bypass.getValue() ? "Bypassed" : !P.tsOn.getValue() ? "Off" : tsIsNeutral() ? neutralText("ts")
-    : `${Math.round(tsAmountAt())} % \u00b7 ${MINUS}${P.tsRange.getScaledValue().toFixed(1)} dB${M.tsTarget ? " \u00b7 song" : ""}`;
+  if (rts) setText(rts, P.bypass.getValue() ? "Bypassed" : !P.tsOn.getValue() ? "Off" : tsIsNeutral() ? neutralText("ts")
+    : `${Math.round(tsAmountAt())} % \u00b7 ${MINUS}${P.tsRange.getScaledValue().toFixed(1)} dB${M.tsTarget ? " \u00b7 song" : ""}`);
   const rrt = $("read-rt");
-  if (rrt) rrt.textContent = P.bypass.getValue() ? "Bypassed" : !P.rtOn.getValue() ? "Off" : rtIsNeutral() ? neutralText("rt")
-    : `${Math.round(rtAmountAt())} % \u00b7 ${RT_FOCUS[comboIndex(P.rtFocus)]}`;
+  if (rrt) setText(rrt, P.bypass.getValue() ? "Bypassed" : !P.rtOn.getValue() ? "Off" : rtIsNeutral() ? neutralText("rt")
+    : `${Math.round(rtAmountAt())} % \u00b7 ${RT_FOCUS[comboIndex(P.rtFocus)]}`);
   const tsf = $("tsmeter-fill");
   if (tsf) {
     const v = tsIsNeutral() || P.bypass.getValue() ? 0 : Math.abs(M.tsDb || 0);
-    tsf.style.width = (clamp(v / 6, 0, 1) * 100).toFixed(1) + "%";
-    $("tsmeter-val").textContent = v < 0.3 ? "resting" : `${M.tsDb < 0 ? MINUS : "+"}${v.toFixed(1)} dB @ ${fmtHz(M.tsHz || 0)}`;
+    setWidth(tsf, (clamp(v / 6, 0, 1) * 100).toFixed(1) + "%");
+    setText($("tsmeter-val"), v < 0.3 ? "resting" : `${M.tsDb < 0 ? MINUS : "+"}${v.toFixed(1)} dB @ ${fmtHz(M.tsHz || 0)}`);
   }
   const rtf = $("rtmeter-fill");
   if (rtf) {
     const v = rtIsNeutral() || P.bypass.getValue() ? 0 : -(M.rtCut || 0);
-    rtf.style.width = (clamp(v / 12, 0, 1) * 100).toFixed(1) + "%";
-    $("rtmeter-val").textContent = v < 0.3 ? "resting" : `${MINUS}${v.toFixed(1)} dB @ ${fmtHz(M.rtHz || 0)}`;
+    setWidth(rtf, (clamp(v / 12, 0, 1) * 100).toFixed(1) + "%");
+    setText($("rtmeter-val"), v < 0.3 ? "resting" : `${MINUS}${v.toFixed(1)} dB @ ${fmtHz(M.rtHz || 0)}`);
   }
   const skv = $("stemkeep-val");
-  if (skv) skv.textContent = stemKeepText();
+  if (skv) setText(skv, stemKeepText());
   const rst = $("read-stem");
-  if (rst) rst.textContent = P.bypass.getValue() ? "Bypassed" : !P.stemOn.getValue() ? "Off" : stemSuggestion() ? "Suggestion ready"
+  if (rst) setText(rst, P.bypass.getValue() ? "Bypassed" : !P.stemOn.getValue() ? "Off" : stemSuggestion() ? "Suggestion ready"
     : stemIsNeutral() ? neutralText("stem")
-    : stemMoves().map((k) => `${["Vox", "Drm", "Bass", "Oth"][k]} ${fmtSigned(stemGainAt(k)).replace(" dB", "")}`).join("\u00b7");
+    : stemMoves().map((k) => `${["Vox", "Drm", "Bass", "Oth"][k]} ${fmtSigned(stemGainAt(k)).replace(" dB", "")}`).join("\u00b7"));
   for (let k = 0; k < 4; k++) {
     const f = $("sh-fill-" + k);
     if (!f) break;
     const v = clamp((M.stemShare || [])[k] || 0, 0, 100);
-    f.style.width = v.toFixed(0) + "%";
+    setWidth(f, v.toFixed(0) + "%");
     $("sh-val-" + k).textContent = `${Math.round(v)} %`;
   }
   const rs = $("read-sat");
-  if (rs) rs.textContent = P.bypass.getValue() ? "Bypassed" : !P.satOn.getValue() ? "Off" : satIsNeutral() ? neutralText("sat") : `${SAT_MODES[satModeIndex()]} +${satDriveAt().toFixed(1)} dB${SAT_FOCUS_TAG[satFocusIndex()].toLowerCase()}${["", " \u00b7 mid", " \u00b7 side"][satChannelsAt()]}`;
+  if (rs) setText(rs, P.bypass.getValue() ? "Bypassed" : !P.satOn.getValue() ? "Off" : satIsNeutral() ? neutralText("sat") : `${SAT_MODES[satModeIndex()]} +${satDriveAt().toFixed(1)} dB${SAT_FOCUS_TAG[satFocusIndex()].toLowerCase()}${["", " \u00b7 mid", " \u00b7 side"][satChannelsAt()]}`);
   const hf = $("harmmeter-fill");
   if (hf) {
     const active = P.satOn.getValue() && !satIsNeutral() && !P.bypass.getValue();
-    hf.style.width = (active ? clamp((M.satHarm + 60) / 50, 0, 1) * 100 : 0).toFixed(1) + "%";
-    $("harmmeter-val").textContent = !active ? "off" : M.satHarm <= -60 ? `< ${MINUS}60 dB` : `${fmtNum(M.satHarm, 0)} dB`;
+    setWidth(hf, (active ? clamp((M.satHarm + 60) / 50, 0, 1) * 100 : 0).toFixed(1) + "%");
+    setText($("harmmeter-val"), !active ? "off" : M.satHarm <= -60 ? `< ${MINUS}60 dB` : `${fmtNum(M.satHarm, 0)} dB`);
   }
   const re = $("read-eq");
   if (re) {
     const moved = EQ_BANDS.filter((_, b) => Math.abs(eqGainAt(b)) >= 0.05).length;
-    re.textContent = P.bypass.getValue() ? "Bypassed" : !eqEnabled() ? "Off" : moved ? `${moved} band${moved > 1 ? "s" : ""} shaped` : "Flat";
+    setText(re, P.bypass.getValue() ? "Bypassed" : !eqEnabled() ? "Off" : moved ? `${moved} band${moved > 1 ? "s" : ""} shaped` : "Flat");
   }
   const rc = $("read-clip");
-  if (rc) rc.textContent = P.bypass.getValue() ? "Bypassed" : clipOn ? `Clip ${clipText} dB` : "Off";
+  if (rc) setText(rc, P.bypass.getValue() ? "Bypassed" : clipOn ? `Clip ${clipText} dB` : "Off");
   const fill = $("clipmeter-fill"), val = $("clipmeter-val");
   if (fill) {
-    fill.style.width = (clipOn ? clamp(-M.clip / 6, 0, 1) * 100 : 0).toFixed(1) + "%";
-    val.textContent = clipOn ? `${clipText} dB` : "off";
+    setWidth(fill, (clipOn ? clamp(-M.clip / 6, 0, 1) * 100 : 0).toFixed(1) + "%");
+    setText(val, clipOn ? `${clipText} dB` : "off");
   }
 }
 
