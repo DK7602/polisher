@@ -190,6 +190,12 @@ const P = {
     cakewalk: "File > Export > Audio: Bit Depth", cubase: "File > Export > Audio Mixdown: Bit Depth", studioone: "Song > Export Mixdown: Format", fl: "File > Export: Depth",
     ableton: "File > Export Audio/Video: Bit Depth", reaper: "File > Render: Format", bitwig: "File > Export Audio: Bit depth",
     logic: "File > Bounce > Project or Section: Bit Depth", other: "your DAW's export settings" },
+  // An export that plays the song through in real time: a plug-in can't tell it from playback, so MATCH and the
+  // listening aids (which an offline export switches off) must be off by hand. Said as "before ..." / "for ...".
+  realtimeExport: {
+    cakewalk: "an export with Fast Bounce off", cubase: "a Realtime Export", studioone: "an export with Realtime Processing on",
+    fl: "recording the Master in real time", ableton: "recording the Main output in real time", reaper: "an Online Render",
+    bitwig: "recording the Master in real time", logic: "a bounce in Realtime mode", other: "an export that plays the song through in real time" },
   // A track's routing / output menu.
   trackOutput: {
     cakewalk: "the track's Output menu (Track view or Inspector)", cubase: "the track's output menu (the routing at the top of the Inspector)", studioone: "the channel's output menu (bottom of its strip in the Console)",

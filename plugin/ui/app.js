@@ -2217,7 +2217,7 @@ function refreshListenButton() {
   b.className = "pill listen " + (on ? "pill-red on" : "pill-blue");
   b.setAttribute("aria-pressed", String(on));
   $("btn-listen-text").textContent = "LISTEN";
-  b.title = `Listen: hear only ${listenWhat(mode)}. A listening aid: a normal export never contains it (switch it off before a Realtime Export)`;
+  b.title = D(`Listen: hear only ${listenWhat(mode)}. A listening aid: a normal export never contains it (switch it off before {daw:realtimeExport})`);
 }
 $("btn-listen").addEventListener("click", () => {
   const mode = listenModeFor(selected), on = MON.listen !== mode;
@@ -2372,8 +2372,8 @@ function addMonitorLearn(body) {
   const mode = listenModeFor(selected);
   if (mode && MON.listen !== mode && !(selected === "dyn" && isSoloMode(MON.listen)))
     body.appendChild(tip("HEAR WHAT IT DOES", selected === "dyn"
-      ? "S next to a band plays only that band. LISTEN (headphones, top right of this panel) plays only what the picked band's compression takes off. Listening aids only: a normal export never contains them (switch them off before a Realtime Export)."
-      : `LISTEN (headphones, top right of this panel) plays only ${listenWhat(mode)}, so you can learn its sound. Quiet changes are turned up so you can hear them. A listening aid: a normal export never contains it (switch it off before a Realtime Export).`, true));
+      ? "S next to a band plays only that band. LISTEN (headphones, top right of this panel) plays only what the picked band's compression takes off. Listening aids only: a normal export never contains them (switch them off before {daw:realtimeExport})."
+      : `LISTEN (headphones, top right of this panel) plays only ${listenWhat(mode)}, so you can learn its sound. Quiet changes are turned up so you can hear them. A listening aid: a normal export never contains it (switch it off before {daw:realtimeExport}).`, true));
 }
 
 function refreshAB() {
@@ -2712,9 +2712,18 @@ $("daw-select").addEventListener("change", (e) => {
   pickDawNative(v);
   DAW.key = v || dawOf(DAW.detected).key;
   DAW.picked = !!v;
+  fillDawTexts();
   renderLearn();
 });
 fillDawSelect();
+// The window's own texts with {daw} tokens (index.html: data-daw = the element's text, data-daw-title = its
+// tooltip), in the words of the DAW: filled now and whenever the DAW changes.
+function fillDawTexts() {
+  document.querySelectorAll("[data-daw]").forEach((el) => setText(el, D(el.dataset.daw)));
+  document.querySelectorAll("[data-daw-title]").forEach((el) => { el.title = D(el.dataset.dawTitle); });
+  refreshListenButton();
+}
+fillDawTexts();
 $("genre-prev").addEventListener("click", () => stepGenre(-1));
 $("genre-next").addEventListener("click", () => stepGenre(1));
 for (const [rowId, st] of [["row-intensity", P.amIntensity], ["row-target", P.amTarget]])
@@ -3994,6 +4003,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (raw) => {
     if (frame.daw && (frame.daw.key !== DAW.key || !!frame.daw.picked !== DAW.picked || frame.daw.detected !== DAW.detected)) {
       Object.assign(DAW, { key: frame.daw.key || "other", picked: !!frame.daw.picked, detected: frame.daw.detected || "other", from: frame.daw.from || 0 });
       fillDawSelect();
+      fillDawTexts();
       refreshLearn();
     }
     // The song's style: this project's, or one just picked in Mixology or Voxology.
