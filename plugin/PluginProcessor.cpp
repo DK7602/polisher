@@ -1291,6 +1291,13 @@ void PolisherAudioProcessor::setStateInformation (const void* data, int sizeInBy
                 keep->setAttribute ("id", "stemKeep");
                 keep->setAttribute ("value", 0.0);
             }
+            // A damaged value ("nan", "inf": a broken preset or project file) must never become a control's
+            // value (a NaN setting plays as silence or noise from then on): the control's default instead.
+            for (auto* child : xml->getChildIterator())
+                if (child->hasTagName ("PARAM"))
+                    if (auto* param = parameters.getParameter (child->getStringAttribute ("id")))
+                        if (! std::isfinite (child->getDoubleAttribute ("value")))
+                            child->setAttribute ("value", static_cast<double> (param->convertFrom0to1 (param->getDefaultValue())));
             // MATCH is a listening aid, but the host saves it like any parameter: a song saved while
             // comparing would reopen with the master turned down (also in a Realtime Export, with no
             // window open to show it). A project always opens with MATCH off.

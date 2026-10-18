@@ -666,6 +666,44 @@ TEST_CASE ("Plug-in: the host's reset clears the look-ahead audio, so playback s
     CHECK (maxAbsDiff (resumed, fresh) < 1.0e-5);
 }
 
+TEST_CASE ("Plug-in: a damaged value in a saved project or snapshot never becomes a NaN setting", "[plugin]")
+{
+    const double sr = 48000.0;
+    auto a = makeProcessor (sr, 512, false);
+    set (*a, "drive", 6.0f);
+    a->snapshots.store (0);
+    juce::MemoryBlock state;
+    a->getStateInformation (state);
+    auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+    REQUIRE (xml != nullptr);
+    int damaged = 0;
+    for (auto* child : xml->getChildIterator())
+        if (child->hasTagName ("PARAM") && (child->getStringAttribute ("id") == "drive" || child->getStringAttribute ("id") == "satDrive"))
+        {
+            child->setAttribute ("value", child->getStringAttribute ("id") == "drive" ? "nan" : "inf");
+            ++damaged;
+        }
+    if (auto* snaps = xml->getChildByName (SettingsSnapshots::kTag))
+        for (auto* slot : snaps->getChildIterator())
+            for (auto* v : slot->getChildIterator())
+                if (v->getStringAttribute ("id") == "drive") { v->setAttribute ("v", "nan"); ++damaged; }
+    REQUIRE (damaged == 3);
+    juce::MemoryBlock broken;
+    juce::AudioProcessor::copyXmlToBinary (*xml, broken);
+
+    auto b = makeProcessor (sr, 512, false);
+    b->setStateInformation (broken.getData(), (int) broken.getSize());
+    auto plain = [&] (const char* id) { return b->parameters.getRawParameterValue (id)->load(); };
+    INFO ("drive " << plain ("drive") << " dB, Saturation Drive " << plain ("satDrive") << " dB");
+    CHECK (plain ("drive") == 0.0f);      // its default
+    CHECK (plain ("satDrive") == 0.0f);
+    REQUIRE (b->snapshots.recall (0));
+    CHECK (std::isfinite (plain ("drive")));
+    CHECK (plain ("drive") == 0.0f);
+    const auto out = renderFixed (*b, testsig::musicLike (sr, 1.0, -6.0), 512);
+    CHECK (nonFinite (out) == 0);
+}
+
 TEST_CASE ("Plug-in: double-precision hosts get the same master as single precision", "[plugin]")
 {
     const double sr = 48000.0;
