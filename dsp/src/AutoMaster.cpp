@@ -2183,7 +2183,11 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         {
             const double to = std::clamp (current + move, -StemEQ::kMaxGainDb, StemEQ::kMaxGainDb);
             r.hasStemSuggestion = true;
+            // With Stem EQ off, the mix was heard without its knobs, so the suggestion starts from 0 dB for the other
+            // stems: applying it (which switches Stem EQ on) must not bring back moves you had switched off.
             r.stemSuggestion = s.stem;
+            if (! s.stem.enabled)
+                r.stemSuggestion.gainDb.fill (0.0);
             r.stemSuggestion.enabled = true;
             r.stemSuggestion.gainDb[kStemVocals] = to;
             reason ("stem", "Vocals", "try " + num (to, true) + " dB",

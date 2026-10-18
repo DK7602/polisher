@@ -1634,7 +1634,7 @@ function stemSuggestion() {
 function stemSuggestButton() {
   const s = stemSuggestion();
   if (!s) return null;
-  const moves = [0, 1, 2, 3].filter((k) => Math.abs(s[k] - stemGainAt(k)) > 0.05);
+  const moves = [0, 1, 2, 3].filter((k) => Math.abs(s[k] - (P.stemOn.getValue() ? stemGainAt(k) : 0)) > 0.05);   // what you'll hear change (with Stem EQ off, every stem is at 0 now)
   const b = document.createElement("button");
   b.type = "button";
   b.className = "pill pill-red stem-apply";

@@ -274,7 +274,7 @@ struct AutoMasterResult
     MixAnalysis masterAnalysis;                 // the master, measured the same way (only when matching a reference)
     MasterChainParams chain;                    // the settings to apply
     bool hasStemSuggestion = false;             // a Stem EQ move to offer (never applied automatically)
-    StemEQParams stemSuggestion;                // the full Stem EQ setting to offer (the user's, plus the move)
+    StemEQParams stemSuggestion;                // the full Stem EQ setting to offer (the user's, plus the move; 0 dB for the other stems when Stem EQ was off)
     LoudnessStats output;                       // what the master measures with them
     double targetLufs = 0.0;
     double capturedLufs = -100.0;               // the 12 s it heard, as it arrived (before Input Trim and every module)
