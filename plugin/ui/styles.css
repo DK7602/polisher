@@ -140,7 +140,7 @@ img { -webkit-user-drag: none; }
 .sw-genre { height: 0; border-top: 2.5px dotted #7EE0C3; opacity: .85; }
 .sw-gr { height: 9px; background: rgba(156,203,240,.3); border-top: 1px solid rgba(156,203,240,.8); }
 .sw-target { height: 0; border-top: 1.5px dashed #DCE8F5; opacity: .8; }
-/* The EQ points' digits and SPECTRUM / HISTORY use the generic monospace, and the DAW list 13.33 px Arial: that is how the
+/* The EQ points' digits and SPECTRUM / HISTORY use the generic monospace, and the DAW list 10 pt (13.33 px) Arial: that is how the
    approved look renders (they named fonts that never applied). Named here so every machine draws them the same. */
 /* the genre line's legend entry is also its show / hide switch */
 .legend-btn { display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
@@ -282,7 +282,7 @@ img { -webkit-user-drag: none; }
 .pop-foot { font-size: 11px; color: var(--dim); }
 /* Your DAW (shared with Mixology and Voxology) */
 .daw-row { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 700; letter-spacing: .08em; color: #DCE8F5; }
-.daw-row select { flex: 1; height: 30px; border: 0; border-radius: 10px; padding: 0 10px; font: 400 13.3333px Arial; color: #fff;
+.daw-row select { flex: 1; height: 30px; border: 0; border-radius: 10px; padding: 0 10px; font: 400 10pt Arial; color: #fff;
   background: rgba(255,255,255,.08); box-shadow: inset 0 0 0 1px rgba(160,210,255,.45); cursor: pointer; }
 .daw-row select option { background: #0F2C54; color: #fff; }
 .toast { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); z-index: 30; max-width: 560px; padding: 12px 18px;
