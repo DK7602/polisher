@@ -368,6 +368,9 @@
     if (am.heard >= SONG) amDecide(true);            // the song ended: it finishes by itself
   }, 100);
 
+  // What the plug-in remembers for the window (rememberUi): here kept in sessionStorage, so a reload is a reopen.
+  let uiMemory = {};
+  try { uiMemory = JSON.parse(sessionStorage.getItem("polisher.mockUi") || "{}") || {}; } catch (_) { uiMemory = {}; }
   const send = (id, obj, ms = 0) => setTimeout(() => window.__JUCE__.backend.emitByBackend(id, JSON.stringify(obj)), ms);
 
   window.__JUCE__ = {
@@ -376,11 +379,12 @@
       __juce__functions: ["resetMeter", "startAutoMaster", "finishAutoMaster", "cancelAutoMaster", "getAutoMasterReport", "clearToneTarget",
                           "setAutoAnalyze", "getAutoAnalyze", "applyAutoEdit", "keepAutoEdit",
                           "loadReference", "clearReference", "getReference", "setMonitor",
-                          "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve", "pickStyle", "pickDaw"],
+                          "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve", "pickStyle", "pickDaw", "rememberUi"],
       __juce__registeredGlobalEventIds: [],
       __juce__sliders: Object.keys(sliders),
       __juce__toggles: Object.keys(toggles),
       __juce__comboBoxes: Object.keys(combos),
+      polisherUi: [uiMemory],
     },
     postMessage(message) {
       const { eventId, payload } = JSON.parse(message);
@@ -468,6 +472,10 @@
         }
         if (payload.name === "pickDaw") Object.assign(daw, { key: (payload.params || [])[0] || "cubase", picked: !!(payload.params || [])[0], from: 3 });
         if (payload.name === "snapshotStore") snapStore((payload.params || [])[0]);
+        if (payload.name === "rememberUi") {   // like the plug-in: kept for the next time the window opens (here: a reload)
+          Object.assign(uiMemory, (payload.params || [])[0] || {});
+          try { sessionStorage.setItem("polisher.mockUi", JSON.stringify(uiMemory)); } catch (_) {}
+        }
         if (payload.name === "snapshotRecall") result = snapRecall((payload.params || [])[0]);
         send("__juce__complete", { promiseId: payload.resultId, result });
       }

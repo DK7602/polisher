@@ -255,7 +255,11 @@ const modules = [
                ["Oversampling", "Cuts down the harsh aliasing that clipping otherwise adds."]] },
   { id: "max", name: "Maximizer", live: true },
 ];
-let selected = "max";
+// What the plug-in remembers for this window (PolisherWebEditor): the module that was open, LEARN on or off (both
+// saved with the project) and the loudness history (while the plug-in runs), so reopening it puts you back there.
+const rememberUi = Juce.getNativeFunction("rememberUi");
+const UI_MEM = ((window.__JUCE__.initialisationData || {}).polisherUi || [])[0] || {};
+let selected = modules.some((m) => m.id === UI_MEM.module) ? UI_MEM.module : "max";
 let learnView = "module";      // "module", "report" (the Auto-Master report), "ref" (Match ref) or "history" (loudness history)
 let amReport = null;           // last Auto-Master report (parsed), or null
 
@@ -391,7 +395,7 @@ function renderChain() {
     btn.innerHTML = `<span class="row-text"><span class="row-name">${m.name}</span>
       <span class="row-read mono" id="read-${m.id}">${m.live ? "" : "Coming soon"}</span></span>
       <span class="row-num mono">${String(i + 1).padStart(2, "0")}</span>`;
-    btn.addEventListener("click", () => { selected = m.id; learnView = "module"; renderChain(); renderModule(); renderLearn(); });
+    btn.addEventListener("click", () => { selected = m.id; learnView = "module"; renderChain(); renderModule(); renderLearn(); rememberUi({ module: m.id }); });
     row.appendChild(btn);
     chainRows.appendChild(row);
   });
@@ -2165,6 +2169,7 @@ function renderClipperLearn(body) {
 // ---------------------------------------------------------------------------------------------
 // Header controls
 function setLearn(on) {
+  if (on !== learnOn) rememberUi({ learn: on });
   learnOn = on;
   const b = $("learn-toggle");
   b.textContent = on ? "LEARN ON" : "LEARN OFF";
@@ -3105,8 +3110,29 @@ const HIST_SETTLE_MS = 3000;                                 // Short-term needs
 const hist = { pts: [], acc: null, gapNext: true, playingSince: null, lastFrame: 0, dirty: true };
 let histView = false;
 try { histView = localStorage.getItem("polisher.view") === "history"; } catch (_) {}
+histRestore(UI_MEM.history);
 
-function histReset() { hist.pts = []; hist.acc = null; hist.gapNext = true; hist.dirty = true; drawHistory(); }
+function histReset() { hist.pts = []; hist.acc = null; hist.gapNext = true; hist.dirty = true; hist.unsaved = true; drawHistory(); }
+// The plug-in keeps the history for the next time this window opens: sent every few seconds while it grows, and as
+// the window goes. It comes back with a gap (time went on while the window was closed).
+function histSave() {
+  if (!hist.unsaved) return;
+  hist.unsaved = false;
+  const r1 = (v) => Math.round(v * 10) / 10;
+  rememberUi({ history: JSON.stringify(hist.pts.map((p) => [r1(p.st), p.inSt === null ? null : r1(p.inSt), r1(p.gr), p.gap ? 1 : 0])) });
+}
+function histRestore(text) {
+  let pts = [];
+  try { pts = JSON.parse(text || "[]"); } catch (_) { pts = []; }
+  if (!Array.isArray(pts)) return;
+  hist.pts = pts.filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && (p[1] === null || Number.isFinite(p[1])) && Number.isFinite(p[2]))
+    .slice(-HIST_POINTS).map((p) => ({ st: p[0], inSt: p[1], gr: p[2], gap: !!p[3] }));
+  hist.gapNext = true;
+  hist.dirty = true;
+}
+setInterval(histSave, 5000);
+window.addEventListener("pagehide", histSave);
+document.addEventListener("visibilitychange", () => { if (document.hidden) histSave(); });
 function histFlush() {
   const a = hist.acc;
   hist.acc = null;
@@ -3115,6 +3141,7 @@ function histFlush() {
   hist.gapNext = false;
   if (hist.pts.length > HIST_POINTS) hist.pts.splice(0, hist.pts.length - HIST_POINTS);
   hist.dirty = true;
+  hist.unsaved = true;
 }
 function histBreak() { histFlush(); if (hist.pts.length) hist.gapNext = true; hist.playingSince = null; }
 // One meter frame. `playing` comes from the plug-in (the host's transport); older builds don't send it.
@@ -4092,7 +4119,7 @@ buildHistoryGrid();
 buildMeters();
 renderChain();
 renderModule();
-setLearn(true);
+setLearn(UI_MEM.learn !== false);
 refreshAmChoices();
 updateAmButton();
 refreshHistory();

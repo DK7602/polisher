@@ -3,6 +3,7 @@
 
 #include "PolisherUIData.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace
@@ -30,6 +31,25 @@ namespace
     }
 
     float roundTo (float v, float step) { return std::round (v / step) * step; }
+
+    // The window remembers where you were. The size, the open module and LEARN on / off are properties of the
+    // processor's state, so they are saved with the project. The loudness history the page draws is kept only
+    // while the plug-in runs (a preset or a copy of Masterology mustn't carry another song's graph): per
+    // instance, keyed by the processor's state tree, which loading a project or preset replaces.
+    const juce::Identifier uiWidthId { "uiWidth" }, uiModuleId { "uiModule" }, uiLearnId { "uiLearn" };
+
+    juce::String& loudnessHistoryFor (PolisherAudioProcessor& p)
+    {
+        struct Kept { juce::ValueTree state; juce::String history; };
+        static std::vector<Kept> kept;   // message thread only
+        // An instance that is gone (or loaded another state) leaves its tree held only here: forget it.
+        kept.erase (std::remove_if (kept.begin(), kept.end(), [] (const Kept& k) { return k.state.getReferenceCount() <= 1; }), kept.end());
+        for (auto& k : kept)
+            if (k.state == p.parameters.state)
+                return k.history;
+        kept.push_back ({ p.parameters.state, {} });
+        return kept.back().history;
+    }
 }
 
 juce::WebBrowserComponent::Options PolisherWebEditor::makeBaseOptions()
@@ -251,6 +271,31 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                                  o->setProperty ("displayDb", points);
                                  complete (juce::JSON::toString (juce::var (o), true));
                              })
+        // What the page told us to remember (see loudnessHistoryFor): rememberUi({ module, learn, history }).
+        .withNativeFunction ("rememberUi", [this] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 if (auto* o = args.size() > 0 ? args[0].getDynamicObject() : nullptr)
+                                 {
+                                     auto& state = audioProcessor.parameters.state;
+                                     const auto module = o->getProperty ("module").toString();
+                                     if (module.isNotEmpty() && module.length() <= 16 && module.containsOnly ("abcdefghijklmnopqrstuvwxyz"))
+                                         state.setProperty (uiModuleId, module, nullptr);
+                                     if (o->hasProperty ("learn"))
+                                         state.setProperty (uiLearnId, static_cast<bool> (o->getProperty ("learn")), nullptr);
+                                     if (o->hasProperty ("history") && o->getProperty ("history").toString().length() <= 32768)
+                                         loudnessHistoryFor (audioProcessor) = o->getProperty ("history").toString();
+                                 }
+                                 complete (true);
+                             })
+        .withInitialisationData ("polisherUi", [this]
+                                 {
+                                     const auto& state = audioProcessor.parameters.state;
+                                     auto* o = new juce::DynamicObject();
+                                     o->setProperty ("module", state.getProperty (uiModuleId, juce::String()));
+                                     o->setProperty ("learn", state.getProperty (uiLearnId, true));
+                                     o->setProperty ("history", loudnessHistoryFor (audioProcessor));
+                                     return juce::var (o);
+                                 }())
         // The page shows the plug-in's version (Settings) from here: the build sets it, so it can't go stale.
         .withInitialisationData ("polisherVersion", juce::String (JucePlugin_VersionString))
         .withResourceProvider ([] (const auto& url) { return getResource (url); });
@@ -313,7 +358,9 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
     setResizeLimits (kMinWidth, kMinHeight, 2400, 1350);
     if (auto* c = getConstrainer())
         c->setFixedAspectRatio (static_cast<double> (kDesignWidth) / kDesignHeight);
-    setSize (1280, 720);
+    // The size it had last time (resized() keeps it), else 1280 x 720.
+    const int width = juce::jlimit (kMinWidth, 2400, static_cast<int> (audioProcessor.parameters.state.getProperty (uiWidthId, 1280)));
+    setSize (width, juce::roundToInt (width * static_cast<double> (kDesignHeight) / kDesignWidth));
 
     // Energy meters piled up while the editor was closed: start fresh.
     for (auto& e : audioProcessor.meters.stemEnergy) e.store (0.0f);
@@ -345,6 +392,7 @@ void PolisherWebEditor::paint (juce::Graphics& g)
 void PolisherWebEditor::resized()
 {
     webView.setBounds (getLocalBounds());
+    audioProcessor.parameters.state.setProperty (uiWidthId, getWidth(), nullptr);   // opens at this size next time
 }
 
 std::optional<juce::WebBrowserComponent::Resource> PolisherWebEditor::getResource (const juce::String& url)
