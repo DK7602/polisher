@@ -1091,10 +1091,15 @@ const nodeEls = EQ_BANDS.map((band, b) => {
   n.setAttribute("aria-label", band.name);
   eqNodes.appendChild(n);
 
-  let dragging = false;
+  // The point moves by as much as the pointer does (a fifth of it with Shift, like the knobs' fine control), from
+  // where it was grabbed: taking it a little off-centre doesn't make it jump under the pointer.
+  let dragging = false, grab = null;
   const setFromPointer = (e) => {
+    const fine = e.shiftKey ? 0.2 : 1;
+    grab.x += (e.clientX - grab.px) * fine; grab.y += (e.clientY - grab.py) * fine;
+    grab.px = e.clientX; grab.py = e.clientY;
     const r = plotWrap.getBoundingClientRect();
-    const fx = clamp((e.clientX - r.left) / r.width, 0, 1), fy = clamp((e.clientY - r.top) / r.height, 0, 1);
+    const fx = clamp((grab.x - r.left) / r.width, 0, 1), fy = clamp((grab.y - r.top) / r.height, 0, 1);
     const f = 20 * Math.pow(1000, fx);
     const g = clamp((0.5 - fy) * 2 * EQ_VIEW, -EQ_MAX, EQ_MAX);
     const fs = P.eqFreq[b], gs = P.eqGain[b];
@@ -1104,6 +1109,8 @@ const nodeEls = EQ_BANDS.map((band, b) => {
   };
   n.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
+    const c = n.getBoundingClientRect();
+    grab = { x: c.left + c.width / 2, y: c.top + c.height / 2, px: e.clientX, py: e.clientY };
     n.setPointerCapture(e.pointerId); dragging = true; n.classList.add("dragging");
     P.eqFreq[b].sliderDragStarted(); P.eqGain[b].sliderDragStarted();
     e.preventDefault(); e.stopPropagation();
