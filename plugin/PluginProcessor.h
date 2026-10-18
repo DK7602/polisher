@@ -16,6 +16,7 @@
 #include "polisher/Unlimiter.h"
 #include "polisher/Dither.h"
 #include "polisher/Monitoring.h"
+#include "polisher/GainGlide.h"
 #include "ModuleParams.h"
 #include "SpectrumTap.h"
 #include "AutoMasterController.h"
@@ -249,7 +250,10 @@ private:
     ModuleParams::Reader moduleParams;
     polisher::SoftClipper clipper;
     polisher::TruePeakLimiter limiter;
-    double currentDriveGain = 1.0, currentTrimGain = 1.0;
+    // Input Trim, Drive and MATCH glide to a new gain in a fixed time, whatever the host's block size
+    // (a jump in one block clicked at a 32-sample buffer and took 43 ms at 2048).
+    static constexpr double kGainGlideSeconds = 0.02;
+    polisher::GainGlide trimGlide, driveGlide, matchGlide;
     polisher::LoudnessMeter outputMeter;
     polisher::LoudnessMeter inputMeter;   // the incoming mix, so Learn can say how much louder the master is
     std::atomic<bool> meterResetRequested { false }, statsResetRequested { false };
@@ -288,7 +292,6 @@ private:
     int songToneVersion = -1;
     polisher::TonalEQParams stageToneEq;
     double stageToneRate = 0.0, stageToneTrimDb = 0.0;
-    double currentMatchGain = 1.0;
 
     // MATCH per snapshot: the gap learned while a slot played unchanged, so flipping back to it is
     // level-matched at once. The audio thread owns matchMemory; recall / store post requests.
@@ -321,6 +324,7 @@ private:
     polisher::MonitorDelay monClipDelay;   // the Soft Clipper's clean gain, carried on past the limiter's look-ahead
     std::array<std::vector<double>, 2> monPre, monSig, monAux;
     std::vector<double> monLimGain, monClipGain, monGlueGain;
+    std::vector<double> monDrive;          // Drive's gain per sample, for the signals formed before it
     int monCapacity = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PolisherAudioProcessor)

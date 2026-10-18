@@ -368,12 +368,15 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     saturation.prepare (sampleRate, channels);
     autoMaster.prepare (sampleRate);
     levelMatch.prepare (sampleRate);
-    currentMatchGain = 1.0;
     outputMeter.prepare (sampleRate, channels);
     inputMeter.prepare (sampleRate, channels);
     updateLimiterParams();
-    currentDriveGain = targetDriveGain();
-    currentTrimGain = targetTrimGain();
+    trimGlide.prepare (sampleRate, kGainGlideSeconds);
+    driveGlide.prepare (sampleRate, kGainGlideSeconds);
+    matchGlide.prepare (sampleRate, kGainGlideSeconds);
+    trimGlide.jumpTo (targetTrimGain());     // starts at the set gains (no glide from 0 dB at bar 1)
+    driveGlide.jumpTo (targetDriveGain());
+    matchGlide.jumpTo (1.0);
     // Constant latency whatever the settings: Unlimiter + Stem EQ look-ahead + saturation + clipper (all
     // oversampling modes) + limiter look-ahead.
     setLatencySamples (unlimiter.latencySamples() + stemEq.latencySamples() + polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples()
@@ -385,6 +388,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     for (auto* v : { &monPre, &monSig, &monAux })
         for (auto& ch : *v) ch.assign (static_cast<size_t> (monCapacity), 0.0);
     monLimGain.assign (static_cast<size_t> (monCapacity), 1.0);
+    monDrive.assign (static_cast<size_t> (monCapacity), 1.0);
     monGlueGain.assign (static_cast<size_t> (monCapacity), 1.0);
     monClipGain.assign (static_cast<size_t> (monCapacity), 1.0);
     const int longest = polisher::Saturation::latencySamples() + polisher::SoftClipper::latencySamples() + limiter.latencySamples();
@@ -530,6 +534,28 @@ double PolisherAudioProcessor::targetDriveGain() const
 
 namespace
 {
+    /** Applies a glide's gain to every channel of samples [from, to): one multiply per sample while it
+        glides, the same multiply at rest, nothing at all at rest on 1 (bit for bit untouched). */
+    template <typename Sample>
+    void applyGlide (juce::AudioBuffer<Sample>& buffer, int from, int to, polisher::GainGlide& glide) noexcept
+    {
+        if (to <= from)
+            return;
+        if (! glide.isGliding())
+        {
+            if (glide.current() != 1.0)
+                buffer.applyGain (from, to - from, static_cast<Sample> (glide.current()));
+            return;
+        }
+        Sample* const* ch = buffer.getArrayOfWritePointers();
+        const int nch = buffer.getNumChannels();
+        for (int i = from; i < to; ++i)
+        {
+            const auto g = static_cast<Sample> (glide.next());
+            for (int c = 0; c < nch; ++c) ch[c][i] *= g;
+        }
+    }
+
     /** True when every sample of the first numSamples is a number (no NaN, no inf). */
     template <typename Sample>
     bool allFinite (const Sample* const* channels, int numChannels, int numSamples) noexcept
@@ -579,8 +605,8 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
 {
     juce::ScopedNoDenormals noDenormals;
 
-    // A host may call with no samples (e.g. only to hand over parameter changes). Nothing to do: the
-    // Drive, Trim and MATCH ramps would otherwise jump to their new gain without ramping.
+    // A host may call with no samples (e.g. only to hand over parameter changes). Nothing to do (the
+    // Drive, Trim and MATCH glides move on with the samples).
     if (buffer.getNumSamples() <= 0)
         return;
 
@@ -679,12 +705,10 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     inputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     autoMaster.capture (buffer, hostSeconds);   // the untouched mix, while Auto-Master is listening
 
-    // Input Trim (ramped per block): turns a too-hot mix down before the whole chain. The input meter,
-    // the spectrum's "your mix" line, MATCH and Auto-Master all take the mix as it arrives, above.
-    const double newTrim = targetTrimGain();
-    if (newTrim != 1.0 || currentTrimGain != 1.0)
-        buffer.applyGainRamp (0, numSamples, static_cast<Sample> (currentTrimGain), static_cast<Sample> (newTrim));
-    currentTrimGain = newTrim;
+    // Input Trim (a 20 ms glide): turns a too-hot mix down before the whole chain. The input meter, the
+    // spectrum's "your mix" line, MATCH and Auto-Master all take the mix as it arrives, above.
+    trimGlide.glideTo (targetTrimGain());
+    applyGlide (buffer, 0, numSamples, trimGlide);
 
     unlimiter.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
     eq.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
@@ -711,15 +735,17 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     if (lm == L::satAdded) copyPre();
     saturation.process (buffer.getArrayOfWritePointers(), numChannels, numSamples);
 
-    // Drive (ramped per block so knob moves don't click) -> Soft Clipper -> limiter.
-    const double newGain = targetDriveGain();
+    // Drive (a 20 ms glide, so knob moves and jumps never click) -> Soft Clipper -> limiter.
+    driveGlide.glideTo (targetDriveGain());
     if (lm != L::off && lm != L::clipRemoved && lm != L::maxRemoved)
     {
         // Monitored signals formed before Drive: what Saturation added (output minus its aligned input),
         // or the tamer's cut / the Dynamics band (with mono input, channel 1 repeats channel 0). They get
         // the same Drive the master gets here, then travel on to the output (and get the Soft Clipper's
         // and the limiter's gain there, below).
-        const double driveStep = (newGain - currentDriveGain) / numSamples;
+        double* const driveGain = monDrive.data();
+        for (int i = 0; i < numSamples; ++i)
+            driveGain[i] = driveGlide.next();
         for (int i = 0; i < numSamples; ++i)
         {
             double l, r;
@@ -735,16 +761,24 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
                 l = aux[0][i];
                 r = numChannels > 1 ? aux[1][i] : l;
             }
-            const double g = currentDriveGain + driveStep * i;
+            const double g = driveGain[i];
             l *= g;
             r *= g;
             monOut.process (l, r);
             sig[0][i] = l;
             sig[1][i] = r;
         }
+        // The master gets the very same gains (and the same arithmetic as applyGlide, so it is the same
+        // master whether something is monitored or not).
+        for (int c = 0; c < numChannels; ++c)
+        {
+            Sample* x = buffer.getWritePointer (c);
+            for (int i = 0; i < numSamples; ++i)
+                x[i] *= static_cast<Sample> (driveGain[i]);
+        }
     }
-    buffer.applyGainRamp (0, numSamples, static_cast<Sample> (currentDriveGain), static_cast<Sample> (newGain));
-    currentDriveGain = newGain;
+    else
+        applyGlide (buffer, 0, numSamples, driveGlide);
 
     if (lm == L::clipRemoved) copyPre();
     clipper.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, lm != L::off && lm != L::maxRemoved ? monClipGain.data() : nullptr);
@@ -853,11 +887,13 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
 
     // ...and while MATCH is on, turn the louder side down to the quieter one, with headroom so A
     // doesn't clip the interface (never during offline export).
+    // Its gain glides (20 ms); an offline export never has any of it, not even the end of a glide.
     const bool matching = levelMatchParam->load() > 0.5f && ! offline;
-    const double targetGain = matching ? juce::Decibels::decibelsToGain (sideGainDb) : 1.0;
-    if (targetGain != 1.0 || currentMatchGain != 1.0)
-        buffer.applyGainRamp (0, numSamples, static_cast<Sample> (currentMatchGain), static_cast<Sample> (targetGain));
-    currentMatchGain = targetGain;
+    if (offline)
+        matchGlide.jumpTo (1.0);
+    else
+        matchGlide.glideTo (matching ? juce::Decibels::decibelsToGain (sideGainDb) : 1.0);
+    applyGlide (buffer, 0, numSamples, matchGlide);
 
     // MONO / PHONE checks at the very end (after MATCH, so A and B get the same treatment), and the
     // 0 dBFS safety of all monitoring.

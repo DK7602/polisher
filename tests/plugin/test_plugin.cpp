@@ -484,6 +484,78 @@ TEST_CASE ("Plug-in: if anything inside the chain goes non-finite, the block is 
     CHECK (worst == 0);
 }
 
+TEST_CASE ("Plug-in: Drive, Input Trim and MATCH glide over 20 ms whatever the host's block size", "[plugin][glide]")
+{
+    // They ramped over exactly one host block: a 12 dB Drive jump took 0.7 ms at a 32-sample buffer (a click,
+    // sharper than the snapshot test allows) and 43 ms at 2048. A steady input shows the gain itself.
+    const double sr = 48000.0;
+    for (int block : { 32, 2048 })
+        for (const char* id : { "drive", "inTrim" })
+        {
+            auto p = makeProcessor (sr, block, false);
+            set (*p, "ceiling", 0.0f);
+            const float to = juce::String (id) == "drive" ? 12.0f : -6.0f;
+            AudioClip steady = testsig::silence (sr, 2, 1.2);
+            for (auto& ch : steady.channels) std::fill (ch.begin(), ch.end(), 0.05f);
+            const int at = (int) (0.4 * sr) / block * block;
+            const auto out = renderWith<float> (*p, steady, block, [&] (int pos, juce::AudioBuffer<float>&) { if (pos == at) set (*p, id, to); });
+            const double end = std::pow (10.0, to / 20.0);
+            int first = -1, last = -1;
+            double steepest = 0.0, before = 1.0;
+            for (int i = p->getLatencySamples() + 1; i < out.numSamples() / block * block; ++i)
+            {
+                const double g = out.channels[0][(size_t) i] / 0.05;
+                if (first < 0 && std::abs (g - 1.0) > 1.0e-4) first = i;
+                if (last < 0 && first >= 0 && std::abs (g - end) < 1.0e-4 * end) last = i;
+                steepest = std::max (steepest, std::abs (20.0 * std::log10 (g / before)));
+                before = g;
+            }
+            const double ms = (last - first) / sr * 1000.0;
+            INFO (id << " to " << to << " dB at block " << block << ": glides in " << ms << " ms, steepest step " << steepest << " dB per sample");
+            REQUIRE (first > 0);
+            REQUIRE (last > first);
+            CHECK (ms > 18.0);
+            CHECK (ms < 21.0);
+            CHECK (steepest < 1.1 * std::abs (to) / (0.02 * sr));   // equal dB steps: never steeper than the average
+        }
+
+    // MATCH switched on: the same music through a twin without MATCH shows its gain, sample by sample.
+    auto mix = testsig::trapLike (sr, 6.0);
+    mix = polisher::withGain (mix, -17.0 - polisher::measure (mix).integratedLufs);
+    for (int block : { 32, 2048 })
+    {
+        auto withMatch = makeProcessor (sr, block, false), plain = makeProcessor (sr, block, false);
+        for (auto* q : { withMatch.get(), plain.get() }) set (*q, "drive", 8.0f);
+        const int at = (int) (4.5 * sr) / block * block;
+        const auto a = renderWith<float> (*withMatch, mix, block, [&] (int pos, juce::AudioBuffer<float>&) { if (pos == at) set (*withMatch, "levelMatch", 1.0f); });
+        const auto b = renderWith (*plain, mix, block, {});
+        auto gainAt = [&] (int i)
+        {
+            double num = 0.0, den = 0.0;   // over a few samples around i, where the music is loud enough to divide by
+            for (int k = i - 2; k <= i + 2; ++k)
+                for (size_t c = 0; c < 2; ++c) { num += (double) a.channels[c][(size_t) k] * b.channels[c][(size_t) k]; den += (double) b.channels[c][(size_t) k] * b.channels[c][(size_t) k]; }
+            return den > 1.0e-8 ? num / den : -1.0;
+        };
+        const double settled = gainAt (at + (int) (0.1 * sr));
+        int first = -1, last = -1;
+        for (int i = at - 10; i < at + (int) (0.1 * sr); ++i)
+        {
+            const double g = gainAt (i);
+            if (g < 0.0) continue;
+            if (first < 0 && g < 1.0 - 1.0e-3) first = i;
+            if (first >= 0 && last < 0 && std::abs (20.0 * std::log10 (g / settled)) < 0.05) last = i;
+        }
+        const double ms = (last - first) / sr * 1000.0;
+        INFO ("MATCH on at block " << block << ": " << 20.0 * std::log10 (settled) << " dB, reached in " << ms << " ms");
+        REQUIRE (settled < 0.8);
+        REQUIRE (last > first);
+        CHECK (first >= at);
+        CHECK (first < at + 16);
+        CHECK (ms > 15.0);
+        CHECK (ms < 21.0);
+    }
+}
+
 TEST_CASE ("Plug-in: double-precision hosts get the same master as single precision", "[plugin]")
 {
     const double sr = 48000.0;

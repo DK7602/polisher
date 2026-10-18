@@ -47,8 +47,8 @@ struct LimiterParams
 
     Bypass (A in the plug-in) passes the delayed input through untouched. The gain computer keeps
     running underneath, so it always knows what is in the delay line. When bypass switches on, the
-    samples still in the delay line were pushed for B (and the plug-in ramps its Drive out over that
-    first block), so the limiter keeps limiting them: for the delay line, the block that came in with
+    samples still in the delay line were pushed for B (and the plug-in's Drive glides out over the next
+    20 ms), so the limiter keeps limiting them: for the delay line, the block that came in with
     the switch and kBypassDrainMs more (while the other modules fade out), with a fast release so it
     lets go as soon as the level drops. Then it glides to unity over kBypassGlideMs. A B -> A switch
     never lets an unlimited peak out: the output stays at or under the ceiling until the glide, and
@@ -118,7 +118,7 @@ public:
     template <typename Sample>
     void process (Sample* const* channels, int numChannels, int numSamples, double* gainOut, double* const* refOut) noexcept
     {
-        armDrain (numSamples);   // a switch to bypass: this block (Drive ramping out) is still limited
+        armDrain (numSamples);   // a switch to bypass: this block (Drive gliding out) is still limited
         const int nch = std::min (numChannels, channelCount);
         for (int i = 0; i < numSamples; ++i)
         {
