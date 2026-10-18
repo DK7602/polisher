@@ -35,9 +35,9 @@ Masterology goes on **Stereo Out**, the channel every track flows into, in the *
 3. **Updating from Polisher** (Masterology's old name)? Delete **Polisher.vst3** from that folder first. It's the same plug-in, so your projects that used Polisher open with Masterology and keep their settings.
 4. Start Cubase. If Masterology doesn't show up, open **Studio > VST Plug-in Manager** and click **Update Plug-in Information**. It's listed under Sonicology.
 
-**By hand (Mac)**: INSTALL.txt in the download has the steps (macOS blocks a downloaded plug-in until you clear its download flag, so the installer is easier). Needs macOS 12 or newer.
+**By hand (Mac)**: INSTALL.txt in the download has the steps (macOS blocks a downloaded plug-in until you clear its download flag, so the installer is easier). Needs macOS 11 or newer.
 
-Masterology's screen runs on the **Microsoft Edge WebView2 Runtime**. Windows 11 has it built in and Windows 10 gets it with Microsoft Edge, so you rarely need to do anything. If Masterology opens a small screen that says **BASIC VIEW**, the runtime is missing: click **GET WEBVIEW2**, install the free "Evergreen" runtime from Microsoft, then close and reopen Masterology. Your settings are kept, and the whole chain keeps processing audio in the basic view.
+Masterology's screen runs on the **Microsoft Edge WebView2 Runtime**. Windows 11 has it built in and Windows 10 gets it with Microsoft Edge, so you rarely need to do anything. If Masterology opens a small screen that says **BASIC VIEW**, the runtime is missing: click **GET WEBVIEW2**, install the free "Evergreen" runtime from Microsoft, then close and reopen Masterology. Your settings are kept, and the whole chain keeps processing audio in the basic view. If the runtime is installed but the full screen doesn't start, the window shows BASIC VIEW after about 15 seconds: close and reopen it; if it keeps happening, restart the computer or reinstall WebView2 (GET WEBVIEW2).
 
 ### Load it on Stereo Out
 
@@ -62,12 +62,15 @@ Leave headroom going in: peaks between **−6 and −3 dBTP** and about **−18 
 ### Using the knobs
 
 - Drag a knob **up or down**. Hold **Shift** for fine moves.
+- Click a knob and the **arrow keys** move it (Shift: fine). Page Up / Page Down take big steps, Home and End go to its ends, Enter opens the value box.
 - **Double-click** a knob to reset it.
-- **Double-click the number** under a knob to type an exact value, then press **Enter** (**Esc** cancels). Units are optional: `-3`, `1.2k` for 1.2 kHz, `2.5` for a 2.5:1 ratio, `off` for a control's lowest setting. Values outside the range stop at its end. With a knob selected, **Enter** opens the box too.
-- The **mouse wheel** works too.
+- **Double-click the number** under a knob to type an exact value, then press **Enter** (**Esc** cancels). Units are optional: `-3`, `1.2k` for 1.2 kHz, `2.5` for a 2.5:1 ratio, `off` for a control's lowest setting. Values outside the range stop at its end. With a knob selected, **Enter** opens the box too. Leaving the box without changing the text changes nothing. `1,200` is 1200 (a comma before three digits groups thousands; `2,5` is 2.5).
+- The **mouse wheel** and a trackpad work too: one notch is one small step (Shift: finer); a trackpad swipe moves about as far as a notch or two.
+- **Right-click** a knob for your DAW's own menu for that control (automation and the like), where your DAW offers one.
+- On Windows, browser keys do nothing while Masterology's window has the keyboard (F3, F5, Ctrl+F, Ctrl+P...): click your DAW's window first to use its shortcuts.
 - Changed your mind? The **undo arrow** at the top (or **Ctrl+Z**) takes back your last change; see [Undo, redo and snapshots](#undo-redo-and-snapshots).
 - **Space and Enter** never press a Masterology button a second time after you clicked it, so pressing Space to play the song can't cancel Auto-Master or switch MATCH off. If Space doesn't start Cubase while Masterology's window is in front, click Cubase's project window first. Moving around with **Tab**, Space and Enter press buttons as usual.
-- Drag the window's corner to resize it; everything scales together. It doesn't go smaller than 1120 × 630, where the small print would be too small to read.
+- Drag the window's corner to resize it; everything scales together. It opens at 1280 × 720, or smaller when your screen has less room (a laptop at 150 % or 175 % display scaling), and goes down to 800 × 450. It reopens at the size you left it, on the module you had open and with LEARN as you left it (saved with the project); the loudness history comes back while the project stays open.
 
 ### Exporting
 
@@ -153,7 +156,7 @@ Every warning in the report says **Do I need to fix it?** and gives numbered ste
 Instead of a genre's typical sound, Auto-Master can aim for a **reference**: a released song you want your master to sound like.
 
 1. Pick a commercial song with the sound you want (for trap: a big trap single). Use a good file of the released version: WAV, AIFF, FLAC or MP3.
-2. Click **Match ref** (at the end of the TARGET row) and choose the file. Masterology reads the whole song (up to 15 minutes) and measures its **loudest 30 seconds** (tone, width, low end), usually the chorus or drop, and the loudness of its **loudest 12 seconds**. That takes a few seconds; your music keeps playing.
+2. Click **Match ref** (at the end of the TARGET row) and choose the file. Masterology reads the whole song (up to 15 minutes) and measures its **loudest 30 seconds** (tone, width, low end), usually the chorus or drop, and the loudness of its **loudest 12 seconds**. That takes a few seconds; your music keeps playing. Use a song that is on your computer: one kept online only by OneDrive or iCloud is refused with a note (OneDrive: right-click > Always keep on this device; iCloud: Download Now).
 3. The pill now shows the song's name, and the spectrum shows its tone as a **dashed yellow line** (moved to the loudness of what's playing, so you compare tone, not volume, and to your project's sample rate). The dotted genre line steps aside while a reference is loaded; click its legend entry to show it too (see [The spectrum screen](#the-spectrum-screen)).
 4. Click **Auto-Master** and play **your own song**, as usual.
 
@@ -224,7 +227,7 @@ The Maximizer makes the song loud again afterwards and presses part of the resto
 
 ### 02 Tonal EQ
 
-Shapes the overall tone in seven bands. Turn a band's knob, or drag its numbered point on the spectrum: sideways moves the frequency, up/down sets the gain. Double-click a point to reset it. Each band goes **±9 dB**; master moves of 1–3 dB go a long way.
+Shapes the overall tone in seven bands. Turn a band's knob, or drag its numbered point on the spectrum: sideways moves the frequency, up/down sets the gain. Double-click a point to reset it. A point moves with the mouse from where you grab it (Shift: fine); with the keyboard, Tab to a point, then ←/→ move its frequency and ↑/↓ its gain. Each band goes **±9 dB**; master moves of 1–3 dB go a long way.
 
 | Band | Default | Can move | Boost | Cut |
 | --- | --- | --- | --- | --- |
@@ -387,7 +390,7 @@ Sets the width of lows, mids and highs. Only the stereo (side) part changes; the
 | Lows | below 250 Hz, 0–200 % (100) | Keep at 100 %. Wide bass smears and costs headroom. |
 | Mids | 250 Hz–5 kHz, 0–200 % (100) | Small moves only. |
 | Highs | above 5 kHz, 0–200 % (100) | Hats, reverbs, ad-libs. Try 110–115 %. |
-| Correlation meter | −1 to +1 | Mono safety. +1 = mono, 0 = wide, below 0 = out of phase. Keep it above +0.3. |
+| Correlation meter | −1 to +1 | Mono safety of the final master (after Saturation, the Soft Clipper and the Maximizer). +1 = mono, 0 = wide, below 0 = out of phase. Keep it above +0.3. |
 
 ### 10 Saturation
 
@@ -431,7 +434,7 @@ The final true-peak limiter. It makes the master loud and keeps every peak at or
 
 | Control | Range (default) | What it does |
 | --- | --- | --- |
-| Drive | 0–24 dB (0) | Pushes the mix into the limiter. More Drive = louder. |
+| Drive | 0–24 dB (0) | Pushes the mix into the limiter. More Drive = louder. Moves and jumps (Auto-Master, snapshots, automation) glide over 20 ms at any buffer size, so they never click. |
 | Input Trim | −24–0 dB (0) | Turns your mix down **before the whole chain**. Drive only pushes up, so this is how Masterology masters a mix that already arrives louder than your target. Auto-Master sets it when needed; at 0 dB the mix goes in as it is. A (bypass) ignores it. |
 | Ceiling | −3 to 0 dBTP (−1) | The highest peak allowed, between samples too (measured the way streaming services measure true peak). −1 suits most masters; loud ones (−9 LUFS and louder) are safer at −1.5 (what Auto-Master sets for Loud and Club) to −2 (Spotify's advice), because their MP3/AAC/Ogg copies peak higher. |
 | Release | 10–1000 ms (120) | How fast the limiter lets go. Shorter = louder but can distort bass. |
@@ -460,6 +463,7 @@ Louder always sounds better, so compare at equal loudness: turn on **MATCH**, th
 - With MATCH on, play **B for a few seconds** first. Masterology learns how much louder the master is (roughly after half a second, exactly after about 3 seconds), then turns the louder side **down** to match. It never turns anything up, so B can't go past its ceiling.
 - After **Auto-Master**, a snapshot you haven't heard yet, or opening the project, MATCH learns the level afresh the same way. After you change settings by hand, it follows within about 20 seconds of B; press **RESET** (under the Output meter) to make it learn afresh at once.
 - Quick A / B flips don't disturb it: it only learns from B played for 3 seconds or more at a stretch.
+- Flips are matched from the first moment: MATCH switches sides exactly when the sound changes (a few ms after the click) and glides over 20 ms, so A / B never snaps or drops out.
 - If your original mix peaks above 0 dBFS, both sides are turned down together so A doesn't clip your audio interface and sound worse than it is.
 - Now judge tone and punch, not volume. Ask: is B clearer, fuller, punchier? Did the kick or vocal lose anything?
 - On B the meters show the **real master**, never the matched level. On A they show your original mix.
@@ -582,7 +586,7 @@ The **Learn** panel on the right explains, live, what the selected module is doi
 - After Auto-Master, the top of each module's Learn shows the reasons for its settings, and **WHY IT SOUNDS LIKE THIS** holds the whole report.
 - After Auto-Master, the **AUTO ANALYZE** switch sits at the top of Learn; when it has edits for you, the link next to it says **NEW EDITS · SEE** (and the Auto-Master button says how many). See [Auto Analyze](#auto-analyze-keep-the-master-in-step-with-your-mix).
 
-**Quick Help** (the **?** button, top right) is a one-page cheat sheet: the chain order and the first moves for every module. Its **OPEN THE FULL MANUAL** button opens this manual inside Masterology, with contents on the left; it works offline. Press **Esc** or **×** to close it.
+**Quick Help** (the **?** button, top right) is a one-page cheat sheet: the first moves for every module. Esc closes Quick Help and Settings too. Its **OPEN THE FULL MANUAL** button opens this manual inside Masterology, with contents on the left; it works offline. Press **Esc** or **×** to close it.
 
 **Settings** (the gear) has your **DAW** (shared with Mixology and Voxology, see [With Voxology and Mixology](#with-voxology-and-mixology)) and three switches:
 
@@ -644,15 +648,15 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 
 **Voxology** makes each vocal sound great, **Mixology** makes all your tracks work together, **Masterology** turns the finished mix into the master. In the same Cubase project they tell each other what they do. Nothing to set up: use Masterology 0.29.3, Mixology 0.21 and Voxology 0.52 (or newer; update all three together, older and newer ones don't see each other; the Sonicology installer always has a matching set), with Mixology on the Stereo Out before Masterology.
 
-- **One DAW for all three**: Settings (the gear) > **DAW**. Masterology finds the program it runs in (Cubase, Studio One, FL Studio, Ableton Live, REAPER, Bitwig Studio, Logic Pro, Cakewalk by BandLab / Sonar) and writes every tip in Learn for it: where the master channel is, how to load a plug-in last on it, how to turn off the loop so the song plays through. "Found: ..." uses the one it found; pick another if it got it wrong. Mixology and Voxology share it: pick it in any of the three and the others follow. BandLab: pick **Cakewalk** (BandLab's desktop DAW for Windows); BandLab's web studio (browser or app) can't load plug-ins.
+- **One DAW for all three**: Settings (the gear) > **DAW**. Masterology finds the program it runs in (Cubase, Studio One, FL Studio, Ableton Live, REAPER, Bitwig Studio, Logic Pro, Cakewalk by BandLab / Sonar) and writes every tip in Learn for it: where the master channel is, how to load a plug-in last on it, how to turn off the loop so the song plays through. "Found: ..." picks the program Masterology found, and Mixology and Voxology follow it too; pick another if it got it wrong. Fender Studio Pro counts as Studio One. Mixology and Voxology share it: pick it in any of the three and the others follow. BandLab: pick **Cakewalk** (BandLab's desktop DAW for Windows); BandLab's web studio (browser or app) can't load plug-ins.
 
-- **One song style for all three**: pick the style in Masterology, Mixology or Voxology and the others in the project follow within a second (Masterology shows "Style: ..., picked in Mixology"). The newest choice wins, also after you reopen the project. Here it sets Auto-Master's genre; your master doesn't change until you run Auto-Master again.
+- **One song style for all three**: pick the style in Masterology, Mixology or Voxology and the others in the project follow within a second (Masterology shows "Style: ..., picked in Mixology"). The newest choice wins, also after you reopen the project. Here it sets Auto-Master's genre; your master doesn't change until you run Auto-Master again. Loading a Masterology preset doesn't change the song's style (or DAW) when the project already has one: the preset follows the project. Only the project that is playing takes part: with two projects open, one doesn't change the other's style.
 
-- **From Mixology** (in Learn): Mixology tells Masterology the mix style you picked there, how loud the mix comes in and how high its peaks are, and, after Mixology's Analyze Mix, how its tone sits against that style. Learn shows it as **FROM MIXOLOGY** at the bottom of the panel.
-- **Use Mixology's genre**: with the shared style the genre follows Mixology's by itself. If you set Auto-Master's genre another way (for example a Cubase automation lane) and it no longer matches Mixology's style, Learn shows the note at the top with a button, **USE R&B (MIXOLOGY'S STYLE)**. One click sets the genre; run Auto-Master after.
-- **Warnings from the mix**: Learn also says when Mixology heard a **mono mix** at the Stereo Out (left = right), when **Mixology's Limiter** is on (two limiters squash the mix twice: switch Mixology's off), and when the mix leaves almost no room (peaks above −1 dBTP).
+- **From Mixology** (in Learn): Mixology tells Masterology the mix style you picked there, how loud the mix comes in and how high its peaks are, and, after Mixology's Analyze Mix, how its tone sits against that style. Learn shows it as **FROM MIXOLOGY** at the bottom of the panel. Masterology checks that these are the numbers of the mix it receives: if Mixology's loudness doesn't match what reaches Masterology for a few seconds while the song plays (Mixology on a group, after Masterology, or in another open project), or Mixology hears nothing (bypassed), FROM MIXOLOGY says so instead of showing the numbers.
+- **Use Mixology's genre**: with the shared style the genre follows Mixology's by itself. If you set Auto-Master's genre another way and it no longer matches Mixology's style, Learn shows the note at the top with a button, **USE R&B (MIXOLOGY'S STYLE)**. One click sets the genre; run Auto-Master after.
+- **Warnings from the mix**: Learn also says when Mixology heard a **mono mix** at the Stereo Out (left = right; shown only while Masterology also hears it mono), when **Mixology's Limiter** is on (two limiters squash the mix twice: switch Mixology's off), and when the mix leaves almost no room (peaks above −1 dBTP).
 - **Auto Analyze with Mixology**: when Mixology's advice on the mix changes (its Analyze Mix or Auto Analyze heard something new), Masterology's Auto Analyze starts listening again, so its edits are about the mix as Mixology left it. Use both: fix the mix in Mixology, then let Masterology's Auto Analyze adjust the master.
-- **Masterology's goal in Mixology**: Mixology's Master page shows what Masterology aims for (for example "Masterology: −9 LUFS · −1.0 dBTP": the target, or a reference's loudness while Match ref is on, and the Maximizer's ceiling). Its HAND-OFF checks use those numbers: the mix's peaks under −3 dBTP, and the mix not more than 3 dB louder than your target.
+- **Masterology's goal in Mixology**: Mixology's Master page shows what Masterology aims for (for example "Masterology: −9 LUFS · −1.0 dBTP": the target, or a reference's loudness while Match ref is on, and the Maximizer's ceiling). Its HAND-OFF checks use those numbers: the mix's peaks under −3 dBTP, and the mix not more than 3 dB louder than your target. While Masterology is bypassed (A, or your DAW's bypass) for more than a few seconds, Mixology doesn't show it.
 
 The link only works inside one program: the three must run in the same DAW, in the same process. Mastering in a separate project works too; Masterology then simply works on its own. DAWs that can run each plug-in in its own process keep them apart: in Bitwig set Settings > Plug-ins > Plug-in hosting to "By manufacturer" or "Together", in REAPER don't run them as separate / dedicated processes, in FL Studio don't make them bridged.
 
@@ -666,7 +670,7 @@ The link only works inside one program: the three must run in the same DAW, in t
 | Auto-Master keeps listening | It waits for the song to end (4 seconds without music after at least 30 s of it), or Cycle is on and the loop keeps playing | Let the song play to its end, or click Auto-Master again (or FINISH NOW in Learn) any time after 12 s of music |
 | Auto-Master finished while you only paused | After 30 s of music, 4 seconds without music count as the song's end | Fine if it heard the hook. Otherwise run it again and keep the song playing |
 | The report says playback jumped | A cycle loop or a playhead move while it listened | Turn Cycle off on the transport bar and play the song once from start to end |
-| Learn never shows FROM MIXOLOGY | No matching Mixology (0.21 or newer, with Masterology 0.29.3 or newer) in the same project and the same process | Put Mixology on the Stereo Out before Masterology and open its window once (it then knows your mix style). Update all three together (the Sonicology installer has a matching set) |
+| Learn never shows FROM MIXOLOGY | No matching Mixology (0.21 or newer, with Masterology 0.29.3 or newer) in the same project and the same process, Mixology isn't right before Masterology, or one of them is in a project that isn't active | Put Mixology on the Stereo Out before Masterology and open its window once (it then knows your mix style). Update all three together (the Sonicology installer has a matching set) |
 | Masterology, Mixology and Voxology don't see each other | Older and newer versions, or your DAW runs plug-ins in separate processes | Update all three together. Bitwig: Settings > Plug-ins > Plug-in hosting "By manufacturer" or "Together"; REAPER: don't run them as separate processes; FL Studio: don't make them bridged |
 | Two plug-ins called Masterology and Polisher, or the old version opens | An old Polisher (Masterology's first name) is still installed: to your DAW it's the same plug-in | Delete Polisher.vst3 (Mac: also Polisher.component) from the plug-in folders, or run the Sonicology installer, which removes it |
 | Mac: "Masterology is damaged and can't be opened" | macOS blocks a plug-in copied from a download | Use the Sonicology installer, or clear the download flag (see INSTALL.txt): `xattr -dr com.apple.quarantine` on the copied plug-in |
@@ -679,6 +683,7 @@ The link only works inside one program: the three must run in the same DAW, in t
 | Master lands quieter than the target | Auto-Master protected the drums within the intensity's limit | Fine as it is. To go louder, choose Punchy, or tame the drum peaks in the mix |
 | Master isn't as loud as the reference | The reference had its drum peaks controlled in the mix; reaching it would crush yours | Fine as it is (streaming plays both at the same level). To get closer: a clipper on the drum bus, or Punchy |
 | Match ref says it can't read the file | Not WAV, AIFF, FLAC or MP3, or a damaged file | Export or convert the song to WAV and load that |
+| Match ref says the file is only in the cloud | OneDrive / iCloud keeps it online only | Make it available offline, then load it again |
 | B sounds better but you're not sure why | B is louder | Turn on MATCH and play B for a few seconds before comparing |
 | B sounds louder with MATCH on after you changed settings by hand | MATCH follows hand changes over about 20 s of B | Keep playing B, or press RESET under the Output meter: MATCH learns the level afresh in about 3 s |
 | One snapshot sounds louder right after you switch, even with MATCH on | MATCH hasn't heard that snapshot yet | Give it 3 seconds of B; play each snapshot for about 15 s once and MATCH remembers its level, so flips are matched at once |
@@ -694,6 +699,10 @@ The link only works inside one program: the three must run in the same DAW, in t
 | Auto-Master left the Unlimiter off on a squashed beat | Your target is about as loud as the beat already is, so the Maximizer would press the hits straight back down | Working as intended. Pick a quieter target (Stream −14) if you want the punch back |
 | Integrated keeps restarting | The Settings switches restart it on play and after changes | Turn off those switches in Settings if you want one long reading |
 | Masterology isn't in the plug-in list | Cubase hasn't scanned it | Check the VST3 folder, then Studio > VST Plug-in Manager > Update |
+| The window stays empty, then shows BASIC VIEW saying the full screen didn't start | WebView2 is installed but failed to start | Close and reopen the window; restart the computer or reinstall WebView2 |
+| Another plug-in before Masterology glitches | A broken (NaN) sample | Nothing to do: Masterology plays it as silence and carries on. Before 0.29.4 the master could stay silent until the project was reopened |
+| A "State Revision" control in your DAW's parameter list | An internal value Masterology changes so the DAW (Logic too) knows the project changed after S1–S4, Match ref, Tone Steady LEARN / CLEAR, Auto Analyze, or a style or DAW pick | Leave it alone |
+| Mac: the Masterology app (Standalone) hears nothing | It needs permission to use the audio input | Allow it when asked, or in System Settings > Privacy & Security > Microphone |
 | Masterology opens a small screen that says BASIC VIEW | The Microsoft Edge WebView2 Runtime is missing on this PC | Click GET WEBVIEW2, install the runtime, close and reopen Masterology. Audio keeps working meanwhile |
 
 ## FAQ

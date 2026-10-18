@@ -13,7 +13,7 @@ individual download also has a **Standalone** app and **Masterology Blind Test**
 plug-ins on Windows or Mac and removes an old Polisher. By hand: the Masterology download from Build & Test, with
 `docs/INSTALL.txt`.
 
-**System requirements.** Windows 10 or 11 (64-bit) or macOS 12+. On Windows the Masterology screen runs on
+**System requirements.** Windows 10 or 11 (64-bit) or macOS 11+. On Windows the Masterology screen runs on
 the **Microsoft Edge WebView2 Runtime**: it ships with Windows 11 and comes with Microsoft Edge on
 Windows 10. Without it Masterology still processes audio but opens a basic view (Maximizer controls and
 meters only) with a button to Microsoft's free download page; install it and reopen Masterology.

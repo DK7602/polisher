@@ -12,7 +12,7 @@ for you, with Voxology and Mixology)
             download block on each copy:
               xattr -dr com.apple.quarantine "/Library/Audio/Plug-Ins/VST3/Masterology.vst3"
               xattr -dr com.apple.quarantine "/Library/Audio/Plug-Ins/Components/Masterology.component"
-            otherwise the DAW calls it damaged. Needs macOS 12 or newer.
+            otherwise the DAW calls it damaged. Needs macOS 11 or newer.
    An old "Polisher" plug-in (Masterology's first name) is the same plug-in to your DAW: delete Polisher.vst3
    (and Polisher.component on a Mac) so the DAW doesn't load the old one.
 
