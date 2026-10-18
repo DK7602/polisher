@@ -113,8 +113,11 @@
   window.__mockResets = resets;
   // The suite link: Mixology's hand-off for the song (null = no Mixology in the project). The smoke test sets it.
   let fromMixology = null;
+  // Echoes: JUCE sends every slider value the page sets back to it. setEcho(ms) delays them (a busy message
+  // thread sends them late, after newer ones went out); a negative ms switches them off.
+  const echo = { ms: 15 };
   window.__polisherMock = { setPlaying: (on) => { transport.playing = !!on; }, setMixology: (h) => { fromMixology = h; },
-                            aaCheck: () => aaCheck() };
+                            aaCheck: () => aaCheck(), setEcho: (ms) => { echo.ms = ms; } };
   // Simulated Auto Analyze: once on (after an Auto-Master run) it "hears" 3 s of song per 0.1 s while playing,
   // checks after 20 s (0.6 s of thinking) and offers two edits: the mix arrived 1.8 dB louder with more low end.
   // aaCheck() (the smoke test) skips straight to the advice.
@@ -362,7 +365,7 @@
     if (am.heard >= SONG) amDecide(true);            // the song ended: it finishes by itself
   }, 100);
 
-  const send = (id, obj) => setTimeout(() => window.__JUCE__.backend.emitByBackend(id, JSON.stringify(obj)), 0);
+  const send = (id, obj, ms = 0) => setTimeout(() => window.__JUCE__.backend.emitByBackend(id, JSON.stringify(obj)), ms);
 
   window.__JUCE__ = {
     initialisationData: {
@@ -384,7 +387,14 @@
           send(eventId, { eventType: "propertiesChanged", start: s.start, end: s.end, skew: s.skew, name, label: s.label,
                           numSteps: 1000, interval: s.interval, parameterIndex: 0 });
           send(eventId, { eventType: "valueChanged", value: s.value });
-        } else if (payload.eventType === "valueChanged") s.value = payload.value;
+        } else if (payload.eventType === "valueChanged") {
+          s.value = payload.value;
+          // Like JUCE: the value comes straight back (the parameter keeps it as a 32-bit float, 0..1).
+          if (echo.ms >= 0) {
+            const n = Math.pow((payload.value - s.start) / (s.end - s.start), s.skew);
+            send(eventId, { eventType: "valueChanged", value: s.start + (s.end - s.start) * Math.pow(Math.fround(n), 1 / s.skew) }, echo.ms);
+          }
+        }
         else if (payload.eventType === "sliderDragStarted") gestureBegin(name);
         else if (payload.eventType === "sliderDragEnded") gestureEnd(name);
       } else if (eventId.startsWith("__juce__toggle")) {

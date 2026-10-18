@@ -103,6 +103,28 @@ const P = {
   rtFocus: Juce.getComboBoxState("rtFocus"),
   stemGain: ["stemVoc", "stemDrums", "stemBass", "stemOther"].map((id) => Juce.getSliderState(id)),
 };
+// JUCE sends every value the page sets straight back. During a drag or a quick run of wheel or arrow steps an
+// older value can come back after a newer one was sent: the next step would start from it (a step lost) and the
+// pointer would jump back for a moment. So an echo of a value sent in the last second is dropped (the newest one
+// too: nothing changed). Any other value is the host's (automation, undo) and is taken.
+function guardEchoes(state) {
+  const sent = [];   // [value, when] sent in the last second, oldest first
+  const prune = (now) => { while (sent.length && (sent.length > 40 || now - sent[0][1] > 1000)) sent.shift(); };
+  const set = state.setNormalisedValue.bind(state), handle = state.handleEvent.bind(state);
+  state.setNormalisedValue = (n) => { set(n); const now = performance.now(); sent.push([state.getScaledValue(), now]); prune(now); };
+  state.handleEvent = (ev) => {
+    if (ev && ev.eventType === "valueChanged" && sent.length) {
+      prune(performance.now());
+      const { start = 0, end = 1, interval = 0 } = state.properties;
+      const near = Math.max(interval / 2, Math.abs(end - start) * 1e-6);
+      const i = sent.findIndex(([v]) => Math.abs(v - ev.value) <= near);
+      if (i >= 0) { sent.splice(0, i + 1); return; }   // ours, coming back
+      sent.length = 0;                                  // the host's: it wins
+    }
+    handle(ev);
+  };
+}
+Object.values(P).flat().filter((st) => typeof st.setNormalisedValue === "function").forEach(guardEchoes);
 const resetMeter = Juce.getNativeFunction("resetMeter");
 const amStart = Juce.getNativeFunction("startAutoMaster");
 const amCancel = Juce.getNativeFunction("cancelAutoMaster");
