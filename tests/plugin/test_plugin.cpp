@@ -556,6 +556,64 @@ TEST_CASE ("Plug-in: Drive, Input Trim and MATCH glide over 20 ms whatever the h
     }
 }
 
+TEST_CASE ("Plug-in: with MATCH on, an A / B flip neither bursts out nor drops in", "[plugin][match]")
+{
+    // MATCH switched sides at the click, ~6 ms before Drive's change came out of the Soft Clipper and limiter
+    // delays: B's driven audio played at A's gain for those ms (+6 to +8 dB, a snap on every B -> A) and A's
+    // at B's on the way back (a hole). Judged in 1 ms windows against A and B played on their own, both at the
+    // gain MATCH gives them.
+    const double sr = 48000.0;
+    auto mix = testsig::trapLike (sr, 13.0);
+    mix = polisher::withGain (mix, -17.0 - polisher::measure (mix).integratedLufs);
+    for (int block : { 64, 512 })
+        for (float drive : { 6.0f, 10.0f })
+        {
+            const int b2a = (int) (8.0 * sr) / block * block, a2b = (int) (10.5 * sr) / block * block;
+            auto make = [&] (bool match, bool a)
+            {
+                auto q = std::make_unique<PolisherAudioProcessor>();
+                set (*q, "autoreset", 0.0f);
+                set (*q, "drive", drive);
+                if (match) set (*q, "levelMatch", 1.0f);
+                if (a) set (*q, "bypass", 1.0f);
+                q->setRateAndBufferSizeDetails (sr, block);
+                q->prepareToPlay (sr, block);
+                return q;
+            };
+            auto pf = make (true, false);
+            double gainA = 0.0;
+            const auto flipped = renderWith<float> (*pf, mix, block, [&] (int pos, juce::AudioBuffer<float>&)
+            {
+                if (pos == b2a) set (*pf, "bypass", 1.0f);
+                if (pos == a2b - block) gainA = pf->meters.matchDb.load();   // A's MATCH gain
+                if (pos == a2b) set (*pf, "bypass", 0.0f);
+            });
+            auto pb = make (true, false);   // B all along, MATCH on: it learns just as the flipped one did
+            const auto onlyB = renderWith (*pb, mix, block, {});
+            auto pa = make (false, true);   // A all along, at A's MATCH gain
+            auto onlyA = renderWith (*pa, mix, block, {});
+            for (auto& ch : onlyA.channels) for (auto& v : ch) v *= (float) std::pow (10.0, gainA / 20.0);
+
+            const int w = (int) (0.001 * sr);
+            auto level = [&] (const AudioClip& c, int from) { return rmsDb (c, from, from + w); };
+            double burst = -100.0, hole = 100.0;
+            for (int at : { b2a, a2b })
+                for (int s = at; s + w <= at + (int) (0.04 * sr); s += w / 2)
+                {
+                    const double x = level (flipped, s), a = level (onlyA, s), b = level (onlyB, s);
+                    burst = std::max (burst, x - std::max (a, b));
+                    hole = std::min (hole, x - std::min (a, b));
+                }
+            INFO ("Drive +" << drive << ", block " << block << ": A at " << gainA << " dB; within 40 ms of a flip the master is up to "
+                  << burst << " dB louder than the louder matched side, and at worst " << hole << " dB under the quieter one");
+            // (What is left at Drive +10: on A -> B Drive comes in unlimited at first and the limiter catches
+            // up only at the end of the glide, so for ~15 ms the master swells up to ~2.3 dB, where it used
+            // to burst by 6.5 to 8 dB on B -> A and drop by up to 7 dB on A -> B.)
+            CHECK (burst < (drive > 8.0f ? 3.0 : 1.0));
+            CHECK (hole > -1.0);
+        }
+}
+
 TEST_CASE ("Plug-in: double-precision hosts get the same master as single precision", "[plugin]")
 {
     const double sr = 48000.0;

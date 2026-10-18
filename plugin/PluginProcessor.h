@@ -233,10 +233,10 @@ private:
     int listenArmSamples (int mode) const noexcept;
     void startListenMode (int mode) noexcept;
 
-    void updateLimiterParams();
+    void updateLimiterParams (bool bypassed);
     void resetChain() noexcept;   // every module and monitoring delay back to a clean start (no allocation)
-    double targetDriveGain() const;
-    double targetTrimGain() const;
+    double targetDriveGain (bool bypassed) const;
+    double targetTrimGain (bool bypassed) const;
     void publishMeters();
 
     polisher::Unlimiter unlimiter;
@@ -254,6 +254,10 @@ private:
     // (a jump in one block clicked at a 32-sample buffer and took 43 ms at 2048).
     static constexpr double kGainGlideSeconds = 0.02;
     polisher::GainGlide trimGlide, driveGlide, matchGlide;
+    // MATCH's side (A or B) follows the sound: a flip reaches the output only when Drive's and the limiter's
+    // change come out of the Soft Clipper and limiter delays, so MATCH switches that many samples later.
+    bool matchSideA = false, matchPendingA = false;   // the side whose MATCH gain plays now / the one it goes to
+    int matchSwitchIn = -1, matchDelay = 0;           // samples until it switches (-1: none); that delay
     polisher::LoudnessMeter outputMeter;
     polisher::LoudnessMeter inputMeter;   // the incoming mix, so Learn can say how much louder the master is
     std::atomic<bool> meterResetRequested { false }, statsResetRequested { false };
