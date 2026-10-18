@@ -426,11 +426,12 @@ function wheelStepper() {
 }
 
 // A typed value -> the control's own units. Accepts "−3", "-3 dB", "1.2k" / "1.2 kHz", "2.5:1", "120 ms",
-// "off" (the control's minimum); keeps it in range. A control that only goes up from a positive start
+// "off" (the control's minimum), "1,200" (a comma before exactly three digits groups thousands; any other comma
+// is a decimal point, "2,5"); keeps it in range. A control that only goes up from a positive start
 // (Tone Steady Range) takes "-3" as 3. Returns null when there is no number.
 function parseTyped(text, state) {
   const { start, end } = state.properties;
-  const t = String(text).trim().toLowerCase().replace(/\u2212/g, "-").replace(",", ".");
+  const t = String(text).trim().toLowerCase().replace(/\u2212/g, "-").replace(/(\d),(\d{3})(?!\d)/g, "$1$2").replace(",", ".");
   if (t === "off") return start;
   const m = /([-+]?\d*\.?\d+)\s*(k(?!hz)|khz)?/.exec(t);
   if (!m) return null;
@@ -509,7 +510,8 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
     const input = document.createElement("input");
     input.className = "value-input mono";
     input.type = "text";
-    input.value = value.textContent;
+    const shown = value.textContent;
+    input.value = shown;
     input.setAttribute("aria-label", `${label}: type a value`);
     value.hidden = true;
     value.after(input);
@@ -519,7 +521,9 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
     const finish = (commit) => {
       if (done) return;
       done = true;
-      const v = commit ? parseTyped(input.value, state) : null;
+      // Left as it opened (a look, then a click away or Enter): nothing changes. The box shows the rounded value,
+      // and writing that back would round a finer one (2.37 dB -> 2.40) and add an undo step.
+      const v = commit && input.value.trim() !== shown.trim() ? parseTyped(input.value, state) : null;
       input.remove();
       value.hidden = false;
       if (v !== null) { state.sliderDragStarted(); setNorm(scaledToNorm(state, v)); state.sliderDragEnded(); }
