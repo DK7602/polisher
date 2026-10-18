@@ -1812,7 +1812,9 @@ function stemSuggestion() {
 function stemSuggestButton() {
   const s = stemSuggestion();
   if (!s) return null;
-  const moves = [0, 1, 2, 3].filter((k) => Math.abs(s[k] - stemGainAt(k)) > 0.05);
+  // Every stem whose sound changes: with Stem EQ off its knobs play as 0 dB, so a knob left at Drums +4 that the
+  // suggestion keeps comes back into the master when APPLY switches it on, and is listed too.
+  const moves = [0, 1, 2, 3].filter((k) => Math.abs(s[k] - (P.stemOn.getValue() ? stemGainAt(k) : 0)) > 0.05);
   const b = document.createElement("button");
   b.type = "button";
   b.className = "pill pill-red stem-apply";
