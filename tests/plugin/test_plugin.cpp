@@ -614,6 +614,29 @@ TEST_CASE ("Plug-in: with MATCH on, an A / B flip neither bursts out nor drops i
         }
 }
 
+TEST_CASE ("Plug-in: the L/R correlation meter reads the master the host gets", "[plugin][meters]")
+{
+    // It was the Imager's, read before Saturation (here on the Side alone), Drive, the Soft Clipper and the
+    // limiter, which all change it; and on a mono bus it read +1 whatever played.
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, true);
+    set (*p, "satChannels", 2.0f); set (*p, "satDrive", 18.0f); set (*p, "satMix", 100.0f);
+    set (*p, "imgHigh", 200.0f); set (*p, "drive", 12.0f);
+    p->prepareToPlay (sr, 512);
+    const auto out = renderFixed (*p, testsig::musicLike (sr, 4.0, -6.0), 512);
+    // The same ~0.3 s averages over what came out.
+    const double k = 1.0 - std::exp (-1.0 / (0.3 * sr));
+    double lr = 0.0, ll = 0.0, rr = 0.0;
+    for (size_t i = 0; i < out.channels[0].size(); ++i)
+    {
+        const double a = out.channels[0][i], b = out.channels[1][i];
+        lr += (a * b - lr) * k; ll += (a * a - ll) * k; rr += (b * b - rr) * k;
+    }
+    const double expect = lr / std::sqrt (ll * rr);
+    INFO ("meter " << p->meters.correlation.load() << ", the output's own correlation " << expect);
+    CHECK (std::abs (p->meters.correlation.load() - expect) < 1.0e-3);
+}
+
 TEST_CASE ("Plug-in: double-precision hosts get the same master as single precision", "[plugin]")
 {
     const double sr = 48000.0;

@@ -371,6 +371,8 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     levelMatch.prepare (sampleRate);
     outputMeter.prepare (sampleRate, channels);
     inputMeter.prepare (sampleRate, channels);
+    corrCoeff = 1.0 - std::exp (-1.0 / (0.3 * sampleRate));
+    corrLR = corrLL = corrRR = 0.0;
     updateLimiterParams (bypassed);
     trimGlide.prepare (sampleRate, kGainGlideSeconds);
     driveGlide.prepare (sampleRate, kGainGlideSeconds);
@@ -856,6 +858,7 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     }
     outputMeter.process (buffer.getArrayOfReadPointers(), numChannels, numSamples);
     outputTap.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
+    measureCorrelation (buffer, numChannels, numSamples);
 
     // Output channel peaks for the L/R meter (held until the editor reads them).
     auto channelPeakDb = [&] (int ch)
@@ -879,7 +882,6 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
                        inputMeter.momentaryLufs(), outputMeter.momentaryLufs());
     const double sideGainDb = bypassed ? levelMatch.gainForADb() : levelMatch.gainForBDb();
     meters.matchDb.store (static_cast<float> (sideGainDb));
-    meters.correlation.store (static_cast<float> (imager.correlation()));
 
     // Listen / Solo: the monitored signal takes the master's place (after every meter and the spectrum,
     // which keep showing the real master).
@@ -937,6 +939,30 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     // 0 dBFS safety of all monitoring.
     if (! offline && (listening || monitorOut.isActive()))
         monitorOut.process (buffer.getArrayOfWritePointers(), numChannels, numSamples, true);
+}
+
+template <typename Sample>
+void PolisherAudioProcessor::measureCorrelation (const juce::AudioBuffer<Sample>& buffer, int numChannels, int numSamples) noexcept
+{
+    // The output L/R correlation meter (+1 mono ... -1 out of phase) reads what the host gets: Saturation
+    // (Mid or Side alone), Drive, the per-channel Soft Clipper and the limiter all come after the Imager,
+    // where it was read before (and a mono bus read +1 there whatever played). ~0.3 s averages.
+    if (numChannels <= 0)
+        return;
+    const Sample* l = buffer.getReadPointer (0);
+    const Sample* r = buffer.getReadPointer (juce::jmin (1, numChannels - 1));
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const double a = static_cast<double> (l[i]), b = static_cast<double> (r[i]);
+        corrLR += (a * b - corrLR) * corrCoeff;
+        corrLL += (a * a - corrLL) * corrCoeff;
+        corrRR += (b * b - corrRR) * corrCoeff;
+    }
+    for (double* v : { &corrLL, &corrRR })
+        if (*v < 1.0e-30) *v = 0.0;   // no denormals in silence
+    if (std::abs (corrLR) < 1.0e-30) corrLR = 0.0;
+    const double d = std::sqrt (corrLL * corrRR);
+    meters.correlation.store (static_cast<float> (d > 1.0e-12 ? juce::jlimit (-1.0, 1.0, corrLR / d) : 1.0));
 }
 
 void PolisherAudioProcessor::clearToneTarget()

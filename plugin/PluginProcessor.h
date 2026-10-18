@@ -240,6 +240,9 @@ private:
     double targetDriveGain (bool bypassed) const;
     double targetTrimGain (bool bypassed) const;
     void publishMeters();
+    template <typename Sample>
+    void measureCorrelation (const juce::AudioBuffer<Sample>& buffer, int numChannels, int numSamples) noexcept;
+    double corrLR = 0.0, corrLL = 0.0, corrRR = 0.0, corrCoeff = 0.0;   // the output's L/R correlation (~0.3 s averages)
 
     polisher::Unlimiter unlimiter;
     polisher::TonalEQ eq;
