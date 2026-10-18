@@ -405,6 +405,10 @@ juce::var PolisherWebEditor::makeSpectrum (const SpectrumTap& tap, Analyser& sta
 {
     std::fill (fftBuffer.begin(), fftBuffer.end(), 0.0f);
     tap.copyLatest (fftBuffer.data(), kFftSize);
+    // One NaN / inf sample would turn the whole frame into NaN (and, kept in the smoothing below, hide the
+    // line until the window is reopened): it counts as silence.
+    for (int i = 0; i < kFftSize; ++i)
+        if (! std::isfinite (fftBuffer[static_cast<size_t> (i)])) fftBuffer[static_cast<size_t> (i)] = 0.0f;
     window.multiplyWithWindowingTable (fftBuffer.data(), static_cast<size_t> (kFftSize));
     fft.performFrequencyOnlyForwardTransform (fftBuffer.data(), true);
 
@@ -429,10 +433,10 @@ juce::var PolisherWebEditor::makeSpectrum (const SpectrumTap& tap, Analyser& sta
 
         // 4.5 dB/octave tilt around 1 kHz so a well-balanced mix reads roughly flat.
         float db = static_cast<float> (20.0 * std::log10 (mag + 1.0e-9) + 4.5 * std::log2 (f / 1000.0));
-        db = juce::jlimit (-120.0f, 12.0f, db);
+        db = std::isfinite (db) ? juce::jlimit (-120.0f, 12.0f, db) : -120.0f;
 
         auto& s = state.smoothed[static_cast<size_t> (i)];
-        if (! state.primed)       s = db;
+        if (! state.primed || ! std::isfinite (s)) s = db;
         else if (db > s)          s = 0.55f * db + 0.45f * s;   // fast rise
         else                      s = 0.88f * s + 0.12f * db;   // slow fall
         out.add (roundTo (s, 0.1f));
