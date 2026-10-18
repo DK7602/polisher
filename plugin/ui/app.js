@@ -15,6 +15,9 @@ const MINUS = "−";
 const fmtNum = (v, digits = 1) => (v < 0 ? MINUS : "") + Math.abs(v).toFixed(digits);
 const fmtDb = (v, unit, digits = 1) => (v <= -99 ? `${MINUS}inf ${unit}` : `${fmtNum(v, digits)} ${unit}`);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+// Writes only what changed, so live readouts don't rewrite the page (or make a screen reader repeat itself).
+const setText = (el, text) => { if (el && el.textContent !== text) el.textContent = text; };
+const setAttr = (el, name, value) => { if (el && el.getAttribute(name) !== value) el.setAttribute(name, value); };
 
 // ---------------------------------------------------------------------------------------------
 // Scale the fixed 1600x900 design to the window.
@@ -467,10 +470,13 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   const value = cell.querySelector(".cell-value");
 
   const refresh = () => {
-    const n = state.getNormalisedValue();
+    const n = state.getNormalisedValue(), { start, end } = state.properties;
     pointer.style.transform = `rotate(${angleFor(n)}deg)`;
     value.textContent = fmt(state.getScaledValue());
     knob.setAttribute("aria-valuetext", value.textContent);
+    setAttr(knob, "aria-valuenow", String(+state.getScaledValue().toFixed(4)));
+    setAttr(knob, "aria-valuemin", String(Math.min(start, end)));
+    setAttr(knob, "aria-valuemax", String(Math.max(start, end)));
   };
   const setNorm = (n) => { state.setNormalisedValue(clamp(n, 0, 1)); refresh(); onParamsChanged(); userEdited(); };
 
@@ -542,10 +548,15 @@ function liveKnobCell({ label, sub, state, fmt, def, minText, maxText }) {
   value.addEventListener("dblclick", typeIn);
   // Each key press is one gesture (the plug-in's undo merges quick repeats into one step).
   const nudge = (dir, size) => { state.sliderDragStarted(); setNorm(stepNorm(state, state.getNormalisedValue(), dir, size)); state.sliderDragEnded(); };
+  const jump = (n) => { state.sliderDragStarted(); setNorm(n); state.sliderDragEnded(); };
   knob.addEventListener("keydown", (e) => {
     const size = e.shiftKey ? 0.002 : 0.01;
     if (e.key === "ArrowUp" || e.key === "ArrowRight") nudge(1, size);
     else if (e.key === "ArrowDown" || e.key === "ArrowLeft") nudge(-1, size);
+    else if (e.key === "PageUp") nudge(1, 0.1);
+    else if (e.key === "PageDown") nudge(-1, 0.1);
+    else if (e.key === "Home") jump(0);
+    else if (e.key === "End") jump(1);
     else if (e.key === "Enter") typeIn();
     else return;
     e.preventDefault();
@@ -1088,7 +1099,8 @@ const nodeEls = EQ_BANDS.map((band, b) => {
   n.className = "eq-node";
   n.textContent = String(b + 1);
   n.setAttribute("role", "slider");
-  n.setAttribute("aria-label", band.name);
+  n.setAttribute("aria-label", `${band.name}: left / right arrows move the frequency, up / down the gain`);
+  n.tabIndex = 0;   // (a click doesn't focus it: its press handler prevents that; the keyboard reaches it with Tab)
   eqNodes.appendChild(n);
 
   // The point moves by as much as the pointer does (a fifth of it with Shift, like the knobs' fine control), from
@@ -1144,7 +1156,21 @@ const nodeEls = EQ_BANDS.map((band, b) => {
     eqCells[b].refresh(); onParamsChanged(); userEdited();
   }, { passive: false });
   n.addEventListener("pointerenter", () => { n.dataset.hover = "1"; drawEq(); });
-  n.addEventListener("pointerleave", () => { delete n.dataset.hover; if (!dragging) eqReadout.hidden = true; });
+  n.addEventListener("pointerleave", () => { delete n.dataset.hover; if (!dragging && !n.dataset.focus) eqReadout.hidden = true; });
+  // Keyboard: left / right move the frequency (1 % of its range, Shift 0.2 %), up / down the gain (0.5 dB, Shift
+  // 0.1 dB); each press is a gesture (the plug-in's undo merges quick repeats). The readout shows while focused.
+  n.addEventListener("keydown", (e) => {
+    const fs = P.eqFreq[b], gs = P.eqGain[b], fine = e.shiftKey;
+    let st, to;
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") { st = fs; to = stepNorm(fs, fs.getNormalisedValue(), e.key === "ArrowRight" ? 1 : -1, fine ? 0.002 : 0.01); }
+    else if (e.key === "ArrowUp" || e.key === "ArrowDown") { st = gs; to = scaledToNorm(gs, clamp(eqGainAt(b) + (e.key === "ArrowUp" ? 1 : -1) * (fine ? 0.1 : 0.5), -EQ_MAX, EQ_MAX)); }
+    else return;
+    e.preventDefault();
+    st.sliderDragStarted(); st.setNormalisedValue(to); st.sliderDragEnded();
+    eqCells[b].refresh(); onParamsChanged(); userEdited();
+  });
+  n.addEventListener("focus", () => { n.dataset.focus = "1"; drawEq(); });
+  n.addEventListener("blur", () => { delete n.dataset.focus; if (!dragging && !n.dataset.hover) eqReadout.hidden = true; });
   return n;
 });
 
@@ -1182,7 +1208,10 @@ function drawEqNow() {
     n.classList.toggle("flat", Math.abs(g) < 0.05 || !active);
     const text = `${EQ_BANDS[b].name} · ${fmtHz(f)} · ${g > 0.049 ? "+" : ""}${fmtNum(g, 1)} dB`;
     n.setAttribute("aria-valuetext", text);
-    if (n.classList.contains("dragging") || n.dataset.hover) {
+    setAttr(n, "aria-valuenow", String(+g.toFixed(2)));
+    setAttr(n, "aria-valuemin", String(-EQ_MAX));
+    setAttr(n, "aria-valuemax", String(EQ_MAX));
+    if (n.classList.contains("dragging") || n.dataset.hover || n.dataset.focus) {
       eqReadout.textContent = text;
       eqReadout.style.left = n.style.left;
       eqReadout.style.top = n.style.top;
@@ -2211,11 +2240,11 @@ function refreshBanner() {
   const on = !!(MON.listen || check);
   $("monitor-banner").hidden = !on;
   if (!on) return;
-  $("monitor-text").textContent = MON.listen
+  setText($("monitor-text"), MON.listen
     ? `${isSoloMode(MON.listen) ? "SOLO" : "LISTENING"}: ${listenWhat(MON.listen)}${check ? `, on ${check}` : ""} — not the master`
     : MON.phone ? "PHONE CHECK: your master on a phone speaker — not the master's real sound"
-    : "MONO CHECK: left + right together — not the master's real sound";
-  $("monitor-level").textContent = monitorLevelText();
+    : "MONO CHECK: left + right together — not the master's real sound");
+  setText($("monitor-level"), monitorLevelText());
 }
 function refreshMonitor() {
   for (const [id, on] of [["btn-mono", MON.mono], ["btn-phone", MON.phone]]) {
@@ -2397,6 +2426,40 @@ $("btn-help").addEventListener("click", (e) => { e.stopPropagation(); togglePopo
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".popover")) togglePopover(null);
 });
+// Esc closes Settings or Quick Help too (the keyboard goes back to its button).
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const open = ["pop-settings", "pop-help"].find((id) => !$(id).hidden);
+  if (!open) return;
+  togglePopover(null);
+  if (keyboardNav) $(open === "pop-settings" ? "btn-settings" : "btn-help").focus({ preventScroll: true });
+});
+// The manual and the style picker are dialogs: when one opens the keyboard goes into it, Tab stays inside, and
+// closing it (Esc or ×) gives the keyboard back to where it was.
+function openDialog(box, first) {
+  const opener = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+  box.hidden = false;
+  if (!box.dataset.dialog) {
+    box.dataset.dialog = "1";
+    box.addEventListener("keydown", (e) => {
+      if (e.key !== "Tab") return;
+      const all = [...box.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+      if (!all.length) return;
+      const i = all.indexOf(document.activeElement);
+      if (e.shiftKey && i <= 0) { e.preventDefault(); all[all.length - 1].focus(); }
+      else if (!e.shiftKey && (i < 0 || i === all.length - 1)) { e.preventDefault(); all[0].focus(); }
+    });
+  }
+  box.returnFocus = opener;
+  if (first) first.focus({ preventScroll: true });
+}
+function closeDialog(box, fallback) {
+  if (box.hidden) return;
+  box.hidden = true;
+  const back = box.returnFocus && box.returnFocus.isConnected && box.returnFocus.offsetParent !== null ? box.returnFocus : fallback;
+  if (keyboardNav && back) back.focus({ preventScroll: true });
+  else if (box.contains(document.activeElement)) document.activeElement.blur();
+}
 
 // ---------------------------------------------------------------------------------------------
 // User manual: docs/manual/polisher-manual.md, embedded in the plug-in and rendered here (offline).
@@ -2469,7 +2532,7 @@ async function loadManual() {
 }
 async function openManual() {
   togglePopover(null);
-  $("manual").hidden = false;
+  openDialog($("manual"), $("btn-manual-close"));
   if (manualLoaded) return;
   const md = await loadManual();
   const body = $("manual-body"), toc = $("manual-toc");
@@ -2480,14 +2543,15 @@ async function openManual() {
   for (const t of doc.toc) {
     const a = document.createElement("a");
     a.textContent = t.text;
-    a.addEventListener("click", () => { const el = document.getElementById(t.id); if (el) body.scrollTo({ top: el.offsetTop - 8, behavior: "smooth" }); });
+    a.href = `#${t.id}`;   // a link the keyboard reaches with Tab (the page itself never navigates)
+    a.addEventListener("click", (e) => { e.preventDefault(); const el = document.getElementById(t.id); if (el) body.scrollTo({ top: el.offsetTop - 8, behavior: "smooth" }); });
     toc.appendChild(a);
   }
   manualLoaded = true;
 }
 $("btn-manual").addEventListener("click", (e) => { e.stopPropagation(); openManual(); });
-$("btn-manual-close").addEventListener("click", () => { $("manual").hidden = true; });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("manual").hidden) $("manual").hidden = true; });
+$("btn-manual-close").addEventListener("click", () => closeDialog($("manual"), $("btn-help")));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("manual").hidden) closeDialog($("manual"), $("btn-help")); });
 
 // Easter egg: clicking the logo swaps the colour scheme (blue chrome <-> black & white glass). Look only.
 function setMono(on) {
@@ -2522,8 +2586,8 @@ function userEdited() {
 let toastTimer = null;
 function toast(text) {
   const t = $("toast");
-  t.textContent = text;
   t.hidden = false;
+  t.textContent = text;   // (a status region: shown first, then the words, so a screen reader reads them)
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (t.hidden = true), 2600);
 }
@@ -2592,8 +2656,8 @@ function openStylePicker() {
         <button type="button" class="manual-close" aria-label="Close" title="Close (Esc)">&times;</button></div>
       <div class="stp-cols"><nav class="stp-genres"></nav><div class="stp-styles"></div></div>`;
     $("stage").appendChild(box);
-    box.querySelector(".manual-close").addEventListener("click", () => (box.hidden = true));
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !box.hidden) box.hidden = true; });
+    box.querySelector(".manual-close").addEventListener("click", () => closeDialog(box, $("genre-name")));
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !box.hidden) closeDialog(box, $("genre-name")); });
   }
   const now = SONG_STYLES.find((s) => s.key === (SONG.key || AM_FIRST_STYLE[comboIndex(P.amGenre)])) || SONG_STYLES[0];
   let shownGenre = now.genre;
@@ -2615,16 +2679,20 @@ function openStylePicker() {
       b.innerHTML = `<b>${s.name}</b><span>${s.about}</span>`;
       b.addEventListener("click", () => {
         pickSongStyle(key);
-        box.hidden = true;
+        closeDialog(box, $("genre-name"));
         toast(`Style: ${shownGenre.name} - ${s.name}. Auto-Master masters it as ${GENRES[amGenreFor(key)]}; Mixology and Voxology follow.`);
       });
       return b;
     }));
   };
   draw();
-  box.hidden = false;
+  openDialog(box, box.querySelector(".stp-style.sel") || box.querySelector(".stp-genre.sel"));
 }
 $("genre-name").addEventListener("click", openStylePicker);
+// The style name is the picker's button for the keyboard too (Enter or Space, once Tab has brought it there).
+$("genre-name").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openStylePicker(); }
+});
 
 // Your DAW: Settings' pick ("Found: ..." = the program Masterology runs in).
 const pickDawNative = Juce.getNativeFunction("pickDaw");
@@ -3966,7 +4034,7 @@ window.__JUCE__.backend.addEventListener("polisherMeters", (raw) => {
         && (frame.listen !== MON.listen || !!frame.mono !== MON.mono || !!frame.phone !== MON.phone)) {
       MON.listen = frame.listen; MON.mono = !!frame.mono; MON.phone = !!frame.phone;
       refreshMonitor();
-    } else if (MON.listen) $("monitor-level").textContent = monitorLevelText();
+    } else if (MON.listen) setText($("monitor-level"), monitorLevelText());   // (a live region: written only when it changes)
     watchLouderPart();
   });
   part("meters", () => {

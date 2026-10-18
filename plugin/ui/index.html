@@ -29,7 +29,7 @@
       <img class="logo" src="assets/logo.webp" alt="Masterology">
       <div class="pill pill-blue genre" title="Genre: what Auto-Master compares your mix with">
         <button type="button" id="genre-prev" aria-label="Previous genre"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg></button>
-        <span id="genre-name">Trap / Hip-Hop</span>
+        <span id="genre-name" tabindex="0" role="button">Trap / Hip-Hop</span>
         <button type="button" id="genre-next" aria-label="Next genre"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg></button>
       </div>
       <div class="grow"></div>
@@ -236,7 +236,7 @@
       <li><b>Learn:</b> the right panel explains what each control is doing to your track, live. Red boxes need a decision and say exactly what to do; blue boxes are tips.</li>
     </ul>
   </div>
-  <div class="toast" id="toast" hidden></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
   <!-- USER MANUAL (docs/manual/polisher-manual.md, bundled into the plug-in) -->
   <div class="manual" id="manual" hidden role="dialog" aria-label="Masterology user manual">
