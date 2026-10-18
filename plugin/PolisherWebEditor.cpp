@@ -513,7 +513,8 @@ void PolisherWebEditor::timerCallback()
     frame->setProperty ("momentary",  roundTo (m.momentary.load(), 0.1f));
     frame->setProperty ("shortTerm",  roundTo (m.shortTerm.load(), 0.1f));
     frame->setProperty ("integrated", roundTo (m.integrated.load(), 0.1f));
-    frame->setProperty ("range",      roundTo (m.loudnessRange.load(), 0.1f));
+    const float range = m.loudnessRange.load();   // the one reading the processor doesn't clamp
+    frame->setProperty ("range",      roundTo (std::isfinite (range) ? juce::jlimit (0.0f, 99.0f, range) : 0.0f, 0.1f));
     frame->setProperty ("truePeak",   roundTo (m.truePeakMax.load(), 0.1f));
     frame->setProperty ("peakRecent", roundTo (m.truePeakRecent.exchange (-100.0f), 0.1f));
     const float peakL = m.peakLeft.exchange (-100.0f), peakR = m.peakRight.exchange (-100.0f);
