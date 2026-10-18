@@ -1433,7 +1433,7 @@ function renderLearnBody(body) {
   const dith = clamp(Math.round(P.maxDither.value * 2), 0, 2);
   body.appendChild(item("Dither", ["Off", "16-bit", "24-bit"][dith],
     dith === 0 ? "Off: right for a 24-bit or 32-bit float export. Turn on 16-bit only when you export a 16-bit WAV (CD, some distributors)."
-    : `On for ${dith === 1 ? "16" : "24"}-bit: adds a very quiet hiss (about ${dith === 1 ? "−98" : "−146"} dBFS) so quiet fades don't turn gritty when {daw} cuts the export to ${dith === 1 ? "16" : "24"} bits. Export at exactly that bit depth, with nothing after Masterology changing the level (Stereo Out fader at 0 dB).`));
+    : `On for ${dith === 1 ? "16" : "24"}-bit: adds a very quiet hiss (about ${dith === 1 ? "−98" : "−146"} dBFS) so quiet fades don't turn gritty when {daw} cuts the export to ${dith === 1 ? "16" : "24"} bits. Export at exactly that bit depth, with nothing after Masterology changing the level ({daw:master} fader at 0 dB).`));
   body.appendChild(item("Release", `${release} ms`,
     adaptive
       ? `Adaptive around ${release} ms: recovers quickly after single hits (drums) and moves slowly on sustained sound (808s, pads), so it doesn't pump.`
