@@ -1216,6 +1216,42 @@ TEST_CASE ("Auto-Master listens to the whole song, finishes by itself when it en
     CHECK (p->toneTarget.get().bandDb == learned.bandDb);
 }
 
+TEST_CASE ("Auto-Master: Stream aims the whole song at -14 only when it heard the whole song", "[plugin][automaster]")
+{
+    const double sr = 48000.0;
+    const auto song = songOf ({ testsig::musicLike (sr, 10.0, -30.0, 1), testsig::musicLike (sr, 20.0, -20.0, 2), testsig::musicLike (sr, 14.0, -12.0, 3),
+                                testsig::musicLike (sr, 20.0, -20.0, 4), testsig::musicLike (sr, 14.0, -12.0, 5) });
+    auto p = makeProcessor (sr, 512, false);
+    set (*p, "amTarget", 0.0f);   // Stream -14
+    FakePlayHead head;
+    p->setPlayHead (&head);
+
+    // Played to the end: the whole song was heard, so its loudest part is set above -14.
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, song);
+    play (*p, head, testsig::silence (sr, 2, 4.5));
+    REQUIRE (waitForAutoMaster (*p));
+    REQUIRE (p->autoMaster.finishedByItself());
+    auto r = reportOf (*p);
+    REQUIRE (static_cast<bool> (r["ok"]));
+    CHECK ((double) r["songGapLu"] > 1.0);
+    CHECK ((double) r["targetLufs"] > -13.5);
+    CHECK ((double) r["targetLufs"] <= -14.0 + polisher::kMaxStreamLiftLu + 1.0e-6);
+    CHECK (r["summary"].toString().contains ("whole song should read about"));
+
+    // Finish after part of it: it can't know the whole song, so the loudest part stays at -14.
+    head.seconds = 0.0;
+    REQUIRE (p->autoMaster.start());
+    play (*p, head, songOf ({ testsig::musicLike (sr, 20.0, -20.0, 2), testsig::musicLike (sr, 14.0, -12.0, 3) }));
+    REQUIRE (p->autoMaster.finish());
+    REQUIRE (waitForAutoMaster (*p));
+    r = reportOf (*p);
+    REQUIRE (static_cast<bool> (r["ok"]));
+    CHECK_FALSE (r.hasProperty ("songGapLu"));
+    CHECK ((double) r["targetLufs"] == Catch::Approx (-14.0).margin (1.0e-6));
+    p->setPlayHead (nullptr);
+}
+
 TEST_CASE ("Auto-Master: Finish uses what it heard from 12 s of music on, not before; a pause doesn't end it", "[plugin][automaster]")
 {
     const double sr = 44100.0;

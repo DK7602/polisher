@@ -58,6 +58,9 @@ public:
     // can carry another song's tone. Synthetic songs: a 15 s listen reads 0.1-2.7 dB from its own
     // song's tone in steady songs, other songs 3-19 dB (see toneDistanceDb).
     static constexpr double kSameSongToneDb = 3.0;
+    // Stream -14 aims the whole song at -14 only when the listen heard the whole song: it ended by itself (the song
+    // ended), without timeline jumps, after at least this much music (polisher::AutoMasterSettings::songGapLu).
+    static constexpr double kWholeSongSeconds = 60.0;
     // Auto Analyze
     static constexpr double kWatchEnoughSeconds = polisher::autoanalyze::kEnoughSeconds;   // music heard before the first check
     static constexpr double kWatchRefreshSeconds = 15.0;    // then at most every 15 s (when the loudest part heard changed)

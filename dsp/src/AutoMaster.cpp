@@ -1237,6 +1237,12 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
     // hooks are compared like for like (the loudest 30 s also hold some of the verse around the hook).
     const double refLufs = useRef ? referenceLoudness (ref) : 0.0;
     r.targetLufs = useRef ? std::clamp (std::round (refLufs * 10.0) / 10.0, kRefMinLufs, kRefMaxLufs) : targetLufs (s.target);
+    // Stream: streaming services measure the whole song, not its loudest part. When the whole song was heard, the
+    // loudest part goes as far above -14 as needed for the whole song to read about -14 (Loud and Club masters are
+    // turned down by the services anyway, and a reference is compared hook to hook).
+    const double streamLift = ! useRef && s.target == LoudnessTarget::stream && s.songGapLu > 0.0
+                                ? std::round (std::min (kMaxStreamLiftLu, kStreamGapShare * s.songGapLu) * 10.0) / 10.0 : 0.0;
+    r.targetLufs += streamLift;
     const LoudnessTarget tier = ! useRef ? s.target : r.targetLufs <= -12.0 ? LoudnessTarget::stream
                               : r.targetLufs <= -8.0 ? LoudnessTarget::loud : LoudnessTarget::club;
     const std::string tname = useRef ? "Ref " + num (r.targetLufs) : std::string (targetName (s.target));
@@ -2110,8 +2116,10 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
             : "With Drive at 0 dB the master lands at " + num (out.integratedLufs) + " LUFS, " + num (out.integratedLufs - r.targetLufs) +
               " dB above the " + tname + " target. Lower Input Trim by that much, or run Auto-Master again.";
     else if (r.reachedTarget)
-        driveWhy = num (drive, true) + " dB of Drive lands this part at " + num (out.integratedLufs) + " LUFS, your " + tname +
-                   " target. " + (cost < 0.3 ? std::string ("At this level the peaks barely need controlling, so the master stays completely clean.")
+        driveWhy = num (drive, true) + " dB of Drive lands this part at " + num (out.integratedLufs) + " LUFS" +
+                   (streamLift > 0.0 ? ", so your whole song should read about " + num (out.integratedLufs - streamLift) + " LUFS, your " + tname +
+                                       " target (streaming services measure the whole song, and your quieter parts sit under this one). "
+                                     : ", your " + tname + " target. ") + (cost < 0.3 ? std::string ("At this level the peaks barely need controlling, so the master stays completely clean.")
                                              : "Holding the peaks down costs about " + num (cost) + " dB of loudness, within the " + rules.name +
                                                " limit of " + num (rules.budgetDb) + " dB, so " +
                                                (bassHeavy ? "the drums keep their punch." : "the attacks stay natural."));
@@ -2125,6 +2133,7 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
         driveWhy = "Reaching " + num (r.targetLufs) + " LUFS would squash this mix too hard for " + std::string (rules.name) +
                    ", so I stopped at " + num (out.integratedLufs) + " LUFS, where holding the peaks down costs " + num (cost) + " dB (the " +
                    rules.name + " limit). " +
+                   (streamLift > 0.0 ? "Your whole song should read about " + num (out.integratedLufs - streamLift) + " LUFS. " : std::string()) +
                    (s.intensity == Intensity::punchy ? "To go louder, tame the drum peaks in the mix."
                                                      : "Choose Punchy to go louder, or tame the drum peaks in the mix.");
     else
@@ -2244,8 +2253,11 @@ AutoMasterResult autoMasterAt (const AudioClip& raw, const AutoMasterSettings& s
                 ". Settings: " + (style != nullptr ? styleName + " (mastered as " + genre + ")" : genre) + ", " + rules.name + ", " + tname +
                 (trimDb < 0.0 ? ". To land on the target, Input Trim turns it down " + num (-trimDb) + " dB first" : std::string()) +
                 ". The master now measures " + num (out.integratedLufs) + " LUFS with true peak " + num (out.truePeakDbtp) +
-                (wholeSong ? " dBTP in this loudest part. The whole song reads lower than its loudest part, which is normal."
-                           : " dBTP. The full song will read about 1 LU lower than this loud section, which is normal.");
+                (streamLift > 0.0 ? " dBTP in this loudest part. Streaming services measure the whole song, so this part is set " + num (streamLift) +
+                                    " dB above " + num (targetLufs (LoudnessTarget::stream)) + ": your whole song should read about " +
+                                    num (out.integratedLufs - streamLift) + " LUFS."
+                 : wholeSong ? " dBTP in this loudest part. The whole song reads lower than its loudest part, which is normal."
+                             : " dBTP. The full song will read about 1 LU lower than this loud section, which is normal.");
     // --- Stem EQ: suggest a vocal move, never apply it -------------------------------------------------
     // Only the vocal: drums, bass and "other" swing too much with the arrangement (no drums in a ballad,
     // a kick but no 808...) for a usual level to mean anything.

@@ -276,7 +276,18 @@ struct AutoMasterSettings
         genre, the EQ aims for the style's own tone (styleTargetCurve), and its feel (handoff::Feel) scales the
         clipping and saturation a little; a style of another genre (you picked another genre) is left out. */
     std::string styleKey;
+    /** How far the song's loudest 12 s sit above the whole song's loudness, as the mix arrives (LU), when the
+        plug-in heard the whole song played once through; negative: unknown. With it, Stream -14 aims the whole
+        song at -14 (streaming services measure the whole song): the loudest part is set higher by
+        kStreamGapShare of this, at most kMaxStreamLiftLu, within the intensity's limits as always. */
+    double songGapLu = -1.0;
 };
+
+/** Stream -14 with the whole song heard: the master's loudest part sits this share of the mix's gap (loudest 12 s
+    over the whole song) above -14, because the master's limiting narrows the gap a little (calibrated on songs
+    with verses 1 to 6 dB under the chorus, see test_automaster.cpp). */
+inline constexpr double kStreamGapShare = 0.8;
+inline constexpr double kMaxStreamLiftLu = 2.5;
 
 struct AutoMasterResult
 {

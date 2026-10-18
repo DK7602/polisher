@@ -280,6 +280,11 @@ void AutoMasterController::launchAnalysis()
     auto settings = currentSettings();
     settings.songTone = tone;                       // Tone Steady holds the song to its own tone
     settings.songSeconds = pendingStats.heardSeconds;   // the report says itself how much it heard
+    // The whole song played once through: Stream -14 can aim the whole song at -14 (how far its loudest part sits
+    // above it). After Finish, a jump or a short listen it can't know the whole song, and keeps the loudest part at -14.
+    if (autoFinished && pendingStats.timelineJumps == 0 && pendingStats.heardSeconds >= kWholeSongSeconds
+        && pendingStats.integratedLufs > -70.0 && pendingStats.loudestLufs > -70.0)
+        settings.songGapLu = std::max (0.0, pendingStats.loudestLufs - pendingStats.integratedLufs);
     pendingSettings = settings;
 
     const int thisSession = session;
@@ -425,6 +430,8 @@ void AutoMasterController::apply (const polisher::AutoMasterResult& r, const pol
         doc->setProperty ("outputLufs", r.output.integratedLufs);
         doc->setProperty ("outputTruePeak", r.output.truePeakDbtp);
         doc->setProperty ("targetLufs", r.targetLufs);
+        if (s.songGapLu >= 0.0)
+            doc->setProperty ("songGapLu", s.songGapLu);   // Auto Analyze's checks aim the same way (Stream: the whole song)
         doc->setProperty ("reachedTarget", r.reachedTarget);
         doc->setProperty ("inputLufs", r.analysis.loudness.integratedLufs);
         doc->setProperty ("capturedLufs", r.capturedLufs);
@@ -752,6 +759,8 @@ void AutoMasterController::launchCheck (polisher::AudioClip clip)
 {
     auto settings = currentSettings();
     settings.songTone = toneTarget.get();   // the song's tone as stored (what the master holds it to)
+    if (aaReport.hasProperty ("songGapLu"))      // Stream aimed at the whole song: the same aim for the same song
+        settings.songGapLu = static_cast<double> (aaReport["songGapLu"]);
     const int thisSession = aaSession;
     checkRunning = true;
     checkCancel = std::make_shared<std::atomic<bool>> (false);
