@@ -1,4 +1,4 @@
-# Masterology (formerly Polisher) — resume here (updated 2026-10-17, v0.29.3)
+# Masterology (formerly Polisher) — resume here (updated 2026-10-18, v0.29.4)
 
 Read this first in a new chat. Code: github.com/DK7602/polisher. Newest work: branch
 `claude/eloquent-einstein-sscadx` (v0.29.1 = Cakewalk in the DAW list; v0.29.0 = your DAW shared by the trio;
@@ -67,6 +67,41 @@ analyze option as well. it could then give option to edit in the learn window as
 - v0.27.0 CI green: run 38756168366 (66d62b9, Windows: build, engine + plug-in tests, pluginval 10 + VST3 validator; UI smoke).
 - NOT YET HEARD / USED by the user. Ask them: run Auto-Master, switch Auto Analyze on, change the mix in Mixology (e.g. 808 +3
   dB), play through the hook, and see whether the cards make sense.
+
+## v0.29.4: the full audit (2026-10-18, from Mixology's "Mixology audit" thread)
+- Five parallel reviews (audio, Auto-Master engine, UI, shell / threads, suite + docs + CI; reports were in the session
+  scratchpad), then four fix helpers on branches audit-audio / audit-engine / audit-ui / audit-shell, merged here.
+  Released with Mixology 0.21.1 and Voxology 0.52.1 (shared SuiteLink.h: Presence + DAW detection; layout stays 4).
+- Audio: a NaN / inf sample no longer silences the master for good (input sanitised, chain reset + silent block if the
+  output goes bad, every module's memory guarded incl. Stem EQ's GRU and Bass First's split; tests/test_nonfinite.cpp);
+  Drive / Input Trim / MATCH glide 20 ms at any buffer (polisher::GainGlide); MATCH switches sides after the clipper +
+  limiter delay (no snap / hole; at Drive +10 an A->B swell of ~2.3 dB / 15 ms remains); per-chunk host time; the
+  correlation meter on the final master; reset() clears look-ahead on stop / locate; NaN in a saved state -> default.
+- Auto-Master / Auto Analyze: the hook gate (11 of 12 s inside the hook spans, 0.5 LU, loudest part settled) - no
+  more bogus Drive edits on an unchanged song; a robust recurring-peak reading (Clip Level worth 1 dB); KEEP MINE holds
+  (aaKeep); Stem EQ suggestion from 0 dB when Stem EQ is off; masters to the song's style (MixHandoff.h has the 75
+  styles with mixstyles.js's bass / scoop / air, a test keeps them equal; style curve offset <= 1-2 dB, soft / hard
+  styles' clipping and saturation; fixed mappings: Epic Trailer -> EDM, Country Modern / Pop and Worship Modern -> Pop,
+  Outlaw / Southern -> Rock, Ambient -> Pop); Stream -14 aims the whole song at -14 after a full listen (>= 60 s, ended
+  by itself, +2.5 LU max); a failed try keeps the last report; a state load stops a run; report texts.
+- UI (look unchanged, pixel-compared): Learn built off-screen (no lost clicks), wheel / Shift / trackpad / skewed
+  ranges, odd frame fields, older macOS (inset longhands, flex-gap fallback, JUCE index.js private method renamed in
+  getResource: macOS 11 works), WebView2 browser keys / menu blocked, type-in, knob focus, EQ point grab offset, stale
+  echoes, keyboard / aria, version injected (withInitialisationData), realtimeExport daws.js phrase, window size /
+  module / LEARN remembered (state properties uiWidth / uiModule / uiLearn), right-click = host parameter menu.
+- Shell: hidden stateRev parameter so Logic (AU) marks the project changed; suite::Presence (join at prepareToPlay,
+  leave at releaseResources: inactive projects don't share style / DAW or look present); Found DAW sticks; Studio Pro /
+  ILBridge / AUHostingService detection (suite::dawFromHost); pollReference from the processor timer; window min
+  800x450 and fits the screen; gestures; reference loader (sample-rate check, shared thread, cloud-only files
+  refused); macOS Standalone mic permission; BASIC VIEW if WebView2 never starts (15 s); FROM MIXOLOGY placement check
+  (plugin/HandoffCheck.h: Mixology's short-term vs Masterology's input); mono only when Masterology hears mono; a
+  preset follows the project's style; bypassed > 8 s releases the master slot.
+- CI / docs: Mac tests tolerate float rounding (Mac builds never finished before), the download packs the manual +
+  docs/INSTALL.txt (Mac .tar.gz keeps permissions), sanitizers every push, auval needs its success line, NEEDS_WEB_BROWSER
+  (Linux); manual: installer / every DAW / one headroom rule (peaks -6 to -3 dBTP) / suite troubleshooting; live copy
+  link moved from the manual to the README.
+- Not done (ideas): layout 5 (Masterology tells Mixology "fix it in the mix"), 8x true peak, linear-phase option,
+  noise-shaped dither, Stem EQ model skipped when unused, ControlParameterIndexUpdater.
 
 ## v0.29.3: suite link 4 (2026-10-17, from Mixology's "Mixology audit" thread)
 - Released with Mixology 0.21.0 and Voxology 0.52.0: SuiteLink.h / .cpp layout 4 (Mixology's answer to each Voxology,
