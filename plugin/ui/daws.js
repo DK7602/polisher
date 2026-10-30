@@ -96,6 +96,17 @@ const P = {
     logic: "Not connected to Logic Pro, so faders and pans can't move (Settings > Logic Pro Bridge).",
     cakewalk: "Not connected to Cakewalk, so faders and pans can't move (Settings > Cakewalk Bridge).",
     other: "Mixology moves faders in Cubase, FL Studio, Ableton Live, Logic Pro and Cakewalk (for now): untick the fader and pan rows to apply the rest, and set those by hand." },
+  // Faders that move together (Mixology moved one, the DAW moved others with it): why, and how to stop it.
+  linkedFaders: {
+    cakewalk: "the tracks are in a Quick Group (several selected while Ctrl is held) or a fader group: click one track so only it is selected, and take the faders out of the group (right-click a fader > Remove from Group)",
+    cubase: "Q-Link is on in the MixConsole (the Q-Link button at the top left) with several channels selected, or the channels are linked (Link Channels): switch Q-Link off, or click one channel so only it is selected (linked channels: right-click one > Unlink Channels)",
+    studioone: "several channels are selected in the Console (a fader moves all the selected ones), or the tracks are in a group: click one channel so only it is selected, or dissolve the group (right-click one of its tracks > Dissolve Group)",
+    fl: "several mixer tracks are selected in the Mixer (a fader moves all the selected ones): click one mixer track so only it is selected",
+    ableton: "several tracks are selected (a volume change moves all the selected ones): click one track's title bar so only it is selected",
+    reaper: "several tracks are selected (a selected track's fader moves all the selected ones), or the tracks are in a track group with volume linked: click one track so only it is selected, or switch that group off (Track Grouping Matrix)",
+    bitwig: "several tracks are selected in the Mix view (a fader moves all the selected ones): click one track so only it is selected",
+    logic: "several channel strips are selected in the Mixer (a fader moves all the selected ones), or they are in a group with Volume linked: click one channel strip so only it is selected, or untick Volume in the group's settings (Group Settings)",
+    other: "several channels are selected, or they are linked or grouped in your DAW's mixer: select only one channel, and unlink or ungroup them" },
   // Turning a recording down at the source, before any plug-in.
   clipGain: {
     cakewalk: "select the clip and lower its Clip Gain in the Inspector (Clip properties)",
