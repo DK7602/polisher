@@ -23,7 +23,7 @@ Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Clau
   at 1366 x 768. Manual's window line updated.
 - The Sonicology installer builds Masterology from this branch (Mixology repo, .github/workflows/sonicology.yml,
   input masterology_ref). Beta 6 suite installers: Mixology run 40996902871 (label "Beta 6", version 0.6.0 = Beta 5's
-  Mixology 0.22.0 + Voxology 0.52.1 + Masterology 0.29.5, f4ccd42), success. Masterology CI for f4ccd42: run 40996813178.
+  Mixology 0.22.0 + Voxology 0.52.1 + Masterology 0.29.5, f4ccd42), success. Masterology CI for f4ccd42: run 40996813178, green (Windows tests + pluginval 10 + VST3 validator, sanitizers, UI smoke).
 
 ## v0.27.0 Auto Analyze (2026-10-15, thread "Masterology Auto Edit")
 User: "we just added an auto analyze in mixology (v0.11.0). once the auto master has been run it should also have an auto
