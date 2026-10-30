@@ -1499,12 +1499,12 @@ function renderLearnBody(body) {
 // How to read the dotted genre line on the spectrum (EQ Learn).
 function genreLineItem() {
   const full = genreCurve ? genreCurve.name : GENRES[comboIndex(P.amGenre)];
-  const read = `Where your red master line sits above the dotted line, your master has more of that range than typical ${genreShort(full) === "Trap" ? "trap" : genreShort(full)}; below it, less. Small differences (1–2 dB) are normal, and below about 60 Hz all the lines get rough.`;
+  const read = `Where your red master line sits above the dotted line, your master has more of that range than typical ${targetShort(full) === "Hip-Hop" || targetShort(full) === "Trap" ? targetShort(full).toLowerCase() : targetShort(full)}; below it, less. Small differences (1–2 dB) are normal, and below about 60 Hz all the lines get rough.`;
   if (refInfo.profile && !genreLineOn())
-    return item(`Dotted line · ${genreShort(full)} target`, null, `Hidden while a reference is loaded: Auto-Master aims for the reference (the yellow dashed line) instead. Click "${genreShort(full)} target" under the spectrum to show it too. ${read}`);
+    return item(`Dotted line · ${targetShort(full)} target`, null, `Hidden while a reference is loaded: Auto-Master aims for the reference (the yellow dashed line) instead. Click "${targetShort(full)} target" under the spectrum to show it too. ${read}`);
   if (!genreLineOn())
-    return item(`Dotted line · ${genreShort(full)} target`, null, `The typical tone of ${full} masters, the one Auto-Master's EQ aims for. It's switched off: click "${genreShort(full)} target" under the spectrum to show it.`);
-  return item(`Dotted line · ${genreShort(full)} target`, null, `The typical tone of ${full} masters, the one Auto-Master's EQ aims for, shown at the loudness of what's playing. ${read}`);
+    return item(`Dotted line · ${targetShort(full)} target`, null, `The typical tone of ${full} masters, the one Auto-Master's EQ aims for. It's switched off: click "${targetShort(full)} target" under the spectrum to show it.`);
+  return item(`Dotted line · ${targetShort(full)} target`, null, `The typical tone of ${full} masters, the one Auto-Master's EQ aims for, shown at the loudness of what's playing. ${read}`);
 }
 
 function renderEqLearn(body) {
@@ -2651,9 +2651,13 @@ function refreshAmChoices() {
     nameEl.innerHTML = `<small>${st.genre.name}</small>${st.name}`;
     nameEl.title = `${st.fullName}: ${st.about} Auto-Master masters it as ${genreName}. Click for every style (the same in Mixology and Voxology).`;
   } else {
-    nameEl.textContent = genreName;
-    nameEl.title = "Click to pick your song's style (the same list as Mixology and Voxology)";
+    // No style chosen yet (a new Masterology, or an older project): ask for one. The six Auto-Master genres behind
+    // the styles are not a choice of their own any more, so the pill never shows one.
+    nameEl.innerHTML = "<small>Song style</small>Choose Style";
+    nameEl.title = `Click to pick your song's style (the same list as Mixology and Voxology). Until you pick one, Auto-Master uses its ${g === 0 ? "hip-hop" : genreName} settings.`;
   }
+  genreLegendKey = "";   // the dotted line's name follows the style too
+  if (genreCurve) drawGenreCurve();
   for (const [rowId, st] of [["row-intensity", P.amIntensity], ["row-target", P.amTarget]]) {
     const idx = comboIndex(st);
     const refSets = rowId === "row-target" && !!refInfo.profile;   // a reference sets the loudness instead
@@ -2666,8 +2670,9 @@ function refreshAmChoices() {
   fetchGenreCurve();   // the dotted line follows the genre (no-op when it already shows this one)
 }
 function stepGenre(d) {
-  // The arrows step through the styles of the song's genre (as in Mixology); from the genre's first style when
-  // none is chosen yet.
+  // The arrows step through the styles of the song's genre (as in Mixology); with none chosen yet, either arrow
+  // picks the genre's first style.
+  if (!SONG.key) { pickSongStyle(AM_FIRST_STYLE[comboIndex(P.amGenre)]); return; }
   const st = SONG_STYLES.find((s) => s.key === (SONG.key || AM_FIRST_STYLE[comboIndex(P.amGenre)])) || SONG_STYLES[0];
   const list = st.genre.styles;
   const i = list.findIndex((s) => s.id === st.id);
@@ -3079,7 +3084,10 @@ let genreOffset = null;        // dB the genre line is moved by: loudness playin
 let genreAsked = "";           // genre and sample rate of the last request (so a stale answer is dropped)
 const genreLinePref = { noRef: true, withRef: false };
 try { Object.assign(genreLinePref, JSON.parse(localStorage.getItem("polisher.genreLine") || "{}")); } catch (_) {}
-const genreShort = (name) => (name || "").split(" /")[0];   // "Trap / Hip-Hop" -> "Trap"
+const genreShort = (name) => (name || "").split(" /")[0];   // "R&B" -> "R&B"
+// The dotted line's short name: the Auto-Master genre, but its hip-hop genre (which also holds trap) is named for the
+// song's style ("Trap" for a Trap & Drill style, else "Hip-Hop"), since "Trap / Hip-Hop" is no longer a style to pick.
+const targetShort = (full) => (comboIndex(P.amGenre) === 0 ? (SONG.key.startsWith("trap.") ? "Trap" : "Hip-Hop") : genreShort(full));
 async function fetchGenreCurve() {
   const g = comboIndex(P.amGenre), sr = M.sr > 0 ? M.sr : 48000, key = `${g}@${sr}`;
   if (key === genreAsked) return;
@@ -3098,10 +3106,10 @@ let genreLegendKey = "";
 function drawGenreCurve() {
   const path = $("sp-genre"), btn = $("legend-genre");
   const full = genreCurve ? genreCurve.name : GENRES[comboIndex(P.amGenre)];
-  const on = genreLineOn(), key = `${full}|${on}|${!!refInfo.profile}`;
+  const on = genreLineOn(), key = `${full}|${targetShort(full)}|${on}|${!!refInfo.profile}`;
   if (key !== genreLegendKey) {
     genreLegendKey = key;
-    $("legend-genre-name").textContent = `${genreShort(full)} target`;
+    $("legend-genre-name").textContent = `${targetShort(full)} target`;
     btn.setAttribute("aria-pressed", String(on));
     btn.title = (refInfo.profile && !on ? "Hidden while a reference is loaded: Auto-Master aims for the reference's tone instead. " : "")
       + `The tone typical ${full} masters have (what Auto-Master's EQ aims for), at the loudness of what's playing. Click to ${on ? "hide" : "show"} it.`;

@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.29.5 · October 2026
+Version 0.29.6 · October 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
@@ -52,7 +52,7 @@ Leave headroom going in: peaks between **−6 and −3 dBTP** and about **−18 
 
 ### Your first master
 
-1. Click the style name at the top and choose your song's genre, then its style (for example Hip Hop, then G-Funk). It's the same list of 75 styles as Mixology and Voxology, and the three share it (see [With Voxology and Mixology](#with-voxology-and-mixology)). The style sets Auto-Master's genre: most Hip Hop and Trap styles master as **Trap / Hip-Hop**; R&B and Gospel as **R&B**; Pop, Latin, Afro, Worship Modern / Live, Country Modern / Pop and Electronic Ambient as **Pop**; Electronic and Cinematic Epic Trailer as **EDM**; Rock and Country Outlaw / Southern as **Rock**; Folk, Jazz, the other Country styles, Worship Acoustic / Hymns and Cinematic Orchestral / Soft Score as **Acoustic**. Auto-Master also masters to the style itself: its EQ aims for the style's own tone (at most 1–2 dB per range away from the genre), and soft styles (Lo-Fi, Ambient, Soft Rock, Orchestral, Soft Score) get less clipping and saturation, hard ones (Rage, Hyperpop, Metal, Modern Metal, Dubstep) a little more. The small text above the name is the genre, the arrows step through its styles.
+1. Click **Choose Style** at the top (once picked, it shows your style) and choose your song's genre, then its style (for example Hip Hop, then G-Funk). Until you pick one, Auto-Master uses its hip-hop settings (or the genre an older project was saved with). It's the same list of 75 styles as Mixology and Voxology, and the three share it (see [With Voxology and Mixology](#with-voxology-and-mixology)). The style sets Auto-Master's genre: most Hip Hop and Trap styles master as **Trap / Hip-Hop**; R&B and Gospel as **R&B**; Pop, Latin, Afro, Worship Modern / Live, Country Modern / Pop and Electronic Ambient as **Pop**; Electronic and Cinematic Epic Trailer as **EDM**; Rock and Country Outlaw / Southern as **Rock**; Folk, Jazz, the other Country styles, Worship Acoustic / Hymns and Cinematic Orchestral / Soft Score as **Acoustic**. Auto-Master also masters to the style itself: its EQ aims for the style's own tone (at most 1–2 dB per range away from the genre), and soft styles (Lo-Fi, Ambient, Soft Rock, Orchestral, Soft Score) get less clipping and saturation, hard ones (Rage, Hyperpop, Metal, Modern Metal, Dubstep) a little more. The small text above the name is the genre, the arrows step through its styles (with no style chosen yet, either arrow picks that genre's first style: Hip Hop - Modern Clean in a new Masterology).
 2. Choose **Intensity**: Gentle, Balanced or Punchy. Balanced is the default.
 3. Choose **Target**: Stream −14, Loud −9 or Club −7. Loud −9 is the default.
 4. Click **Auto-Master**, then play your song from the start. It finishes by itself 4 seconds after the song ends (or click it again any time after 12 seconds to use what it heard).
@@ -257,7 +257,7 @@ Every band keeps its true shape right up to 20 kHz, at 44.1 and 48 kHz too, so t
 
 Click the button to cycle STEREO → MID → SIDE. The change glides, so it never clicks. Keep Low End and Bass on STEREO or MID: boosting the lows on SIDE makes the bass wide, which costs headroom and collapses on phones (Bass Control's Mono Below undoes it anyway). On a mono track a SIDE band does nothing. Auto-Master sets every band back to STEREO.
 
-On the spectrum, the white line is your mix, the blue curve is the EQ change and the red line is the master after the whole chain. The dotted line (for example **Trap target**) is the tone typical masters in your genre have, the balance Auto-Master's EQ aims for: where the red line sits above it, your master has more of that range than typical (see [The spectrum screen](#the-spectrum-screen)).
+On the spectrum, the white line is your mix, the blue curve is the EQ change and the red line is the master after the whole chain. The dotted line (for example **Hip-Hop target**; **Trap target** for a Trap & Drill style) is the tone typical masters in your genre have, the balance Auto-Master's EQ aims for: where the red line sits above it, your master has more of that range than typical (see [The spectrum screen](#the-spectrum-screen)).
 
 ### 03 Stem EQ
 
@@ -607,7 +607,7 @@ The big screen in the middle has two views. Switch with **SPECTRUM / HISTORY** a
 ### Spectrum
 
 - **White line**: your mix as it arrives. **Red line**: the master after the whole chain. Both are tilted 4.5 dB per octave, so a well-balanced mix reads roughly flat instead of falling to the right.
-- **Dotted line** (for example **Trap target**): the tone typical masters in the genre you picked at the top have, the same balance Auto-Master's EQ aims for. It follows the genre, and it is moved to the loudness of what's playing, so you compare tone, not volume.
+- **Dotted line** (for example **Hip-Hop target**, or **Trap target** for a Trap & Drill style): the tone typical masters in the genre of the style you picked at the top have, the same balance Auto-Master's EQ aims for. It follows the genre, and it is moved to the loudness of what's playing, so you compare tone, not volume.
   - Where your red master line sits **above** the dotted line, your master has more of that range than typical masters in your genre; **below**, less. Differences of 1–2 dB are normal.
   - Below about 60 Hz all the lines get rough: the screen can't draw the lowest notes finely.
   - It shows a steady, average master. Busy drums and hats read up to about 1 dB above it, and wide stereo highs about 1 dB below it (the screen adds left and right together, so the purely stereo part of the sound doesn't count).

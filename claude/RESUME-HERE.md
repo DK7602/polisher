@@ -10,6 +10,16 @@ Edit" (started 2026-10-15).
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
 
+## v0.29.6 "Choose Style" instead of "Trap / Hip-Hop" (2026-10-30, thread "Masterology Auto Edit")
+- User (after installing Beta 6, which "opens bigger now"): the style pill defaulted to "Trap / Hip-Hop", which is no longer
+  an option in the shared 75-style list: "it should say Choose Style or default to another style".
+- UI only: with no song style chosen the pill reads "SONG STYLE / Choose Style" (index.html too); tooltip says Auto-Master
+  uses its hip-hop settings (or the older project's genre) until one is picked; either arrow then picks the genre's first
+  style (AM_FIRST_STYLE). The dotted line's legend / EQ Learn name: targetShort() = "Hip-Hop", or "Trap" for a trap.*
+  style, for Auto-Master genre 0 (others unchanged); refreshAmChoices redraws it. ui_smoke checks all of it.
+- Still saying "Trap / Hip-Hop": Auto-Master's own genre name in the report / undo label / toasts ("masters it as") and
+  its reasons ("typical Trap / Hip-Hop masters"); offered to rename, not done.
+
 ## v0.29.5 Opens at a proper size (2026-10-30, thread "Masterology Auto Edit")
 - User (screenshot in Cubase): "when masterology opens it needs to open in a bigger window, this opens too small. please
   change in the sonicology package as well as masterology solo package".
