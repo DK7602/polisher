@@ -39,7 +39,7 @@ namespace
         return std::round (v * perStep) / perStep;
     }
 
-    /** The window's width: the one wanted (1280 x 720, or the size it had last time) where that fits, else as large
+    /** The window's width: the one wanted (kOpenWidth x kOpenHeight, or the size it had last time) where that fits, else as large
         as fits the screen it opens on, under the host's title and plug-in bars (16:9, not below the minimum). */
     int fitWidth (int w)
     {
@@ -55,7 +55,9 @@ namespace
     // processor's state, so they are saved with the project. The loudness history the page draws is kept only
     // while the plug-in runs (a preset or a copy of Masterology mustn't carry another song's graph): per
     // instance, keyed by the processor's state tree, which loading a project or preset replaces.
-    const juce::Identifier uiWidthId { "uiWidth" }, uiModuleId { "uiModule" }, uiLearnId { "uiLearn" };
+    // (The width is "uiOpenWidth" since 0.29.5: up to 0.29.4 every window remembered 800, its minimum, under
+    // "uiWidth" - see the constructor - so projects saved then would still open that small.)
+    const juce::Identifier uiWidthId { "uiOpenWidth" }, uiModuleId { "uiModule" }, uiLearnId { "uiLearn" };
 
     juce::String& loudnessHistoryFor (PolisherAudioProcessor& p)
     {
@@ -383,16 +385,20 @@ PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)
     addAndMakeVisible (webView);
     webView.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
 
+    // The size it had last time (resized() keeps it), else kOpenWidth x kOpenHeight. Read FIRST: setResizeLimits
+    // below clamps the still-empty window to the minimum, and remembering that made it open at 800 x 450 every time.
+    const int saved = static_cast<int> (audioProcessor.parameters.state.getProperty (uiWidthId, kOpenWidth));
+
     // Fixed 16:9 design, freely resizable; the page scales itself to fit. Not smaller than half the design
     // (kMinWidth), and it opens no larger than the screen.
     setResizable (true, true);
     setResizeLimits (kMinWidth, kMinHeight, 2400, 1350);
     if (auto* c = getConstrainer())
         c->setFixedAspectRatio (static_cast<double> (kDesignWidth) / kDesignHeight);
-    // The size it had last time (resized() keeps it), else 1280 x 720; never larger than the screen it opens on.
-    const int saved = static_cast<int> (audioProcessor.parameters.state.getProperty (uiWidthId, 1280));
+    // Never larger than the screen it opens on.
     const int width = fitWidth (juce::jlimit (kMinWidth, 2400, saved));
     setSize (width, juce::roundToInt (width * static_cast<double> (kDesignHeight) / kDesignWidth));
+    sizeReady = true;   // from here on, a size is one the window really has (resized() remembers it)
 
     // Energy meters piled up while the editor was closed: start fresh.
     for (auto& e : audioProcessor.meters.stemEnergy) e.store (0.0f);
@@ -430,7 +436,7 @@ void PolisherWebEditor::resized()
     webView.setBounds (getLocalBounds());
     if (basicView != nullptr)
         basicView->setBounds (getLocalBounds());
-    if (getWidth() >= kMinWidth)   // (not a size the host passes through while it builds or closes the window)
+    if (sizeReady && getWidth() >= kMinWidth)   // (not a size the window passes through while it is built or closed)
         audioProcessor.parameters.state.setProperty (uiWidthId, getWidth(), nullptr);   // opens at this size next time
 }
 

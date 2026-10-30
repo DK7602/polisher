@@ -1007,11 +1007,11 @@ await page.click('#learn-toggle'); await page.click('#view-spectrum'); await pic
 check(errors.length === 0, `no script errors (${errors.join(' | ')})`);
 await browser.close();
 
-// The listening banner at the window sizes Masterology opens at (1280 x 720), 1120 x 630 and its smallest (800 x 450,
+// The listening banner at 1440 x 810 (where a new Masterology opens), 1280 x 720, 1120 x 630 and its smallest (800 x 450,
 // for 1080p laptops at 150 % and more): the longest description (a Dynamics band on PHONE) is shown whole,
 // "— not the master" included.
 const browser2 = await chromium.launch();
-for (const [w, hgt] of [[1280, 720], [1120, 630], [800, 450]]) {
+for (const [w, hgt] of [[1440, 810], [1280, 720], [1120, 630], [800, 450]]) {
   const pg = await browser2.newPage({ viewport: { width: w, height: hgt } });
   pg.on('pageerror', (e) => errors.push(String(e)));
   await pg.goto(url);

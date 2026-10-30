@@ -10,6 +10,20 @@ Edit" (started 2026-10-15).
 CI: pushes build Windows only (private repo minutes; macOS counts 10x). Mac build on request:
 Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Claude to trigger it.
 
+## v0.29.5 Opens at a proper size (2026-10-30, thread "Masterology Auto Edit")
+- User (screenshot in Cubase): "when masterology opens it needs to open in a bigger window, this opens too small. please
+  change in the sonicology package as well as masterology solo package".
+- Cause (a v0.29 bug): the editor constructor called setResizeLimits on the still 0 x 0 editor; JUCE then
+  setBoundsConstrained -> 800 x 450 -> resized() remembered 800 under "uiWidth" BEFORE the constructor read the saved
+  width, so it opened at the minimum every time (the saved size was overwritten too). Checked on Linux under Xvfb
+  (xdotool + xwininfo on the Standalone): old build 800 x 450 on a 1920 x 1080 screen.
+- Fix: read the saved width first; sizeReady flag (resized() remembers only after the constructor's setSize); new
+  default kOpenWidth x kOpenHeight = 1440 x 810 (fitWidth still keeps it on smaller screens); property renamed to
+  "uiOpenWidth" so projects saved with the bad 800 open at the new default. Measured: 1440 x 810 at 1920 x 1080, 1187 x 668
+  at 1366 x 768. Manual's window line updated.
+- The Sonicology installer builds Masterology from this branch (Mixology repo, .github/workflows/sonicology.yml,
+  input masterology_ref): run it again for the suite.
+
 ## v0.27.0 Auto Analyze (2026-10-15, thread "Masterology Auto Edit")
 User: "we just added an auto analyze in mixology (v0.11.0). once the auto master has been run it should also have an auto
 analyze option as well. it could then give option to edit in the learn window as it picks up changes and new edit needs."

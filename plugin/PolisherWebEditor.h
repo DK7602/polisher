@@ -39,6 +39,10 @@ public:
     // 9 pixels on such a screen (what 70 % gave on a 100 % screen).
     static constexpr int kMinWidth = 800;
     static constexpr int kMinHeight = 450;
+    // What a new Masterology opens at (90 % of the design): fits a 1080p screen at 100 % or 125 % with the host's
+    // bars; on a smaller screen it opens as large as fits (fitWidth). After that it reopens at the size you left it.
+    static constexpr int kOpenWidth = 1440;
+    static constexpr int kOpenHeight = 810;
 
 private:
     static constexpr int kFftOrder = 12;
@@ -107,6 +111,7 @@ private:
 
     std::unique_ptr<juce::FileChooser> referenceChooser;   // Match ref: the open dialog, while it's open
     bool pageGroupOpen = false;                            // the page opened an undo group (historyGroup)
+    bool sizeReady = false;                                // the constructor gave the window its size (until then resized() remembers nothing)
 
     // WebView2 can still fail after isSupported() (a second environment that won't start, a locked or mismatched
     // user-data folder, a crashed runtime): the page then never runs, and the window would stay blank. Once the

@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.29.4 · October 2026
+Version 0.29.5 · October 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
@@ -70,7 +70,7 @@ Leave headroom going in: peaks between **−6 and −3 dBTP** and about **−18 
 - On Windows, browser keys do nothing while Masterology's window has the keyboard (F3, F5, Ctrl+F, Ctrl+P...): click your DAW's window first to use its shortcuts.
 - Changed your mind? The **undo arrow** at the top (or **Ctrl+Z**) takes back your last change; see [Undo, redo and snapshots](#undo-redo-and-snapshots).
 - **Space and Enter** never press a Masterology button a second time after you clicked it, so pressing Space to play the song can't cancel Auto-Master or switch MATCH off. If Space doesn't start Cubase while Masterology's window is in front, click Cubase's project window first. Moving around with **Tab**, Space and Enter press buttons as usual.
-- Drag the window's corner to resize it; everything scales together. It opens at 1280 × 720, or smaller when your screen has less room (a laptop at 150 % or 175 % display scaling), and goes down to 800 × 450. It reopens at the size you left it, on the module you had open and with LEARN as you left it (saved with the project); the loudness history comes back while the project stays open.
+- Drag the window's corner to resize it; everything scales together. A new Masterology opens at 1440 × 810, or as large as fits when your screen has less room (a laptop at 150 % or 175 % display scaling), and goes down to 800 × 450. It reopens at the size you left it, on the module you had open and with LEARN as you left it (saved with the project); the loudness history comes back while the project stays open.
 
 ### Exporting
 
