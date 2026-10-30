@@ -22,7 +22,8 @@ Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Clau
   "uiOpenWidth" so projects saved with the bad 800 open at the new default. Measured: 1440 x 810 at 1920 x 1080, 1187 x 668
   at 1366 x 768. Manual's window line updated.
 - The Sonicology installer builds Masterology from this branch (Mixology repo, .github/workflows/sonicology.yml,
-  input masterology_ref): run it again for the suite.
+  input masterology_ref). Beta 6 suite installers: Mixology run 40996902871 (label "Beta 6", version 0.6.0 = Beta 5's
+  Mixology 0.22.0 + Voxology 0.52.1 + Masterology 0.29.5, f4ccd42), success. Masterology CI for f4ccd42: run 40996813178.
 
 ## v0.27.0 Auto Analyze (2026-10-15, thread "Masterology Auto Edit")
 User: "we just added an auto analyze in mixology (v0.11.0). once the auto master has been run it should also have an auto
