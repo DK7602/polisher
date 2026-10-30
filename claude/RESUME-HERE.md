@@ -18,7 +18,7 @@ Actions -> Build & Test -> Run workflow ("Also build macOS" ticked), or ask Clau
   style (AM_FIRST_STYLE). The dotted line's legend / EQ Learn name: targetShort() = "Hip-Hop", or "Trap" for a trap.*
   style, for Auto-Master genre 0 (others unchanged); refreshAmChoices redraws it. ui_smoke checks all of it.
 - Beta 7 suite installers: Mixology run 41044275423 (label "Beta 7", version 0.7.0 = Beta 6 + Masterology 0.29.6, 6791108),
-  success. Masterology CI for 6791108: run 41044247076.
+  success. Masterology CI for 6791108: run 41044247076, green.
 - Still saying "Trap / Hip-Hop": Auto-Master's own genre name in the report / undo label / toasts ("masters it as") and
   its reasons ("typical Trap / Hip-Hop masters"); offered to rename, not done.
 
