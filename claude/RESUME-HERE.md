@@ -738,3 +738,9 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   fresh / aaEdits / freshInfo, stopWatching; listening restarts fresh once the flag clears. editsLive() excludes it;
   Learn's status text "Waiting for Mixology". Voxology 0.53 leaves the vocal's level to Mixology (the only real loop:
   Balance moving music faders that feed Voxology's post-fader side-chain).
+
+## v0.30.1 HD logo (2026-11-03)
+- The user found the header logo poor quality: the 840 x 265 cut-out from the mock-up was soft (compression smear).
+  tools/art/upscale_logo.py rebuilds it with Real-ESRGAN x4plus in plain numpy (no PyTorch: reads the .pth zip
+  itself), colour premultiplied + alpha as its own pass, 4x then Lanczos to 2x: plugin/ui/assets/logo.webp is now
+  1680 x 530 (271 KB). The original stays in tools/art/logo_source.webp (outside ui/assets, so not bundled).
