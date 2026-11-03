@@ -138,6 +138,7 @@ void PolisherAudioProcessor::leaveSuite()
     link.releaseMaster (suiteSlot, suiteId);
     suiteSlot = -1;
     hasHandoff = false;
+    autoMaster.setMixologyChanging (false);
     placement.forget();
     lastSuiteMs = 0;
     bypassedSinceMs = 0;
@@ -186,6 +187,8 @@ void PolisherAudioProcessor::updateSuite (std::uint64_t now)
         mixIn (suite::nameHash (handoff.styleKey));
         autoMaster.setMixKey (key);
     }
+    // Mixology changing the mix right now: Auto Analyze waits and then hears the new mix from the start.
+    autoMaster.setMixologyChanging (hasHandoff && (handoff.flags & suite::MixInfo::changing) != 0);
     // The song's style: the newest choice in Voxology, Mixology or Masterology wins (from a moment after joining,
     // so the plug-ins of a project just switched away from have left first).
     bool adopted = false;

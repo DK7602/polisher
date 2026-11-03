@@ -730,3 +730,11 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
 - Live manual copy (Claude Docs 3bf99dd7...): add the same "With Voxology and Mixology" section and the version line.
 - Local note: under ctest -j8 on a busy machine "closing the plug-in while it analyses" once took > 2 s (passes alone and at -j3).
 - v0.26.0 CI green: run 38657259925 (Windows + UI smoke).
+
+## v0.30.0 Waits for Mixology (2026-11-03, with Mixology 0.24.0 and Voxology 0.53.0)
+- No plug-in feedback loop: Mixology sets suite::MixInfo::changing (bit 3, layout stays 4) while a plan applies and
+  for 4 s after any of its processing changes. PluginProcessor's suite tick -> AutoMasterController::
+  setMixologyChanging; autoTick pauses "mixology" (after "closed"): cancels a running check, ++aaSession, drops
+  fresh / aaEdits / freshInfo, stopWatching; listening restarts fresh once the flag clears. editsLive() excludes it;
+  Learn's status text "Waiting for Mixology". Voxology 0.53 leaves the vocal's level to Mixology (the only real loop:
+  Balance moving music faders that feed Voxology's post-fader side-chain).

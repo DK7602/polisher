@@ -405,3 +405,19 @@ TEST_CASE ("Suite: the DAW is found from the host program", "[suite]")
     CHECK (std::string (suite::dawName ("studioone")) == "Studio One");
     CHECK (std::string (suite::dawName ("nope")) == "Other DAW");
 }
+
+TEST_CASE ("Suite: Mixology tells Masterology while it changes the mix", "[suite]")
+{
+    Memory mem;
+    suite::Link mix (mem.data()), master (mem.data());
+    suite::MixInfo m, got;
+    m.flags = suite::MixInfo::analysed | suite::MixInfo::changing;
+    mix.publishMix (m, 1000);
+    REQUIRE (master.readMix (got, 1100));
+    CHECK ((got.flags & suite::MixInfo::changing) != 0);   // Masterology's Auto Analyze waits
+    CHECK ((got.flags & suite::MixInfo::analysed) != 0);
+    m.flags = suite::MixInfo::analysed;                     // done: it listens to the new mix from the start
+    mix.publishMix (m, 1200);
+    REQUIRE (master.readMix (got, 1300));
+    CHECK ((got.flags & suite::MixInfo::changing) == 0);
+}

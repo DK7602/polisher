@@ -793,6 +793,24 @@ void AutoMasterController::autoTick (double nowMs)
     if (! (aaReport.isObject() && static_cast<bool> (aaReport["ok"]))) { stopWatching(); pause ("noReport"); return; }
     if (! reportSettingsMatch())                      { stopWatching(); pause ("settings"); return; }
     if (! editorOpen)                                 { stopWatching(); pause ("closed"); return; }
+    if (mixologyChanging)
+    {
+        // Mixology is changing the mix (its plan going out to the faders, or a tool applied a moment ago). What was
+        // heard, and the edits offered, were for the mix before: drop them (a check still running too) and listen to
+        // the new mix from the start once Mixology is done. So a Mixology move never becomes a Masterology edit
+        // halfway through, and Masterology never stacks its answer on top of one.
+        if (aaPause != "mixology")
+        {
+            if (checkCancel != nullptr) checkCancel->store (true);
+            ++aaSession;
+            hasFresh = false;
+            aaEdits.clear();
+            freshInfo = juce::var();
+        }
+        stopWatching();
+        pause ("mixology");
+        return;
+    }
 
     if (hasFresh)
         recomputeEdits (false);   // the knobs may have moved: "now -> new" follows them

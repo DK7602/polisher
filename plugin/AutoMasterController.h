@@ -154,7 +154,12 @@ public:
     void setEditorOpen (bool open);
     /** Mixology's hand-off (a hash of what it says about the mix; 0: none). A change starts the listen again. */
     void setMixKey (std::uint64_t key)         { mixKey = key; }
-    /** Why it isn't checking right now: "off", "noReport", "busy", "closed", "settings", "stopped", "listening",
+    /** Mixology says it is changing the mix right now (suite::MixInfo::changing: a plan going out to the faders, or a
+        change it made a moment ago). Auto Analyze then waits, drops what it heard and offered for the mix before, and
+        listens to the new mix from the start once Mixology is done: Masterology never answers a half-made mix change,
+        and never offers an edit for a mix that isn't there any more. */
+    void setMixologyChanging (bool changing)   { mixologyChanging = changing; }
+    /** Why it isn't checking right now: "off", "noReport", "busy", "closed", "settings", "mixology", "stopped", "listening",
         "hook" (the part heard isn't at the hook's level), "checking", "cantJudge", or "" (checked; see the edits). */
     juce::String getAutoAnalyzeStatus() const  { return aaPause; }
     double getAutoAnalyzeHeard() const noexcept;   // music heard in this stretch of playback
@@ -188,7 +193,7 @@ private:
     float paramValue (const juce::String& id) const;
     bool changeReport (const juce::String& module, bool applyParams);
     /** The edits still apply: not while Auto-Master's plan is for other choices, or there is no plan. */
-    bool editsLive() const { return aaPause != "settings" && aaPause != "noReport" && aaPause != "busy"; }
+    bool editsLive() const { return aaPause != "settings" && aaPause != "noReport" && aaPause != "busy" && aaPause != "mixology"; }
     /** Sets a new state and waits until the audio thread is out of capture(), so the listener is ours. */
     void takeListener (State newState);
     void launchAnalysis();
@@ -229,7 +234,7 @@ private:
     // Auto Analyze (message thread, except watchFlag)
     std::atomic<bool> watchFlag { false };        // the audio thread feeds the listener for Auto Analyze
     std::atomic<bool> aaOn { false };
-    bool editorOpen = false, watching = false, checkRunning = false, hasFresh = false;
+    bool editorOpen = false, watching = false, checkRunning = false, hasFresh = false, mixologyChanging = false;
     std::uint64_t mixKey = 0, watchMixKey = 0;
     double watchMusicMs = 0.0;                    // when the music last grew
     std::int64_t watchHeard = 0;

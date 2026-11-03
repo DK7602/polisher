@@ -128,6 +128,9 @@ namespace suite
             analysed = 1u << 0,   // the tone fields come from a finished Analyze Mix
             monoMix  = 1u << 1,   // left and right are the same at the Stereo Out
             limited  = 1u << 2,   // Mixology's own limiter is on the full mix
+            changing = 1u << 3,   // Mixology is changing the mix right now (a plan going out to the faders, or any of its
+                                  // processing changed in the last few seconds): Masterology's Auto Analyze waits, then
+                                  // hears the new mix from the start (an older reader ignores the bit: layout stays 4)
         };
         std::string styleKey;         // "hiphop.modern" (genre.style)
         std::string styleName;        // "Hip Hop - Modern Clean"

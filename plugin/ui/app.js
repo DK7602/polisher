@@ -3568,6 +3568,7 @@ function aaStatusText() {
   if (!M.aaOn) return "Off. Turn it on and Masterology keeps listening while your song plays: when your mix changes, it works out what Auto-Master would change and shows it here.";
   switch (p) {
     case "busy": return "Paused while Auto-Master listens and thinks.";
+    case "mixology": return "Waiting for Mixology: it's changing your mix right now (a Balance, Auto Mix or another tool you applied). Masterology starts listening again from the start once Mixology is done, so it never answers a half-made change. Edits it offered before are gone: they were for the mix before.";
     case "settings": return "Paused: the genre, style, intensity, target or reference changed since Auto-Master ran (picking a style here, in Mixology or in Voxology changes it too), so its plan doesn't apply any more. Run Auto-Master again.";
     case "stopped": return `Waiting for the song (it starts listening afresh after every stop). Press play: it checks the hook or drop${hook ? ` (${hook})` : ""}, the part Auto-Master set your master from.`;
     case "listening": return `Listening · ${fmtTime(heard)} heard. It checks once it has heard 20 seconds, including the hook or drop${hook ? ` (${hook})` : ""}.`;
@@ -3691,7 +3692,7 @@ function renderAutoLearn(body) {
       { need: "Yes, if you want the master to follow the new choice.",
         steps: ["Click Auto-Master and play your whole song from the start.", "Auto Analyze carries on with the new plan by itself."] }));
 
-  const live = !["settings", "noReport", "busy"].includes(M.aaPause);
+  const live = !["settings", "noReport", "busy", "mixology"].includes(M.aaPause);
   const edits = (M.aaOn && live && aa && aa.edits) || [];
   const mix = aa && aa.mix;
   if (M.aaOn && live && aa && aa.hasCheck) {
