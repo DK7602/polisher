@@ -744,3 +744,11 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   tools/art/upscale_logo.py rebuilds it with Real-ESRGAN x4plus in plain numpy (no PyTorch: reads the .pth zip
   itself), colour premultiplied + alpha as its own pass, 4x then Lanczos to 2x: plugin/ui/assets/logo.webp is now
   1680 x 530 (271 KB). The original stays in tools/art/logo_source.webp (outside ui/assets, so not bundled).
+
+## NEXT: Sonicology Rack, stage 1 (planned 2026-11-14, not built; the user says when to start)
+- The plan lives in Mixology: docs/rack/RACK-PLAN.md (branch claude/mixology), with the concept art in docs/rack/concepts.
+- A view inside all three plug-ins (a RACK button in Masterology's top bar next to the gear and ?: the only change to
+  its locked look) that shows every Sonicology plug-in's modules per track and how they work together. Masterology's
+  part in stage 1: publish its 12 modules, Input Trim, target and ceiling into the new shared block RackLink (same files
+  in all three), serve the shared rack.js / rack.css, the RACK button. Its manual gets a Rack section (and the Claude
+  Docs copy with it).
