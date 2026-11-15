@@ -29,6 +29,7 @@ add_executable(polisher_tests
     test_songlistener.cpp
     test_genrecurve.cpp
     test_suite.cpp
+    test_rack_link.cpp
     test_handoff.cpp
     test_autoanalyze.cpp
     test_nonfinite.cpp
