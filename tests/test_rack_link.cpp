@@ -229,6 +229,70 @@ TEST_CASE ("Rack link: the plug-ins publish details only while a Rack view is op
     CHECK_FALSE (link.watched (1000 + rack::kViewerMs + 1));
 }
 
+TEST_CASE ("Rack link: a plug-in's publisher (taking part, how often, details while watched)", "[rack]")
+{
+    using Due = rack::Publisher::Due;
+    Memory mem;
+    rack::Link link (mem.data());
+    std::uint64_t t = 1000;
+    {
+        rack::Publisher pub (link);
+        CHECK (pub.due (t) == Due::none);           // not playing (prepareToPlay not called): not in the Rack
+        CHECK (link.units (t).empty());
+        pub.start();
+        REQUIRE (pub.due (t) == Due::brief);        // joined: published at once, briefly (no Rack open)
+        pub.publish (unit (rack::Product::link, rack::Role::track, "Kick", { mod ("mix.eq") }), t);
+        auto seen = link.units (t);
+        REQUIRE (seen.size() == 1);
+        CHECK_FALSE (seen[0].detailed);
+        CHECK (pub.due (t + 100) == Due::none);     // not again yet
+        CHECK (pub.due (t + rack::Publisher::kBriefMs) == Due::brief);   // the heartbeat
+        pub.publish (unit (rack::Product::link, rack::Role::track, "Kick"), t + rack::Publisher::kBriefMs);
+        t += rack::Publisher::kBriefMs;
+
+        link.view (t + 10);                         // a Rack opens: full details at once, then about 5 a second
+        REQUIRE (pub.due (t + 10) == Due::full);
+        pub.publish (unit (rack::Product::link, rack::Role::track, "Kick"), t + 10);
+        seen = link.units (t + 10);
+        REQUIRE (seen.size() == 1);
+        CHECK (seen[0].detailed);
+        CHECK (pub.due (t + 100) == Due::none);
+        link.view (t + 200);
+        CHECK (pub.due (t + 10 + rack::Publisher::kFullMs) == Due::full);
+        pub.publish (unit (rack::Product::link, rack::Role::track, "Kick"), t + 10 + rack::Publisher::kFullMs);
+
+        // A due() not followed by publish() publishes nothing; publish() without a due() does nothing.
+        t += 10 + rack::Publisher::kFullMs;
+        pub.publish (unit (rack::Product::link, rack::Role::track, "Snare"), t + 1);
+        CHECK (link.units (t + 1)[0].track == "Kick");
+
+        pub.stop();                                 // the host stopped it (another project plays): out of the Rack
+        CHECK (pub.due (t + 2) == Due::none);
+        CHECK (link.units (t + 2).empty());
+        pub.start();
+        CHECK (pub.due (t + 3) != Due::none);       // back
+        pub.publish (unit (rack::Product::link, rack::Role::track, "Kick"), t + 3);
+        CHECK (link.units (t + 3).size() == 1);
+    }
+    CHECK (link.units (t + 4).empty());             // destroyed: released
+
+    // Taken over after a long silence: it claims a new slot by itself.
+    rack::Publisher a (link);
+    a.start();
+    REQUIRE (a.due (5000) != Due::none);
+    a.publish (unit (rack::Product::link, rack::Role::track, "Bass"), 5000);
+    const int first = a.slot();
+    rack::Link other (mem.data());
+    const int stolen = other.claim (777, 5000 + rack::kAliveMs + 1);
+    CHECK (stolen == first);
+    REQUIRE (a.due (5000 + rack::kAliveMs + 2) != Due::none);
+    a.publish (unit (rack::Product::link, rack::Role::track, "Bass"), 5000 + rack::kAliveMs + 2);
+    CHECK (a.slot() == -1);                          // found out
+    REQUIRE (a.due (5000 + rack::kAliveMs + 3) != Due::none);
+    CHECK (a.slot() >= 0);
+    CHECK (a.slot() != first);
+}
+
 TEST_CASE ("Rack link: what the plug-ins do together", "[rack]")
 {
     using rack::Product;

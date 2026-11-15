@@ -387,6 +387,68 @@ namespace rack
         return out;
     }
 
+    // ---- one plug-in's publisher -------------------------------------------------------------------------------
+
+    namespace
+    {
+        std::uint64_t newInstanceId (const void* self)
+        {
+            static std::atomic<std::uint64_t> counter { 0 };
+            const auto mixed = (static_cast<std::uint64_t> (reinterpret_cast<std::uintptr_t> (self)) << 16)
+                               ^ (suite::wallMs() << 20) ^ (counter.fetch_add (1) + 1) * 0x9E3779B97F4A7C15ull;
+            return mixed != 0 ? mixed : 1;
+        }
+    }
+
+    Publisher::Publisher (Link& l) : link (l), id (newInstanceId (this)) {}
+
+    Publisher::~Publisher()
+    {
+        if (slotIndex >= 0) link.release (slotIndex, id);
+    }
+
+    Publisher::Due Publisher::due (std::uint64_t now)
+    {
+        pending = Due::none;
+        switch (presence.update (now))
+        {
+            case suite::Presence::Step::away:
+                return Due::none;
+            case suite::Presence::Step::leave:
+                if (slotIndex >= 0) link.release (slotIndex, id);
+                slotIndex = -1;
+                return Due::none;
+            case suite::Presence::Step::join:
+            case suite::Presence::Step::here:
+                break;
+        }
+        const bool claimed = slotIndex < 0;
+        if (claimed)
+        {
+            slotIndex = link.claim (id, now);
+            if (slotIndex < 0) return Due::none;   // full: try again next time
+        }
+        const bool full = link.watched (now);
+        const std::uint64_t every = full ? kFullMs : kBriefMs;
+        if (! claimed && ! (full && ! lastWasFull) && now - std::min (now, lastMs) < every) return Due::none;
+        pending = full ? Due::full : Due::brief;
+        return pending;
+    }
+
+    void Publisher::publish (Unit u, std::uint64_t now)
+    {
+        if (slotIndex < 0 || pending == Due::none) return;
+        u.detailed = pending == Due::full;
+        if (! link.publish (slotIndex, id, u, now))
+        {
+            slotIndex = -1;   // taken over (we were silent too long): claim again next time
+            return;
+        }
+        lastMs = now;
+        lastWasFull = u.detailed;
+        pending = Due::none;
+    }
+
     // ---- what they do together ---------------------------------------------------------------------------------
 
     const char* productKey (Product p)

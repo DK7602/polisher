@@ -245,4 +245,43 @@ namespace rack
     private:
         Block& block;
     };
+
+    /** One plug-in's side of the link (message thread, except start / stop): its slot, the suite link's rule that only
+        the project that plays takes part, and how often to publish. In the plug-in:
+          prepareToPlay: rack.start();      releaseResources: rack.stop();      (any thread)
+          a timer (any rate): if (auto due = rack.due (now); due != rack::Publisher::Due::none)
+                                  rack.publish (unitFor (due == rack::Publisher::Due::full), now);
+        Full (modules, values, bands, the spectrum) about kFullMs while a Rack view is open; else brief (who and where,
+        the modules' keys and states) about every kBriefMs, which is also the heartbeat. */
+    class Publisher
+    {
+    public:
+        enum class Due { none, brief, full };
+        static constexpr std::uint64_t kFullMs = 200, kBriefMs = 800;
+
+        explicit Publisher (Link& = Link::process());
+        ~Publisher();
+        Publisher (const Publisher&) = delete;
+        Publisher& operator= (const Publisher&) = delete;
+
+        void start() noexcept { presence.start(); }
+        void stop() noexcept { presence.stop(); }
+
+        Due due (std::uint64_t nowMs);
+        /** Publishes (u.detailed set from the last due()). */
+        void publish (Unit u, std::uint64_t nowMs);
+
+        bool takingPart() const noexcept { return presence.takingPart(); }
+        int slot() const noexcept { return slotIndex; }
+        bool watched (std::uint64_t nowMs) const { return link.watched (nowMs); }
+
+    private:
+        Link& link;
+        std::uint64_t id;
+        suite::Presence presence;
+        int slotIndex = -1;
+        std::uint64_t lastMs = 0;
+        bool lastWasFull = false;
+        Due pending = Due::none;
+    };
 }
