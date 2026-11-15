@@ -184,7 +184,9 @@ jobs:
   # host changes, no script errors.
   ui:
     name: UI smoke test
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04, not ubuntu-latest: GitHub moved ubuntu-latest to 26.04, where Playwright 1.56.1 can't install its
+    # browser ("does not support chromium on ubuntu26.04-x64").
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
