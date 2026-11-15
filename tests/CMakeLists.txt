@@ -30,6 +30,7 @@ add_executable(polisher_tests
     test_genrecurve.cpp
     test_suite.cpp
     test_rack_link.cpp
+    test_rack_unit.cpp
     test_handoff.cpp
     test_autoanalyze.cpp
     test_nonfinite.cpp

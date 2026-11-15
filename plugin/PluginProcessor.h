@@ -24,6 +24,8 @@
 #include "ToneTargetStore.h"
 #include "SettingsHistory.h"
 #include "HandoffCheck.h"
+#include "polisher/RackUnit.h"
+#include "suite/RackLink.h"
 #include "suite/SuiteLink.h"
 
 #include <array>
@@ -236,6 +238,7 @@ public:
             bumpStateRevision();
         pollReference();   // a Match ref that finished measuring after the window closed still marks the project
         updateSuite();
+        publishRack();     // the Sonicology Rack (more often while a Rack view watches)
     }
 
 private:
@@ -248,6 +251,19 @@ private:
     void bumpStateRevision();
     int suiteSlot = -1;
     std::uint64_t suiteId = 0;
+
+    // The Sonicology Rack (suite/RackLink.h): the master's modules for a Rack view open in any Sonicology plug-in. Its
+    // own meter copies (deepest since the Rack last read them), so it never takes the window's readings.
+    void publishRack();
+    rack::Publisher rackPub;
+    struct RackMeters
+    {
+        std::atomic<float> resonance { 0.0f }, bassTame { 0.0f }, glue { 0.0f }, clipper { 0.0f }, maximizer { 0.0f };
+        std::atomic<float> inPeak { -100.0f }, outPeak { -100.0f };   // dBFS, highest since read
+        std::array<std::atomic<float>, polisher::kDynBands> dynamics {};
+    };
+    RackMeters rackMeters;
+    std::atomic<std::uint64_t> lastAudioMs { 0 };
     suite::MixInfo handoff;
     bool hasHandoff = false;
     suitecheck::Placement placement;          // is the hand-off this mix? (message thread)

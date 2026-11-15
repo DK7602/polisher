@@ -549,7 +549,7 @@ namespace rack
             if (shared) continue;   // what follows could mix up two tracks
 
             if (vox != nullptr && vox->role == Role::beat)
-                add (T, hash, Level::ok, "Voxology in Beat mode: it only listens for the song's key and shares it; it changes nothing on the beat.");
+                add (T, hash, Level::ok, "Voxology in Beat mode: it listens for the song's key and shares it with your vocals and Honey Tune.");
 
             if (vox != nullptr && vox->role == Role::vocal && vox->on)
             {

@@ -745,7 +745,7 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   itself), colour premultiplied + alpha as its own pass, 4x then Lanczos to 2x: plugin/ui/assets/logo.webp is now
   1680 x 530 (271 KB). The original stays in tools/art/logo_source.webp (outside ui/assets, so not bundled).
 
-## NEXT: Sonicology Rack, stage 1 (planned 2026-11-14, not built; the user says when to start)
+## NOW: Sonicology Rack, stage 1 (planned 2026-11-14; steps 1 - 3 built 2026-11-15; next: step 4)
 - The plan lives in Mixology: docs/rack/RACK-PLAN.md (branch claude/mixology), with the concept art in docs/rack/concepts.
 - A view inside all three plug-ins (a RACK button in Masterology's top bar next to the gear and ?: the only change to
   its locked look) that shows every Sonicology plug-in's modules per track and how they work together. Masterology's
@@ -754,4 +754,8 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   Docs copy with it).
 - Step 2 done (2026-11-15): dsp/include/suite/RackLink.h, dsp/src/RackLink.cpp, tests/test_rack_link.cpp copied from
   Mixology (the master copy; the suite's shared-files job checks they match), in this repo's dsp library and tests.
-  Nothing in the plug-in uses them yet: step 3 (this plug-in publishes its modules) comes next.
+  Nothing in the plug-in used them in step 2.
+- Step 3 done (2026-11-15): dsp/include/polisher/RackUnit.h + src/RackUnit.cpp (the 12 modules; tests in
+  tests/test_rack_unit.cpp), published from PolisherAudioProcessor::publishRack (tick(); its own meter copies taken in
+  publishMeters; starts / stops with prepareToPlay / releaseResources). Next: step 4 (the RACK pill before the gear,
+  serve rack.js / rack.css / art, getRack()).

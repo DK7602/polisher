@@ -3672,6 +3672,63 @@ TEST_CASE ("Plug-in: the suite link (Masterology's goal reaches Mixology, Mixolo
     CHECK (link.masters (suite::nowMs()).empty());
 }
 
+TEST_CASE ("Plug-in: the Sonicology Rack sees Masterology's 12 modules, in detail while a Rack view is open", "[plugin][suite][rack]")
+{
+    auto& rk = rack::Link::process();
+    auto masters = [&rk] {
+        std::vector<rack::Unit> out;
+        for (auto& u : rk.units (suite::nowMs()))
+            if (u.product == rack::Product::masterology) out.push_back (u);
+        return out;
+    };
+    REQUIRE (masters().empty());
+    auto p = makeProcessor (48000.0, 512, false);
+    set (*p, "glueRatio", 4.0f);
+    set (*p, "glueThr", -30.0f);
+    p->tick();
+    auto us = masters();
+    REQUIRE (us.size() == 1);
+    CHECK (us[0].role == rack::Role::master);
+    CHECK (us[0].on);
+    CHECK_FALSE (us[0].detailed);   // nobody looks: keys, states and summaries only
+    REQUIRE (us[0].modules.size() == 12);
+    CHECK (us[0].modules[6].key == "mas.glue");
+    CHECK (us[0].modules[6].state == rack::State::on);
+    CHECK (us[0].modules[6].values.empty());
+    CHECK (us[0].modules[11].summary.find ("Loud release") != std::string::npos);
+
+    // Loud music through it, then a Rack view opens: the details come, with the Glue's gain reduction.
+    juce::AudioBuffer<float> buf (2, 512);
+    juce::MidiBuffer midi;
+    for (int b = 0; b < 40; ++b)
+    {
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < 512; ++i)
+                buf.setSample (c, i, 0.7f * static_cast<float> (std::sin (2.0 * std::numbers::pi * 110.0 * (b * 512 + i) / 48000.0)));
+        p->processBlock (buf, midi);
+    }
+    rk.view (suite::nowMs());
+    p->tick();
+    us = masters();
+    REQUIRE (us.size() == 1);
+    CHECK (us[0].detailed);
+    const auto& glue = us[0].modules[6];
+    CHECK (glue.values.size() == 8);
+    CHECK (glue.meterKind == rack::MeterKind::gr);
+    CHECK (glue.meter < -1.0f);
+    CHECK (us[0].outDb > -100.0f);
+
+    // The host stops it: it leaves the Rack at the next tick.
+    p->releaseResources();
+    p->tick();
+    CHECK (masters().empty());
+    p->prepareToPlay (48000.0, 512);
+    p->tick();
+    CHECK (masters().size() == 1);
+    p.reset();   // removed: gone
+    CHECK (masters().empty());
+}
+
 TEST_CASE ("Plug-in: Mixology's hand-off is checked against what reaches Masterology (Mixology right before it, or not)", "[plugin][suite]")
 {
     using P = suitecheck::Placement;

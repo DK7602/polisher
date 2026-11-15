@@ -128,6 +128,7 @@ PolisherAudioProcessor::~PolisherAudioProcessor()
 void PolisherAudioProcessor::releaseResources()
 {
     suitePresence.stop();   // off the suite link at the next tick (see updateSuite)
+    rackPub.stop();         // ... and out of the Rack
 }
 
 void PolisherAudioProcessor::leaveSuite()
@@ -515,6 +516,7 @@ void PolisherAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     dynamics.setMonitorBand (-1, false);
     hostResetRequested.store (false);   // everything above starts clean already
     suitePresence.start();   // on the suite link from the next tick (see updateSuite)
+    rackPub.start();
 }
 
 namespace
@@ -995,6 +997,11 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
         const float l = channelPeakDb (0), r = channelPeakDb (1);
         if (l > meters.peakLeft.load())  meters.peakLeft.store (l);
         if (r > meters.peakRight.load()) meters.peakRight.store (r);
+        // The Rack's in / out levels (highest peaks since it last read them).
+        const float inDb = static_cast<float> (inputPeak > 1.0e-5 ? 20.0 * std::log10 (inputPeak) : -100.0);
+        if (inDb > rackMeters.inPeak.load (std::memory_order_relaxed)) rackMeters.inPeak.store (inDb, std::memory_order_relaxed);
+        const float outDb = juce::jmax (l, r);
+        if (outDb > rackMeters.outPeak.load (std::memory_order_relaxed)) rackMeters.outPeak.store (outDb, std::memory_order_relaxed);
     }
 
     publishMeters();
@@ -1293,12 +1300,14 @@ void PolisherAudioProcessor::publishMeters()
         meters.bassPunch.store (punch);
     meters.bassWidth.store (static_cast<float> (bass.bassWidthPercent()));
 
+    std::array<float, polisher::kDynBands> dynNow {};
     const float glueGr = static_cast<float> (glue.takeMaxReductionDb());
     if (glueGr < meters.glueGr.load())
         meters.glueGr.store (glueGr);
     for (int b = 0; b < polisher::kDynBands; ++b)
     {
         const float d = static_cast<float> (dynamics.takeMaxGrDb (b));
+        dynNow[static_cast<size_t> (b)] = d;
         auto& slot = meters.dynGr[static_cast<size_t> (b)];
         if (d < slot.load())
             slot.store (d);
@@ -1341,6 +1350,93 @@ void PolisherAudioProcessor::publishMeters()
     const float gr = static_cast<float> (limiter.takeMaxGainReductionDb());
     if (gr < meters.gainReduction.load())
         meters.gainReduction.store (gr);
+
+    // The Rack's own copies (deepest since it last read them).
+    auto keepMin = [] (std::atomic<float>& a, float v) { if (v < a.load (std::memory_order_relaxed)) a.store (v, std::memory_order_relaxed); };
+    keepMin (rackMeters.resonance, static_cast<float> (rtDb));
+    keepMin (rackMeters.bassTame, tame);
+    keepMin (rackMeters.glue, glueGr);
+    for (size_t b = 0; b < rackMeters.dynamics.size(); ++b) keepMin (rackMeters.dynamics[b], dynNow[b]);
+    keepMin (rackMeters.clipper, clip);
+    keepMin (rackMeters.maximizer, gr);
+    lastAudioMs.store (suite::nowMs(), std::memory_order_relaxed);
+}
+
+void PolisherAudioProcessor::publishRack()
+{
+    const auto now = suite::nowMs();
+    const auto due = rackPub.due (now);
+    if (due == rack::Publisher::Due::none) return;
+    auto value = [this] (const char* id) { auto* p = parameters.getRawParameterValue (id); return p != nullptr ? p->load() : 0.0f; };
+
+    polisher::rackunit::State st;
+    st.unlimiter = moduleParams.unlimiter (false);   // (the modules' own switches: Bypass shows as the unit being off)
+    st.stem = moduleParams.stem (false);
+    st.steady = moduleParams.steady (false);
+    st.steadyHasTarget = toneTarget.isSet();
+    st.resonance = moduleParams.resonance (false);
+    st.glue = moduleParams.glue (false);
+    st.dynamics = moduleParams.dynamics (false);
+    st.imager = moduleParams.imager (false);
+    st.saturation = moduleParams.saturation (false);
+    st.eq.enabled = eqOnParam->load() > 0.5f;
+    for (size_t b = 0; b < static_cast<size_t> (polisher::kEqBands); ++b)
+    {
+        st.eq.gainDb[b] = eqGainParams[b]->load();
+        st.eq.freqHz[b] = eqFreqParams[b]->load();
+        st.eq.channels[b] = static_cast<polisher::EqChannels> (juce::jlimit (0, 2, juce::roundToInt (eqModeParams[b]->load())));
+    }
+    st.bass.enabled = bassOnParam->load() > 0.5f;
+    st.bass.monoHz = bassMonoParam->load();
+    st.bass.tame = bassTameParam->load() / 100.0;
+    st.bass.punch = bassPunchParam->load() / 100.0;
+    st.clipOn = clipOnParam->load() > 0.5f;
+    st.clipLevelDb = clipLevelParam->load();
+    st.clipSoftness = clipSoftnessParam->load();
+    st.clipOversampling = juce::jlimit (0, 3, juce::roundToInt (clipOversamplingParam->load()));
+    st.inputTrimDb = trimParam->load();
+    st.driveDb = driveParam->load();
+    st.limiter.ceilingDbtp = ceilingParam->load();
+    st.limiter.releaseMs = releaseParam->load();
+    st.limiter.adaptiveRelease = adaptiveParam->load() > 0.5f;
+    st.limiter.bassFirst = juce::jlimit (0.0, 1.0, static_cast<double> (bassFirstParam->load()) / 100.0);
+    // What it aims for: a loaded reference's loudness, else the Auto-Master target (as it tells Mixology).
+    if (reference.getVersion() != suiteRefVersion)
+    {
+        suiteRefVersion = reference.getVersion();
+        suiteRef = reference.getState() == ReferenceTrack::loaded ? reference.getProfile() : polisher::ReferenceProfile {};
+    }
+    const int target = juce::jlimit (0, 2, juce::roundToInt (value ("amTarget")));
+    st.goal = suiteRef.valid ? "Matching " + suiteRef.name : std::string (polisher::handoff::targetName (target));
+    st.targetLufs = suiteRef.valid ? static_cast<float> (std::clamp (polisher::referenceLoudness (suiteRef), polisher::kRefMinLufs, polisher::kRefMaxLufs))
+                                   : static_cast<float> (polisher::targetLufs (static_cast<polisher::LoudnessTarget> (target)));
+
+    const bool playing = now - std::min (now, lastAudioMs.load (std::memory_order_relaxed)) < 1000;
+    auto take = [] (std::atomic<float>& a) { return a.exchange (0.0f, std::memory_order_relaxed); };
+    st.meters.resonance = take (rackMeters.resonance);
+    st.meters.bassTame = take (rackMeters.bassTame);
+    st.meters.glue = take (rackMeters.glue);
+    st.meters.clipper = take (rackMeters.clipper);
+    st.meters.maximizer = take (rackMeters.maximizer);
+    for (size_t b = 0; b < st.meters.dynamics.size(); ++b) st.meters.dynamics[b] = take (rackMeters.dynamics[b]);
+    st.hasMeters = playing;
+
+    rack::Unit u;
+    u.product = rack::Product::masterology;
+    u.role = rack::Role::master;   // (the master channel: the Rack shows it as the master, whatever its name)
+    u.version = static_cast<std::uint32_t> (JucePlugin_VersionCode);
+    u.on = bypassParam->load() <= 0.5f;
+    const float inPeak = rackMeters.inPeak.exchange (-100.0f, std::memory_order_relaxed);
+    const float outPeak = rackMeters.outPeak.exchange (-100.0f, std::memory_order_relaxed);
+    if (playing)
+    {
+        u.inDb = inPeak;
+        u.outDb = outPeak;
+    }
+    const double rate = getSampleRate();
+    u.latencyMs = rate > 0.0 ? static_cast<float> (getLatencySamples() * 1000.0 / rate) : 0.0f;
+    u.modules = polisher::rackunit::modules (st, due == rack::Publisher::Due::full);
+    rackPub.publish (std::move (u), now);
 }
 
 void PolisherAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
