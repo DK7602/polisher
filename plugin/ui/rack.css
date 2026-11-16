@@ -595,4 +595,8 @@
 .sr-light .sr-hex { color: #eaf2ff; }   /* as in the dark view (the plug-in tone colours don't apply to the hexes) */
 .sr-light .sr-liquid-l { background-image: url("rack/rack_liquid_left_light.webp"); }
 .sr-light .sr-liquid-r { background-image: url("rack/rack_liquid_right_light.webp"); }
-.sr-light .sr-liquid { filter: drop-shadow(0 0 4px rgba(255, 255, 255, .9)); }
+.sr-light .sr-liquid { filter: drop-shadow(0 2px 3px rgba(30, 70, 140, .22)); }   /* glass on pearl: a soft shade, no white halo */
+
+/* Live parts (meters, readouts, the module's graph) change a few times a second: their layout stays inside them, so an
+   update never re-lays out the whole page (slow in a plug-in's web view). */
+.sr-graphwrap, .sr-io, .sr-lbox, .sr-meter { contain: layout style; }

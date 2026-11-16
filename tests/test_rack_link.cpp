@@ -469,3 +469,43 @@ TEST_CASE ("Rack link: a view's JSON - the heartbeat, the units, the loudness fr
     CHECK (json.find ("\"lufsI\":-12.5") != std::string::npos);
 }
 
+TEST_CASE ("Rack link: a view's JSON carries details only for the track it shows", "[rack]")
+{
+    auto rackMem = std::make_unique<unsigned char[]> (rack::Link::bytes() + 64);
+    auto suiteMem = std::make_unique<unsigned char[]> (suite::Link::bytes() + 64);
+    auto align = [] (unsigned char* p) { return static_cast<void*> (p + (64 - reinterpret_cast<std::uintptr_t> (p) % 64) % 64); };
+    rack::Link rk (align (rackMem.get()));
+    suite::Link sl (align (suiteMem.get()));
+    const std::uint64_t t = 2000000;
+    auto detailed = [] (const char* track, rack::Role role) {
+        rack::Unit u;
+        u.product = role == rack::Role::master ? rack::Product::masterology : rack::Product::link;
+        u.role = role;
+        u.track = track;
+        u.version = suite::packVersion (0, 26, 0);
+        u.detailed = true;
+        rack::Module m;
+        m.key = "mix.comp";
+        m.state = rack::State::on;
+        m.summary = "Ratio 4.0:1";
+        m.values = { { "Ratio", "4.0:1", 0.4f, false } };
+        u.modules = { m };
+        return u;
+    };
+    const int a = rk.claim (1, t), b = rk.claim (2, t), c = rk.claim (3, t);
+    REQUIRE (rk.publish (a, 1, detailed ("Kick", rack::Role::track), t));
+    REQUIRE (rk.publish (b, 2, detailed ("Snare", rack::Role::track), t));
+    REQUIRE (rk.publish (c, 3, detailed ("", rack::Role::master), t));
+    const auto kick = "t" + std::to_string (suite::nameHash ("Kick"));
+
+    auto json = rack::viewJson (rk, sl, "mixology", 0, t + 5, kick);
+    CHECK (json.find ("\"Ratio\"") != std::string::npos);                          // Kick's knob
+    CHECK (json.find ("\"Ratio\"") == json.rfind ("\"Ratio\""));                   // ... and nobody else's
+    CHECK (json.find ("\"summary\":\"Ratio 4.0:1\"") != json.rfind ("\"summary\":\"Ratio 4.0:1\""));   // every summary stays
+
+    json = rack::viewJson (rk, sl, "mixology", 0, t + 5, "master");
+    CHECK (json.find ("\"Ratio\"") == json.rfind ("\"Ratio\""));
+    json = rack::viewJson (rk, sl, "mixology", 0, t + 5);                          // no track named: everyone's
+    CHECK (json.find ("\"Ratio\"") != json.rfind ("\"Ratio\""));
+}
+

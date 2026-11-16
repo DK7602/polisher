@@ -6,7 +6,7 @@
 //
 // The Rack only shows; the plug-ins do the processing (stage 1 of docs/rack/RACK-PLAN.md in Mixology's repo).
 // A plug-in opens it over its own page:
-//   SonicologyRack.open({ host: "voxology" | "mixology" | "masterology", getRack: () => Promise<data>, back: () => {},
+//   SonicologyRack.open({ host: "voxology" | "mixology" | "masterology", getRack: (track) => Promise<data>, back: () => {},
 //                         art: "rack/" (where the rack_*.webp files are, from the page),
 //                         theme: "dark" | "light" (the plug-in's saved one), onTheme: (theme) => {} (save it) })
 // Clicking the cube switches between the dark and the light view.
@@ -302,6 +302,7 @@
   // ---- the view's state ---------------------------------------------------------------------------------------------
   const S = {
     root: null, stage: null, opts: null, timer: 0, data: null, sig: "",
+    parts: null, html: {}, detail: {}, down: false, pending: false, eqKey: "",
     page: "rack", track: null, sel: null, unfold: {}, hist: {},
     filter: "all", search: "", card: null, inProject: null,
     theme: "dark",
@@ -847,17 +848,45 @@
     const caret = focusSearch ? document.activeElement.selectionStart : 0;
     const t = trackOf(data, S.track);
     const sel = S.page === "rack" ? findSel(t) : null;
-    S.stage.innerHTML = `<div class="sr-frame"><i class="sr-c sr-c-tl"></i><i class="sr-c sr-c-tr"></i><i class="sr-c sr-c-bl"></i><i class="sr-c sr-c-br"></i></div>`
-      + header(data) + (S.page === "rack" ? rackPage(data) : modulesPage(data)) + footer(data, sel ? sel.unit : t ? t.units[0] : null)
-      + (S.menu ? trackMenu(data) : "");
+    // Only the parts whose HTML changed are rebuilt (a whole-page rebuild is slow in a plug-in's web view, and a click
+    // that lands while its button is being replaced is lost).
+    const html = {
+      frame: `<div class="sr-frame"><i class="sr-c sr-c-tl"></i><i class="sr-c sr-c-tr"></i><i class="sr-c sr-c-bl"></i><i class="sr-c sr-c-br"></i></div>`,
+      header: header(data),
+      page: S.page === "rack" ? rackPage(data) : modulesPage(data),
+      footer: footer(data, sel ? sel.unit : t ? t.units[0] : null),
+      menu: S.menu ? trackMenu(data) : "",
+    };
+    for (const k of Object.keys(html)) if (html[k] !== S.html[k]) { S.parts[k].innerHTML = html[k]; S.html[k] = html[k]; }
+    S.eqKey = "";
     S.stage.querySelectorAll("[data-scroll]").forEach((el) => { const s = scrolls[el.dataset.scroll]; if (s) { el.scrollTop = s[0]; el.scrollLeft = s[1]; } });
     if (focusSearch) { const i = S.stage.querySelector('[data-sr="search"]'); if (i) { i.focus(); i.setSelectionRange(caret, caret); } }
   }
 
-  // What changes the page's layout (not the meters).
+  // What changes the page's layout: the picked track's modules in detail (the MODULES page: every unit's), the other
+  // tracks by their modules' keys and states. Not the live values (meters, a dynamic EQ's moving cuts): updateLive.
   function signature(data) {
-    return JSON.stringify((data.units || []).map((u) => [u.id, u.track, u.role, u.on, u.version, (u.modules || []).map((m) => [m.key, m.state, m.summary, m.by, (m.values || []).map((v) => v.text), m.bands, m.layers]), u.together]))
+    const t = trackOf(data, S.track);
+    const here = new Set(t ? t.units.map((u) => u.id) : []);
+    const all = S.page !== "rack";
+    return JSON.stringify((data.units || []).map((u) => (all || here.has(u.id)
+      ? [u.id, u.track, u.role, u.product, u.on, u.version, (u.modules || []).map((m) => [m.key, m.state, m.summary, m.by, (m.values || []).map((v) => v.text),
+          (m.bands || []).map((b) => [b.type, Math.round(b.hz || 0), b.name, b.on]), m.layers]), u.together]
+      : [u.id, u.track, u.role, u.product, u.on, u.version, (u.modules || []).map((m) => m.key + ":" + m.state)])))
       + JSON.stringify(data.together) + JSON.stringify(data.mix && data.mix.source);
+  }
+
+  // A plug-in sends its modules' settings only while a Rack is open, and only the picked track's; between, the Rack
+  // keeps the last ones it had (a moment without them must not empty the knobs).
+  function keepDetails(data) {
+    for (const u of data.units || []) {
+      const c = (S.detail[u.id] = S.detail[u.id] || {});
+      for (const m of u.modules || []) {
+        const has = (m.values && m.values.length) || (m.bands && m.bands.length);
+        if (u.detailed !== false) c[m.key] = { values: m.values, bands: m.bands, spectrum: m.spectrum };
+        else if (!has && c[m.key]) { m.values = c[m.key].values; m.bands = c[m.key].bands; if (!m.spectrum) m.spectrum = c[m.key].spectrum; }
+      }
+    }
   }
 
   function updateLive(data) {
@@ -865,19 +894,28 @@
     const t = trackOf(data, S.track);
     const sel = S.page === "rack" ? findSel(t) : null;
     const unit = sel ? sel.unit : t ? t.units[0] : null;
-    const set = (sel2, text) => { const el = S.stage.querySelector(`[data-val="${sel2}"]`); if (el) el.textContent = text; };
-    const meter = (id, db) => { const el = S.stage.querySelector(`[data-meter="${id}"] i`); if (el) el.style.width = (clamp((db + 60) / 60, 0, 1) * 100).toFixed(1) + "%"; };
+    const set = (sel2, text) => { const el = S.stage.querySelector(`[data-val="${sel2}"]`); if (el && el.textContent !== text) el.textContent = text; };
+    const meter = (id, db) => {
+      const el = S.stage.querySelector(`[data-meter="${id}"] i`);
+      const w = (clamp((db + 60) / 60, 0, 1) * 100).toFixed(1) + "%";
+      if (el && el.style.width !== w) el.style.width = w;
+    };
     if (unit) { meter("in", unit.inDb ?? -100); meter("out", unit.outDb ?? -100); set("in", dbText(unit.inDb, "dB")); set("out", dbText(unit.outDb, "dB")); }
     const mix = data.mix || {};
     set("lufsI", dbText(mix.lufsI, "LUFS")); set("lufsS", dbText(mix.lufsS, "LUFS")); set("tp", dbText(mix.tp, "dBTP"));
     if (sel) {
       const c = cat(sel.mod.key);
       if (sel.mod.meterKind === "gr") set("meter", num(sel.mod.meter || 0));
-      const wrap = S.stage.querySelector(".sr-graphwrap .sr-graph-hist");
-      if (wrap && !(c.graph === "eq" && (sel.mod.bands || []).length)) {
-        const html = historyGraph(sel.unit.id + "|" + sel.mod.key, sel.mod.meterKind === "gr" || c.graph === "gr" ? "gr" : "level", 640, 210);
-        const tmp = document.createElement("div"); tmp.innerHTML = html;
-        wrap.replaceWith(tmp.firstChild);
+      const isEq = c.graph === "eq" && (sel.mod.bands || []).length;
+      const wrap = S.stage.querySelector(isEq ? ".sr-graphwrap .sr-graph-eq" : ".sr-graphwrap .sr-graph-hist");
+      if (wrap) {
+        let html = null;
+        if (!isEq) html = historyGraph(sel.unit.id + "|" + sel.mod.key, sel.mod.meterKind === "gr" || c.graph === "gr" ? "gr" : "level", 640, 210);
+        else {
+          const k = JSON.stringify([(sel.mod.bands || []).map((b) => b.db), sel.mod.spectrum]);
+          if (k !== S.eqKey) { S.eqKey = k; html = eqGraph(sel.mod, 640, 210); }
+        }
+        if (html) { const tmp = document.createElement("div"); tmp.innerHTML = html; wrap.replaceWith(tmp.firstChild); }
       }
     }
   }
@@ -897,17 +935,22 @@
   async function poll() {
     if (!S.root) return;
     let data = null;
-    try { data = await S.opts.getRack(); } catch (e) { data = null; }
+    try { data = await S.opts.getRack(S.track || ""); } catch (e) { data = null; }
     if (!S.root) return;
     if (data) {
+      keepDetails(data);
       remember(data);
       const first = !S.data;
       S.data = data;
       if (first || !trackOf(data, S.track)) S.track = S.track && trackOf(data, S.track) ? S.track : hostTrackKey(data);
       const sig = signature(data);
-      if (first || sig !== S.sig) { S.sig = sig; render(); } else updateLive(data);
+      if (first || sig !== S.sig) {
+        S.sig = sig;
+        if (S.down) S.pending = true;   // a button is held: rebuild after the click, never under it
+        else render();
+      } else updateLive(data);
     }
-    S.timer = setTimeout(poll, 100);
+    S.timer = setTimeout(poll, 150);
   }
 
   function onClick(e) {
@@ -935,6 +978,12 @@
     else if (a === "clear") { S.search = ""; S.card = null; }
     else return;
     render();
+  }
+
+  function onDown() { S.down = true; }
+  function onUp() {
+    S.down = false;
+    if (S.pending) { S.pending = false; setTimeout(() => { if (S.root) render(); }, 0); }   // after the click's own render
   }
 
   function onInput(e) {
@@ -970,9 +1019,22 @@
     setTheme(S.opts.theme === "light" || S.opts.theme === "dark" ? S.opts.theme : savedTheme() || "dark");
     S.stage = document.createElement("div");
     S.stage.className = "sr-stage";
+    S.parts = {};
+    S.html = {};
+    S.detail = {};
+    for (const k of ["frame", "header", "page", "footer", "menu"]) {
+      const d = document.createElement("div");
+      d.className = "sr-part";
+      d.style.display = "contents";   // the parts sit in the stage's grid as if they were the stage's own children
+      S.stage.appendChild(d);
+      S.parts[k] = d;
+    }
     S.root.appendChild(S.stage);
     document.body.appendChild(S.root);
     S.root.addEventListener("click", onClick);
+    S.root.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointercancel", onUp, true);
     S.root.addEventListener("input", onInput);
     window.addEventListener("keydown", onKey);
     window.addEventListener("resize", fit);
@@ -985,6 +1047,9 @@
     clearTimeout(S.timer);
     window.removeEventListener("keydown", onKey);
     window.removeEventListener("resize", fit);
+    window.removeEventListener("pointerup", onUp, true);
+    window.removeEventListener("pointercancel", onUp, true);
+    S.down = false; S.pending = false;
     S.root.remove();
     S.root = null; S.stage = null; S.data = null;
   }

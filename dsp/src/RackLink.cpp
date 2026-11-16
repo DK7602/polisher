@@ -883,10 +883,35 @@ namespace rack
         return ov;
     }
 
-    std::string viewJson (Link& rackLink, const suite::Link& suiteLink, const std::string& host, std::uint32_t hostHash, std::uint64_t now)
+    std::string viewJson (Link& rackLink, const suite::Link& suiteLink, const std::string& host, std::uint32_t hostHash, std::uint64_t now,
+                          const std::string& detailTrack)
     {
         rackLink.view (now);
-        const auto units = rackLink.units (now);
-        return toJson (host, hostHash, units, together (units), overview (suiteLink, now));
+        auto units = rackLink.units (now);
+        const auto lines = together (units);
+        if (! detailTrack.empty())
+        {
+            // The other tracks' units go brief (keys, states, summaries): a tenth of the text for a big project.
+            std::uint32_t hash = 0;
+            const bool isHash = detailTrack.size() > 1 && detailTrack[0] == 't';
+            if (isHash)
+                for (std::size_t i = 1; i < detailTrack.size() && detailTrack[i] >= '0' && detailTrack[i] <= '9'; ++i)
+                    hash = hash * 10u + static_cast<std::uint32_t> (detailTrack[i] - '0');
+            for (auto& u : units)
+            {
+                const bool shown = detailTrack == "fullmix" ? u.role == Role::fullmix
+                                 : detailTrack == "master"  ? u.role == Role::master
+                                 : isHash && u.role != Role::fullmix && u.role != Role::master && u.hash == hash;
+                if (shown || ! u.detailed) continue;
+                u.detailed = false;
+                u.spectrum.clear();
+                for (auto& m : u.modules)
+                {
+                    m.values.clear();
+                    m.bands.clear();
+                }
+            }
+        }
+        return toJson (host, hostHash, units, lines, overview (suiteLink, now));
     }
 }

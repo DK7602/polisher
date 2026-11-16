@@ -40,8 +40,10 @@ namespace rack
     constexpr int kMaxBands = 8;            // an EQ's bands
     constexpr int kMaxLines = 4;            // a plug-in's own "together" lines
     constexpr int kSpectrumBins = 128;      // log-spaced 20 Hz - 20 kHz: bin i at 20 * 1000^(i / 127) Hz
-    constexpr std::uint64_t kAliveMs = 2000;    // a publisher silent this long is gone
-    constexpr std::uint64_t kViewerMs = 1500;   // a Rack view that hasn't looked for this long is closed
+    // Generous: a DAW's window thread (where the plug-ins' timers run) can stall for seconds on a busy computer, and a
+    // stall must not make the plug-ins vanish from the Rack or drop their details.
+    constexpr std::uint64_t kAliveMs = 6000;    // a publisher silent this long is gone
+    constexpr std::uint64_t kViewerMs = 5000;   // a Rack view that hasn't looked for this long is closed
 
     constexpr std::size_t kTrackBytes = 128, kKeyBytes = 24, kSummaryBytes = 96, kByBytes = 40, kValueNameBytes = 24,
                           kValueTextBytes = 24, kBandNameBytes = 16, kLineBytes = 160;
@@ -293,10 +295,12 @@ namespace rack
 
     /** Everything an open Rack view shows (its getRack()), for the plug-in it is open in: refreshes the viewer heartbeat
         (so the plug-ins publish their details), reads every live unit, works out what they do together, adds the
-        overview. Message thread, a few times a second while the view is open. */
-    std::string viewJson (Link&, const suite::Link&, const std::string& host, std::uint32_t hostHash, std::uint64_t nowMs);
-    inline std::string viewJson (const std::string& host, std::uint32_t hostHash, std::uint64_t nowMs)
+        overview. Message thread, a few times a second while the view is open. Details (values, bands, the spectrum)
+        only for the track the view shows: rack.js's track key "t<hash>", "fullmix" or "master" ("" = every track's). */
+    std::string viewJson (Link&, const suite::Link&, const std::string& host, std::uint32_t hostHash, std::uint64_t nowMs,
+                          const std::string& detailTrack = {});
+    inline std::string viewJson (const std::string& host, std::uint32_t hostHash, std::uint64_t nowMs, const std::string& detailTrack = {})
     {
-        return viewJson (Link::process(), suite::Link::process(), host, hostHash, nowMs);
+        return viewJson (Link::process(), suite::Link::process(), host, hostHash, nowMs, detailTrack);
     }
 }

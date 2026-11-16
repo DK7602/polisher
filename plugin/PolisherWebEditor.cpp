@@ -345,9 +345,10 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
         .withInitialisationData ("polisherVersion", juce::String (JucePlugin_VersionString))
         // The Sonicology Rack (suite/RackLink.h): every Sonicology plug-in in the project, as rack.js shows it. Opened from
         // Masterology it starts on the master.
-        .withNativeFunction ("getRack", [] (const juce::Array<juce::var>&, auto complete)
+        .withNativeFunction ("getRack", [] (const juce::Array<juce::var>& args, auto complete)
                              {
-                                 const auto json = rack::viewJson ("masterology", 0, suite::nowMs());
+                                 const auto json = rack::viewJson ("masterology", 0, suite::nowMs(),
+                                                                 args.size() > 0 ? args[0].toString().toStdString() : std::string());   // the track it shows
                                  complete (juce::String::fromUTF8 (json.data(), static_cast<int> (json.size())));
                              })
         .withNativeFunction ("getRackTheme", [] (const juce::Array<juce::var>&, auto complete)
