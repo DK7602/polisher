@@ -411,4 +411,12 @@ namespace rack
     {
         return viewJson (Link::process(), suite::Link::process(), host, hostHash, nowMs, detailTrack);
     }
+
+    /** Stage 2, for the view's plug-in (its rackRequest() / rackAnswer() native functions): a click in the view as rack.js
+        sends it. unit: the JSON's "u<slot>", gen: its "gen"; change "value" | "state"; gesture "set" | "begin" | "move" |
+        "end". Returns {"ticket":N,"why":""} (ticket 0 and why when it can't go). */
+    std::string requestJson (Link&, const std::string& unit, std::uint32_t generation, const std::string& change, const std::string& module,
+                             const std::string& control, float value, const std::string& gesture, std::uint64_t nowMs);
+    /** {"outcome":"pending" | "applied" | "refused" | "gone","why":"..."} for a ticket requestJson() gave. */
+    std::string answerJson (const Link&, const std::string& unit, std::uint32_t generation, std::uint64_t ticket);
 }

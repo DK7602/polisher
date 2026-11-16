@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "polisher/MixHandoff.h"
+#include "RackHost.h"
 #if ! POLISHER_HEADLESS                 // the plug-in-level tests build the processor without its editors
  #include "PluginEditor.h"
  #include "PolisherWebEditor.h"
@@ -122,6 +123,7 @@ PolisherAudioProcessor::PolisherAudioProcessor()
 PolisherAudioProcessor::~PolisherAudioProcessor()
 {
     stopTimer();
+    rackTimer.stopTimer();
     leaveSuite();
 }
 
@@ -1362,9 +1364,38 @@ void PolisherAudioProcessor::publishMeters()
     lastAudioMs.store (suite::nowMs(), std::memory_order_relaxed);
 }
 
+std::string PolisherAudioProcessor::rackLock() const
+{
+    switch (autoMaster.getState())
+    {
+        case AutoMasterController::listening: return "Auto-Master is listening to the mix.";
+        case AutoMasterController::analysing: return "Auto-Master is working out the master.";
+        default: return {};
+    }
+}
+
+std::string PolisherAudioProcessor::applyRack (const rack::Request& r)
+{
+    if (r.change == rack::Change::state)
+    {
+        const char* id = polisher::rackunit::switchOf (r.module);
+        auto* p = id != nullptr ? rack::host::find (parameters, id) : nullptr;
+        if (p == nullptr) return rack::host::cannot ("Masterology", r);
+        rack::host::setSwitch (*p, r.value >= 0.5f);
+        return {};
+    }
+    double value = 0.0;
+    auto* p = polisher::rackunit::fromKnob (r.control, r.value, value) ? rack::host::find (parameters, r.control) : nullptr;
+    if (p == nullptr) return rack::host::cannot ("Masterology", r);
+    rack::host::set (*p, r.gesture, static_cast<float> (value));
+    return {};
+}
+
 void PolisherAudioProcessor::publishRack()
 {
     const auto now = suite::nowMs();
+    // Stage 2: knobs turned and modules switched in a Rack view (in any Sonicology plug-in), on this Masterology.
+    rackPub.serve (now, rackLock(), [this] (const rack::Request& r) { return applyRack (r); });
     const auto due = rackPub.due (now);
     if (due == rack::Publisher::Due::none) return;
     auto value = [this] (const char* id) { auto* p = parameters.getRawParameterValue (id); return p != nullptr ? p->load() : 0.0f; };
@@ -1426,6 +1457,7 @@ void PolisherAudioProcessor::publishRack()
     u.role = rack::Role::master;   // (the master channel: the Rack shows it as the master, whatever its name)
     u.version = static_cast<std::uint32_t> (JucePlugin_VersionCode);
     u.on = bypassParam->load() <= 0.5f;
+    u.lock = rackLock();   // the Rack can't change it while Auto-Master works
     const float inPeak = rackMeters.inPeak.exchange (-100.0f, std::memory_order_relaxed);
     const float outPeak = rackMeters.outPeak.exchange (-100.0f, std::memory_order_relaxed);
     if (playing)

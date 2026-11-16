@@ -4,15 +4,19 @@
 // THIS FILE, rack.css AND plugin/ui/rack/ ARE THE SAME IN ALL THREE REPOSITORIES (Voxology, Mixology, Masterology).
 // Change them in Mixology (the master copy), copy them to the other two.
 //
-// The Rack only shows; the plug-ins do the processing (stage 1 of docs/rack/RACK-PLAN.md in Mixology's repo).
+// The plug-ins do the processing; the Rack shows it all (stage 1 of docs/rack/RACK-PLAN.md in Mixology's repo) and, in
+// stage 2, turns knobs and switches modules through the plug-in that owns them (request / answer below).
 // A plug-in opens it over its own page:
 //   SonicologyRack.open({ host: "voxology" | "mixology" | "masterology", getRack: (track) => Promise<data>, back: () => {},
+//                         request: ({ unit, gen, change: "value" | "state", module, control, value, gesture }) =>
+//                           Promise<{ ticket, why }>, answer: (unit, gen, ticket) => Promise<{ outcome, why }>,
 //                         art: "rack/" (where the rack_*.webp files are, from the page),
 //                         theme: "dark" | "light" (the plug-in's saved one), onTheme: (theme) => {} (save it) })
 // Clicking the cube switches between the dark and the light view.
 // getRack() returns what every plug-in publishes into the shared block (RackLink), as JSON:
-//   { host, hostHash, units: [ { id, product, version, track, hash, role, on, inDb, outDb, modules: [ { key, state,
-//     summary, by, meterKind, meter, values: [ { name, text, norm, bi } ], bands: [ { type, hz, db, q } ], layers } ],
+//   { host, hostHash, units: [ { id, gen, lock, product, version, track, hash, role, on, inDb, outDb, modules: [ { key,
+//     state, switchable, summary, by, meterKind, meter, values: [ { name, text, norm, bi, key, steps } ],
+//     bands: [ { type, hz, db, q } ], layers } ],
 //     together: [ { level, text } ] } ], together: [ { hash, level, text } ], mix: { lufsI, lufsS, tp, style },
 //     master: { goal, lufs, ceiling } }
 // product: "voxology" | "honeytune" | "link" | "mixology" | "masterology"; role: "vocal" | "beat" | "track" |
@@ -45,6 +49,7 @@
 
   // ---- icons (24 x 24, drawn with the current colour) -------------------------------------------------------------
   const ICONS = {
+    lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
     mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/>',
     wave: '<path d="M2 12h3l2-6 3 12 3-9 2 6 2-3h5"/>',
     sliders: '<path d="M6 3v18M12 3v18M18 3v18"/><rect x="3.5" y="13" width="5" height="3" rx="1"/><rect x="9.5" y="6" width="5" height="3" rx="1"/><rect x="15.5" y="15" width="5" height="3" rx="1"/>',
@@ -306,6 +311,7 @@
     page: "rack", track: null, sel: null, unfold: {}, hist: {},
     filter: "all", search: "", card: null, inProject: null,
     theme: "dark",
+    held: {}, drag: null, chain: Promise.resolve(), toastTimer: 0, scale: 1,   // stage 2: knobs you turn
   };
 
   // The light / dark view: the plug-in's saved choice, else the last one in this browser (if it keeps any)
@@ -541,8 +547,7 @@
   }
 
   // ---- knobs --------------------------------------------------------------------------------------------------------
-  function knob(v, size) {
-    const norm = clamp(v.norm == null ? 0.5 : v.norm, 0, 1);
+  function knobArc(norm, bi) {
     const ang = -135 + norm * 270;
     const r = 41, c = 50;
     const arc = (a0, a1) => {
@@ -550,14 +555,29 @@
       const [x0, y0] = p(a0), [x1, y1] = p(a1);
       return `M${x0.toFixed(2)} ${y0.toFixed(2)} A${r} ${r} 0 ${Math.abs(a1 - a0) > 180 ? 1 : 0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
     };
-    const from = v.bi ? 0 : -135;
-    const lit = Math.abs(ang - from) < 0.5 ? "" : `<path d="${arc(Math.min(from, ang), Math.max(from, ang))}" class="sr-karc ${v.bi && ang < 0 ? "sr-karc-neg" : ""}"/>`;
-    return `<div class="sr-knob" style="--sz:${size}px">
+    const from = bi ? 0 : -135;
+    const lit = Math.abs(ang - from) < 0.5 ? "" : `<path d="${arc(Math.min(from, ang), Math.max(from, ang))}" class="sr-karc ${bi && ang < 0 ? "sr-karc-neg" : ""}"/>`;
+    return `<path d="${arc(-135, 135)}" class="sr-kdim"/>${lit}`;
+  }
+
+  // A knob; turnable (unit + module given) when its plug-in can take a request for it: drag it up / down (Shift: fine),
+  // click one with a few options to step through them.
+  function knob(v, size, unit, mod) {
+    const turn = !!(unit && mod && v.key && canTurn(unit));
+    const k = turn ? heldKey(unit, mod.key, v.key) : "";
+    const held = turn ? S.held[k] : null;
+    const norm = clamp(held ? held.norm : v.norm == null ? 0.5 : v.norm, 0, 1);
+    const ang = -135 + norm * 270;
+    const attrs = turn ? ` data-knob="${esc(k)}" data-unit="${esc(unit.id)}" data-module="${esc(mod.key)}" data-control="${esc(v.key)}" data-steps="${v.steps || 0}" data-bi="${v.bi ? 1 : 0}" data-norm="${norm}"
+      title="${v.steps >= 2 ? "Click for the next option, or drag" : "Drag up / down (Shift: fine)"}"` : "";
+    return `<div class="sr-knob${turn ? " sr-turn" : ""}" style="--sz:${size}px"${attrs}>
       <img class="sr-kring" src="${ART}rack_knob_ring.webp" alt="" draggable="false">
-      <svg class="sr-kval" viewBox="0 0 100 100"><path d="${arc(-135, 135)}" class="sr-kdim"/>${lit}</svg>
+      <svg class="sr-kval" viewBox="0 0 100 100">${knobArc(norm, v.bi)}</svg>
       <img class="sr-kcap" src="${ART}rack_knob_cap.webp" alt="" draggable="false" style="transform:rotate(${ang.toFixed(1)}deg)">
     </div>`;
   }
+  const canTurn = (unit) => !!(S.opts && S.opts.request && unit && unit.gen != null && !unit.lock);
+  const heldKey = (unit, module, control) => unit.id + "|" + module + "|" + control;
 
   // ---- pieces --------------------------------------------------------------------------------------------------------
   const pill = (state) => `<span class="sr-pill sr-pill-${state}">${STATE_WORD[state] || state}</span>`;
@@ -677,7 +697,7 @@
       const nk = Math.min(vals.length, 8);
       const centre = (S.W || 1280) - 684 - 56;
       const ks = Math.round(clamp(centre / Math.max(nk, 1) - 18, 54, 92));
-      const knobs = vals.slice(0, nk).map((v) => `<div class="sr-kcell"><b>${esc(v.name.toUpperCase())}</b>${knob(v, ks)}<span class="sr-kval-t">${esc(v.text)}</span></div>`).join("");
+      const knobs = vals.slice(0, nk).map((v) => `<div class="sr-kcell"><b>${esc(v.name.toUpperCase())}</b>${knob(v, ks, sel.unit, m)}<span class="sr-kval-t">${esc(v.text)}</span></div>`).join("");
       const more = vals.slice(nk).map((v) => `<span class="sr-chip"><b>${esc(v.name)}</b>${esc(v.text)}</span>`).join("");
       const meterNow = m.meterKind === "gr" ? `<div class="sr-big"><b data-val="meter">${num(m.meter || 0)}</b><small>dB gain reduction</small></div>` : "";
       detail = `<section class="sr-panel sr-mod">
@@ -685,14 +705,16 @@
           <div class="sr-mod-ic sr-tone-${PRODUCTS[sel.unit.product].tone}">${icon(c.icon)}</div>
           <div class="sr-mod-t"><h2>${esc(c.name.toUpperCase())}</h2><p>${where}</p></div>
           <div class="sr-mod-sum"><span>${esc(m.summary || "")}</span>${m.by ? `<small>set by ${esc(m.by)}</small>` : ""}</div>
-          ${pill(m.state)}
+          ${m.switchable && canTurn(sel.unit)
+            ? `<button class="sr-pill sr-pill-${m.state} sr-switch" data-sr="switch" data-unit="${esc(sel.unit.id)}" data-key="${esc(m.key)}" title="Click: turn ${esc(c.name)} ${m.state === "off" ? "on" : "off"}">${STATE_WORD[m.state] || m.state}</button>`
+            : pill(m.state)}
         </div>
         <div class="sr-graphwrap">${graph}${meterNow}</div>
         ${c.graph === "eq" ? bandChips(m) : ""}
         <div class="sr-knobs ${vals.length ? "" : "sr-knobs-none"}">
           ${vals.length ? `<div class="sr-krow">${knobs}</div>` : `<p class="sr-nokn">${m.state === "off" ? "Off: it passes the sound through untouched." : "No settings to show."}</p>`}
           ${more ? `<div class="sr-more">${more}</div>` : ""}
-          <div class="sr-readonly">Shows ${esc(PRODUCTS[sel.unit.product].name)}'s settings live · change them in ${esc(PRODUCTS[sel.unit.product].name)}${sel.unit.product === "link" ? " (or with Mixology's tools)" : ""}</div>
+          <div class="sr-readonly ${sel.unit.lock ? "sr-locked" : ""}">${readonlyLine(sel.unit, m)}</div>
         </div>
       </section>`;
     }
@@ -733,6 +755,15 @@
         </div>
       </section>
     </main>`;
+  }
+
+  // What the line under the knobs says: how to change them here, or why not now.
+  function readonlyLine(unit, m) {
+    const name = esc(PRODUCTS[unit.product].name);
+    if (unit.lock) return `${icon("lock")}${esc(unit.lock)} The Rack can change ${name} again when it has finished.`;
+    if (canTurn(unit) && ((m.values || []).some((v) => v.key) || m.switchable))
+      return `Drag a knob up or down to change it in ${name} (Shift: fine) · click a choice to step it${m.switchable ? " · click ON / OFF to switch it" : ""}`;
+    return `Shows ${name}'s settings live · change them in ${name}${unit.product === "link" ? " (or with Mixology's tools)" : ""}`;
   }
 
   // ---- page: MODULES (every module in the suite, where it plays in this project) --------------------------------------
@@ -939,6 +970,7 @@
     if (!S.root) return;
     if (data) {
       keepDetails(data);
+      settleHeld(data);
       remember(data);
       const first = !S.data;
       S.data = data;
@@ -976,8 +1008,138 @@
     else if (a === "card") { S.card = el.dataset.key; }
     else if (a === "goto") { S.track = el.dataset.track; S.sel = { unit: el.dataset.unit, key: el.dataset.key }; S.page = "rack"; }
     else if (a === "clear") { S.search = ""; S.card = null; }
+    else if (a === "switch") { switchModule(el.dataset.unit, el.dataset.key, el); return; }
     else return;
     render();
+  }
+
+  // ---- stage 2: turning knobs and switching modules through the plug-in that owns them --------------------------------
+  const unitById = (id) => (S.data && (S.data.units || []).find((u) => u.id === id)) || null;
+
+  // One request at a time, in order (a drag's begin before its moves, its moves before its end).
+  function send(unit, req, check) {
+    const r = Object.assign({ unit: unit.id, gen: unit.gen }, req);
+    S.chain = S.chain.then(async () => {
+      let res = null;
+      try { res = await S.opts.request(r); } catch (e) { res = { ticket: 0, why: "The Rack couldn't reach the plug-in." }; }
+      if (!res || !res.ticket) {
+        toast((res && res.why) || "That didn't go through.");
+        if (r.change === "value") delete S.held[heldKey(unit, r.module, r.control)];
+        return;
+      }
+      if (check) watchAnswer(unit, res.ticket, r, 0);
+    });
+    return S.chain;
+  }
+
+  // After a click or the end of a drag: say so when the plug-in refused it.
+  function watchAnswer(unit, ticket, r, tries) {
+    setTimeout(async () => {
+      if (!S.root || !S.opts.answer) return;
+      let a = null;
+      try { a = await S.opts.answer(unit.id, unit.gen, ticket); } catch (e) { a = null; }
+      if (!a) return;
+      if (a.outcome === "pending" && tries < 10) { watchAnswer(unit, ticket, r, tries + 1); return; }
+      if (a.outcome === "refused" || a.outcome === "gone") {
+        toast(a.why || (a.outcome === "gone" ? "That plug-in has closed or moved." : "Not done."));
+        if (r.change === "value") { delete S.held[heldKey(unit, r.module, r.control)]; render(); }
+      }
+    }, tries ? 300 : 450);
+  }
+
+  function toast(text) {
+    if (!S.stage) return;
+    let el = S.stage.querySelector(".sr-toast");
+    if (!el) { el = document.createElement("div"); el.className = "sr-toast"; S.stage.appendChild(el); }
+    el.innerHTML = `${icon("info")}<span>${esc(text)}</span>`;
+    el.classList.add("sr-shown");
+    clearTimeout(S.toastTimer);
+    S.toastTimer = setTimeout(() => el.classList.remove("sr-shown"), 4500);
+  }
+
+  function switchModule(unitId, key, el) {
+    const unit = unitById(unitId);
+    const mod = unit && (unit.modules || []).find((m) => m.key === key);
+    if (!unit || !mod || !canTurn(unit)) return;
+    el.classList.add("sr-pending");
+    send(unit, { change: "state", module: key, control: "", value: mod.state === "off" ? 1 : 0, gesture: "set" }, true);
+  }
+
+  // A knob's value held where you put it until the plug-in's own value catches up (it publishes a few times a second).
+  function settleHeld(data) {
+    const now = Date.now();
+    for (const k of Object.keys(S.held)) {
+      const h = S.held[k];
+      if (S.drag && S.drag.key === k) continue;
+      const [uid, module, control] = k.split("|");
+      const u = (data.units || []).find((x) => x.id === uid);
+      const m = u && (u.modules || []).find((x) => x.key === module);
+      const v = m && (m.values || []).find((x) => x.key === control);
+      if (!v || Math.abs((v.norm ?? -1) - h.norm) < 0.006 || now - h.at > 2500) delete S.held[k];
+    }
+  }
+
+  function paintKnob(el, norm) {
+    const svg = el.querySelector(".sr-kval"), cap = el.querySelector(".sr-kcap");
+    if (svg) svg.innerHTML = knobArc(norm, el.dataset.bi === "1");
+    if (cap) cap.style.transform = `rotate(${(-135 + norm * 270).toFixed(1)}deg)`;
+    el.dataset.norm = String(norm);
+    S.html.page = "";   // drawn in place: the next render rewrites the page whatever it holds
+  }
+
+  function onKnobDown(e) {
+    const el = e.target.closest && e.target.closest("[data-knob]");
+    if (!el || e.button > 0) return;
+    const unit = unitById(el.dataset.unit);
+    if (!unit || !canTurn(unit)) return;
+    e.preventDefault();
+    try { el.setPointerCapture(e.pointerId); } catch (err) { /* fine */ }
+    S.drag = { el, unit, key: el.dataset.knob, module: el.dataset.module, control: el.dataset.control, steps: +el.dataset.steps || 0,
+      start: +el.dataset.norm, norm: +el.dataset.norm, y: e.clientY, moved: false, begun: false, lastSend: 0, timer: 0 };
+    el.classList.add("sr-dragging");
+  }
+
+  function onKnobMove(e) {
+    const d = S.drag;
+    if (!d) return;
+    const dy = (d.y - e.clientY) / (S.scale || 1);   // in the stage's pixels
+    if (!d.moved && Math.abs(dy) < 3) return;
+    d.moved = true;
+    let n = clamp(d.start + dy / (e.shiftKey ? 900 : 220), 0, 1);
+    if (d.steps >= 2) n = Math.round(n * (d.steps - 1)) / (d.steps - 1);
+    if (n === d.norm && d.begun) return;
+    d.norm = n;
+    S.held[d.key] = { norm: n, at: Date.now() };
+    paintKnob(d.el, n);
+    const cell = d.el.closest(".sr-kcell");
+    if (cell) cell.classList.add("sr-kpending");
+    // begin at once, then the newest value about 25 times a second
+    const now = Date.now();
+    if (!d.begun) { d.begun = true; d.lastSend = now; send(d.unit, { change: "value", module: d.module, control: d.control, value: n, gesture: "begin" }); return; }
+    clearTimeout(d.timer);
+    const go = () => { if (S.drag !== d) return; d.lastSend = Date.now(); send(d.unit, { change: "value", module: d.module, control: d.control, value: d.norm, gesture: "move" }); };
+    if (now - d.lastSend >= 40) go(); else d.timer = setTimeout(go, 40 - (now - d.lastSend));
+  }
+
+  function onKnobUp() {
+    const d = S.drag;
+    if (!d) return;
+    S.drag = null;
+    clearTimeout(d.timer);
+    d.el.classList.remove("sr-dragging");
+    if (d.moved) {
+      S.held[d.key] = { norm: d.norm, at: Date.now() };
+      send(d.unit, { change: "value", module: d.module, control: d.control, value: d.norm, gesture: "end" }, true);
+    } else if (d.steps >= 2) {
+      // a click: the next option (round to the first after the last)
+      const i = Math.round(d.start * (d.steps - 1));
+      const n = ((i + 1) % d.steps) / (d.steps - 1);
+      S.held[d.key] = { norm: n, at: Date.now() };
+      paintKnob(d.el, n);
+      const cell = d.el.closest(".sr-kcell");
+      if (cell) cell.classList.add("sr-kpending");
+      send(d.unit, { change: "value", module: d.module, control: d.control, value: n, gesture: "set" }, true);
+    }
   }
 
   function onDown() { S.down = true; }
@@ -1001,6 +1163,7 @@
     const H = 960;
     const W = clamp(Math.round((H * w) / h), 1280, 1708);
     const s = Math.min(w / W, h / H);
+    S.scale = s;
     if (W !== S.W) { S.W = W; if (S.data) render(); }
     S.stage.style.width = W + "px";
     S.stage.style.height = H + "px";
@@ -1032,7 +1195,11 @@
     S.root.appendChild(S.stage);
     document.body.appendChild(S.root);
     S.root.addEventListener("click", onClick);
+    S.root.addEventListener("pointerdown", onKnobDown);
     S.root.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointermove", onKnobMove, true);
+    window.addEventListener("pointerup", onKnobUp, true);
+    window.addEventListener("pointercancel", onKnobUp, true);
     window.addEventListener("pointerup", onUp, true);
     window.addEventListener("pointercancel", onUp, true);
     S.root.addEventListener("input", onInput);
@@ -1049,7 +1216,11 @@
     window.removeEventListener("resize", fit);
     window.removeEventListener("pointerup", onUp, true);
     window.removeEventListener("pointercancel", onUp, true);
-    S.down = false; S.pending = false;
+    window.removeEventListener("pointermove", onKnobMove, true);
+    window.removeEventListener("pointerup", onKnobUp, true);
+    window.removeEventListener("pointercancel", onKnobUp, true);
+    if (S.drag) onKnobUp();
+    S.down = false; S.pending = false; S.held = {};
     S.root.remove();
     S.root = null; S.stage = null; S.data = null;
   }

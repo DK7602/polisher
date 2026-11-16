@@ -958,3 +958,41 @@ TEST_CASE ("Rack requests: many views sending at once, the owner serving meanwhi
         for (auto t : tickets[static_cast<std::size_t> (s)])
             CHECK (link.answer (u.slot, u.generation, t).outcome == rack::Outcome::applied);
 }
+
+TEST_CASE ("Rack requests: what the view's plug-in hands rack.js (requestJson, answerJson)", "[rack][requests]")
+{
+    Memory mem;
+    rack::Link link (mem.data());
+    Owner vox (link);
+    REQUIRE (vox.publish (1000));
+    const auto u = link.units (1000).at (0);
+    const std::string id = "u" + std::to_string (u.slot);
+
+    auto j = rack::requestJson (link, id, u.generation, "value", "vox.comp", "cpThr", 0.4f, "begin", 1000);
+    CHECK (wellFormed (j));
+    CHECK (j.rfind ("{\"ticket\":1,\"why\":\"\"}", 0) == 0);
+    CHECK (rack::answerJson (link, id, u.generation, 1) == "{\"outcome\":\"pending\",\"why\":\"\"}");
+    vox.serve (1010);
+    REQUIRE (vox.seen.size() == 1);
+    CHECK (vox.seen[0].gesture == rack::Gesture::begin);
+    CHECK (vox.seen[0].value == Catch::Approx (0.4f));
+    CHECK (rack::answerJson (link, id, u.generation, 1) == "{\"outcome\":\"applied\",\"why\":\"\"}");
+
+    j = rack::requestJson (link, id, u.generation, "state", "vox.pitch", "", 0.0f, "set", 1020);
+    CHECK (j.rfind ("{\"ticket\":2,", 0) == 0);
+    j = rack::requestJson (link, id, u.generation, "value", "vox.pitch", "speed", 0.5f, "end", 1020);
+    vox.serve (1030);
+    CHECK (vox.seen[1].change == rack::Change::state);
+    CHECK (rack::answerJson (link, id, u.generation, 3) == "{\"outcome\":\"refused\",\"why\":\"Pitch has no Speed knob.\"}");
+
+    // Bad addresses and empty requests: a reason, no ticket.
+    for (const auto& bad : { std::string ("x1"), std::string ("u"), std::string ("u99999"), std::string ("u-1"), std::string ("") })
+    {
+        const auto k = rack::requestJson (link, bad, u.generation, "value", "vox.comp", "cpThr", 0.5f, "set", 1040);
+        CHECK (k.rfind ("{\"ticket\":0,\"why\":\"", 0) == 0);
+        CHECK (k.size() > 22);
+        CHECK (rack::answerJson (link, bad, u.generation, 1) == "{\"outcome\":\"gone\",\"why\":\"\"}");
+    }
+    CHECK (rack::requestJson (link, id, u.generation, "value", "vox.comp", "", 0.5f, "set", 1040) == "{\"ticket\":0,\"why\":\"Nothing to change.\"}");
+    CHECK (rack::requestJson (link, id, u.generation + 1, "value", "vox.comp", "cpThr", 0.5f, "set", 1040).rfind ("{\"ticket\":0,", 0) == 0);
+}

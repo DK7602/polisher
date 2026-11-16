@@ -754,6 +754,10 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   (switchOf: "mas.glue" -> "glueOn"); polisher::rackunit::fromKnob() turns the Rack's 0..1 back into the
   parameter value in its units (one knob table, kKnobs). Dynamics bands and the Targets shown only. Glue Ignore
   Lows' knob now follows the host's curve (90 Hz centre). Tests check every key exists in the parameter code.
+- Step 3 built (2026-11-16), Masterology 0.32.0: the Rack's knobs and switches work here. applyRack (fromKnob /
+  switchOf -> plugin/RackHost.h, shared: one host gesture per drag), rackLock (Auto-Master listening / analysing),
+  a 25 Hz rackTimer while a Rack is open (main timer 4 Hz), rackRequest / rackAnswer native functions, app.js passes
+  request / answer to the Rack. Manual's Rack section + the Claude Docs copy updated. Not in a DAW yet; Beta 16.
 
 ## NOW: Sonicology Rack, stage 1 (planned 2026-11-14; steps 1 - 3 built 2026-11-15; next: step 4)
 - The plan lives in Mixology: docs/rack/RACK-PLAN.md (branch claude/mixology), with the concept art in docs/rack/concepts.

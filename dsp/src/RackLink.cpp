@@ -1142,4 +1142,53 @@ namespace rack
         }
         return toJson (host, hostHash, units, lines, overview (suiteLink, now));
     }
+
+    // ---- the view's requests (stage 2) ---------------------------------------------------------------------------
+
+    namespace
+    {
+        int unitSlot (const std::string& unit)
+        {
+            if (unit.size() < 2 || unit.size() > 5 || unit[0] != 'u') return -1;
+            int slot = 0;
+            for (std::size_t i = 1; i < unit.size(); ++i)
+            {
+                if (unit[i] < '0' || unit[i] > '9') return -1;
+                slot = slot * 10 + (unit[i] - '0');
+            }
+            return slot < kMaxSlots ? slot : -1;
+        }
+    }
+
+    std::string requestJson (Link& link, const std::string& unit, std::uint32_t generation, const std::string& change, const std::string& module,
+                             const std::string& control, float value, const std::string& gesture, std::uint64_t now)
+    {
+        Request r;
+        r.change = change == "state" ? Change::state : Change::value;
+        r.module = module;
+        r.control = control;
+        r.value = value;
+        r.gesture = gesture == "begin" ? Gesture::begin : gesture == "move" ? Gesture::move : gesture == "end" ? Gesture::end : Gesture::set;
+        std::string why;
+        std::uint64_t ticket = 0;
+        if (module.empty() || (r.change == Change::value && control.empty()))
+            why = "Nothing to change.";
+        else
+            ticket = link.request (unitSlot (unit), generation, r, now, why);
+        std::string o = "{\"ticket\":" + std::to_string (ticket) + ",\"why\":";
+        str (o, why);
+        o.push_back ('}');
+        return o;
+    }
+
+    std::string answerJson (const Link& link, const std::string& unit, std::uint32_t generation, std::uint64_t ticket)
+    {
+        const auto a = link.answer (unitSlot (unit), generation, ticket);
+        const char* outcome = a.outcome == Outcome::pending ? "pending" : a.outcome == Outcome::applied ? "applied"
+                            : a.outcome == Outcome::refused ? "refused" : "gone";
+        std::string o = std::string ("{\"outcome\":\"") + outcome + "\",\"why\":";
+        str (o, a.why);
+        o.push_back ('}');
+        return o;
+    }
 }

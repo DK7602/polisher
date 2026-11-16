@@ -238,7 +238,15 @@ public:
             bumpStateRevision();
         pollReference();   // a Match ref that finished measuring after the window closed still marks the project
         updateSuite();
-        publishRack();     // the Sonicology Rack (more often while a Rack view watches)
+        publishRack();     // the Sonicology Rack (more often while a Rack view watches: rackTimer)
+        const bool watched = rackPub.watched (suite::nowMs());
+        if (watched && ! rackTimer.isTimerRunning())
+        {
+            rackTimer.tick = [this] { publishRack(); };
+            rackTimer.startTimerHz (25);
+        }
+        else if (! watched && rackTimer.isTimerRunning())
+            rackTimer.stopTimer();
     }
 
 private:
@@ -256,6 +264,16 @@ private:
     // own meter copies (deepest since the Rack last read them), so it never takes the window's readings.
     void publishRack();
     rack::Publisher rackPub;
+    // Stage 2: knobs turned and modules switched in a Rack view, applied here like a move of your own mouse. While a
+    // Rack view is open anywhere, a faster timer serves them (the main one runs four times a second).
+    std::string applyRack (const rack::Request&);
+    std::string rackLock() const;
+    struct RackTimer final : juce::Timer
+    {
+        std::function<void()> tick;
+        void timerCallback() override { if (tick) tick(); }
+    };
+    RackTimer rackTimer;
     struct RackMeters
     {
         std::atomic<float> resonance { 0.0f }, bassTame { 0.0f }, glue { 0.0f }, clipper { 0.0f }, maximizer { 0.0f };
