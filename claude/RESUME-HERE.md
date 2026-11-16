@@ -769,3 +769,7 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
 - Masterology 0.31.1 (2026-11-16, Beta 14 feedback: light liquid glass flat, knobs appearing / disappearing, the Rack slow): the
   shared rack.js / rack.css / light liquid art / RackLink from Mixology (details: Mixology's RESUME-HERE), getRack(track)
   asks only for the shown track's details. Goes out in Sonicology Beta 15 with Voxology 0.55.1 and Mixology 0.26.1.
+  Beta 15 built 2026-11-16: Mixology's Sonicology suite run 43896548580 (label "Beta 15", version 0.15.0; Mixology
+  0.26.1 89c9c01, Voxology 0.55.1 d32231c, Masterology 0.31.1 6f9ab1e), all green, both installers. Build & Test:
+  Mixology 43896414539 green; Voxology 43896452035 and Masterology 43896463325 green on Windows (+ UI smoke), their
+  ASan jobs ran on after. Next: the user checks the Rack again in Cubase.
