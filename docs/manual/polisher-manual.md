@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.30.1 · November 2026
+Version 0.31.0 · November 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
@@ -665,6 +665,48 @@ Spotify and YouTube turn every song to about −14 LUFS. Going louder than that 
 - **Masterology's goal in Mixology**: Mixology's Master page shows what Masterology aims for (for example "Masterology: −9 LUFS · −1.0 dBTP": the target, or a reference's loudness while Match ref is on, and the Maximizer's ceiling). Its HAND-OFF checks use those numbers: the mix's peaks under −3 dBTP, and the mix not more than 3 dB louder than your target. While Masterology is bypassed (A, or your DAW's bypass) for more than a few seconds, Mixology doesn't show it.
 
 The link only works inside one program: the three must run in the same DAW, in the same process. Mastering in a separate project works too; Masterology then simply works on its own. DAWs that can run each plug-in in its own process keep them apart: in Bitwig set Settings > Plug-ins > Plug-in hosting to "By manufacturer" or "Together", in REAPER don't run them as separate / dedicated processes, in FL Studio don't make them bridged.
+
+## Sonicology Rack: your whole suite in one view
+
+The Sonicology Rack shows every Sonicology plug-in in your project in one place: Voxology and Honey Tune on your
+vocals, Mixology Link on your tracks, Mixology on the Full Mix and Masterology on the master. You see each track's
+chain, what every module is doing, and how the plug-ins work together. In this version the Rack only **shows**: you
+change settings in each plug-in as usual.
+
+**Open it:** the **RACK** pill before the gear and **?**, top right. It opens over this window; **BACK TO MASTEROLOGY** (or Esc) brings you back.
+
+**What it needs**
+- Every Sonicology plug-in in the project at this version or newer (Voxology 0.55, Mixology 0.26, Masterology 0.31).
+  An older one is missing from the Rack.
+- **Press play.** Plug-ins join the Rack while your project plays (and only the project that plays), like the rest of
+  the suite link. A stopped project shows "No Sonicology plug-ins are playing".
+- **Named tracks.** The Rack matches plug-ins to tracks by the track's name. Two tracks with the same name get a
+  warning: rename one.
+
+**The RACK page**
+- **The track picker** (top right, with arrows and a list): every track with a Sonicology plug-in, plus the Full Mix
+  and the Master. The Rack starts on the Master.
+- **Signal Chain** (left): the picked track's modules top to bottom, grouped by plug-in, in the order the sound goes
+  through them. Each says **ON**, **OFF**, **IDLE** (switched on but set to do nothing yet) or **RESTS** (Voxology's
+  Pitch while Honey Tune tunes that track). Click one to look at it. **Chain Flow** (top) shows the same chain as a
+  row of icons.
+- **The module** (middle): its curve for an EQ (with the sound behind it) or its gain reduction / level over the last
+  12 seconds, and its knobs exactly as set.
+- **Rack Coach** (right): **How they work together** (green: fine, blue: good to know, red: fix it, for example two
+  compressors on one vocal, Pitch and Honey Tune both tuning, two Masterologys, or Mixology's Limiter before
+  Masterology), the chain overview, and what the picked module is for.
+- **The bottom bar:** IN and OUT of the picked plug-in, and the mix's loudness (from Mixology, or what reaches
+  Masterology). A dash means nothing has measured it yet.
+
+**The MODULES page:** every module in the suite as a card: search, filter by kind (vocal, mixing, dynamics, space,
+mastering...), what it's for, and where it plays in your project (click to jump to it on the RACK page).
+
+**Light or dark:** click the spinning cube at the top left. All three plug-ins remember your choice.
+
+**Good to know**
+- Honey Tune has no RACK button: it shows up in the Rack above Voxology on the track it tunes.
+- Mixology Link has no RACK button yet: Links show up in the Rack opened from Voxology, Mixology or Masterology.
+- The Rack costs nothing while it's closed: the plug-ins send their details only while a Rack is open.
 
 ## Troubleshooting
 
