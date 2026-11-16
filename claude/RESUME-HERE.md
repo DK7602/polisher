@@ -745,6 +745,12 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   itself), colour premultiplied + alpha as its own pass, 4x then Lanczos to 2x: plugin/ui/assets/logo.webp is now
   1680 x 530 (271 KB). The original stays in tools/art/logo_source.webp (outside ui/assets, so not bundled).
 
+## Sonicology Rack, stage 2 (started 2026-11-16; Mixology's RESUME-HERE "NOW: Sonicology Rack, stage 2" leads)
+- Step 1 (the plumbing: requests from a Rack view to the plug-in that owns a module) built in Mixology; RackLink.h /
+  .cpp / test_rack_link.cpp copied here unchanged (layout 2; Unit gained lock + generation with defaults, so
+  polisher/RackUnit and the processor compile as they are). [rack] tests pass here. Step 3 wires serve() into the
+  processor's Rack publishing (lock while Auto-Master runs). No manual change (nothing the user sees yet).
+
 ## NOW: Sonicology Rack, stage 1 (planned 2026-11-14; steps 1 - 3 built 2026-11-15; next: step 4)
 - The plan lives in Mixology: docs/rack/RACK-PLAN.md (branch claude/mixology), with the concept art in docs/rack/concepts.
 - A view inside all three plug-ins (a RACK button in Masterology's top bar next to the gear and ?: the only change to

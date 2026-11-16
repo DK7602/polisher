@@ -8,7 +8,8 @@
 //
 // The Rack (plugin/ui/rack.js, opened from any of the three) shows the whole suite in one view: each track's
 // Sonicology plug-ins and their modules in signal order, what each is set to, and how the plug-ins work together.
-// It only shows (stage 1 of docs/rack/RACK-PLAN.md in Mixology's repo); the plug-ins do the processing.
+// Stage 1 of docs/rack/RACK-PLAN.md (in Mixology's repo) shows; stage 2 changes things through the plug-ins that own them
+// (requests, below). The plug-ins do the processing.
 //
 //   - Each plug-in instance (Voxology, Honey Tune, Mixology, each Mixology Link, Masterology) claims a slot in a named
 //     block of shared memory, one per host process, and publishes a Unit there from its message thread: which plug-in,
@@ -18,6 +19,10 @@
 //     fresh (watched()), else just who and where they are, about once a second. No cost while no Rack is open.
 //   - The view's plug-in reads every live unit (units()), works out what they do together (together()) and hands the
 //     view one JSON text (toJson()).
+//   - Stage 2: a click in the view becomes a Request (turn a module on / off, move a knob) that the view's plug-in puts
+//     in the queue of the unit that owns the module (request()). The owner takes it on its message thread
+//     (Publisher::serve()) and applies it like a move of your own mouse, so the host's undo and automation see it; a
+//     unit that is locked ("Auto Mix is running") refuses, and the view reads the answer (answer()).
 // Framework-free C++17, lock-free (atomics and a sequence counter per slot), nothing allocated in shared memory.
 // Zero-filled memory is a valid, empty block. Same rules as the suite link (SuiteLink.h): a plug-in takes part only
 // while the host runs it (suite::Presence), a slot silent for kAliveMs is gone and may be taken over.
@@ -28,12 +33,13 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
 namespace rack
 {
-    constexpr std::uint32_t kLayout = 1;
+    constexpr std::uint32_t kLayout = 2;    // 2: + requests (stage 2), the lock
     constexpr int kMaxSlots = 256;          // every Mixology Link, Voxology, Honey Tune, Mixology and Masterology
     constexpr int kMaxModules = 16;         // a Link has 15 (the Assist EQ and its processing modules)
     constexpr int kMaxValues = 8;           // the knobs the view draws
@@ -44,9 +50,13 @@ namespace rack
     // stall must not make the plug-ins vanish from the Rack or drop their details.
     constexpr std::uint64_t kAliveMs = 6000;    // a publisher silent this long is gone
     constexpr std::uint64_t kViewerMs = 5000;   // a Rack view that hasn't looked for this long is closed
+    constexpr int kMaxRequests = 32;            // a unit's queue: requests its owner hasn't taken yet
+    constexpr int kMaxRefusals = 4;             // the latest refusals a view can still read
+    constexpr std::uint64_t kGestureMs = 2000;  // a knob drag that stopped moving this long has ended
+    constexpr std::uint64_t kStuckMs = 1000;    // a request handed out but never written (its sender stopped) is skipped
 
     constexpr std::size_t kTrackBytes = 128, kKeyBytes = 24, kSummaryBytes = 96, kByBytes = 40, kValueNameBytes = 24,
-                          kValueTextBytes = 24, kBandNameBytes = 16, kLineBytes = 160;
+                          kValueTextBytes = 24, kBandNameBytes = 16, kLineBytes = 160, kControlBytes = 24, kWhyBytes = 128;
 
     // ---- what a plug-in publishes ---------------------------------------------------------------------------------
 
@@ -114,9 +124,35 @@ namespace rack
         std::vector<Module> modules;    // in signal order, up to kMaxModules
         std::vector<Line> lines;        // up to kMaxLines
         std::vector<float> spectrum;    // kSpectrumBins dB values (what it hears, tilted as its own display), or empty
+        std::string lock;               // why the Rack can't change it now ("Auto Mix is running"), "" = it can
         // Filled in by the reader:
         int slot = -1;
+        std::uint32_t generation = 0;   // the slot's owner: requests name it, so a slot taken over never gets another's
         std::uint64_t instanceId = 0;
+    };
+
+    // ---- stage 2: requests from a Rack view to the plug-in that owns a module ------------------------------------
+
+    enum class Change : std::uint32_t { value = 0, state };
+    /** A knob drag: begin, moves, end (the owner holds the host's gesture open between them, so automation records it
+        as one touch); set: a single change (a click). The owner always gets them balanced (Publisher::serve()). */
+    enum class Gesture : std::uint32_t { set = 0, begin, move, end };
+
+    struct Request
+    {
+        Change change = Change::value;
+        std::string module;             // the module's key ("link.comp")
+        std::string control;            // Change::value: the control's key in that module; Change::state: ""
+        float value = 0.0f;             // Change::value: where the knob goes (0..1); Change::state: 1 on, 0 off
+        Gesture gesture = Gesture::set; // Change::state: always set
+        std::uint64_t ticket = 0;       // from request() (0: made up by serve() to close a gesture the view left open)
+    };
+
+    enum class Outcome { gone = 0, pending, applied, refused };
+    struct Answer
+    {
+        Outcome outcome = Outcome::gone;
+        std::string why;                // refused: the owner's reason, shown in the Rack
     };
 
     /** A line about how plug-ins work together, from together(): on a track (hash), the Full Mix, the Master, or the
@@ -193,6 +229,33 @@ namespace rack
         Text<kLineBytes> text;
     };
 
+    /** One request in a unit's queue. stamp: 2t - 1 while ticket t is written, 2t once it is (0: never used). */
+    struct RequestSlot
+    {
+        std::atomic<std::uint64_t> stamp;
+        std::atomic<std::uint32_t> generation, change, gesture;
+        std::atomic<float> value;
+        Text<kKeyBytes> module;
+        Text<kControlBytes> control;
+    };
+
+    struct RefusalSlot
+    {
+        std::atomic<std::uint32_t> seq;            // odd while written
+        std::atomic<std::uint64_t> ticket;
+        Text<kWhyBytes> why;
+    };
+
+    /** A unit's requests: many senders (any Rack view), one taker (the owner). Tickets count from 1. */
+    struct Queue
+    {
+        std::atomic<std::uint64_t> issued;         // the last ticket handed out (senders, compare-and-swap)
+        std::atomic<std::uint64_t> taken;          // the owner has taken every ticket up to here
+        std::atomic<std::uint64_t> answered;       // ... and answered them (refusals written first)
+        std::array<RequestSlot, kMaxRequests> ring;            // ticket t at t % kMaxRequests
+        std::array<RefusalSlot, kMaxRefusals> refusals;        // ticket t at t % kMaxRefusals
+    };
+
     struct alignas (64) UnitSlot
     {
         std::atomic<std::uint32_t> state;          // 0 free, 1 claimed
@@ -203,9 +266,11 @@ namespace rack
         std::atomic<std::uint32_t> product, role, hash, on, version, detailed, moduleCount, lineCount, spectrumBins;
         std::atomic<float> inDb, outDb, latencyMs;
         Text<kTrackBytes> track;
+        Text<kWhyBytes> lock;
         std::array<LineSlot, kMaxLines> lines;
         std::array<std::atomic<float>, kSpectrumBins> spectrum;
         std::array<ModuleSlot, kMaxModules> modules;
+        Queue queue;
     };
 
     struct Block
@@ -244,6 +309,23 @@ namespace rack
         /** Every live unit (version != 0), by slot. */
         std::vector<Unit> units (std::uint64_t nowMs) const;
 
+        /** Puts a request in the queue of the unit in `slot` (as units() gave it: slot and generation). Its ticket, or 0
+            with `why` (shown in the Rack) when it can't go: the unit is gone, locked (its lock), or its queue is full.
+            Any thread, any number of views at once; texts cut, the value kept to 0..1. */
+        std::uint64_t request (int slot, std::uint32_t generation, const Request&, std::uint64_t nowMs, std::string& why);
+        /** What became of a ticket: pending until the owner took it; refused (with why) or applied; gone when the unit
+            went (its requests with it). A refusal stays readable until kMaxRefusals later tickets of the same unit. */
+        Answer answer (int slot, std::uint32_t generation, std::uint64_t ticket) const;
+
+        // ---- the owner of a slot (its message thread; Publisher::serve() does all this) ----
+        /** Up to `max` requests in ticket order. A ticket handed out but not written within kStuckMs (its sender
+            stopped half-way) is skipped; `waitingSinceMs` is the owner's own memo of that (start at 0). */
+        int take (int slot, std::uint64_t instanceId, Request* out, int max, std::uint64_t nowMs, std::uint64_t& waitingSinceMs);
+        /** Refuses a taken ticket (before answered() passes it). */
+        void refuse (int slot, std::uint64_t instanceId, std::uint64_t ticket, const std::string& why);
+        /** Every taken ticket up to `ticket` is answered (applied unless refused). */
+        void answered (int slot, std::uint64_t instanceId, std::uint64_t ticket);
+
     private:
         Block& block;
     };
@@ -273,6 +355,20 @@ namespace rack
         /** Publishes (u.detailed set from the last due()). */
         void publish (Unit u, std::uint64_t nowMs);
 
+        /** Applies one request like a move of your own mouse (Change::value: the control to `value` 0..1, with the
+            host's gesture: begin -> beginChangeGesture + set, move -> set, end -> set + endChangeGesture, set -> all
+            three; Change::state: the module on / off). Returns "" when done, else why not (shown in the Rack: "Pitch has
+            no Speed knob"). A Gesture::end with ticket 0 closes a drag the view left open: always end the gesture. */
+        using Apply = std::function<std::string (const Request&)>;
+        /** The owner's side of the queue, from the same timer as due() (as often as you like; 30 a second keeps a drag
+            smooth). Takes the requests sent since the last call and applies them, in order, through `apply`:
+              - `lock` not "" (Auto Mix is running ...): every request refused with it; open drags are closed first.
+              - Gestures balanced: a move without a begin begins, a begin while open moves, a set while open ends, an
+                end without a begin sets. A drag that stopped kGestureMs ago is closed (Gesture::end, ticket 0).
+              - A move followed by another change of the same control in the same batch is skipped (counts as applied).
+            Returns how many requests it applied. */
+        int serve (std::uint64_t nowMs, const std::string& lock, const Apply& apply);
+
         bool takingPart() const noexcept { return presence.takingPart(); }
         int slot() const noexcept { return slotIndex; }
         bool watched (std::uint64_t nowMs) const { return link.watched (nowMs); }
@@ -285,6 +381,10 @@ namespace rack
         std::uint64_t lastMs = 0;
         bool lastWasFull = false;
         Due pending = Due::none;
+
+        struct Open { std::string module, control; float value = 0.0f; std::uint64_t lastMs = 0; };
+        std::vector<Open> open;                    // drags in progress (the host's gesture is open)
+        std::uint64_t waitingSinceMs = 0;          // take()'s memo
     };
 
     // ---- the Rack view's plug-in ----------------------------------------------------------------------------------

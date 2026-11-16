@@ -223,6 +223,11 @@ namespace rack
                 if (! s.heartbeatMs.compare_exchange_strong (beat, now, std::memory_order_acq_rel)) continue;
             }
             s.instanceId.store (instanceId, kRelaxed);
+            // Requests for the slot's earlier owner aren't ours: start after the last one handed out (before the new
+            // generation shows, so a sender that sees it finds the queue ready).
+            const auto issued = s.queue.issued.load (kAcquire);
+            s.queue.taken.store (issued, kRelaxed);
+            s.queue.answered.store (issued, kRelaxed);
             s.generation.fetch_add (1, kRelease);
             const int slot = static_cast<int> (i);
             publish (slot, instanceId, Unit {}, now);   // nothing of an earlier owner shows
@@ -260,6 +265,7 @@ namespace rack
         s.outDb.store (finite (u.outDb, -100.0f), kRelaxed);
         s.latencyMs.store (std::max (0.0f, finite (u.latencyMs)), kRelaxed);
         storeText (s.track, u.track);
+        storeText (s.lock, u.lock);
 
         const auto lines = std::min<std::size_t> (u.lines.size(), kMaxLines);
         for (std::size_t i = 0; i < lines; ++i)
@@ -340,6 +346,7 @@ namespace rack
                 u.outDb = s.outDb.load (kRelaxed);
                 u.latencyMs = s.latencyMs.load (kRelaxed);
                 u.track = loadText (s.track);
+                u.lock = loadText (s.lock);
                 const auto lines = std::min<std::uint32_t> (s.lineCount.load (kRelaxed), kMaxLines);
                 for (std::uint32_t l = 0; l < lines; ++l)
                     u.lines.push_back ({ static_cast<Level> (s.lines[l].level.load (kRelaxed)), loadText (s.lines[l].text) });
@@ -381,10 +388,150 @@ namespace rack
             });
             if (! ok || u.version == 0 || u.product == Product::none) continue;
             u.slot = static_cast<int> (i);
+            u.generation = s.generation.load (kAcquire);
             u.instanceId = s.instanceId.load (kRelaxed);
             out.push_back (std::move (u));
         }
         return out;
+    }
+
+    // ---- requests (stage 2) ------------------------------------------------------------------------------------
+
+    namespace
+    {
+        const char* const kGoneWhy = "That plug-in has closed or moved. The Rack catches up in a moment.";
+        const char* const kBusyWhy = "That plug-in is busy. Try again in a moment.";
+
+        float requestValue (float v) { return std::clamp (finite (v), 0.0f, 1.0f); }
+    }
+
+    std::uint64_t Link::request (int slot, std::uint32_t generation, const Request& r, std::uint64_t now, std::string& why)
+    {
+        why.clear();
+        if (slot < 0 || slot >= kMaxSlots) { why = kGoneWhy; return 0; }
+        auto& s = block.slots[static_cast<std::size_t> (slot)];
+        if (s.state.load (kAcquire) != 1u || s.generation.load (kAcquire) != generation || ! alive (s.heartbeatMs.load (kRelaxed), now))
+        {
+            why = kGoneWhy;
+            return 0;
+        }
+        std::uint32_t version = 0;
+        std::string lock;
+        if (! readConsistent (s.seq, [&] { version = s.version.load (kRelaxed); lock = loadText (s.lock); })) { why = kBusyWhy; return 0; }
+        if (version == 0) { why = kGoneWhy; return 0; }
+        if (! lock.empty()) { why = lock; return 0; }
+
+        // A ticket: only while the owner has room for it (it hasn't taken the request kMaxRequests before it).
+        auto& q = s.queue;
+        std::uint64_t ticket = 0;
+        for (auto last = q.issued.load (kAcquire);;)
+        {
+            if (last + 1 - std::min (last + 1, q.taken.load (kAcquire)) > static_cast<std::uint64_t> (kMaxRequests)) { why = kBusyWhy; return 0; }
+            if (q.issued.compare_exchange_weak (last, last + 1, std::memory_order_acq_rel)) { ticket = last + 1; break; }
+        }
+
+        // Its place in the ring, held by one sender at a time: odd while written. Still odd from an earlier sender that
+        // stalled half-way (the owner skipped it): this one gives up, nothing is mixed. The owner skips the ticket.
+        auto& e = q.ring[static_cast<std::size_t> (ticket % static_cast<std::uint64_t> (kMaxRequests))];
+        const std::uint64_t writing = 2 * ticket - 1, written = 2 * ticket;
+        for (auto old = e.stamp.load (kAcquire);;)
+        {
+            if ((old & 1u) != 0 || old >= writing) { why = kBusyWhy; return 0; }
+            if (e.stamp.compare_exchange_weak (old, writing, std::memory_order_acq_rel)) break;
+        }
+        std::atomic_thread_fence (kRelease);
+        e.generation.store (generation, kRelaxed);
+        e.change.store (static_cast<std::uint32_t> (r.change), kRelaxed);
+        e.gesture.store (static_cast<std::uint32_t> (r.gesture), kRelaxed);
+        e.value.store (requestValue (r.value), kRelaxed);
+        storeText (e.module, r.module);
+        storeText (e.control, r.control);
+        e.stamp.store (written, kRelease);
+        return ticket;
+    }
+
+    Answer Link::answer (int slot, std::uint32_t generation, std::uint64_t ticket) const
+    {
+        if (slot < 0 || slot >= kMaxSlots || ticket == 0) return {};
+        const auto& s = block.slots[static_cast<std::size_t> (slot)];
+        if (s.state.load (kAcquire) != 1u || s.generation.load (kAcquire) != generation) return {};
+        const auto& q = s.queue;
+        if (ticket > q.answered.load (kAcquire)) return { ticket <= q.issued.load (kAcquire) ? Outcome::pending : Outcome::gone, {} };
+        const auto& f = q.refusals[static_cast<std::size_t> (ticket % static_cast<std::uint64_t> (kMaxRefusals))];
+        std::uint64_t refused = 0;
+        std::string why;
+        if (readConsistent (f.seq, [&] { refused = f.ticket.load (kRelaxed); why = loadText (f.why); }) && refused == ticket)
+            return { Outcome::refused, why };
+        return { Outcome::applied, {} };
+    }
+
+    int Link::take (int slot, std::uint64_t instanceId, Request* out, int max, std::uint64_t now, std::uint64_t& waitingSince)
+    {
+        if (slot < 0 || slot >= kMaxSlots || out == nullptr || max <= 0) return 0;
+        auto& s = block.slots[static_cast<std::size_t> (slot)];
+        if (s.instanceId.load (kRelaxed) != instanceId) return 0;
+        auto& q = s.queue;
+        const auto generation = s.generation.load (kAcquire);
+        const auto issued = q.issued.load (kAcquire);
+        auto taken = q.taken.load (kRelaxed);   // only the owner writes it
+        int n = 0;
+        while (taken < issued && n < max)
+        {
+            const auto ticket = taken + 1;
+            const auto& e = q.ring[static_cast<std::size_t> (ticket % static_cast<std::uint64_t> (kMaxRequests))];
+            Request r;
+            std::uint32_t forGeneration = 0;
+            bool ready = e.stamp.load (kAcquire) == 2 * ticket;
+            if (ready)
+            {
+                forGeneration = e.generation.load (kRelaxed);
+                r.change = static_cast<Change> (e.change.load (kRelaxed));
+                r.gesture = static_cast<Gesture> (e.gesture.load (kRelaxed));
+                r.value = requestValue (e.value.load (kRelaxed));
+                r.module = loadText (e.module);
+                r.control = loadText (e.control);
+                std::atomic_thread_fence (kAcquire);
+                ready = e.stamp.load (kRelaxed) == 2 * ticket;
+            }
+            if (! ready)
+            {
+                // Not written yet: its sender is between getting the ticket and writing it (microseconds), or stopped.
+                if (waitingSince == 0) waitingSince = now + 1;
+                if (now + 1 - std::min (now + 1, waitingSince) < kStuckMs) break;
+                forGeneration = generation + 1;   // skip it
+            }
+            waitingSince = 0;
+            taken = ticket;
+            q.taken.store (taken, kRelease);
+            if (forGeneration != generation) continue;   // for the slot's earlier owner, or skipped
+            if (r.change != Change::value && r.change != Change::state) r.change = Change::value;
+            if (static_cast<std::uint32_t> (r.gesture) > static_cast<std::uint32_t> (Gesture::end)) r.gesture = Gesture::set;
+            r.ticket = ticket;
+            out[n++] = std::move (r);
+        }
+        return n;
+    }
+
+    void Link::refuse (int slot, std::uint64_t instanceId, std::uint64_t ticket, const std::string& why)
+    {
+        if (slot < 0 || slot >= kMaxSlots || ticket == 0) return;
+        auto& s = block.slots[static_cast<std::size_t> (slot)];
+        if (s.instanceId.load (kRelaxed) != instanceId) return;
+        auto& f = s.queue.refusals[static_cast<std::size_t> (ticket % static_cast<std::uint64_t> (kMaxRefusals))];
+        beginWrite (f.seq);
+        f.ticket.store (ticket, kRelaxed);
+        storeText (f.why, why.empty() ? std::string ("Not done.") : why);
+        endWrite (f.seq);
+    }
+
+    void Link::answered (int slot, std::uint64_t instanceId, std::uint64_t ticket)
+    {
+        if (slot < 0 || slot >= kMaxSlots) return;
+        auto& s = block.slots[static_cast<std::size_t> (slot)];
+        if (s.instanceId.load (kRelaxed) != instanceId) return;
+        auto& q = s.queue;
+        const auto upTo = std::min (ticket, q.taken.load (kRelaxed));
+        if (upTo > q.answered.load (kRelaxed)) q.answered.store (upTo, kRelease);
     }
 
     // ---- one plug-in's publisher -------------------------------------------------------------------------------
@@ -447,6 +594,76 @@ namespace rack
         lastMs = now;
         lastWasFull = u.detailed;
         pending = Due::none;
+    }
+
+    int Publisher::serve (std::uint64_t now, const std::string& lock, const Apply& apply)
+    {
+        if (! apply) return 0;
+        const auto close = [&] (const Open& o) {
+            Request r;
+            r.module = o.module;
+            r.control = o.control;
+            r.value = o.value;
+            r.gesture = Gesture::end;
+            apply (r);   // ticket 0: the plug-in ends the host's gesture
+        };
+        const auto find = [this] (const Request& r) {
+            return std::find_if (open.begin(), open.end(), [&] (const Open& o) { return o.module == r.module && o.control == r.control; });
+        };
+
+        // Drags that stopped (the view closed or stalled mid-drag), or all of them while locked.
+        for (auto it = open.begin(); it != open.end();)
+        {
+            if (! lock.empty() || now - std::min (now, it->lastMs) >= kGestureMs) { close (*it); it = open.erase (it); }
+            else ++it;
+        }
+        if (slotIndex < 0) return 0;
+
+        std::array<Request, kMaxRequests> batch;
+        const int n = link.take (slotIndex, id, batch.data(), kMaxRequests, now, waitingSinceMs);
+        int applied = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            auto r = batch[static_cast<std::size_t> (i)];
+            if (! lock.empty()) { link.refuse (slotIndex, id, r.ticket, lock); continue; }
+            if (r.change == Change::state)
+            {
+                r.control.clear();
+                r.gesture = Gesture::set;
+                r.value = r.value >= 0.5f ? 1.0f : 0.0f;
+            }
+            else
+            {
+                if (r.gesture == Gesture::move)
+                {
+                    bool later = false;
+                    for (int j = i + 1; j < n && ! later; ++j)
+                    {
+                        const auto& o = batch[static_cast<std::size_t> (j)];
+                        later = o.change == Change::value && o.module == r.module && o.control == r.control;
+                    }
+                    if (later) { ++applied; continue; }   // a newer value of the same knob follows at once
+                }
+                const bool isOpen = find (r) != open.end();
+                if (r.gesture == Gesture::move && ! isOpen) r.gesture = Gesture::begin;
+                else if (r.gesture == Gesture::begin && isOpen) r.gesture = Gesture::move;
+                else if (r.gesture == Gesture::set && isOpen) r.gesture = Gesture::end;
+                else if (r.gesture == Gesture::end && ! isOpen) r.gesture = Gesture::set;
+            }
+
+            const auto why = apply (r);
+            if (r.change == Change::value)
+            {
+                auto it = find (r);
+                if (r.gesture == Gesture::end) { if (it != open.end()) open.erase (it); }
+                else if (why.empty() && r.gesture == Gesture::begin) open.push_back ({ r.module, r.control, r.value, now });
+                else if (why.empty() && r.gesture == Gesture::move && it != open.end()) { it->value = r.value; it->lastMs = now; }
+            }
+            if (! why.empty()) { link.refuse (slotIndex, id, r.ticket, why); continue; }
+            ++applied;
+        }
+        link.answered (slotIndex, id, ~std::uint64_t { 0 });   // every taken ticket, skipped ones too (refusals written)
+        return applied;
     }
 
     // ---- what they do together ---------------------------------------------------------------------------------
@@ -734,6 +951,8 @@ namespace rack
             bool f = true;
             o.push_back ('{');
             key (o, "id", f); str (o, "u" + std::to_string (u.slot >= 0 ? u.slot : static_cast<int> (i)));
+            key (o, "gen", f); o += std::to_string (u.generation);
+            key (o, "lock", f); str (o, u.lock);
             key (o, "product", f); str (o, productKey (u.product));
             key (o, "version", f); str (o, versionText (u.version));
             key (o, "track", f); str (o, u.track);

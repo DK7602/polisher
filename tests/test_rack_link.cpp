@@ -9,8 +9,11 @@
 #include <clocale>
 #include <cmath>
 #include <limits>
+#include <atomic>
 #include <memory>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace
 {
@@ -100,6 +103,7 @@ TEST_CASE ("Rack link: a plug-in's unit reaches the Rack whole, from another lib
     u.lines = { { rack::Level::ok, "Pitch rests: Honey Tune tunes this track" } };
     u.spectrum.assign (rack::kSpectrumBins, -40.0f);
     u.spectrum[10] = -12.0f;
+    u.lock = "Auto-Edit is running";
     CHECK (vox.publish (slot, 11, u, 200));
     CHECK_FALSE (vox.publish (slot, 99, u, 200));   // someone else's instance id: ignored
 
@@ -116,7 +120,9 @@ TEST_CASE ("Rack link: a plug-in's unit reaches the Rack whole, from another lib
     CHECK (s.latencyMs == Catch::Approx (55.0f));
     CHECK (s.detailed);
     CHECK (s.slot == slot);
+    CHECK (s.generation == 1);
     CHECK (s.instanceId == 11);
+    CHECK (s.lock == "Auto-Edit is running");
     REQUIRE (s.modules.size() == 3);
     CHECK (s.modules[0].key == "vox.pitch");
     CHECK (s.modules[0].state == rack::State::rest);
@@ -369,6 +375,8 @@ TEST_CASE ("Rack link: the JSON the Rack view reads", "[rack]")
 {
     auto vox = unit (rack::Product::voxology, rack::Role::vocal, "Lead \"Vox\"\\1\n");
     vox.slot = 4;
+    vox.generation = 7;
+    vox.lock = "Auto-Edit is running";
     auto eq = mod ("vox.eq");
     eq.summary = "Mud −3 dB";
     eq.values = { { "Mud", "−3.0 dB", 0.33f, true } };
@@ -402,7 +410,7 @@ TEST_CASE ("Rack link: the JSON the Rack view reads", "[rack]")
     CHECK (wellFormed (j));
     CHECK (j.find ("\"host\":\"voxology\"") != std::string::npos);
     CHECK (j.find ("\"hostHash\":42") != std::string::npos);
-    CHECK (j.find ("\"id\":\"u4\"") != std::string::npos);
+    CHECK (j.find ("\"id\":\"u4\",\"gen\":7,\"lock\":\"Auto-Edit is running\"") != std::string::npos);
     CHECK (j.find ("\"product\":\"voxology\"") != std::string::npos);
     CHECK (j.find ("\"version\":\"1.2.3\"") != std::string::npos);
     CHECK (j.find ("\"track\":\"Lead \\\"Vox\\\"\\\\1\\n\"") != std::string::npos);   // escaped
@@ -509,3 +517,426 @@ TEST_CASE ("Rack link: a view's JSON carries details only for the track it shows
     CHECK (json.find ("\"Ratio\"") != json.rfind ("\"Ratio\""));
 }
 
+
+// ---- stage 2: requests from a Rack view to the plug-in that owns a module ---------------------------------------
+
+namespace
+{
+    rack::Request knob (const char* module, const char* control, float value, rack::Gesture g = rack::Gesture::set)
+    {
+        rack::Request r;
+        r.change = rack::Change::value;
+        r.module = module;
+        r.control = control;
+        r.value = value;
+        r.gesture = g;
+        return r;
+    }
+
+    rack::Request power (const char* module, bool on)
+    {
+        rack::Request r;
+        r.change = rack::Change::state;
+        r.module = module;
+        r.value = on ? 1.0f : 0.0f;
+        return r;
+    }
+
+    // A plug-in that owns a unit: a publisher, and what its apply() was asked to do.
+    struct Owner
+    {
+        explicit Owner (rack::Link& l, const char* track = "Lead Vox") : pub (l), name (track)
+        {
+            pub.start();
+        }
+        bool publish (std::uint64_t now, const std::string& lock = {})
+        {
+            if (pub.due (now) == rack::Publisher::Due::none) return false;
+            auto u = unit (rack::Product::voxology, rack::Role::vocal, name, { mod ("vox.comp"), mod ("vox.pitch") });
+            u.lock = lock;
+            pub.publish (u, now);
+            return true;
+        }
+        int serve (std::uint64_t now, const std::string& lock = {})
+        {
+            return pub.serve (now, lock, [this] (const rack::Request& r) -> std::string {
+                seen.push_back (r);
+                if (r.module != "vox.comp" && r.module != "vox.pitch") return "This plug-in has no " + r.module + ".";
+                if (r.change == rack::Change::value && r.control == "speed") return "Pitch has no Speed knob.";
+                return {};
+            });
+        }
+        rack::Publisher pub;
+        std::string name;
+        std::vector<rack::Request> seen;
+    };
+}
+
+TEST_CASE ("Rack requests: a click in one plug-in's Rack reaches the plug-in that owns the module", "[rack][requests]")
+{
+    Memory mem;
+    rack::Link ownerSide (mem.data()), viewSide (mem.data());   // two libraries on the same memory
+    Owner vox (ownerSide);
+    REQUIRE (vox.publish (1000));
+    const auto units = viewSide.units (1000);
+    REQUIRE (units.size() == 1);
+    const auto& u = units[0];
+
+    std::string why;
+    const auto t1 = viewSide.request (u.slot, u.generation, knob ("vox.comp", "thresh", 0.25f), 1000, why);
+    const auto t2 = viewSide.request (u.slot, u.generation, power ("vox.pitch", false), 1000, why);
+    CHECK (why.empty());
+    REQUIRE (t1 > 0);
+    REQUIRE (t2 > t1);
+    CHECK (viewSide.answer (u.slot, u.generation, t1).outcome == rack::Outcome::pending);   // not taken yet
+
+    CHECK (vox.serve (1010) == 2);
+    REQUIRE (vox.seen.size() == 2);
+    CHECK (vox.seen[0].change == rack::Change::value);
+    CHECK (vox.seen[0].module == "vox.comp");
+    CHECK (vox.seen[0].control == "thresh");
+    CHECK (vox.seen[0].value == Catch::Approx (0.25f));
+    CHECK (vox.seen[0].gesture == rack::Gesture::set);
+    CHECK (vox.seen[0].ticket == t1);
+    CHECK (vox.seen[1].change == rack::Change::state);
+    CHECK (vox.seen[1].module == "vox.pitch");
+    CHECK (vox.seen[1].value == 0.0f);
+    CHECK (viewSide.answer (u.slot, u.generation, t1).outcome == rack::Outcome::applied);
+    CHECK (viewSide.answer (u.slot, u.generation, t2).outcome == rack::Outcome::applied);
+    CHECK (vox.serve (1020) == 0);   // each request once
+    CHECK (vox.seen.size() == 2);
+
+    // The plug-in can't do it: refused, with its reason, for the view to show.
+    const auto t3 = viewSide.request (u.slot, u.generation, knob ("vox.pitch", "speed", 0.5f), 1030, why);
+    const auto t4 = viewSide.request (u.slot, u.generation, power ("mix.space", true), 1030, why);
+    const auto t5 = viewSide.request (u.slot, u.generation, knob ("vox.comp", "ratio", 0.5f), 1030, why);
+    CHECK (vox.serve (1040) == 1);
+    auto a = viewSide.answer (u.slot, u.generation, t3);
+    CHECK (a.outcome == rack::Outcome::refused);
+    CHECK (a.why == "Pitch has no Speed knob.");
+    a = viewSide.answer (u.slot, u.generation, t4);
+    CHECK (a.outcome == rack::Outcome::refused);
+    CHECK (a.why == "This plug-in has no mix.space.");
+    CHECK (viewSide.answer (u.slot, u.generation, t5).outcome == rack::Outcome::applied);
+
+    // Values kept to 0..1 (and a value that isn't a number goes to 0); state requests are on or off; texts cut.
+    viewSide.request (u.slot, u.generation, knob ("vox.comp", "thresh", 7.0f), 1050, why);
+    viewSide.request (u.slot, u.generation, knob ("vox.comp", "thresh", std::numeric_limits<float>::quiet_NaN()), 1050, why);
+    auto odd = power ("vox.comp", true);
+    odd.value = 0.7f;
+    odd.control = "ignored";
+    odd.gesture = rack::Gesture::begin;
+    viewSide.request (u.slot, u.generation, odd, 1050, why);
+    viewSide.request (u.slot, u.generation, knob ("vox.comp", std::string (100, 'c').c_str(), 0.5f), 1050, why);
+    vox.seen.clear();
+    vox.serve (1060);
+    REQUIRE (vox.seen.size() == 4);
+    CHECK (vox.seen[0].value == 1.0f);
+    CHECK (vox.seen[1].value == 0.0f);
+    CHECK (vox.seen[2].value == 1.0f);
+    CHECK (vox.seen[2].control.empty());
+    CHECK (vox.seen[2].gesture == rack::Gesture::set);
+    CHECK (vox.seen[3].control == std::string (rack::kControlBytes - 1, 'c'));
+
+    // Tickets that were never handed out, and nonsense addresses.
+    CHECK (viewSide.answer (u.slot, u.generation, 0).outcome == rack::Outcome::gone);
+    CHECK (viewSide.answer (u.slot, u.generation, 9999).outcome == rack::Outcome::gone);
+    CHECK (viewSide.answer (-1, u.generation, t1).outcome == rack::Outcome::gone);
+    CHECK (viewSide.request (rack::kMaxSlots, 1, power ("vox.comp", true), 1070, why) == 0);
+    CHECK_FALSE (why.empty());
+}
+
+TEST_CASE ("Rack requests: a plug-in that closed or moved never gets another's requests", "[rack][requests]")
+{
+    Memory mem;
+    rack::Link link (mem.data());
+    std::string why;
+    auto owner = std::make_unique<Owner> (link);
+    REQUIRE (owner->publish (1000));
+    const auto u = link.units (1000).at (0);
+
+    // A request waiting when the plug-in closes: gone with it.
+    const auto t = link.request (u.slot, u.generation, knob ("vox.comp", "thresh", 0.3f), 1000, why);
+    REQUIRE (t > 0);
+    owner.reset();
+    CHECK (link.answer (u.slot, u.generation, t).outcome == rack::Outcome::gone);
+    CHECK (link.request (u.slot, u.generation, knob ("vox.comp", "thresh", 0.3f), 1000, why) == 0);
+    CHECK (why.find ("closed") != std::string::npos);
+
+    // Another plug-in takes the same slot: the view's old address (slot + generation) doesn't reach it, and the request
+    // that was waiting for the old one isn't served to it.
+    Owner next (link, "Bass");
+    REQUIRE (next.publish (1100));
+    const auto v = link.units (1100).at (0);
+    CHECK (v.slot == u.slot);
+    CHECK (v.generation != u.generation);
+    CHECK (link.request (u.slot, u.generation, knob ("vox.comp", "thresh", 0.3f), 1100, why) == 0);
+    CHECK (next.serve (1100) == 0);
+    CHECK (next.seen.empty());
+    const auto mine = link.request (v.slot, v.generation, knob ("vox.comp", "ratio", 0.6f), 1100, why);
+    REQUIRE (mine > 0);
+    CHECK (next.serve (1110) == 1);
+    REQUIRE (next.seen.size() == 1);
+    CHECK (next.seen[0].control == "ratio");
+
+    // A request sent with the old generation in the moment the slot changes hands: taken and dropped, not served.
+    Memory mem2;
+    rack::Link raw (mem2.data());
+    const int slot = raw.claim (5, 100);
+    raw.publish (slot, 5, unit (rack::Product::link, rack::Role::track, "Kick"), 100);
+    const auto oldGen = raw.units (100).at (0).generation;
+    REQUIRE (raw.request (slot, oldGen, knob ("link.comp", "thresh", 0.5f), 100, why) > 0);
+    raw.release (slot, 5);
+    REQUIRE (raw.claim (6, 200) == slot);
+    raw.publish (slot, 6, unit (rack::Product::link, rack::Role::track, "Kick"), 200);
+    rack::Request got[4];
+    std::uint64_t memo = 0;
+    CHECK (raw.take (slot, 6, got, 4, 200, memo) == 0);
+    CHECK (raw.take (slot, 5, got, 4, 200, memo) == 0);   // not the owner any more
+    // A silent unit (its heartbeat older than kAliveMs) takes no requests.
+    CHECK (raw.request (slot, raw.units (200).at (0).generation, knob ("link.comp", "thresh", 0.5f), 200 + rack::kAliveMs + 1, why) == 0);
+}
+
+TEST_CASE ("Rack requests: a locked unit (Auto Mix running, padlock) takes none", "[rack][requests]")
+{
+    Memory mem;
+    rack::Link link (mem.data());
+    Owner vox (link);
+    REQUIRE (vox.publish (1000));
+    auto u = link.units (1000).at (0);
+    std::string why;
+
+    // Locked when the view asks: refused at once, with the lock's reason.
+    vox.pub.due (1000 + rack::Publisher::kBriefMs);
+    vox.pub.publish ([&] { auto x = unit (rack::Product::voxology, rack::Role::vocal, "Lead Vox"); x.lock = "Auto-Edit is running."; return x; }(),
+                     1000 + rack::Publisher::kBriefMs);
+    CHECK (link.request (u.slot, u.generation, knob ("vox.comp", "thresh", 0.3f), 1900, why) == 0);
+    CHECK (why == "Auto-Edit is running.");
+
+    // Locked after the view asked (the lock wasn't published yet): refused by the owner, nothing applied.
+    vox.pub.due (1000 + 2 * rack::Publisher::kBriefMs);
+    vox.pub.publish (unit (rack::Product::voxology, rack::Role::vocal, "Lead Vox"), 1000 + 2 * rack::Publisher::kBriefMs);
+    const auto t = link.request (u.slot, u.generation, knob ("vox.comp", "thresh", 0.3f), 2600, why);
+    REQUIRE (t > 0);
+    CHECK (vox.serve (2610, "Auto Mix is running.") == 0);
+    CHECK (vox.seen.empty());
+    const auto a = link.answer (u.slot, u.generation, t);
+    CHECK (a.outcome == rack::Outcome::refused);
+    CHECK (a.why == "Auto Mix is running.");
+
+    // A drag in progress when the lock comes: closed (the host's gesture ends), then refused.
+    link.request (u.slot, u.generation, knob ("vox.comp", "thresh", 0.4f, rack::Gesture::begin), 2700, why);
+    CHECK (vox.serve (2700) == 1);
+    link.request (u.slot, u.generation, knob ("vox.comp", "thresh", 0.5f, rack::Gesture::move), 2710, why);
+    vox.seen.clear();
+    CHECK (vox.serve (2720, "Auto Mix is running.") == 0);
+    REQUIRE (vox.seen.size() == 1);
+    CHECK (vox.seen[0].gesture == rack::Gesture::end);
+    CHECK (vox.seen[0].ticket == 0);
+    CHECK (vox.seen[0].value == Catch::Approx (0.4f));   // where it was, not the refused move
+}
+
+TEST_CASE ("Rack requests: knob drags reach the host as one balanced gesture", "[rack][requests]")
+{
+    using G = rack::Gesture;
+    Memory mem;
+    rack::Link link (mem.data());
+    Owner vox (link);
+    REQUIRE (vox.publish (1000));
+    const auto u = link.units (1000).at (0);
+    std::string why;
+    auto send = [&] (const char* control, float v, G g, std::uint64_t now) {
+        return link.request (u.slot, u.generation, knob ("vox.comp", control, v, g), now, why);
+    };
+
+    // begin, moves, end: as sent. Moves of one knob in one batch: only the newest (the others count as applied).
+    send ("thresh", 0.1f, G::begin, 1000);
+    vox.serve (1000);
+    const auto m1 = send ("thresh", 0.2f, G::move, 1010);
+    send ("thresh", 0.3f, G::move, 1010);
+    send ("ratio", 0.5f, G::move, 1010);   // another knob at the same time: its own gesture
+    send ("thresh", 0.4f, G::move, 1010);
+    CHECK (vox.serve (1020) == 4);
+    REQUIRE (vox.seen.size() == 3);
+    CHECK (vox.seen[0].gesture == G::begin);
+    CHECK (vox.seen[1].control == "ratio");
+    CHECK (vox.seen[1].gesture == G::begin);   // a move without a begin begins
+    CHECK (vox.seen[2].control == "thresh");
+    CHECK (vox.seen[2].gesture == G::move);
+    CHECK (vox.seen[2].value == Catch::Approx (0.4f));
+    CHECK (link.answer (u.slot, u.generation, m1).outcome == rack::Outcome::applied);
+
+    vox.seen.clear();
+    send ("thresh", 0.45f, G::begin, 1030);   // a begin while open: a move
+    send ("thresh", 0.5f, G::end, 1030);
+    send ("ratio", 0.6f, G::set, 1030);        // a set while open: ends it
+    send ("ratio", 0.7f, G::end, 1030);        // an end without a begin: a set
+    vox.serve (1040);
+    REQUIRE (vox.seen.size() == 4);
+    CHECK (vox.seen[0].gesture == G::move);
+    CHECK (vox.seen[1].gesture == G::end);
+    CHECK (vox.seen[2].gesture == G::end);
+    CHECK (vox.seen[3].gesture == G::set);
+
+    // The view closed mid-drag: the owner ends the gesture itself after kGestureMs, at the last value.
+    vox.seen.clear();
+    send ("thresh", 0.6f, G::begin, 2000);
+    vox.serve (2000);
+    send ("thresh", 0.65f, G::move, 2100);
+    vox.serve (2100);
+    vox.serve (2100 + rack::kGestureMs - 1);
+    CHECK (vox.seen.size() == 2);
+    vox.serve (2100 + rack::kGestureMs);
+    REQUIRE (vox.seen.size() == 3);
+    CHECK (vox.seen[2].gesture == G::end);
+    CHECK (vox.seen[2].ticket == 0);
+    CHECK (vox.seen[2].value == Catch::Approx (0.65f));
+    // ... and a move after that starts a new one.
+    send ("thresh", 0.7f, G::move, 4500);
+    vox.serve (4500);
+    CHECK (vox.seen.back().gesture == G::begin);
+
+    // A refused begin opens nothing: its end comes as a set.
+    vox.seen.clear();
+    send ("speed", 0.5f, G::begin, 4600);
+    vox.serve (4600);
+    send ("speed", 0.5f, G::end, 4610);
+    vox.serve (4610);
+    REQUIRE (vox.seen.size() == 2);
+    CHECK (vox.seen[1].gesture == G::set);
+
+    // Stopped by the host (another project plays): open drags still close in time.
+    vox.seen.clear();
+    vox.pub.stop();
+    vox.pub.due (6000);
+    vox.serve (4500 + rack::kGestureMs);
+    REQUIRE (vox.seen.size() == 1);
+    CHECK (vox.seen[0].gesture == G::end);
+}
+
+TEST_CASE ("Rack requests: a full queue, and a sender that stopped half-way", "[rack][requests]")
+{
+    Memory mem;
+    rack::Link link (mem.data());
+    Owner vox (link);
+    REQUIRE (vox.publish (1000));
+    const auto u = link.units (1000).at (0);
+    std::string why;
+
+    // kMaxRequests waiting: the next is refused as busy, nothing overwritten; served, there's room again.
+    std::vector<std::uint64_t> tickets;
+    for (int i = 0; i < rack::kMaxRequests; ++i)
+        tickets.push_back (link.request (u.slot, u.generation, knob ("vox.comp", "thresh", static_cast<float> (i) / 100.0f), 1000, why));
+    for (auto t : tickets) CHECK (t > 0);
+    CHECK (link.request (u.slot, u.generation, knob ("vox.comp", "thresh", 0.9f), 1000, why) == 0);
+    CHECK (why.find ("busy") != std::string::npos);
+    CHECK (vox.serve (1010) == rack::kMaxRequests);
+    REQUIRE (vox.seen.size() == static_cast<std::size_t> (rack::kMaxRequests));
+    for (int i = 0; i < rack::kMaxRequests; ++i) CHECK (vox.seen[static_cast<std::size_t> (i)].value == Catch::Approx (static_cast<float> (i) / 100.0f));
+    CHECK (link.request (u.slot, u.generation, knob ("vox.comp", "thresh", 0.9f), 1020, why) > 0);
+    vox.serve (1020);
+
+    // A sender took a ticket and never wrote it (its plug-in stopped in that moment): the owner waits kStuckMs, then
+    // skips it and serves the ones after. Its place in the ring was never held, so the next round uses it normally.
+    auto* block = static_cast<rack::Block*> (mem.data());
+    auto& q = block->slots[static_cast<std::size_t> (u.slot)].queue;
+    const auto stuck = q.issued.fetch_add (1) + 1;
+    const auto after = link.request (u.slot, u.generation, knob ("vox.comp", "ratio", 0.3f), 2000, why);
+    REQUIRE (after == stuck + 1);
+    vox.seen.clear();
+    CHECK (vox.serve (2000) == 0);
+    CHECK (link.answer (u.slot, u.generation, after).outcome == rack::Outcome::pending);
+    CHECK (vox.serve (2000 + rack::kStuckMs - 1) == 0);
+    CHECK (vox.serve (2000 + rack::kStuckMs) == 1);
+    REQUIRE (vox.seen.size() == 1);
+    CHECK (vox.seen[0].control == "ratio");
+    CHECK (link.answer (u.slot, u.generation, after).outcome == rack::Outcome::applied);
+
+    // A sender that stopped while writing (its place still held): a later sender for the same place gives up rather
+    // than mix its request into the other's; the owner skips both in time.
+    const auto held = q.issued.fetch_add (1) + 1;
+    auto& place = q.ring[static_cast<std::size_t> (held % rack::kMaxRequests)];
+    place.stamp.store (2 * held - 1);
+    for (int i = 0; i < rack::kMaxRequests - 1; ++i)
+        REQUIRE (link.request (u.slot, u.generation, knob ("vox.comp", "thresh", 0.5f), 3000, why) > 0);
+    vox.serve (3000);
+    vox.serve (3000 + rack::kStuckMs);   // skips `held`, serves the others
+    CHECK (link.request (u.slot, u.generation, knob ("vox.comp", "thresh", 0.5f), 4500, why) == 0);   // lands on `held`'s place
+    CHECK (why.find ("busy") != std::string::npos);
+    vox.serve (4500);
+    vox.serve (4500 + rack::kStuckMs);   // skips that one too
+    const auto next = link.request (u.slot, u.generation, knob ("vox.comp", "ratio", 0.8f), 6000, why);
+    REQUIRE (next > 0);
+    vox.seen.clear();
+    vox.serve (6000);
+    REQUIRE (vox.seen.size() == 1);
+    CHECK (vox.seen[0].ticket == next);
+}
+
+TEST_CASE ("Rack requests: many views sending at once, the owner serving meanwhile", "[rack][requests]")
+{
+    // Four senders (Rack views in four plug-ins) and the owner on their own threads: every request that got a ticket
+    // is served exactly once, whole (its value says which sender and which request it was), in each sender's order.
+    Memory mem;
+    rack::Link link (mem.data());
+    Owner vox (link);
+    REQUIRE (vox.publish (1000));
+    const auto u = link.units (1000).at (0);
+
+    constexpr int kSenders = 4, kEach = 3000;
+    std::atomic<bool> sending { true };
+    std::atomic<int> sent { 0 };
+    std::vector<std::vector<std::uint64_t>> tickets (kSenders);
+    std::vector<std::thread> senders;
+    for (int s = 0; s < kSenders; ++s)
+        senders.emplace_back ([&, s] {
+            rack::Link mine (mem.data());
+            std::string why;
+            for (int i = 0; i < kEach; ++i)
+            {
+                // control "s<sender>", value i / kEach: a torn request would mix them up.
+                const std::string control = "s" + std::to_string (s);
+                auto r = knob ("vox.comp", control.c_str(), static_cast<float> (i) / kEach);
+                r.gesture = rack::Gesture::set;
+                std::uint64_t t = 0;
+                while ((t = mine.request (u.slot, u.generation, r, 1000, why)) == 0) std::this_thread::yield();
+                tickets[static_cast<std::size_t> (s)].push_back (t);
+                sent.fetch_add (1);
+            }
+        });
+
+    std::vector<rack::Request> got;
+    std::thread owner ([&] {
+        rack::Request batch[rack::kMaxRequests];
+        std::uint64_t memo = 0;
+        while (sending.load() || static_cast<int> (got.size()) < kSenders * kEach)
+        {
+            const int n = link.take (u.slot, vox.pub.slot() >= 0 ? link.units (1000).at (0).instanceId : 0, batch, rack::kMaxRequests, 1000, memo);
+            for (int i = 0; i < n; ++i) got.push_back (batch[i]);
+            link.answered (u.slot, link.units (1000).at (0).instanceId, ~std::uint64_t { 0 });
+            if (n == 0) std::this_thread::yield();
+        }
+    });
+    for (auto& t : senders) t.join();
+    sending.store (false);
+    owner.join();
+
+    REQUIRE (static_cast<int> (got.size()) == kSenders * kEach);
+    std::vector<int> nextOf (kSenders, 0);
+    std::uint64_t lastTicket = 0;
+    for (const auto& r : got)
+    {
+        CHECK (r.ticket > lastTicket);
+        lastTicket = r.ticket;
+        REQUIRE (r.module == "vox.comp");
+        REQUIRE (r.control.size() == 2);
+        const int s = r.control[1] - '0';
+        REQUIRE ((s >= 0 && s < kSenders));
+        auto& next = nextOf[static_cast<std::size_t> (s)];
+        REQUIRE (r.value == Catch::Approx (static_cast<float> (next) / kEach).margin (1e-6));
+        ++next;
+    }
+    for (int s = 0; s < kSenders; ++s)
+        for (auto t : tickets[static_cast<std::size_t> (s)])
+            CHECK (link.answer (u.slot, u.generation, t).outcome == rack::Outcome::applied);
+}
