@@ -43,6 +43,7 @@ namespace rack
     constexpr int kMaxSlots = 256;          // every Mixology Link, Voxology, Honey Tune, Mixology and Masterology
     constexpr int kMaxModules = 16;         // a Link has 15 (the Assist EQ and its processing modules)
     constexpr int kMaxValues = 8;           // the knobs the view draws
+    constexpr int kMaxSteps = 64;           // a choice knob's options at most
     constexpr int kMaxBands = 8;            // an EQ's bands
     constexpr int kMaxLines = 4;            // a plug-in's own "together" lines
     constexpr int kSpectrumBins = 128;      // log-spaced 20 Hz - 20 kHz: bin i at 20 * 1000^(i / 127) Hz
@@ -68,12 +69,17 @@ namespace rack
     enum class Level : std::uint32_t { ok = 0, info, warn };
 
     /** One knob as the view shows it: its name, its value as text ("3.2 kHz"), where it sits (0..1) and whether it is
-        bipolar (its arc grows from the middle). */
+        bipolar (its arc grows from the middle). Stage 2: `key` names the control the Rack can turn ("" = shown only, as
+        a key Pitch follows or what the Beat Listener hears); the owner turns a request's 0..1 back into the value with
+        its own curve (the same one that gave `norm`). `steps`: a choice of that many (Mode, Speed: the Rack clicks
+        through them, step i at i / (steps - 1)), 0 = continuous. */
     struct Value
     {
         std::string name, text;
         float norm = 0.5f;
         bool bi = false;
+        std::string key;
+        int steps = 0;
     };
 
     struct Band
@@ -101,6 +107,7 @@ namespace rack
         std::vector<Value> values;      // up to kMaxValues
         std::vector<Band> bands;        // up to kMaxBands (EQs)
         std::uint32_t layers = 0;       // SpaceLayer bits (Mixology's Space)
+        bool switchable = false;        // the Rack can turn it on / off (it has its own on switch)
     };
 
     struct Line
@@ -202,7 +209,8 @@ namespace rack
         Text<kValueNameBytes> name;
         Text<kValueTextBytes> text;
         std::atomic<float> norm;
-        std::atomic<std::uint32_t> bi;
+        std::atomic<std::uint32_t> bi, steps;
+        Text<kControlBytes> key;
     };
 
     struct BandSlot
@@ -217,7 +225,7 @@ namespace rack
         Text<kKeyBytes> key;
         Text<kSummaryBytes> summary;
         Text<kByBytes> by;
-        std::atomic<std::uint32_t> state, meterKind, layers, valueCount, bandCount;
+        std::atomic<std::uint32_t> state, meterKind, layers, valueCount, bandCount, switchable;
         std::atomic<float> meter;
         std::array<ValueSlot, kMaxValues> values;
         std::array<BandSlot, kMaxBands> bands;

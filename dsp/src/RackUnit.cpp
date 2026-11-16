@@ -12,6 +12,8 @@ namespace polisher::rackunit
         const char* const kEqNames[kEqBands] = { "Low End", "Bass", "Low Mid", "Mid", "Upper Mid", "Presence", "Air" };
         const char* const kStemNames[kStems] = { "Vocals", "Drums", "Bass", "Other" };
         const char* const kDynNames[kDynBands] = { "Low", "Lo-Mid", "Hi-Mid", "High" };
+        const char* const kStemKeys[kStems] = { "stemVoc", "stemDrums", "stemBass", "stemOther" };   // plugin/ModuleParams.h
+        const char* const kImagerKeys[3] = { "imgLow", "imgMid", "imgHigh" };
 
         // Fixed decimals without printf (whose decimal point follows the host's locale); no sign.
         std::string digits (double v, int decimals)
@@ -46,9 +48,64 @@ namespace polisher::rackunit
         }
         float choice (int i, int count) { return count > 1 ? static_cast<float> (std::clamp (i, 0, count - 1)) / static_cast<float> (count - 1) : 0.0f; }
 
+        // Every knob the Rack can turn: its parameter's id and range, as the host has it (plugin/PluginProcessor.cpp,
+        // plugin/ModuleParams.h). skew: JUCE's skew factor (1 = linear); centre: JUCE's skew for a centre value instead;
+        // steps: a choice of that many.
+        struct Knob
+        {
+            const char* key;
+            double lo, hi, skew, centre;
+            int steps;
+        };
+        const Knob kKnobs[] = {
+            { "ulAmount", 0, 100, 1, 0, 0 }, { "ulLength", 5, 50, 0.6, 0, 0 }, { "ulFocus", 0, 2, 1, 0, 3 },
+            { "eqGain1", -kEqMaxGainDb, kEqMaxGainDb, 1, 0, 0 }, { "eqGain2", -kEqMaxGainDb, kEqMaxGainDb, 1, 0, 0 },
+            { "eqGain3", -kEqMaxGainDb, kEqMaxGainDb, 1, 0, 0 }, { "eqGain4", -kEqMaxGainDb, kEqMaxGainDb, 1, 0, 0 },
+            { "eqGain5", -kEqMaxGainDb, kEqMaxGainDb, 1, 0, 0 }, { "eqGain6", -kEqMaxGainDb, kEqMaxGainDb, 1, 0, 0 },
+            { "eqGain7", -kEqMaxGainDb, kEqMaxGainDb, 1, 0, 0 },
+            { "stemVoc", -StemEQ::kMaxGainDb, StemEQ::kMaxGainDb, 1, 0, 0 }, { "stemDrums", -StemEQ::kMaxGainDb, StemEQ::kMaxGainDb, 1, 0, 0 },
+            { "stemBass", -StemEQ::kMaxGainDb, StemEQ::kMaxGainDb, 1, 0, 0 }, { "stemOther", -StemEQ::kMaxGainDb, StemEQ::kMaxGainDb, 1, 0, 0 },
+            { "tsAmount", 0, 100, 1, 0, 0 }, { "tsRange", 1, 6, 1, 0, 0 }, { "tsSpeed", 0, 2, 1, 0, 3 },
+            { "rtAmount", 0, 100, 1, 0, 0 }, { "rtSens", 0, 100, 1, 0, 0 }, { "rtRelease", 20, 300, 0.5, 0, 0 }, { "rtFocus", 0, 2, 1, 0, 3 },
+            { "bassMono", 0, kBassMonoMaxHz, 1, 0, 0 }, { "bassTame", 0, 100, 1, 0, 0 }, { "bassPunch", 0, 100, 1, 0, 0 },
+            { "glueChar", 0, 2, 1, 0, 3 }, { "glueThr", -40, 0, 1, 0, 0 }, { "glueRatio", 1, 10, 0.5, 0, 0 }, { "glueAtk", 0.1, 30, 0.4, 0, 0 },
+            { "glueRel", 50, 1200, 0.5, 0, 0 }, { "glueSc", 20, 250, 1, 90, 0 }, { "glueMix", 0, 100, 1, 0, 0 }, { "glueGain", -12, 12, 1, 0, 0 },
+            { "imgLow", 0, 200, 1, 0, 0 }, { "imgMid", 0, 200, 1, 0, 0 }, { "imgHigh", 0, 200, 1, 0, 0 },
+            { "satMode", 0, 2, 1, 0, 3 }, { "satFocus", 0, 3, 1, 0, 4 }, { "satDrive", 0, Saturation::kMaxDriveDb, 1, 0, 0 }, { "satMix", 0, 100, 1, 0, 0 },
+            { "clipLevel", -9, 3, 1, 0, 0 }, { "clipSoftness", 0, 100, 1, 0, 0 }, { "clipOversampling", 0, 3, 1, 0, 4 },
+            { "drive", 0, 24, 1, 0, 0 }, { "inTrim", kMinTrimDb, 0, 1, 0, 0 }, { "ceiling", -3, 0, 1, 0, 0 }, { "release", 10, 1000, 0.4, 0, 0 },
+            { "maxBassFirst", 0, 100, 1, 0, 0 },
+        };
+
+        const Knob* knobSpec (const std::string& key)
+        {
+            for (const auto& k : kKnobs)
+                if (key == k.key) return &k;
+            return nullptr;
+        }
+
+        double skewOf (const Knob& k)
+        {
+            return k.centre > k.lo && k.centre < k.hi ? std::log (0.5) / std::log ((k.centre - k.lo) / (k.hi - k.lo)) : k.skew;
+        }
+
+        float knobNorm (const Knob& k, double value)
+        {
+            if (k.steps >= 2) return choice (static_cast<int> (std::lround (value - k.lo)), k.steps);
+            return skewed (value, k.lo, k.hi, skewOf (k));
+        }
+
+        // Shown only (what the Dynamics bands do now, the loudness Masterology aims for).
         void add (rack::Module& m, const std::string& name, const std::string& text, float norm, bool bi = false)
         {
             if (m.values.size() < static_cast<std::size_t> (rack::kMaxValues)) m.values.push_back ({ name, text, norm, bi });
+        }
+        // A knob the Rack can turn, at `value` in its parameter's units.
+        void add (rack::Module& m, const std::string& name, const std::string& text, const std::string& key, double value, bool bi = false)
+        {
+            const auto* k = knobSpec (key);
+            if (k == nullptr || m.values.size() >= static_cast<std::size_t> (rack::kMaxValues)) return;
+            m.values.push_back ({ name, text, knobNorm (*k, value), bi, key, k->steps });
         }
         void join (std::string& s, const std::string& part, std::size_t limit = 64)
         {
@@ -74,10 +131,39 @@ namespace polisher::rackunit
         std::string signedPct (double v) { return std::string (v > 0.0 ? "+" : showsNegative (v, 0) ? kMinus : "") + digits (v, 0) + " %"; }
     }
 
+    const char* switchOf (const std::string& moduleKey)
+    {
+        static const std::pair<const char*, const char*> kSwitches[] = {
+            { "mas.unlimiter", "ulOn" }, { "mas.tonaleq", "eqOn" }, { "mas.stemeq", "stemOn" }, { "mas.steady", "tsOn" },
+            { "mas.resonance", "rtOn" }, { "mas.bass", "bassOn" }, { "mas.glue", "glueOn" }, { "mas.dynamics", "dynOn" },
+            { "mas.imager", "imgOn" }, { "mas.sat", "satOn" }, { "mas.clipper", "clipOn" },
+        };
+        for (const auto& [module, param] : kSwitches)
+            if (moduleKey == module) return param;
+        return nullptr;
+    }
+
+    bool fromKnob (const std::string& key, float knob, double& value)
+    {
+        const auto* k = knobSpec (key);
+        if (k == nullptr) return false;
+        const double n = std::clamp (std::isfinite (knob) ? static_cast<double> (knob) : 0.0, 0.0, 1.0);
+        if (k->steps >= 2)
+            value = k->lo + std::round (n * (k->steps - 1));
+        else
+        {
+            const double s = skewOf (*k);
+            value = k->lo + (s > 0.0 && s != 1.0 ? std::pow (n, 1.0 / s) : n) * (k->hi - k->lo);
+        }
+        value = std::clamp (value, k->lo, k->hi);
+        return true;
+    }
+
     std::vector<rack::Module> modules (const State& s, bool full)
     {
         std::vector<rack::Module> out;
         auto finish = [&] (rack::Module& m, const char* idleText = "Set to do nothing") {
+            m.switchable = switchOf (m.key) != nullptr;
             if (m.state == rack::State::off) m.summary = "Off";
             else if (m.state == rack::State::idle) m.summary = idleText;
             if (! full)
@@ -94,9 +180,9 @@ namespace polisher::rackunit
             static const char* const kFocus[] = { "Full", "Kick", "Snap" };
             const int focus = std::clamp (static_cast<int> (u.focus), 0, 2);
             auto m = cell ("mas.unlimiter", u.enabled, u.amount < 0.5);
-            add (m, "Amount", pct (u.amount), lin (u.amount, 0.0, 100.0));
-            add (m, "Length", ms (u.lengthMs), skewed (u.lengthMs, 5.0, 50.0, 0.6));
-            add (m, "Focus", kFocus[focus], choice (focus, 3));
+            add (m, "Amount", pct (u.amount), "ulAmount", u.amount);
+            add (m, "Length", ms (u.lengthMs), "ulLength", u.lengthMs);
+            add (m, "Focus", kFocus[focus], "ulFocus", focus);
             m.summary = "Amount " + pct (u.amount);
             if (focus != 0) join (m.summary, std::string ("Focus ") + kFocus[focus]);
             finish (m);
@@ -113,7 +199,7 @@ namespace polisher::rackunit
                 const auto i = static_cast<std::size_t> (b);
                 const auto& spec = kEqBandSpecs[i];
                 const double g = e.gainDb[i];
-                add (m, kEqNames[b], signedDb (g), lin (g, -kEqMaxGainDb, kEqMaxGainDb), true);
+                add (m, kEqNames[b], signedDb (g), "eqGain" + std::to_string (b + 1), g, true);
                 if (std::abs (g) < 0.05) continue;
                 const char* where = e.channels[i] == EqChannels::mid ? " (Mid)" : e.channels[i] == EqChannels::side ? " (Side)" : "";
                 join (m.summary, std::string (kEqNames[b]) + " " + signedDb (g) + where);
@@ -133,7 +219,7 @@ namespace polisher::rackunit
             for (int k = 0; k < kStems; ++k)
             {
                 const double g = t.gainDb[static_cast<std::size_t> (k)];
-                add (m, kStemNames[k], signedDb (g), lin (g, -StemEQ::kMaxGainDb, StemEQ::kMaxGainDb), true);
+                add (m, kStemNames[k], signedDb (g), kStemKeys[k], g, true);
                 if (std::abs (g) >= 0.05) join (m.summary, std::string (kStemNames[k]) + " " + signedDb (g));
             }
             finish (m, "Flat");
@@ -145,9 +231,9 @@ namespace polisher::rackunit
             static const char* const kSpeeds[] = { "Slow", "Medium", "Fast" };
             const int speed = std::clamp (t.speed, 0, 2);
             auto m = cell ("mas.steady", t.enabled, t.amount < 0.5);
-            add (m, "Amount", pct (t.amount), lin (t.amount, 0.0, 100.0));
-            add (m, "Range", db (t.rangeDb), lin (t.rangeDb, 1.0, 6.0));
-            add (m, "Speed", kSpeeds[speed], choice (speed, 3));
+            add (m, "Amount", pct (t.amount), "tsAmount", t.amount);
+            add (m, "Range", db (t.rangeDb), "tsRange", t.rangeDb);
+            add (m, "Speed", kSpeeds[speed], "tsSpeed", speed);
             add (m, "Target", s.steadyHasTarget ? "The song's tone" : "Follows the music", s.steadyHasTarget ? 1.0f : 0.0f);
             m.summary = "Amount " + pct (t.amount);
             join (m.summary, s.steadyHasTarget ? "holds the song's tone" : "follows the music");
@@ -160,10 +246,10 @@ namespace polisher::rackunit
             static const char* const kFocus[] = { "Full", "Boxiness", "Harshness" };
             const int focus = std::clamp (static_cast<int> (r.focus), 0, 2);
             auto m = cell ("mas.resonance", r.enabled, r.amount < 0.5);
-            add (m, "Amount", pct (r.amount), lin (r.amount, 0.0, 100.0));
-            add (m, "Sensitivity", pct (r.sensitivity), lin (r.sensitivity, 0.0, 100.0));
-            add (m, "Release", ms (r.releaseMs), skewed (r.releaseMs, 20.0, 300.0, 0.5));
-            add (m, "Focus", kFocus[focus], choice (focus, 3));
+            add (m, "Amount", pct (r.amount), "rtAmount", r.amount);
+            add (m, "Sensitivity", pct (r.sensitivity), "rtSens", r.sensitivity);
+            add (m, "Release", ms (r.releaseMs), "rtRelease", r.releaseMs);
+            add (m, "Focus", kFocus[focus], "rtFocus", focus);
             m.summary = "Amount " + pct (r.amount);
             if (focus != 0) join (m.summary, kFocus[focus]);
             gr (m, s, s.meters.resonance);
@@ -175,9 +261,9 @@ namespace polisher::rackunit
             const auto& b = s.bass;
             const bool mono = b.monoHz >= kBassMonoOffHz;
             auto m = cell ("mas.bass", b.enabled, ! mono && b.tame < 0.0005 && b.punch < 0.0005);
-            add (m, "Mono Below", mono ? hz (b.monoHz) : "Off", lin (b.monoHz, 0.0, kBassMonoMaxHz));
-            add (m, "Sub Tame", pct (b.tame * 100.0), lin (b.tame, 0.0, 1.0));
-            add (m, "Punch", pct (b.punch * 100.0), lin (b.punch, 0.0, 1.0));
+            add (m, "Mono Below", mono ? hz (b.monoHz) : "Off", "bassMono", b.monoHz);
+            add (m, "Sub Tame", pct (b.tame * 100.0), "bassTame", b.tame * 100.0);
+            add (m, "Punch", pct (b.punch * 100.0), "bassPunch", b.punch * 100.0);
             if (mono) join (m.summary, "Mono below " + hz (b.monoHz));
             if (b.tame >= 0.0005) join (m.summary, "Sub tame " + pct (b.tame * 100.0));
             if (b.punch >= 0.0005) join (m.summary, "Punch " + pct (b.punch * 100.0));
@@ -191,14 +277,14 @@ namespace polisher::rackunit
             static const char* const kChar[] = { "Bus", "Opto", "Tube" };
             const int character = std::clamp (static_cast<int> (g.character), 0, 2);
             auto m = cell ("mas.glue", g.enabled, GlueCompressor::isNeutral (g));
-            add (m, "Character", kChar[character], choice (character, 3));
-            add (m, "Threshold", db (g.thresholdDb), lin (g.thresholdDb, -40.0, 0.0));
-            add (m, "Ratio", ratio (g.ratio), skewed (g.ratio, 1.0, 10.0, 0.5));
-            add (m, "Attack", ms (g.attackMs), skewed (g.attackMs, 0.1, 30.0, 0.4));
-            add (m, "Release", g.autoRelease ? "Auto" : ms (g.releaseMs), skewed (g.releaseMs, 50.0, 1200.0, 0.5));
-            add (m, "Ignore Lows", g.sidechainHz <= 20.0 ? "Off" : hz (g.sidechainHz), lin (g.sidechainHz, 20.0, 250.0));
-            add (m, "Mix", pct (g.mix * 100.0), lin (g.mix, 0.0, 1.0));
-            add (m, "Gain", signedDb (g.gainDb), lin (g.gainDb, -12.0, 12.0), true);
+            add (m, "Character", kChar[character], "glueChar", character);
+            add (m, "Threshold", db (g.thresholdDb), "glueThr", g.thresholdDb);
+            add (m, "Ratio", ratio (g.ratio), "glueRatio", g.ratio);
+            add (m, "Attack", ms (g.attackMs), "glueAtk", g.attackMs);
+            add (m, "Release", g.autoRelease ? "Auto" : ms (g.releaseMs), "glueRel", g.releaseMs);
+            add (m, "Ignore Lows", g.sidechainHz <= 20.0 ? "Off" : hz (g.sidechainHz), "glueSc", g.sidechainHz);
+            add (m, "Mix", pct (g.mix * 100.0), "glueMix", g.mix * 100.0);
+            add (m, "Gain", signedDb (g.gainDb), "glueGain", g.gainDb, true);
             m.summary = kChar[character];
             if (g.ratio > kGlueRatioNeutral) join (m.summary, ratio (g.ratio) + kDot + "Threshold " + db (g.thresholdDb));
             if (g.mix < 0.995) join (m.summary, "Mix " + pct (g.mix * 100.0));
@@ -240,7 +326,7 @@ namespace polisher::rackunit
             auto m = cell ("mas.imager", im.enabled, idle);
             for (int i = 0; i < 3; ++i)
             {
-                add (m, kNames[i], pct (w[i]), lin (w[i], 0.0, 200.0));
+                add (m, kNames[i], pct (w[i]), kImagerKeys[i], w[i]);
                 if (std::abs (w[i] - 100.0) >= 0.5) join (m.summary, std::string (kNames[i]) + " " + pct (w[i]));
             }
             finish (m);
@@ -253,10 +339,10 @@ namespace polisher::rackunit
             static const char* const kFocus[] = { "Full", "Bass only", "Highs only", "Bass + Highs" };
             const int mode = std::clamp (static_cast<int> (t.mode), 0, 2), focus = std::clamp (static_cast<int> (t.focus), 0, 3);
             auto m = cell ("mas.sat", t.enabled, Saturation::isNeutral (t));
-            add (m, "Mode", kModes[mode], choice (mode, 3));
-            add (m, "Focus", kFocus[focus], choice (focus, 4));
-            add (m, "Drive", db (t.driveDb), lin (t.driveDb, 0.0, Saturation::kMaxDriveDb));
-            add (m, "Mix", pct (t.mix), lin (t.mix, 0.0, 100.0));
+            add (m, "Mode", kModes[mode], "satMode", mode);
+            add (m, "Focus", kFocus[focus], "satFocus", focus);
+            add (m, "Drive", db (t.driveDb), "satDrive", t.driveDb);
+            add (m, "Mix", pct (t.mix), "satMix", t.mix);
             m.summary = kModes[mode];
             join (m.summary, "Drive " + db (t.driveDb));
             if (t.mix < 99.5) join (m.summary, "Mix " + pct (t.mix));
@@ -269,9 +355,9 @@ namespace polisher::rackunit
             static const char* const kOs[] = { "1x", "2x", "4x", "8x" };
             const int os = std::clamp (s.clipOversampling, 0, 3);
             auto m = cell ("mas.clipper", s.clipOn, false);
-            add (m, "Clip Level", signedDb (s.clipLevelDb), lin (s.clipLevelDb, -9.0, 3.0), true);
-            add (m, "Softness", pct (s.clipSoftness), lin (s.clipSoftness, 0.0, 100.0));
-            add (m, "Oversampling", kOs[os], choice (os, 4));
+            add (m, "Clip Level", signedDb (s.clipLevelDb), "clipLevel", s.clipLevelDb, true);
+            add (m, "Softness", pct (s.clipSoftness), "clipSoftness", s.clipSoftness);
+            add (m, "Oversampling", kOs[os], "clipOversampling", os);
             m.summary = "Clip level " + signedDb (s.clipLevelDb);
             gr (m, s, s.meters.clipper);
             finish (m);
@@ -283,11 +369,11 @@ namespace polisher::rackunit
             auto m = cell ("mas.max", true, false);
             const std::string ceiling = num (l.ceilingDbtp, 1) + " dBTP";
             const std::string target = num (s.targetLufs, 0) + " LUFS";
-            add (m, "Drive", signedDb (s.driveDb), lin (s.driveDb, 0.0, 24.0));
-            add (m, "Input Trim", signedDb (s.inputTrimDb), lin (s.inputTrimDb, kMinTrimDb, 0.0));
-            add (m, "Ceiling", ceiling, lin (l.ceilingDbtp, -3.0, 0.0));
-            add (m, "Release", l.adaptiveRelease ? ms (l.releaseMs) + " auto" : ms (l.releaseMs), skewed (l.releaseMs, 10.0, 1000.0, 0.4));
-            add (m, "Bass First", pct (l.bassFirst * 100.0), lin (l.bassFirst, 0.0, 1.0));
+            add (m, "Drive", signedDb (s.driveDb), "drive", s.driveDb);
+            add (m, "Input Trim", signedDb (s.inputTrimDb), "inTrim", s.inputTrimDb);
+            add (m, "Ceiling", ceiling, "ceiling", l.ceilingDbtp);
+            add (m, "Release", l.adaptiveRelease ? ms (l.releaseMs) + " auto" : ms (l.releaseMs), "release", l.releaseMs);
+            add (m, "Bass First", pct (l.bassFirst * 100.0), "maxBassFirst", l.bassFirst * 100.0);
             add (m, "Target", target, lin (s.targetLufs, -16.0, -6.0));
             m.summary = "Drive " + signedDb (s.driveDb);
             join (m.summary, "Ceiling " + ceiling);

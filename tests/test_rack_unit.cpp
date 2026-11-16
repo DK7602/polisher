@@ -5,7 +5,11 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
+#include <fstream>
+#include <iterator>
 #include <memory>
+#include <string>
 
 using namespace polisher;
 
@@ -157,4 +161,94 @@ TEST_CASE ("Rack unit (Masterology): with Mixology's Limiter on the Full Mix, th
     for (const auto& l : rack::together (shared.units (10)))
         warned |= l.level == rack::Level::warn && l.text.find ("Limiter") != std::string::npos;
     CHECK (warned);
+}
+
+TEST_CASE ("Rack unit (Masterology): every knob the Rack can turn names its parameter, and turns back to its value", "[rack]")
+{
+    rackunit::State st;
+    st.unlimiter.lengthMs = 22.0;
+    st.glue.ratio = 4.0;
+    st.glue.attackMs = 10.0;
+    st.glue.sidechainHz = 120.0;
+    st.glue.mix = 0.6;
+    st.glue.character = static_cast<decltype (st.glue.character)> (2);
+    st.bass.tame = 0.35;
+    st.eq.gainDb[3] = -2.5;
+    st.limiter.releaseMs = 300.0;
+    st.limiter.bassFirst = 0.4;
+    st.clipOn = true;
+    st.clipOversampling = 3;
+
+    const auto ms = rackunit::modules (st, true);
+    int turnable = 0;
+    for (const auto& m : ms)
+    {
+        CAPTURE (m.key);
+        CHECK (m.switchable == (m.key != "mas.max"));
+        for (const auto& v : m.values)
+        {
+            CAPTURE (v.name);
+            const bool shownOnly = m.key == "mas.dynamics" || (m.key == "mas.steady" && v.name == "Target") || (m.key == "mas.max" && v.name == "Target");
+            CHECK (v.key.empty() == shownOnly);
+            if (v.key.empty()) continue;
+            double back = 0.0;
+            CHECK (rackunit::fromKnob (v.key, v.norm, back));
+            ++turnable;
+        }
+    }
+    CHECK (turnable > 40);
+    CHECK (rackunit::switchOf ("mas.max") == nullptr);
+    CHECK (std::string (rackunit::switchOf ("mas.glue")) == "glueOn");
+
+    auto back = [&] (const char* module, const char* name) {
+        const auto* v = value (*find (ms, module), name);
+        REQUIRE (v != nullptr);
+        double x = -999.0;
+        REQUIRE (rackunit::fromKnob (v->key, v->norm, x));
+        return x;
+    };
+    CHECK (back ("mas.unlimiter", "Length") == Catch::Approx (22.0).margin (1e-3));      // JUCE skew factor
+    CHECK (back ("mas.glue", "Ratio") == Catch::Approx (4.0).margin (1e-3));
+    CHECK (back ("mas.glue", "Attack") == Catch::Approx (10.0).margin (1e-3));
+    CHECK (back ("mas.glue", "Ignore Lows") == Catch::Approx (120.0).margin (1e-3));     // skew for a centre (90 Hz)
+    CHECK (back ("mas.glue", "Mix") == Catch::Approx (60.0).margin (1e-3));              // the parameter's %, not 0..1
+    CHECK (back ("mas.glue", "Character") == 2.0);
+    CHECK (value (*find (ms, "mas.glue"), "Character")->steps == 3);
+    CHECK (back ("mas.bass", "Sub Tame") == Catch::Approx (35.0).margin (1e-3));
+    CHECK (back ("mas.tonaleq", "Mid") == Catch::Approx (-2.5).margin (1e-3));
+    CHECK (value (*find (ms, "mas.tonaleq"), "Mid")->key == "eqGain4");
+    CHECK (back ("mas.max", "Release") == Catch::Approx (300.0).margin (1e-2));
+    CHECK (back ("mas.max", "Bass First") == Catch::Approx (40.0).margin (1e-3));
+    CHECK (back ("mas.clipper", "Oversampling") == 3.0);
+
+    double x = 0.0;
+    REQUIRE (rackunit::fromKnob ("glueThr", 5.0f, x));
+    CHECK (x == 0.0);
+    REQUIRE (rackunit::fromKnob ("glueThr", std::nanf (""), x));
+    CHECK (x == -40.0);
+    CHECK_FALSE (rackunit::fromKnob ("dynThr1", 0.5f, x));
+}
+
+TEST_CASE ("Rack unit (Masterology): the Rack's knobs are Masterology's parameters", "[rack]")
+{
+    std::string params;
+    for (const char* file : { "/plugin/PluginProcessor.cpp", "/plugin/ModuleParams.h" })
+    {
+        std::ifstream in (std::string (POLISHER_SOURCE_DIR) + file);
+        REQUIRE (in.good());
+        params += std::string ((std::istreambuf_iterator<char> (in)), std::istreambuf_iterator<char>());
+    }
+    rackunit::State st;
+    st.clipOn = true;
+    for (const auto& m : rackunit::modules (st, true))
+    {
+        if (const char* sw = rackunit::switchOf (m.key)) CHECK (params.find ("\"" + std::string (sw) + "\"") != std::string::npos);
+        for (const auto& v : m.values)
+        {
+            if (v.key.empty()) continue;
+            CAPTURE (v.key);
+            const bool eq = v.key.rfind ("eqGain", 0) == 0;
+            CHECK (params.find (eq ? std::string ("return \"eqGain\" + juce::String (band + 1)") : "\"" + v.key + "\"") != std::string::npos);
+        }
+    }
 }

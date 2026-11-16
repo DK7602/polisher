@@ -750,6 +750,10 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   .cpp / test_rack_link.cpp copied here unchanged (layout 2; Unit gained lock + generation with defaults, so
   polisher/RackUnit and the processor compile as they are). [rack] tests pass here. Step 3 wires serve() into the
   processor's Rack publishing (lock while Auto-Master runs). No manual change (nothing the user sees yet).
+- Step 2 built (2026-11-16): every Rack knob names its parameter (Value::key; steps for choices), modules switchable
+  (switchOf: "mas.glue" -> "glueOn"); polisher::rackunit::fromKnob() turns the Rack's 0..1 back into the
+  parameter value in its units (one knob table, kKnobs). Dynamics bands and the Targets shown only. Glue Ignore
+  Lows' knob now follows the host's curve (90 Hz centre). Tests check every key exists in the parameter code.
 
 ## NOW: Sonicology Rack, stage 1 (planned 2026-11-14; steps 1 - 3 built 2026-11-15; next: step 4)
 - The plan lives in Mixology: docs/rack/RACK-PLAN.md (branch claude/mixology), with the concept art in docs/rack/concepts.

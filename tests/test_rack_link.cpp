@@ -93,7 +93,9 @@ TEST_CASE ("Rack link: a plug-in's unit reaches the Rack whole, from another lib
     auto eq = mod ("vox.eq");
     eq.summary = "Mud −3 dB · Presence +2.5 dB";
     eq.by = "Auto-Edit";
-    eq.values = { { "Mud", "−3.0 dB", 0.33f, true }, { "Presence", "+2.5 dB", 0.64f, true } };
+    eq.values = { { "Mud", "−3.0 dB", 0.33f, true }, { "Presence", "+2.5 dB", 0.64f, true, "eqGain3" },
+                  { "Mode", "Natural", 0.5f, false, "ptMode", 3 } };
+    eq.switchable = true;
     eq.bands = { { rack::BandType::bell, 320.0f, -3.0f, 1.1f, "Mud", true }, { rack::BandType::highShelf, 10000.0f, 2.0f, 0.7f, "Air", true } };
     auto comp = mod ("vox.comp");
     comp.meterKind = rack::MeterKind::gr;
@@ -128,7 +130,14 @@ TEST_CASE ("Rack link: a plug-in's unit reaches the Rack whole, from another lib
     CHECK (s.modules[0].state == rack::State::rest);
     CHECK (s.modules[1].summary == "Mud −3 dB · Presence +2.5 dB");   // UTF-8 kept
     CHECK (s.modules[1].by == "Auto-Edit");
-    REQUIRE (s.modules[1].values.size() == 2);
+    REQUIRE (s.modules[1].values.size() == 3);
+    CHECK (s.modules[1].switchable);
+    CHECK_FALSE (s.modules[0].switchable);
+    CHECK (s.modules[1].values[0].key.empty());          // shown only
+    CHECK (s.modules[1].values[0].steps == 0);
+    CHECK (s.modules[1].values[1].key == "eqGain3");
+    CHECK (s.modules[1].values[2].key == "ptMode");
+    CHECK (s.modules[1].values[2].steps == 3);
     CHECK (s.modules[1].values[1].name == "Presence");
     CHECK (s.modules[1].values[1].text == "+2.5 dB");
     CHECK (s.modules[1].values[1].norm == Catch::Approx (0.64f));
@@ -198,7 +207,8 @@ TEST_CASE ("Rack link: limits, cut texts and numbers that aren't finite", "[rack
     for (int i = 0; i < rack::kMaxModules + 5; ++i)
     {
         auto m = mod ("mix.eq");
-        for (int v = 0; v < rack::kMaxValues + 3; ++v) m.values.push_back ({ "Gain", "+1 dB", std::numeric_limits<float>::quiet_NaN(), false });
+        for (int v = 0; v < rack::kMaxValues + 3; ++v)
+            m.values.push_back ({ "Gain", "+1 dB", std::numeric_limits<float>::quiet_NaN(), false, std::string (40, 'k'), v == 0 ? 1000 : v == 1 ? 1 : -5 });
         for (int b = 0; b < rack::kMaxBands + 3; ++b) m.bands.push_back ({ rack::BandType::bell, std::numeric_limits<float>::infinity(), 99.0f, 0.0f, "", true });
         m.meter = std::numeric_limits<float>::quiet_NaN();
         u.modules.push_back (m);
@@ -219,6 +229,10 @@ TEST_CASE ("Rack link: limits, cut texts and numbers that aren't finite", "[rack
     CHECK (std::isfinite (s.inDb));
     CHECK (std::isfinite (s.modules[0].meter));
     CHECK (s.modules[0].values[0].norm == Catch::Approx (0.5f));
+    CHECK (s.modules[0].values[0].key == std::string (rack::kControlBytes - 1, 'k'));
+    CHECK (s.modules[0].values[0].steps == rack::kMaxSteps);   // too many: the most
+    CHECK (s.modules[0].values[1].steps == 0);                  // one step isn't a choice
+    CHECK (s.modules[0].values[2].steps == 0);
     CHECK (s.modules[0].bands[0].hz == Catch::Approx (1000.0f));
     CHECK (s.modules[0].bands[0].db == Catch::Approx (48.0f));
     CHECK (s.modules[0].bands[0].q == Catch::Approx (0.1f));
@@ -379,7 +393,8 @@ TEST_CASE ("Rack link: the JSON the Rack view reads", "[rack]")
     vox.lock = "Auto-Edit is running";
     auto eq = mod ("vox.eq");
     eq.summary = "Mud −3 dB";
-    eq.values = { { "Mud", "−3.0 dB", 0.33f, true } };
+    eq.values = { { "Mud", "−3.0 dB", 0.33f, true }, { "Mode", "Natural", 0.5f, false, "ptMode", 3 } };
+    eq.switchable = true;
     eq.bands = { { rack::BandType::lowCut, 80.0f, 0.0f, 0.7f, "", true } };
     auto space = mod ("mix.space");
     space.layers = rack::SpaceLayer::chorus | rack::SpaceLayer::hall;
@@ -417,7 +432,10 @@ TEST_CASE ("Rack link: the JSON the Rack view reads", "[rack]")
     CHECK (j.find ("\"role\":\"vocal\"") != std::string::npos);
     CHECK (j.find ("\"state\":\"rest\"") != std::string::npos);
     CHECK (j.find ("\"summary\":\"Mud −3 dB\"") != std::string::npos);
-    CHECK (j.find ("{\"name\":\"Mud\",\"text\":\"−3.0 dB\",\"norm\":0.330,\"bi\":true}") != std::string::npos);
+    CHECK (j.find ("{\"name\":\"Mud\",\"text\":\"−3.0 dB\",\"norm\":0.330,\"bi\":true,\"key\":\"\",\"steps\":0}") != std::string::npos);
+    CHECK (j.find ("{\"name\":\"Mode\",\"text\":\"Natural\",\"norm\":0.500,\"bi\":false,\"key\":\"ptMode\",\"steps\":3}") != std::string::npos);
+    CHECK (j.find ("\"by\":\"\",\"switchable\":true") != std::string::npos);
+    CHECK (j.find ("\"switchable\":false") != std::string::npos);
     CHECK (j.find ("{\"type\":\"lowCut\",\"hz\":80.0,\"db\":0.00,\"q\":0.700,\"name\":\"\",\"on\":true}") != std::string::npos);
     CHECK (j.find ("\"layers\":[\"chorus\",\"hall\"]") != std::string::npos);
     CHECK (j.find ("\"inDb\":0.0") != std::string::npos);                  // infinity: 0

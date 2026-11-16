@@ -61,4 +61,11 @@ namespace polisher::rackunit
 
     /** The modules (brief: keys, states and summaries only; full: values, bands and meters too). */
     std::vector<rack::Module> modules (const State&, bool full);
+
+    /** Stage 2: a module's on switch (its parameter id: "mas.glue" -> "glueOn"), nullptr for none (the Maximizer). */
+    const char* switchOf (const std::string& moduleKey);
+    /** Where a Rack knob (0..1, as modules() published it) puts its parameter (by its id), in the parameter's units
+        (Sub Tame, Glue Mix, Bass First in %), the same range and curve as the host's; a choice to a whole option.
+        False: not a knob the Rack can turn. */
+    bool fromKnob (const std::string& key, float knob, double& value);
 }

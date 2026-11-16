@@ -293,6 +293,7 @@ namespace rack
             to.meterKind.store (static_cast<std::uint32_t> (from.meterKind), kRelaxed);
             to.meter.store (finite (from.meter), kRelaxed);
             to.layers.store (from.layers, kRelaxed);
+            to.switchable.store (from.switchable ? 1u : 0u, kRelaxed);
             const auto values = std::min<std::size_t> (from.values.size(), kMaxValues);
             for (std::size_t v = 0; v < values; ++v)
             {
@@ -300,6 +301,8 @@ namespace rack
                 storeText (to.values[v].text, from.values[v].text);
                 to.values[v].norm.store (std::clamp (finite (from.values[v].norm, 0.5f), 0.0f, 1.0f), kRelaxed);
                 to.values[v].bi.store (from.values[v].bi ? 1u : 0u, kRelaxed);
+                to.values[v].steps.store (static_cast<std::uint32_t> (from.values[v].steps >= 2 ? std::min (from.values[v].steps, kMaxSteps) : 0), kRelaxed);
+                storeText (to.values[v].key, from.values[v].key);
             }
             to.valueCount.store (static_cast<std::uint32_t> (values), kRelaxed);
             const auto bands = std::min<std::size_t> (from.bands.size(), kMaxBands);
@@ -367,10 +370,13 @@ namespace rack
                     mod.meterKind = static_cast<MeterKind> (from.meterKind.load (kRelaxed));
                     mod.meter = from.meter.load (kRelaxed);
                     mod.layers = from.layers.load (kRelaxed);
+                    mod.switchable = from.switchable.load (kRelaxed) != 0;
                     const auto values = std::min<std::uint32_t> (from.valueCount.load (kRelaxed), kMaxValues);
                     for (std::uint32_t v = 0; v < values; ++v)
                         mod.values.push_back ({ loadText (from.values[v].name), loadText (from.values[v].text),
-                                                from.values[v].norm.load (kRelaxed), from.values[v].bi.load (kRelaxed) != 0 });
+                                                from.values[v].norm.load (kRelaxed), from.values[v].bi.load (kRelaxed) != 0,
+                                                loadText (from.values[v].key),
+                                                static_cast<int> (std::min<std::uint32_t> (from.values[v].steps.load (kRelaxed), kMaxSteps)) });
                     const auto bands = std::min<std::uint32_t> (from.bandCount.load (kRelaxed), kMaxBands);
                     for (std::uint32_t b = 0; b < bands; ++b)
                     {
@@ -991,6 +997,7 @@ namespace rack
                 key (o, "state", g); str (o, stateKey (mod.state));
                 key (o, "summary", g); str (o, mod.summary);
                 key (o, "by", g); str (o, mod.by);
+                key (o, "switchable", g); o += mod.switchable ? "true" : "false";
                 key (o, "meterKind", g); str (o, mod.meterKind == MeterKind::gr ? "gr" : mod.meterKind == MeterKind::level ? "level" : "");
                 key (o, "meter", g); num (o, mod.meter, 1);
                 key (o, "values", g);
@@ -1003,6 +1010,8 @@ namespace rack
                     o += ",\"text\":"; str (o, val.text);
                     o += ",\"norm\":"; num (o, std::clamp (val.norm, 0.0f, 1.0f), 3);
                     o += ",\"bi\":"; o += val.bi ? "true" : "false";
+                    o += ",\"key\":"; str (o, val.key);
+                    o += ",\"steps\":"; o += std::to_string (val.steps >= 2 ? std::min (val.steps, kMaxSteps) : 0);
                     o.push_back ('}');
                 }
                 o.push_back (']');
