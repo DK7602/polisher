@@ -759,3 +759,7 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   tests/test_rack_unit.cpp), published from PolisherAudioProcessor::publishRack (tick(); its own meter copies taken in
   publishMeters; starts / stops with prepareToPlay / releaseResources). Next: step 4 (the RACK pill before the gear,
   serve rack.js / rack.css / art, getRack()).
+- Step 4 (2026-11-16): the RACK pill before the gear (index.html #btn-rack, styles.css: trimmed to fit; the header
+  row is now full, so the logo gives up a little width, never below its min-width; ui_smoke's header check allows the
+  empty spacer), getRack / getRackTheme / setRackTheme in PolisherWebEditor.cpp (rack::viewJson, opens on the
+  master), rack.js / rack.css / ui/rack/ from Mixology (shared-files job), mock.js answers the Rack in the preview.

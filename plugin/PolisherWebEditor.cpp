@@ -1,6 +1,7 @@
 #include "PolisherWebEditor.h"
 #include "PluginEditor.h"
 #include "polisher/MixHandoff.h"
+#include "suite/RackLink.h"
 
 #include "PolisherUIData.h"
 
@@ -9,6 +10,17 @@
 
 namespace
 {
+    // The Sonicology Rack's light / dark view: one choice for all three plug-ins, kept in the user's own settings folder.
+    juce::File rackThemeFile()
+    {
+        const auto base = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
+       #if JUCE_MAC
+        return base.getChildFile ("Application Support/Sonicology/rack-theme.txt");
+       #else
+        return base.getChildFile ("Sonicology/rack-theme.txt");
+       #endif
+    }
+
     juce::String mimeTypeFor (const juce::String& file)
     {
         const auto ext = file.fromLastOccurrenceOf (".", false, false).toLowerCase();
@@ -331,6 +343,21 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                                  }())
         // The page shows the plug-in's version (Settings) from here: the build sets it, so it can't go stale.
         .withInitialisationData ("polisherVersion", juce::String (JucePlugin_VersionString))
+        // The Sonicology Rack (suite/RackLink.h): every Sonicology plug-in in the project, as rack.js shows it. Opened from
+        // Masterology it starts on the master.
+        .withNativeFunction ("getRack", [] (const juce::Array<juce::var>&, auto complete)
+                             {
+                                 const auto json = rack::viewJson ("masterology", 0, suite::nowMs());
+                                 complete (juce::String::fromUTF8 (json.data(), static_cast<int> (json.size())));
+                             })
+        .withNativeFunction ("getRackTheme", [] (const juce::Array<juce::var>&, auto complete)
+                             { complete (rackThemeFile().loadFileAsString().trim()); })
+        .withNativeFunction ("setRackTheme", [] (const juce::Array<juce::var>& args, auto complete)
+                             {
+                                 const auto f = rackThemeFile();
+                                 f.getParentDirectory().createDirectory();
+                                 complete (f.replaceWithText (args.size() > 0 && args[0].toString() == "light" ? "light" : "dark"));
+                             })
         .withResourceProvider ([] (const auto& url) { return getResource (url); });
 }
 

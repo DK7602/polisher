@@ -566,11 +566,15 @@ check(!sn[2].empty && sn[2].lit, 'Shift-click stores in a slot');
 await page.click('#btn-b'); await page.click('#btn-match'); await page.waitForTimeout(150);
 
 // The header still fits on one row with the new controls (the page scales the 1600 x 900 design). The
-// logo may hang a little past the row's left edge (it overlaps the frame on purpose), by at most 16 px.
+// logo may hang a little past the row's left edge (it overlaps the frame on purpose), by at most 16 px. Since the
+// Sonicology Rack's RACK pill the row is full: the spacer is empty and the logo gives up a little width (never below
+// its min-width, 190 px of the design).
 const fits = await page.evaluate(() => {
   const row = document.querySelector('.header-row'), r = row.getBoundingClientRect();
-  return row.scrollWidth <= row.clientWidth && [...row.children].every((c) => { const b = c.getBoundingClientRect();
-    return b.left >= r.left - (c.classList.contains('logo') ? 16 : 0.5) && b.right <= r.right + 0.5 && b.width > 0; });
+  const scale = r.width / (1600 - 32);
+  const logo = row.querySelector('.logo').getBoundingClientRect();
+  return row.scrollWidth <= row.clientWidth && logo.width >= 190 * scale - 0.5 && [...row.children].every((c) => { const b = c.getBoundingClientRect();
+    return b.left >= r.left - (c.classList.contains('logo') ? 16 : 0.5) && b.right <= r.right + 0.5 && (b.width > 0 || c.classList.contains('grow')); });
 });
 check(fits, 'header controls fit on one row');
 // Whole-song listen: the button and Learn say what it has heard; FINISH NOW works from 12 s of music on.

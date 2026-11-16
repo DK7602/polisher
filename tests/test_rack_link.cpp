@@ -428,3 +428,44 @@ TEST_CASE ("Rack link: the JSON the Rack view reads", "[rack]")
     CHECK (wellFormed (empty));
     CHECK (empty == "{\"host\":\"mixology\",\"hostHash\":0,\"units\":[],\"together\":[],\"mix\":{},\"master\":{}}");
 }
+
+TEST_CASE ("Rack link: a view's JSON - the heartbeat, the units, the loudness from the suite link", "[rack]")
+{
+    auto rackMem = std::make_unique<unsigned char[]> (rack::Link::bytes() + 64);
+    auto suiteMem = std::make_unique<unsigned char[]> (suite::Link::bytes() + 64);
+    auto align = [] (unsigned char* p) { return static_cast<void*> (p + (64 - reinterpret_cast<std::uintptr_t> (p) % 64) % 64); };
+    rack::Link rk (align (rackMem.get()));
+    suite::Link sl (align (suiteMem.get()));
+    const std::uint64_t t = 1000000;
+
+    rack::Unit vox;
+    vox.product = rack::Product::voxology;
+    vox.role = rack::Role::vocal;
+    vox.track = "Lead Vox";
+    vox.version = suite::packVersion (0, 55, 0);
+    const int a = rk.claim (7, t);
+    REQUIRE (rk.publish (a, 7, vox, t));
+    CHECK_FALSE (rk.watched (t));
+
+    auto json = rack::viewJson (rk, sl, "voxology", suite::nameHash ("Lead Vox"), t);
+    CHECK (rk.watched (t + 10));   // the view looked: the plug-ins publish their details now
+    CHECK (json.find ("\"host\":\"voxology\"") != std::string::npos);
+    CHECK (json.find ("\"track\":\"Lead Vox\"") != std::string::npos);
+    CHECK (json.find ("\"mix\":{}") != std::string::npos);      // no Mixology, no Masterology: nothing measured
+    CHECK (json.find ("\"master\":{}") != std::string::npos);
+
+    suite::MixInfo mix;
+    mix.integratedLufs = -12.5f;
+    mix.shortTermLufs = -11.0f;
+    mix.peakDbtp = -1.2f;
+    mix.version = suite::packVersion (0, 26, 0);
+    sl.publishMix (mix, t);
+    const auto ov = rack::overview (sl, t + 100);
+    CHECK (ov.mixKnown);
+    CHECK (ov.lufsI == -12.5f);
+    CHECK (ov.source == "the mix");
+    CHECK_FALSE (ov.masterKnown);
+    json = rack::viewJson (rk, sl, "mixology", 0, t + 100);
+    CHECK (json.find ("\"lufsI\":-12.5") != std::string::npos);
+}
+

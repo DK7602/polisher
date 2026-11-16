@@ -2453,6 +2453,23 @@ function togglePopover(id) {
 }
 $("btn-settings").addEventListener("click", (e) => { e.stopPropagation(); togglePopover("pop-settings"); });
 $("btn-help").addEventListener("click", (e) => { e.stopPropagation(); togglePopover("pop-help"); });
+// The Sonicology Rack: every Sonicology plug-in in the project in one view, over this page (BACK returns). Opened
+// from Masterology it starts on the master.
+const rackGet = Juce.getNativeFunction("getRack");
+const rackThemeGet = Juce.getNativeFunction("getRackTheme");
+const rackThemeSet = Juce.getNativeFunction("setRackTheme");
+$("btn-rack").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  if (!window.SonicologyRack || window.SonicologyRack.isOpen()) return;
+  const theme = await rackThemeGet().catch(() => "");
+  window.SonicologyRack.open({
+    host: "masterology",
+    theme: theme === "light" || theme === "dark" ? theme : undefined,
+    getRack: async () => { const j = await rackGet().catch(() => null); return j ? JSON.parse(j) : null; },
+    onTheme: (t) => { rackThemeSet(t).catch(() => {}); },
+    back: () => {},
+  });
+});
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".popover")) togglePopover(null);
 });

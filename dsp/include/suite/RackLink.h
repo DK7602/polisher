@@ -284,4 +284,19 @@ namespace rack
         bool lastWasFull = false;
         Due pending = Due::none;
     };
+
+    // ---- the Rack view's plug-in ----------------------------------------------------------------------------------
+
+    /** The mix's loudness (Mixology's hand-off, else what reaches Masterology) and Masterology's goal, from the suite
+        link. */
+    Overview overview (const suite::Link&, std::uint64_t nowMs);
+
+    /** Everything an open Rack view shows (its getRack()), for the plug-in it is open in: refreshes the viewer heartbeat
+        (so the plug-ins publish their details), reads every live unit, works out what they do together, adds the
+        overview. Message thread, a few times a second while the view is open. */
+    std::string viewJson (Link&, const suite::Link&, const std::string& host, std::uint32_t hostHash, std::uint64_t nowMs);
+    inline std::string viewJson (const std::string& host, std::uint32_t hostHash, std::uint64_t nowMs)
+    {
+        return viewJson (Link::process(), suite::Link::process(), host, hostHash, nowMs);
+    }
 }

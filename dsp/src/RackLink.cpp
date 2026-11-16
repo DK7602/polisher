@@ -850,4 +850,43 @@ namespace rack
         o += "}}";
         return o;
     }
+
+    // ---- the Rack view's plug-in ----------------------------------------------------------------------------------
+
+    Overview overview (const suite::Link& suiteLink, std::uint64_t now)
+    {
+        Overview ov;
+        const auto masters = suiteLink.masters (now);
+        suite::MixInfo mix;
+        if (suiteLink.readMix (mix, now) && (mix.integratedLufs > -99.0f || mix.shortTermLufs > -99.0f))
+        {
+            ov.mixKnown = true;
+            ov.lufsI = mix.integratedLufs;
+            ov.lufsS = mix.shortTermLufs;
+            ov.truePeak = mix.peakDbtp;
+            ov.source = "the mix";
+        }
+        else if (! masters.empty() && masters.front().inputLufs > -99.0f)
+        {
+            ov.mixKnown = true;
+            ov.lufsI = masters.front().inputLufs;
+            ov.truePeak = masters.front().inputPeakDbtp;
+            ov.source = "into Masterology";
+        }
+        if (! masters.empty())
+        {
+            ov.masterKnown = true;
+            ov.goal = masters.front().goalName;
+            ov.targetLufs = masters.front().targetLufs;
+            ov.ceilingDbtp = masters.front().ceilingDbtp;
+        }
+        return ov;
+    }
+
+    std::string viewJson (Link& rackLink, const suite::Link& suiteLink, const std::string& host, std::uint32_t hostHash, std::uint64_t now)
+    {
+        rackLink.view (now);
+        const auto units = rackLink.units (now);
+        return toJson (host, hostHash, units, together (units), overview (suiteLink, now));
+    }
 }

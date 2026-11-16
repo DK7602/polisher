@@ -380,7 +380,8 @@
       __juce__functions: ["resetMeter", "startAutoMaster", "finishAutoMaster", "cancelAutoMaster", "getAutoMasterReport", "clearToneTarget",
                           "setAutoAnalyze", "getAutoAnalyze", "applyAutoEdit", "keepAutoEdit",
                           "loadReference", "clearReference", "getReference", "setMonitor",
-                          "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve", "pickStyle", "pickDaw", "rememberUi", "showParameterMenu"],
+                          "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve", "pickStyle", "pickDaw", "rememberUi", "showParameterMenu",
+                          "getRack", "getRackTheme", "setRackTheme"],
       __juce__registeredGlobalEventIds: [],
       __juce__sliders: Object.keys(sliders),
       __juce__toggles: Object.keys(toggles),
@@ -471,6 +472,12 @@
           combos.amGenre.value = (genre === undefined ? 5 : genre) / 5;
           send("__juce__comboBoxamGenre", { eventType: "valueChanged", value: combos.amGenre.value });   // as the host tells the window
         }
+        if (payload.name === "getRack") {   // Mixology's tools/rack/rack_mock.js, when the preview loads it: a demo project
+          if (window.SonicologyRackMock) { Promise.resolve(window.SonicologyRackMock.getRack()).then((d) => send("__juce__complete", { promiseId: payload.resultId, result: JSON.stringify(d) })); return; }
+          result = null;
+        }
+        if (payload.name === "getRackTheme") { try { result = localStorage.getItem("sonicologyRackTheme") || ""; } catch (_) { result = ""; } }
+        if (payload.name === "setRackTheme") { try { localStorage.setItem("sonicologyRackTheme", (payload.params || [])[0]); } catch (_) {} }
         if (payload.name === "pickDaw") Object.assign(daw, { key: (payload.params || [])[0] || "cubase", picked: !!(payload.params || [])[0], from: 3 });
         if (payload.name === "snapshotStore") snapStore((payload.params || [])[0]);
         if (payload.name === "showParameterMenu") result = false;   // no host here: no menu
