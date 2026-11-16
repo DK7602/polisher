@@ -765,3 +765,4 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   master), rack.js / rack.css / ui/rack/ from Mixology (shared-files job), mock.js answers the Rack in the preview.
 - Masterology 0.31.0 (2026-11-16, step 5): the manual's "Sonicology Rack: your whole suite in one view" section (the
   Claude Docs copy updated too), version, README. Goes out in Sonicology Beta 14 with Voxology 0.55.0 and Mixology 0.26.0.
+  Beta 14 built 2026-11-16: Mixology's Sonicology suite run 43876865629 (label "Beta 14", version 0.14.0), all green.
