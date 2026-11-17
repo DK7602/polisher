@@ -238,14 +238,14 @@ public:
             bumpStateRevision();
         pollReference();   // a Match ref that finished measuring after the window closed still marks the project
         updateSuite();
-        publishRack();     // the Sonicology Rack (more often while a Rack view watches: rackTimer)
-        const bool watched = rackPub.watched (suite::nowMs());
-        if (watched && ! rackTimer.isTimerRunning())
+        publishRack();     // the Sonicology Rack (more often while a Rack view shows the master: rackTimer)
+        const bool shown = rackPub.shows (suite::nowMs(), 0, rack::Role::master);
+        if (shown && ! rackTimer.isTimerRunning())
         {
             rackTimer.tick = [this] { publishRack(); };
             rackTimer.startTimerHz (25);
         }
-        else if (! watched && rackTimer.isTimerRunning())
+        else if (! shown && rackTimer.isTimerRunning())
             rackTimer.stopTimer();
     }
 

@@ -98,7 +98,7 @@ namespace polisher::rackunit
         // Shown only (what the Dynamics bands do now, the loudness Masterology aims for).
         void add (rack::Module& m, const std::string& name, const std::string& text, float norm, bool bi = false)
         {
-            if (m.values.size() < static_cast<std::size_t> (rack::kMaxValues)) m.values.push_back ({ name, text, norm, bi });
+            if (m.values.size() < static_cast<std::size_t> (rack::kMaxValues)) m.values.push_back ({ name, text, norm, bi, {}, 0 });
         }
         // A knob the Rack can turn, at `value` in its parameter's units.
         void add (rack::Module& m, const std::string& name, const std::string& text, const std::string& key, double value, bool bi = false)

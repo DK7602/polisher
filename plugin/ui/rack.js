@@ -315,6 +315,7 @@
     filter: "all", search: "", card: null, inProject: null,
     theme: "dark",
     held: {}, drag: null, chain: Promise.resolve(), toastTimer: 0, scale: 1,   // stage 2: knobs you turn
+    wheel: null, sent: {}, snapTold: {}, toastAct: null,
   };
 
   // The light / dark view: the plug-in's saved choice, else the last one in this browser (if it keeps any)
@@ -572,7 +573,7 @@
     const norm = clamp(held ? held.norm : v.norm == null ? 0.5 : v.norm, 0, 1);
     const ang = -135 + norm * 270;
     const attrs = turn ? ` data-knob="${esc(k)}" data-unit="${esc(unit.id)}" data-module="${esc(mod.key)}" data-control="${esc(v.key)}" data-steps="${v.steps || 0}" data-bi="${v.bi ? 1 : 0}" data-norm="${norm}"
-      title="${v.steps >= 2 ? "Click for the next option, or drag" : "Drag up / down (Shift: fine)"}"` : "";
+      title="${v.steps >= 2 ? "Click for the next option, or drag · mouse wheel: step" : "Drag up / down (Shift: fine) · mouse wheel: nudge · double-click: back to default"}"` : "";
     return `<div class="sr-knob${turn ? " sr-turn" : ""}" style="--sz:${size}px"${attrs}>
       <img class="sr-kring" src="${ART}rack_knob_ring.webp" alt="" draggable="false">
       <svg class="sr-kval" viewBox="0 0 100 100">${knobArc(norm, v.bi)}</svg>
@@ -726,8 +727,10 @@
     const lines = [];
     for (const l of data.together || []) if (!l.hash || l.hash === t.hash || (t.role === "master" && l.hash === "master") || (t.role === "fullmix" && l.hash === "fullmix")) lines.push(l);
     for (const u of t.units) for (const l of u.together || []) lines.push(l);
+    if ((data.otherLayouts || []).length)
+      lines.push({ level: "warn", text: "A Sonicology plug-in from another beta is in this project, and the Rack can't see it. Install this beta, so all three plug-ins are the same version." });
     lines.sort((a, b) => (a.level === "warn" ? 0 : a.level === "info" ? 2 : 1) - (b.level === "warn" ? 0 : b.level === "info" ? 2 : 1));
-    const together = lines.length ? lines.map((l) => `<li class="sr-tl sr-tl-${l.level || "ok"}">${lineIcon(l.level)}<span>${esc(l.text)}</span></li>`).join("")
+    const together = lines.length ? lines.map((l) => `<li class="sr-tl sr-tl-${l.level || "ok"}">${lineIcon(l.level)}<span>${esc(l.text)}${fixButtons(l)}</span></li>`).join("")
       : `<li class="sr-tl">${lineIcon("info")}<span>Nothing else in the suite touches this track.</span></li>`;
     const overview = flowMods.map((c) => {
       const isSel = sel && c.unit.id === sel.unit.id && c.mod.key === sel.mod.key;   // the picked module, in red (as the concept)
@@ -763,9 +766,16 @@
   function readonlyLine(unit, m) {
     const name = esc(PRODUCTS[unit.product].name);
     if (unit.lock) return `${icon("lock")}${esc(unit.lock)} The Rack can change ${name} again when it has finished.`;
+    const honey = unit.product === "honeytune" ? " · they set Honey Tune for all its clips" : "";
     if (canTurn(unit) && ((m.values || []).some((v) => v.key) || m.switchable))
-      return `Drag a knob up or down to change it in ${name} (Shift: fine) · click a choice to step it${m.switchable ? " · click ON / OFF to switch it" : ""}`;
-    return `Shows ${name}'s settings live · change them in ${name}${unit.product === "link" ? " (or with Mixology's tools)" : ""}`;
+      return `Drag a knob to change it in ${name} (Shift: fine) · wheel: nudge · double-click: default${m.switchable ? " · click ON / OFF to switch it" : ""}${honey}`;
+    return `Shows ${name}'s settings live · change them in ${name}${unit.product === "link" ? " (or with Mixology's tools)" : ""}${honey}`;
+  }
+
+  // A warning's one-click fixes (RackLink's together()): each switches one module off, through the plug-in that owns it.
+  function fixButtons(l) {
+    if (!S.opts || !S.opts.request || !Array.isArray(l.fixes) || !l.fixes.length) return "";
+    return `<span class="sr-fixes">${l.fixes.map((f) => `<button class="sr-fix" data-sr="fix" data-unit="${esc(f.unit)}" data-gen="${esc(f.gen)}" data-module="${esc(f.module)}" data-on="${f.on ? 1 : 0}">${esc(f.label)}</button>`).join("")}</span>`;
   }
 
   // ---- page: MODULES (every module in the suite, where it plays in this project) --------------------------------------
@@ -981,6 +991,7 @@
       keepDetails(data);
       settleHeld(data);
       remember(data);
+      dragText(data);
       const first = !S.data;
       S.data = data;
       if (first || !trackOf(data, S.track)) S.track = S.track && trackOf(data, S.track) ? S.track : hostTrackKey(data);
@@ -991,7 +1002,20 @@
         else render();
       } else updateLive(data);
     }
-    S.timer = setTimeout(poll, 150);
+    S.timer = setTimeout(poll, S.drag || S.wheel ? 80 : 150);   // quicker while a knob turns, so its value follows
+  }
+
+  // While you drag, the page isn't rebuilt (the knob is under your mouse): the plug-in's own text for the value
+  // ("−18.0 dB") goes into it in place.
+  function dragText(data) {
+    const d = S.drag;
+    if (!d || !d.moved || !d.el.isConnected) return;
+    const u = (data.units || []).find((x) => x.id === d.unit.id);
+    const m = u && (u.modules || []).find((x) => x.key === d.module);
+    const v = m && (m.values || []).find((x) => x.key === d.control);
+    const cell = d.el.closest(".sr-kcell");
+    const t = cell && cell.querySelector(".sr-kval-t");
+    if (v && t && t.textContent !== v.text) t.textContent = v.text;
   }
 
   function onClick(e) {
@@ -1018,6 +1042,8 @@
     else if (a === "goto") { S.track = el.dataset.track; S.sel = { unit: el.dataset.unit, key: el.dataset.key }; S.page = "rack"; }
     else if (a === "clear") { S.search = ""; S.card = null; }
     else if (a === "switch") { switchModule(el.dataset.unit, el.dataset.key, el); return; }
+    else if (a === "fix") { applyFix(el); return; }
+    else if (a === "toast-act") { const act = S.toastAct; hideToast(); if (act) act(); return; }
     else return;
     render();
   }
@@ -1036,34 +1062,79 @@
         if (r.change === "value") delete S.held[heldKey(unit, r.module, r.control)];
         return;
       }
-      if (check) watchAnswer(unit, res.ticket, r, 0);
+      if (check) watchAnswer(unit, res.ticket, r, 0, typeof check === "function" ? check : null);
     });
     return S.chain;
   }
 
-  // After a click or the end of a drag: say so when the plug-in refused it.
-  function watchAnswer(unit, ticket, r, tries) {
+  // After a click or the end of a drag: say so when the plug-in refused it (`done`: what to do once it took it).
+  function watchAnswer(unit, ticket, r, tries, done) {
     setTimeout(async () => {
       if (!S.root || !S.opts.answer) return;
       let a = null;
       try { a = await S.opts.answer(unit.id, unit.gen, ticket); } catch (e) { a = null; }
       if (!a) return;
-      if (a.outcome === "pending" && tries < 10) { watchAnswer(unit, ticket, r, tries + 1); return; }
+      if (a.outcome === "pending" && tries < 10) { watchAnswer(unit, ticket, r, tries + 1, done); return; }
       if (a.outcome === "refused" || a.outcome === "gone") {
         toast(a.why || (a.outcome === "gone" ? "That plug-in has closed or moved." : "Not done."));
         if (r.change === "value") { delete S.held[heldKey(unit, r.module, r.control)]; render(); }
+      } else if (a.outcome === "applied") {
+        if (r.change === "value") watchSnapBack(unit, r);
+        if (done) done();
       }
     }, tries ? 300 : 450);
   }
 
-  function toast(text) {
+  // A value the plug-in took, and a moment later it is back where it was: the track's automation is reading that
+  // knob (Cubase: R lit), and the DAW moves it back as the song plays. Say so once a while per knob. (Not for
+  // Honey Tune: its settings aren't automated.)
+  function watchSnapBack(unit, r) {
+    if (unit.product === "honeytune") return;
+    const k = heldKey(unit, r.module, r.control);
+    const sent = (S.sent[k] = { value: r.value, at: Date.now() });
+    setTimeout(() => {
+      if (!S.root || S.sent[k] !== sent || (S.drag && S.drag.key === k) || (S.wheel && S.wheel.key === k)) return;
+      const u = unitById(unit.id);
+      if (!u || u.gen !== unit.gen || u.detailed === false) return;
+      const m = (u.modules || []).find((x) => x.key === r.module);
+      const v = m && (m.values || []).find((x) => x.key === r.control);
+      if (!v || v.norm == null || Math.abs(v.norm - r.value) <= 0.03) return;
+      if (Date.now() - (S.snapTold[k] || 0) < 30000) return;
+      S.snapTold[k] = Date.now();
+      toast(`${v.name} went back to where it was: your DAW's automation is reading it (in Cubase: the R button is lit on this track). ` +
+        "Switch Read off, or use Write (W) to record the move.", null, 8000);
+    }, 1800);
+  }
+
+  // A message at the bottom of the Rack; `act` gives it an UNDO button.
+  function toast(text, act, ms) {
     if (!S.stage) return;
     let el = S.stage.querySelector(".sr-toast");
     if (!el) { el = document.createElement("div"); el.className = "sr-toast"; S.stage.appendChild(el); }
-    el.innerHTML = `${icon("info")}<span>${esc(text)}</span>`;
+    S.toastAct = act || null;
+    el.innerHTML = `${icon("info")}<span>${esc(text)}</span>${act ? '<button class="sr-toast-btn" data-sr="toast-act">UNDO</button>' : ""}`;
+    el.classList.toggle("sr-toast-act", !!act);
     el.classList.add("sr-shown");
     clearTimeout(S.toastTimer);
-    S.toastTimer = setTimeout(() => el.classList.remove("sr-shown"), 4500);
+    S.toastTimer = setTimeout(hideToast, ms || (act ? 8000 : 4500));
+  }
+
+  function hideToast() {
+    clearTimeout(S.toastTimer);
+    S.toastAct = null;
+    const el = S.stage && S.stage.querySelector(".sr-toast");
+    if (el) el.classList.remove("sr-shown", "sr-toast-act");
+  }
+
+  // A Coach warning's fix: switch that module (on or off) in its own plug-in, with an UNDO that switches it back.
+  function applyFix(el) {
+    const unit = unitById(el.dataset.unit) || { id: el.dataset.unit, gen: +el.dataset.gen };
+    if (unit.gen !== +el.dataset.gen || unit.lock || !S.opts.request) { toast(unit.lock ? unit.lock : "That plug-in has closed or moved."); return; }
+    const module = el.dataset.module, on = el.dataset.on === "1";
+    const label = el.textContent;
+    el.disabled = true;
+    const go = (v, then) => send(unit, { change: "state", module, control: "", value: v ? 1 : 0, gesture: "set" }, then || true);
+    go(on, () => toast("Done: " + label.replace(/^Turn /, "turned ") + ".", () => go(!on)));
   }
 
   function switchModule(unitId, key, el) {
@@ -1079,7 +1150,7 @@
     const now = Date.now();
     for (const k of Object.keys(S.held)) {
       const h = S.held[k];
-      if (S.drag && S.drag.key === k) continue;
+      if ((S.drag && S.drag.key === k) || (S.wheel && S.wheel.key === k)) continue;
       const [uid, module, control] = k.split("|");
       const u = (data.units || []).find((x) => x.id === uid);
       const m = u && (u.modules || []).find((x) => x.key === module);
@@ -1151,6 +1222,70 @@
     }
   }
 
+  // Double-click: back to the plug-in's default for that knob (a knob with a few options steps on a click instead).
+  function onDblClick(e) {
+    const el = e.target.closest && e.target.closest("[data-knob]");
+    if (!el || (+el.dataset.steps || 0) >= 2) return;
+    const unit = unitById(el.dataset.unit);
+    if (!unit || !canTurn(unit)) return;
+    e.preventDefault();
+    delete S.held[el.dataset.knob];
+    const cell = el.closest(".sr-kcell");
+    if (cell) cell.classList.add("sr-kpending");
+    send(unit, { change: "reset", module: el.dataset.module, control: el.dataset.control, value: 0, gesture: "set" }, true);
+  }
+
+  // The mouse wheel over a knob: a small nudge (Shift: finer), or the next / previous option. One touch for the host
+  // (begin, moves, end once the wheel has been still for a moment), so a DAW records it as one move.
+  function onWheel(e) {
+    const el = e.target.closest && e.target.closest("[data-knob]");
+    if (!el) return;
+    const unit = unitById(el.dataset.unit);
+    if (!unit || !canTurn(unit) || S.drag) return;
+    e.preventDefault();
+    const raw = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;   // Shift + wheel scrolls sideways
+    if (!raw) return;
+    const notches = clamp(-raw / (e.deltaMode === 1 ? 3 : e.deltaMode === 2 ? 1 : 100), -3, 3);
+    const key = el.dataset.knob, steps = +el.dataset.steps || 0;
+    let w = S.wheel;
+    if (w && w.key !== key) { endWheel(); w = null; }
+    if (!w) w = S.wheel = { key, unit, module: el.dataset.module, control: el.dataset.control, steps, norm: +el.dataset.norm, begun: false, timer: 0, lastSend: 0, sendTimer: 0, acc: 0, lastStep: 0 };
+    let n = w.norm;
+    if (steps >= 2) {
+      // one option per click of the wheel (a trackpad's many small ones add up first)
+      w.acc += notches;
+      const now = Date.now();
+      if (Math.abs(w.acc) < 0.6 || now - w.lastStep < 120) return;
+      const i = clamp(Math.round(w.norm * (steps - 1)) + (w.acc > 0 ? 1 : -1), 0, steps - 1);
+      w.acc = 0; w.lastStep = now;
+      n = i / (steps - 1);
+    } else n = clamp(w.norm + notches * (e.shiftKey ? 0.002 : 0.01), 0, 1);
+    clearTimeout(w.timer);
+    w.timer = setTimeout(endWheel, 400);
+    if (n === w.norm) return;
+    w.norm = n;
+    S.held[key] = { norm: n, at: Date.now() };
+    paintKnob(el, n);
+    const cell = el.closest(".sr-kcell");
+    if (cell) cell.classList.add("sr-kpending");
+    const now = Date.now();
+    if (!w.begun) { w.begun = true; w.lastSend = now; send(unit, { change: "value", module: w.module, control: w.control, value: n, gesture: "begin" }); return; }
+    clearTimeout(w.sendTimer);
+    const go = () => { if (S.wheel !== w) return; w.lastSend = Date.now(); send(unit, { change: "value", module: w.module, control: w.control, value: w.norm, gesture: "move" }); };
+    if (now - w.lastSend >= 40) go(); else w.sendTimer = setTimeout(go, 40 - (now - w.lastSend));
+  }
+
+  function endWheel() {
+    const w = S.wheel;
+    if (!w) return;
+    S.wheel = null;
+    clearTimeout(w.timer);
+    clearTimeout(w.sendTimer);
+    if (!w.begun) return;
+    S.held[w.key] = { norm: w.norm, at: Date.now() };
+    send(w.unit, { change: "value", module: w.module, control: w.control, value: w.norm, gesture: "end" }, true);
+  }
+
   function onDown() { S.down = true; }
   function onUp() {
     S.down = false;
@@ -1206,6 +1341,8 @@
     S.root.addEventListener("click", onClick);
     S.root.addEventListener("pointerdown", onKnobDown);
     S.root.addEventListener("pointerdown", onDown);
+    S.root.addEventListener("dblclick", onDblClick);
+    S.root.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("pointermove", onKnobMove, true);
     window.addEventListener("pointerup", onKnobUp, true);
     window.addEventListener("pointercancel", onKnobUp, true);
@@ -1229,7 +1366,9 @@
     window.removeEventListener("pointerup", onKnobUp, true);
     window.removeEventListener("pointercancel", onKnobUp, true);
     if (S.drag) onKnobUp();
-    S.down = false; S.pending = false; S.held = {};
+    if (S.wheel) endWheel();
+    hideToast();
+    S.down = false; S.pending = false; S.held = {}; S.sent = {};
     S.root.remove();
     S.root = null; S.stage = null; S.data = null;
   }
@@ -1246,5 +1385,17 @@
     render();
   }
 
-  window.SonicologyRack = { open, close, show, isOpen: () => !!S.root, theme: () => S.theme, catalog: CATALOG, products: PRODUCTS };
+  // getRack's reply: the Rack's JSON as base64 (see RackHost.h viewBase64), or the JSON itself (an older plug-in).
+  function fromBase64Json(s) {
+    if (s == null || s === "") return null;
+    if (typeof s === "object") return s;
+    s = String(s).trim();
+    if (s[0] === "{" || s[0] === "[") return JSON.parse(s);
+    const bin = atob(s);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return JSON.parse(new TextDecoder("utf-8").decode(bytes));
+  }
+
+  window.SonicologyRack = { open, close, show, fromBase64Json, isOpen: () => !!S.root, theme: () => S.theme, catalog: CATALOG, products: PRODUCTS };
 })();

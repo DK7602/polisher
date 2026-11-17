@@ -280,6 +280,10 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, .55); opacity: 0; transform: translate(-50%, 10px); transition: opacity .2s, transform .2s; }
 .sr-toast.sr-shown { opacity: 1; transform: translate(-50%, 0); }
 .sr-toast .sr-ic { color: var(--gold2); font-size: 22px; flex: none; }
+.sr-toast.sr-toast-act { pointer-events: auto; }
+.sr-toast-btn { flex: none; margin-left: 6px; padding: 5px 14px; border-radius: 9px; font: inherit; font-size: 14px; font-weight: 800; letter-spacing: .08em; color: #2a1700; cursor: pointer;
+  background: linear-gradient(180deg, #ffe7a0, #e0aa3e); border: 0; box-shadow: 0 2px 6px rgba(0, 0, 0, .4); }
+.sr-toast-btn:hover { filter: brightness(1.08); }
 
 /* ---- RACK: right, RACK COACH -------------------------------------------------------------------------------------- */
 .sr-right { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -294,6 +298,12 @@
 .sr-li-warn { color: var(--warn); filter: drop-shadow(0 0 4px rgba(255, 77, 94, .7)); }
 .sr-li-info { color: var(--info); }
 .sr-tl-warn span { color: #ffd6da; }
+/* a warning's one-click fixes (each switches one module off in its own plug-in) */
+.sr-fixes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.sr-fix { padding: 4px 10px; border-radius: 8px; font: inherit; font-size: 13px; font-weight: 700; line-height: 1.2; text-align: left; color: #fff3d0; cursor: pointer;
+  background: linear-gradient(180deg, rgba(60, 40, 8, .9), rgba(30, 18, 2, .9)) padding-box, var(--goldline) border-box; border: 1.5px solid transparent; }
+.sr-fix:hover { filter: brightness(1.2); }
+.sr-fix:disabled { opacity: .5; cursor: default; filter: none; }
 .sr-overview b { color: var(--gold2); font-weight: 700; }
 .sr-coach h4, .sr-cardinfo h4 { display: flex; align-items: center; gap: 8px; margin: 4px 0 9px; padding-bottom: 6px; font-size: 17px; font-weight: 700; letter-spacing: .08em; color: var(--gold2);
   border-bottom: 1px solid rgba(242, 200, 96, .35); }
@@ -514,6 +524,7 @@
 .sr-light .sr-tl, .sr-light .sr-overview li, .sr-light .sr-coach > p, .sr-light .sr-ci-desc,
 .sr-light .sr-coach .sr-uses li, .sr-light .sr-cardinfo .sr-uses li { color: #3a2e1c; }
 .sr-light .sr-tl-warn span { color: #a8102a; }
+.sr-light .sr-fix { color: #5a3a06; background: linear-gradient(180deg, #fffaf0, #f6e6c0) padding-box, var(--goldline) border-box; }
 .sr-light .sr-banner { color: #fff; background: linear-gradient(180deg, #e8364c, #a80c22); box-shadow: inset 0 0 0 1.5px #ff8a96, 0 0 12px rgba(255, 46, 69, .35); }
 .sr-light .sr-coach h4, .sr-light .sr-cardinfo h4 { border-bottom-color: rgba(184, 134, 42, .4); }
 /* footer */

@@ -39,7 +39,7 @@
 
 namespace rack
 {
-    constexpr std::uint32_t kLayout = 2;    // 2: + requests (stage 2), the lock
+    constexpr std::uint32_t kLayout = 3;    // 2: + requests (stage 2), the lock; 3: + the tracks the views show
     constexpr int kMaxSlots = 256;          // every Mixology Link, Voxology, Honey Tune, Mixology and Masterology
     constexpr int kMaxModules = 16;         // a Link has 15 (the Assist EQ and its processing modules)
     constexpr int kMaxValues = 8;           // the knobs the view draws
@@ -140,7 +140,8 @@ namespace rack
 
     // ---- stage 2: requests from a Rack view to the plug-in that owns a module ------------------------------------
 
-    enum class Change : std::uint32_t { value = 0, state };
+    /** value: a knob to `value`; state: a module on / off; reset: a knob back to its default (the owner's own). */
+    enum class Change : std::uint32_t { value = 0, state, reset };
     /** A knob drag: begin, moves, end (the owner holds the host's gesture open between them, so automation records it
         as one touch); set: a single change (a click). The owner always gets them balanced (Publisher::serve()). */
     enum class Gesture : std::uint32_t { set = 0, begin, move, end };
@@ -150,7 +151,7 @@ namespace rack
         Change change = Change::value;
         std::string module;             // the module's key ("link.comp")
         std::string control;            // Change::value: the control's key in that module; Change::state: ""
-        float value = 0.0f;             // Change::value: where the knob goes (0..1); Change::state: 1 on, 0 off
+        float value = 0.0f;             // Change::value: where the knob goes (0..1); Change::state: 1 on, 0 off; reset: unused
         Gesture gesture = Gesture::set; // Change::state: always set
         std::uint64_t ticket = 0;       // from request() (0: made up by serve() to close a gesture the view left open)
     };
@@ -164,6 +165,17 @@ namespace rack
 
     /** A line about how plug-ins work together, from together(): on a track (hash), the Full Mix, the Master, or the
         whole project. */
+    /** A one-click fix for a warning: switch a module off (or on) in the unit that owns it ("Turn the Link's Space
+        off"). The Rack sends it as a Change::state request. */
+    struct Fix
+    {
+        int slot = -1;                  // the unit (as units() gave it)
+        std::uint32_t generation = 0;
+        std::string module;             // its key ("mix.space")
+        bool on = false;                // what to switch it to
+        std::string label;              // the button ("Turn the Link's Space off")
+    };
+
     struct ProjectLine
     {
         enum class Scope : std::uint32_t { track = 0, fullmix, master, project };
@@ -171,6 +183,7 @@ namespace rack
         std::uint32_t hash = 0;         // Scope::track
         Level level = Level::ok;
         std::string text;
+        std::vector<Fix> fixes;         // up to two (units read from the block only: a unit with no slot gets none)
     };
 
     /** What the plug-ins in the project do together: two reverbs or two compressors on one vocal, two tuners, a vocal
@@ -191,7 +204,7 @@ namespace rack
     /** The JSON text rack.js reads (getRack()): host is "voxology" | "mixology" | "masterology", hostHash the track the
         view's plug-in sits on. Locale-independent, every number finite. */
     std::string toJson (const std::string& host, std::uint32_t hostHash, const std::vector<Unit>&, const std::vector<ProjectLine>&,
-                        const Overview&);
+                        const Overview&, const std::vector<std::uint32_t>& otherLayouts = {});
 
     const char* productKey (Product);   // "voxology", "honeytune", "link", "mixology", "masterology"
 
@@ -281,10 +294,20 @@ namespace rack
         Queue queue;
     };
 
+    /** What an open Rack view shows: every track's details (kind 0), a track (1, by its hash), the Full Mix (2) or the
+        Master (3). The plug-ins elsewhere send the short version (their details aren't drawn). */
+    struct ViewerSlot
+    {
+        std::atomic<std::uint64_t> ms;             // its last look (0 = never)
+        std::atomic<std::uint32_t> kind, hash;
+    };
+    constexpr int kMaxViewers = 4;
+
     struct Block
     {
         std::atomic<std::uint32_t> layout;
         std::atomic<std::uint64_t> viewerMs;       // an open Rack view's heartbeat (0 = none)
+        std::array<ViewerSlot, kMaxViewers> viewers;
         std::array<UnitSlot, kMaxSlots> slots;
     };
 
@@ -300,6 +323,9 @@ namespace rack
         static Link& process();
         /** False when the OS refused shared memory (the plug-ins then can't see each other). */
         static bool processShared();
+        /** The layouts of other Rack blocks alive in this process: Sonicology plug-ins of an older (or, on Windows, a
+            newer) beta, which can't join this Rack. Empty when all match. A few OS calls: once a second is plenty. */
+        static std::vector<std::uint32_t> otherLayouts (std::uint64_t nowMs);
 
         // ---- every plug-in (message thread) ----
         int claim (std::uint64_t instanceId, std::uint64_t nowMs);   // -1 when full
@@ -308,12 +334,16 @@ namespace rack
             no longer this instance's (it was silent longer than kAliveMs and another took it over): claim again. Values
             past the limits are dropped, texts cut (at a UTF-8 boundary), numbers that aren't finite stored as 0. */
         bool publish (int slot, std::uint64_t instanceId, const Unit&, std::uint64_t nowMs);
-        /** A Rack view is open somewhere in the project: publish the modules' details. */
+        /** A Rack view is open somewhere in the project. */
         bool watched (std::uint64_t nowMs) const;
+        /** A Rack view open somewhere shows this unit's track (role fullmix / master: the Full Mix / the Master; else the
+            track's hash): publish its details, serve its requests quickly. */
+        bool shows (std::uint64_t nowMs, std::uint32_t hash, Role) const;
 
         // ---- the Rack view's plug-in (message thread) ----
-        /** The view looked (a few times a second while it is open). */
-        void view (std::uint64_t nowMs);
+        /** The view looked (a few times a second while it is open), showing `track`: rack.js's track key ("t<hash>",
+            "fullmix", "master"; "" = every track's details). */
+        void view (std::uint64_t nowMs, const std::string& track = {});
         /** Every live unit (version != 0), by slot. */
         std::vector<Unit> units (std::uint64_t nowMs) const;
 
@@ -359,6 +389,10 @@ namespace rack
         void start() noexcept { presence.start(); }
         void stop() noexcept { presence.stop(); }
 
+        /** Full when a Rack view open somewhere shows this unit's track (hash, role: as Link::shows()), else brief. Right
+            after serve() applied a request, due at once (the Rack sees the new value without waiting). */
+        Due due (std::uint64_t nowMs, std::uint32_t hash, Role role);
+        /** As above, for a unit any open Rack view counts as showing. */
         Due due (std::uint64_t nowMs);
         /** Publishes (u.detailed set from the last due()). */
         void publish (Unit u, std::uint64_t nowMs);
@@ -380,8 +414,10 @@ namespace rack
         bool takingPart() const noexcept { return presence.takingPart(); }
         int slot() const noexcept { return slotIndex; }
         bool watched (std::uint64_t nowMs) const { return link.watched (nowMs); }
+        bool shows (std::uint64_t nowMs, std::uint32_t hash, Role role) const { return link.shows (nowMs, hash, role); }
 
     private:
+        Due dueIf (std::uint64_t nowMs, bool full);
         Link& link;
         std::uint64_t id;
         suite::Presence presence;
@@ -389,6 +425,7 @@ namespace rack
         std::uint64_t lastMs = 0;
         bool lastWasFull = false;
         Due pending = Due::none;
+        bool refresh = false;                      // serve() applied a request: publish at once
 
         struct Open { std::string module, control; float value = 0.0f; std::uint64_t lastMs = 0; };
         std::vector<Open> open;                    // drags in progress (the host's gesture is open)

@@ -173,14 +173,61 @@ namespace rack
 #endif
         };
 
-        std::string processBlockName()
+        std::string blockName (std::uint32_t layout)
         {
 #if defined(_WIN32)
             const auto pid = static_cast<unsigned long> (GetCurrentProcessId());
 #else
             const auto pid = static_cast<unsigned long> (getpid());
 #endif
-            return "SonicologyRack.v" + std::to_string (kLayout) + "." + std::to_string (pid);
+            return "SonicologyRack.v" + std::to_string (layout) + "." + std::to_string (pid);
+        }
+
+        std::string processBlockName() { return blockName (kLayout); }
+
+        // Earlier layouts: where their slots start and how long one is (state at +0, heartbeat at +16 in each), so a
+        // block left from a plug-in that has gone (macOS / Linux keep it until the next restart) isn't taken for one
+        // that is here. Add this layout's when bumping kLayout: v3 slots at 128, 23936 bytes each.
+        struct EarlierLayout { std::uint32_t layout; std::size_t slotsAt, slotBytes; };
+        constexpr EarlierLayout kEarlier[] = { { 1, 64, 16640 }, { 2, 64, 23936 } };
+
+        bool layoutAlive (std::uint32_t layout, std::uint64_t now)
+        {
+#if defined(_WIN32)
+            // Windows drops a block with the last plug-in that had it open: there is one only while one is here.
+            (void) now;
+            const std::string osName = "Local\\" + blockName (layout);
+            HANDLE h = OpenFileMappingA (FILE_MAP_READ, FALSE, osName.c_str());
+            if (h == nullptr) return false;
+            CloseHandle (h);
+            return true;
+#else
+            const EarlierLayout* known = nullptr;
+            for (const auto& e : kEarlier)
+                if (e.layout == layout) known = &e;
+            if (known == nullptr) return false;
+            const std::string osName = "/" + blockName (layout);
+            const int fd = shm_open (osName.c_str(), O_RDONLY, 0);
+            if (fd < 0) return false;
+            const std::size_t bytes = known->slotsAt + known->slotBytes * static_cast<std::size_t> (kMaxSlots);
+            struct stat st {};
+            void* p = (fstat (fd, &st) == 0 && static_cast<std::size_t> (st.st_size) >= bytes)
+                          ? mmap (nullptr, bytes, PROT_READ, MAP_SHARED, fd, 0) : MAP_FAILED;
+            close (fd);
+            if (p == MAP_FAILED) return false;
+            bool any = false;
+            for (int i = 0; i < kMaxSlots && ! any; ++i)
+            {
+                const auto* slot = static_cast<const unsigned char*> (p) + known->slotsAt + known->slotBytes * static_cast<std::size_t> (i);
+                std::uint32_t state = 0;
+                std::uint64_t beat = 0;
+                std::memcpy (&state, slot, sizeof state);
+                std::memcpy (&beat, slot + 16, sizeof beat);
+                any = state == 1u && alive (beat, now);
+            }
+            munmap (p, bytes);
+            return any;
+#endif
         }
 
         struct ProcessHandle
@@ -205,6 +252,18 @@ namespace rack
 
     Link& Link::process() { return handle().link; }
     bool Link::processShared() { return handle().memory.isShared(); }
+
+    std::vector<std::uint32_t> Link::otherLayouts (std::uint64_t now)
+    {
+        static std::uint64_t lastMs = 0;
+        static std::vector<std::uint32_t> found;
+        if (lastMs != 0 && now - std::min (now, lastMs) < 1000) return found;
+        lastMs = now;
+        found.clear();
+        for (std::uint32_t layout = 1; layout <= kLayout + 5; ++layout)
+            if (layout != kLayout && layoutAlive (layout, now)) found.push_back (layout);
+        return found;
+    }
 
     int Link::claim (std::uint64_t instanceId, std::uint64_t now)
     {
@@ -326,7 +385,44 @@ namespace rack
 
     bool Link::watched (std::uint64_t now) const { return alive (block.viewerMs.load (kAcquire), now, kViewerMs); }
 
-    void Link::view (std::uint64_t now) { block.viewerMs.store (now, kRelease); }
+    void Link::view (std::uint64_t now, const std::string& track)
+    {
+        block.viewerMs.store (now, kRelease);
+        std::uint32_t kind = 0, hash = 0;
+        if (track == "fullmix") kind = 2;
+        else if (track == "master") kind = 3;
+        else if (track.size() > 1 && track[0] == 't')
+        {
+            kind = 1;
+            for (std::size_t i = 1; i < track.size() && track[i] >= '0' && track[i] <= '9'; ++i)
+                hash = hash * 10u + static_cast<std::uint32_t> (track[i] - '0');
+        }
+        // Its own place (same track), else the one looked at longest ago. Two views writing one place at once (rare)
+        // can only make a track look shown or not for a moment.
+        auto* place = &block.viewers[0];
+        for (auto& v : block.viewers)
+        {
+            if (v.ms.load (kAcquire) != 0 && v.kind.load (kRelaxed) == kind && v.hash.load (kRelaxed) == hash) { place = &v; break; }
+            if (v.ms.load (kRelaxed) < place->ms.load (kRelaxed)) place = &v;
+        }
+        place->kind.store (kind, kRelaxed);
+        place->hash.store (hash, kRelaxed);
+        place->ms.store (now, kRelease);
+    }
+
+    bool Link::shows (std::uint64_t now, std::uint32_t hash, Role role) const
+    {
+        for (const auto& v : block.viewers)
+        {
+            if (! alive (v.ms.load (kAcquire), now, kViewerMs)) continue;
+            const auto kind = v.kind.load (kRelaxed);
+            if (kind == 0) return true;
+            if (role == Role::fullmix) { if (kind == 2) return true; continue; }
+            if (role == Role::master) { if (kind == 3) return true; continue; }
+            if (kind == 1 && hash != 0 && v.hash.load (kRelaxed) == hash) return true;
+        }
+        return false;
+    }
 
     std::vector<Unit> Link::units (std::uint64_t now) const
     {
@@ -510,7 +606,7 @@ namespace rack
             taken = ticket;
             q.taken.store (taken, kRelease);
             if (forGeneration != generation) continue;   // for the slot's earlier owner, or skipped
-            if (r.change != Change::value && r.change != Change::state) r.change = Change::value;
+            if (r.change != Change::value && r.change != Change::state && r.change != Change::reset) r.change = Change::value;
             if (static_cast<std::uint32_t> (r.gesture) > static_cast<std::uint32_t> (Gesture::end)) r.gesture = Gesture::set;
             r.ticket = ticket;
             out[n++] = std::move (r);
@@ -560,7 +656,11 @@ namespace rack
         if (slotIndex >= 0) link.release (slotIndex, id);
     }
 
-    Publisher::Due Publisher::due (std::uint64_t now)
+    Publisher::Due Publisher::due (std::uint64_t now) { return dueIf (now, link.watched (now)); }
+
+    Publisher::Due Publisher::due (std::uint64_t now, std::uint32_t hash, Role role) { return dueIf (now, link.shows (now, hash, role)); }
+
+    Publisher::Due Publisher::dueIf (std::uint64_t now, bool full)
     {
         pending = Due::none;
         switch (presence.update (now))
@@ -581,9 +681,9 @@ namespace rack
             slotIndex = link.claim (id, now);
             if (slotIndex < 0) return Due::none;   // full: try again next time
         }
-        const bool full = link.watched (now);
         const std::uint64_t every = full ? kFullMs : kBriefMs;
-        if (! claimed && ! (full && ! lastWasFull) && now - std::min (now, lastMs) < every) return Due::none;
+        if (! claimed && ! refresh && ! (full && ! lastWasFull) && now - std::min (now, lastMs) < every) return Due::none;
+        refresh = false;
         pending = full ? Due::full : Due::brief;
         return pending;
     }
@@ -638,6 +738,14 @@ namespace rack
                 r.gesture = Gesture::set;
                 r.value = r.value >= 0.5f ? 1.0f : 0.0f;
             }
+            else if (r.change == Change::reset)
+            {
+                r.gesture = Gesture::set;
+                r.value = 0.0f;
+                // a drag of the same knob still open: closed first, so the reset is a gesture of its own
+                for (auto it = open.begin(); it != open.end(); ++it)
+                    if (it->module == r.module && it->control == r.control) { close (*it); open.erase (it); break; }
+            }
             else
             {
                 if (r.gesture == Gesture::move)
@@ -669,6 +777,7 @@ namespace rack
             ++applied;
         }
         link.answered (slotIndex, id, ~std::uint64_t { 0 });   // every taken ticket, skipped ones too (refusals written)
+        if (applied > 0) refresh = true;                       // the Rack sees the new value at the next due()
         return applied;
     }
 
@@ -729,8 +838,14 @@ namespace rack
     std::vector<ProjectLine> together (const std::vector<Unit>& units)
     {
         std::vector<ProjectLine> out;
-        auto add = [&] (ProjectLine::Scope scope, std::uint32_t hash, Level level, std::string text) {
-            out.push_back ({ scope, hash, level, std::move (text) });
+        auto add = [&] (ProjectLine::Scope scope, std::uint32_t hash, Level level, std::string text, std::vector<Fix> fixes = {}) {
+            ProjectLine l { scope, hash, level, std::move (text), {} };
+            for (auto& f : fixes)
+                if (f.slot >= 0 && l.fixes.size() < 2) l.fixes.push_back (std::move (f));
+            out.push_back (std::move (l));
+        };
+        auto off = [] (const Unit* u, const char* module, std::string label) {
+            return Fix { u != nullptr ? u->slot : -1, u != nullptr ? u->generation : 0u, module, false, std::move (label) };
         };
         const auto T = ProjectLine::Scope::track;
 
@@ -783,18 +898,26 @@ namespace rack
                     const auto* vComp = findModule (vox, "vox.comp");
                     const auto* lComp = findModule (link, "mix.comp");
                     if (isOn (vComp) && isOn (lComp))
-                        add (T, hash, Level::warn, "Two compressors on this vocal: Voxology's and the Link's. Mixology adds none where Voxology compresses; switch one off unless you want both.");
+                        add (T, hash, Level::warn, "Two compressors on this vocal: Voxology's and the Link's. Mixology adds none where Voxology compresses; switch one off unless you want both.",
+                             { off (link, "mix.comp", "Turn the Link's Compressor off"), off (vox, "vox.comp", "Turn Voxology's Compressor off") });
                     else if (isOn (vComp))
                         add (T, hash, Level::ok, "Voxology compresses this vocal, so Mixology's Link adds no second compressor.");
 
                     const auto* space = findModule (link, "mix.space");
                     const std::uint32_t layers = isOn (space) ? space->layers : 0u;
                     const bool vRev = isOn (findModule (vox, "vox.reverb")), vDly = isOn (findModule (vox, "vox.delay"));
+                    // Space switches all its effects at once: the button says so when it plays more than the one in question.
+                    const auto spaceOff = [&] (std::uint32_t these) {
+                        return off (link, "mix.space", (layers & ~these) != 0 ? "Turn the Link's Space off (" + layerNames (layers) + ")"
+                                                                              : std::string ("Turn the Link's Space off"));
+                    };
                     if (vRev && (layers & kReverbLayers) != 0)
                         add (T, hash, Level::warn, "Two reverbs on this vocal: Voxology's Reverb and the Link's Space (" + layerNames (layers & kReverbLayers)
-                             + "). Stacked spaces can wash it out: turn one down or off.");
+                             + "). Stacked spaces can wash it out: turn one down or off.",
+                             { spaceOff (kReverbLayers), off (vox, "vox.reverb", "Turn Voxology's Reverb off") });
                     if (vDly && (layers & SpaceLayer::delay) != 0)
-                        add (T, hash, Level::warn, "Two delays on this vocal: Voxology's Delay and the Link's Space. Their echoes can clash: keep one.");
+                        add (T, hash, Level::warn, "Two delays on this vocal: Voxology's Delay and the Link's Space. Their echoes can clash: keep one.",
+                             { spaceOff (SpaceLayer::delay), off (vox, "vox.delay", "Turn Voxology's Delay off") });
                     if ((vRev || vDly) && layers == 0)
                         add (T, hash, Level::ok, std::string ("Voxology adds the ") + (vRev && vDly ? "reverb and delay" : vRev ? "reverb" : "delay")
                              + " here; Mixology adds none on top.");
@@ -807,7 +930,8 @@ namespace rack
                 if (pitch != nullptr && pitch->state == State::rest)
                     add (T, hash, Level::ok, "Voxology's Pitch rests while Honey Tune tunes this track: one tuner at a time.");
                 else if (isOn (pitch))
-                    add (T, hash, Level::warn, "Two tuners on this track: Honey Tune and Voxology's Pitch (set to tune here anyway). Notes outside Voxology's key get pulled away from where Honey Tune put them.");
+                    add (T, hash, Level::warn, "Two tuners on this track: Honey Tune and Voxology's Pitch (set to tune here anyway). Notes outside Voxology's key get pulled away from where Honey Tune put them.",
+                         { off (vox, "vox.pitch", "Turn Voxology's Pitch off") });
             }
         }
 
@@ -820,7 +944,8 @@ namespace rack
             for (const auto& u : units)
                 if (u.product == Product::mixology && u.role == Role::fullmix && isOn (findModule (&u, "mix.limit")))
                 {
-                    add (ProjectLine::Scope::fullmix, 0, Level::warn, "Mixology's Limiter is on the Full Mix: leave the final limiting to Masterology (it measures true peaks the way streaming does).");
+                    add (ProjectLine::Scope::fullmix, 0, Level::warn, "Mixology's Limiter is on the Full Mix: leave the final limiting to Masterology (it measures true peaks the way streaming does).",
+                         { off (&u, "mix.limit", "Turn Mixology's Limiter off") });
                     break;
                 }
         if (masterologys > 0 && ! fullMixMixology)
@@ -942,7 +1067,7 @@ namespace rack
     }
 
     std::string toJson (const std::string& host, std::uint32_t hostHash, const std::vector<Unit>& units,
-                        const std::vector<ProjectLine>& projectLines, const Overview& ov)
+                        const std::vector<ProjectLine>& projectLines, const Overview& ov, const std::vector<std::uint32_t>& otherLayouts)
     {
         std::string o;
         o.reserve (8192 + units.size() * 4096);
@@ -1058,6 +1183,23 @@ namespace rack
             else if (l.scope == ProjectLine::Scope::master) { key (o, "hash", f); str (o, "master"); }
             key (o, "level", f); str (o, levelKey (l.level));
             key (o, "text", f); str (o, l.text);
+            if (! l.fixes.empty())
+            {
+                key (o, "fixes", f);
+                o.push_back ('[');
+                for (std::size_t k = 0; k < l.fixes.size(); ++k)
+                {
+                    const auto& x = l.fixes[k];
+                    if (k) o.push_back (',');
+                    o += "{\"unit\":"; str (o, "u" + std::to_string (x.slot));
+                    o += ",\"gen\":" + std::to_string (x.generation);
+                    o += ",\"module\":"; str (o, x.module);
+                    o += ",\"on\":"; o += x.on ? "true" : "false";
+                    o += ",\"label\":"; str (o, x.label);
+                    o.push_back ('}');
+                }
+                o.push_back (']');
+            }
             o.push_back ('}');
         }
         o += "],\"mix\":{";
@@ -1075,7 +1217,9 @@ namespace rack
             o += ",\"lufs\":"; num (o, ov.targetLufs, 1);
             o += ",\"ceiling\":"; num (o, ov.ceilingDbtp, 1);
         }
-        o += "}}";
+        o += "},\"otherLayouts\":[";
+        for (std::size_t i = 0; i < otherLayouts.size(); ++i) o += (i ? "," : "") + std::to_string (otherLayouts[i]);
+        o += "]}";
         return o;
     }
 
@@ -1114,7 +1258,7 @@ namespace rack
     std::string viewJson (Link& rackLink, const suite::Link& suiteLink, const std::string& host, std::uint32_t hostHash, std::uint64_t now,
                           const std::string& detailTrack)
     {
-        rackLink.view (now);
+        rackLink.view (now, detailTrack);
         auto units = rackLink.units (now);
         const auto lines = together (units);
         if (! detailTrack.empty())
@@ -1140,7 +1284,7 @@ namespace rack
                 }
             }
         }
-        return toJson (host, hostHash, units, lines, overview (suiteLink, now));
+        return toJson (host, hostHash, units, lines, overview (suiteLink, now), Link::otherLayouts (now));
     }
 
     // ---- the view's requests (stage 2) ---------------------------------------------------------------------------
@@ -1164,14 +1308,14 @@ namespace rack
                              const std::string& control, float value, const std::string& gesture, std::uint64_t now)
     {
         Request r;
-        r.change = change == "state" ? Change::state : Change::value;
+        r.change = change == "state" ? Change::state : change == "reset" ? Change::reset : Change::value;
         r.module = module;
         r.control = control;
         r.value = value;
         r.gesture = gesture == "begin" ? Gesture::begin : gesture == "move" ? Gesture::move : gesture == "end" ? Gesture::end : Gesture::set;
         std::string why;
         std::uint64_t ticket = 0;
-        if (module.empty() || (r.change == Change::value && control.empty()))
+        if (module.empty() || (r.change != Change::state && control.empty()))
             why = "Nothing to change.";
         else
             ticket = link.request (unitSlot (unit), generation, r, now, why);

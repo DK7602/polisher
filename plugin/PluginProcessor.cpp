@@ -1376,6 +1376,14 @@ std::string PolisherAudioProcessor::rackLock() const
 
 std::string PolisherAudioProcessor::applyRack (const rack::Request& r)
 {
+    if (r.change == rack::Change::reset)
+    {
+        double unused = 0.0;
+        auto* p = polisher::rackunit::fromKnob (r.control, 0.0f, unused) ? rack::host::find (parameters, r.control) : nullptr;   // a knob the Rack shows
+        if (p == nullptr) return rack::host::cannot ("Masterology", r);
+        rack::host::setDefault (*p);
+        return {};
+    }
     if (r.change == rack::Change::state)
     {
         const char* id = polisher::rackunit::switchOf (r.module);
@@ -1396,7 +1404,7 @@ void PolisherAudioProcessor::publishRack()
     const auto now = suite::nowMs();
     // Stage 2: knobs turned and modules switched in a Rack view (in any Sonicology plug-in), on this Masterology.
     rackPub.serve (now, rackLock(), [this] (const rack::Request& r) { return applyRack (r); });
-    const auto due = rackPub.due (now);
+    const auto due = rackPub.due (now, 0, rack::Role::master);
     if (due == rack::Publisher::Due::none) return;
     auto value = [this] (const char* id) { auto* p = parameters.getRawParameterValue (id); return p != nullptr ? p->load() : 0.0f; };
 

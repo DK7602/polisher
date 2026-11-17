@@ -22,7 +22,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 A live copy is kept in Claude Docs (project 3bf99dd7-1111-4be3-884d-d787ae49506c, node 15637893-1eb5): update it
 whenever the manual changes.
 
-## Status — v0.32.1
+## Status — v0.33.0
 
 | Piece | State |
 | --- | --- |
@@ -77,6 +77,7 @@ whenever the manual changes.
 | Re-audit of every module after the nine features (5 measured audits, reports in claude/reaudit-2026-10-10): MATCH relearns in ~3 s and is off on project load; clean B->A switch; Mono Below / Imager / Dynamics switch without holes (park and glide); Saturation Mode cross-fades; Tone Steady target leaves sections without the 808 alone; Keep Loudness follows section changes; Model Hears LUFS-weighted; reference matched hook against hook; honest report levels; Space key safe; project marked changed on snapshot / reference | Done (v0.16) |
 | Sonicology Rack (v0.31.0, with Voxology 0.55.0 and Mixology 0.26.0): the RACK pill shows every Sonicology plug-in in the project in one view; Masterology publishes its 12 modules (polisher/RackUnit.h) through the shared link (suite/RackLink.h) | Done: tested in the engine, the plug-in tests and the UI smoke test, not yet in a DAW |
 | Sonicology Rack stage 2 (v0.32.0, with Voxology 0.56.0 and Mixology 0.27.0): Masterology's knobs and modules can be changed from the Rack (rackunit::fromKnob / switchOf, plugin/RackHost.h), locked while Auto-Master listens or works | New: tested in the engine and the browser preview, not yet in a DAW |
+| Rack Beta 18 (v0.33.0, with Voxology 0.57.0 and Mixology 0.28.0): details only for the track a Rack shows, published at once after a change; reset to default (double-click), wheel nudge, one-click fixes, the automation and old-beta warnings; the window grows while the Rack is open and Masterology doesn't remember that size; report natives return objects (rack::host::jsonObject), not long JSON text | New: tested in the engine and the browser preview, not yet in a DAW |
 
 ## Validation
 

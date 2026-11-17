@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PluginProcessor.h"
+#include "RackHost.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_dsp/juce_dsp.h>
@@ -93,6 +94,7 @@ private:
     std::vector<std::unique_ptr<juce::WebToggleButtonRelay>> moduleToggleRelays = makeRelays<juce::WebToggleButtonRelay> (ModuleParams::toggleIds());
     std::vector<std::unique_ptr<juce::WebComboBoxRelay>> moduleComboRelays = makeRelays<juce::WebComboBoxRelay> (ModuleParams::comboIds());
 
+    rack::host::RackWindow rackWindow;   // the window grows while the Rack is open (RackHost.h)
     juce::WebBrowserComponent webView;
 
     juce::WebSliderParameterAttachment driveAttachment, ceilingAttachment, releaseAttachment;

@@ -381,7 +381,7 @@
                           "setAutoAnalyze", "getAutoAnalyze", "applyAutoEdit", "keepAutoEdit",
                           "loadReference", "clearReference", "getReference", "setMonitor",
                           "historyUndo", "historyRedo", "historyGroup", "snapshotStore", "snapshotRecall", "getGenreCurve", "pickStyle", "pickDaw", "rememberUi", "showParameterMenu",
-                          "getRack", "getRackTheme", "setRackTheme", "rackRequest", "rackAnswer"],
+                          "getRack", "getRackTheme", "setRackTheme", "rackRequest", "rackAnswer", "rackWindow"],
       __juce__registeredGlobalEventIds: [],
       __juce__sliders: Object.keys(sliders),
       __juce__toggles: Object.keys(toggles),

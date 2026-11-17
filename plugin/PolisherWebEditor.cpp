@@ -218,7 +218,7 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                              })
         .withNativeFunction ("getAutoMasterReport", [this] (const juce::Array<juce::var>&, auto complete)
                              {
-                                 complete (audioProcessor.autoMaster.getReportJson());
+                                 complete (rack::host::jsonObject (audioProcessor.autoMaster.getReportJson()));
                              })
         // Auto Analyze: switch it on / off (saved with the project), fetch the advice, apply or keep an edit
         // (a module id, or "all").
@@ -229,7 +229,7 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                              })
         .withNativeFunction ("getAutoAnalyze", [this] (const juce::Array<juce::var>&, auto complete)
                              {
-                                 complete (audioProcessor.autoMaster.getAutoAnalyzeJson());
+                                 complete (rack::host::jsonObject (audioProcessor.autoMaster.getAutoAnalyzeJson()));
                              })
         .withNativeFunction ("applyAutoEdit", [this] (const juce::Array<juce::var>& args, auto complete)
                              {
@@ -266,7 +266,7 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                              })
         .withNativeFunction ("getReference", [this] (const juce::Array<juce::var>&, auto complete)
                              {
-                                 complete (audioProcessor.reference.getInfoJson());
+                                 complete (rack::host::jsonObject (audioProcessor.reference.getInfoJson()));
                              })
         // Monitoring: setMonitor(listenMode, mono, phone). Listening aids only: not parameters, back to
         // off when this window closes, never in an offline export.
@@ -346,11 +346,15 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
         .withInitialisationData ("polisherVersion", juce::String (JucePlugin_VersionString))
         // The Sonicology Rack (suite/RackLink.h): every Sonicology plug-in in the project, as rack.js shows it. Opened from
         // Masterology it starts on the master.
+        .withNativeFunction ("rackWindow", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            // the Rack opens (true) / goes BACK (false): a bigger window for it, then the one you had
+            if (args.size() > 0 && static_cast<bool> (args[0])) rackWindow.open (*this); else rackWindow.close (*this);
+            complete (juce::var());
+        })
         .withNativeFunction ("getRack", [] (const juce::Array<juce::var>& args, auto complete)
                              {
-                                 const auto json = rack::viewJson ("masterology", 0, suite::nowMs(),
-                                                                 args.size() > 0 ? args[0].toString().toStdString() : std::string());   // the track it shows
-                                 complete (juce::String::fromUTF8 (json.data(), static_cast<int> (json.size())));
+                                 complete (rack::host::viewBase64 ("masterology", 0, args.size() > 0 ? args[0] : juce::var()));
                              })
         // Stage 2: a knob turned or a module switched in the Rack, for the plug-in that owns it; and what became of it.
         .withNativeFunction ("rackRequest", [] (const juce::Array<juce::var>& args, auto complete) { complete (rack::host::requestFrom (args)); })
@@ -471,7 +475,7 @@ void PolisherWebEditor::resized()
     webView.setBounds (getLocalBounds());
     if (basicView != nullptr)
         basicView->setBounds (getLocalBounds());
-    if (sizeReady && getWidth() >= kMinWidth)   // (not a size the window passes through while it is built or closed)
+    if (sizeReady && ! rackWindow.big && getWidth() >= kMinWidth)   // (not a size it passes through while built or closed, nor the Rack's)
         audioProcessor.parameters.state.setProperty (uiWidthId, getWidth(), nullptr);   // opens at this size next time
 }
 

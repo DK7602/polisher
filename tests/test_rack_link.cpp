@@ -9,10 +9,25 @@
 #include <clocale>
 #include <cmath>
 #include <limits>
+#include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <thread>
+#if defined(_WIN32)
+ #ifndef WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
+ #endif
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #include <windows.h>
+#else
+ #include <fcntl.h>
+ #include <sys/mman.h>
+ #include <unistd.h>
+#endif
 #include <vector>
 
 namespace
@@ -452,7 +467,8 @@ TEST_CASE ("Rack link: the JSON the Rack view reads", "[rack]")
     // Nothing known: empty objects, still well formed.
     const auto empty = rack::toJson ("mixology", 0, {}, {}, rack::Overview {});
     CHECK (wellFormed (empty));
-    CHECK (empty == "{\"host\":\"mixology\",\"hostHash\":0,\"units\":[],\"together\":[],\"mix\":{},\"master\":{}}");
+    CHECK (empty == "{\"host\":\"mixology\",\"hostHash\":0,\"units\":[],\"together\":[],\"mix\":{},\"master\":{},\"otherLayouts\":[]}");
+    CHECK (rack::toJson ("mixology", 0, {}, {}, rack::Overview {}, { 2 }).find ("\"otherLayouts\":[2]}") != std::string::npos);
 }
 
 TEST_CASE ("Rack link: a view's JSON - the heartbeat, the units, the loudness from the suite link", "[rack]")
@@ -995,4 +1011,196 @@ TEST_CASE ("Rack requests: what the view's plug-in hands rack.js (requestJson, a
     }
     CHECK (rack::requestJson (link, id, u.generation, "value", "vox.comp", "", 0.5f, "set", 1040) == "{\"ticket\":0,\"why\":\"Nothing to change.\"}");
     CHECK (rack::requestJson (link, id, u.generation + 1, "value", "vox.comp", "cpThr", 0.5f, "set", 1040).rfind ("{\"ticket\":0,", 0) == 0);
+}
+
+// ---- Beta 18: what the views show, reset, one-click fixes, other layouts -----------------------------------------
+
+TEST_CASE ("Rack link: plug-ins send details only for the track a Rack view shows", "[rack]")
+{
+    using rack::Role;
+    Memory mem;
+    rack::Link link (mem.data());
+    const std::uint32_t lead = suite::nameHash ("Lead Vox"), kick = suite::nameHash ("Kick");
+    const std::uint64_t t = 100000;
+    CHECK_FALSE (link.shows (t, lead, Role::vocal));                 // no view open
+    link.view (t, "t" + std::to_string (lead));
+    CHECK (link.watched (t));
+    CHECK (link.shows (t, lead, Role::vocal));
+    CHECK (link.shows (t, lead, Role::track));
+    CHECK_FALSE (link.shows (t, kick, Role::track));
+    CHECK_FALSE (link.shows (t, 0, Role::fullmix));
+    CHECK_FALSE (link.shows (t, 0, Role::master));
+    CHECK_FALSE (link.shows (t, lead, Role::master));                // the master isn't a track, whatever its hash
+
+    link.view (t + 10, "master");                                   // a second Rack (another plug-in) on the master
+    CHECK (link.shows (t + 10, 0, Role::master));
+    CHECK (link.shows (t + 10, lead, Role::vocal));                  // the first still looks
+    CHECK_FALSE (link.shows (t + 10, 0, Role::fullmix));
+    link.view (t + 20, "fullmix");
+    CHECK (link.shows (t + 20, 0, Role::fullmix));
+
+    // A view showing every track's details (the MODULES page, the first look): everything.
+    link.view (t + 30, "");
+    CHECK (link.shows (t + 30, kick, Role::track));
+    // Views that stopped looking: nothing after kViewerMs.
+    CHECK_FALSE (link.shows (t + 30 + rack::kViewerMs + 1, lead, Role::vocal));
+
+    // More tracks looked at than places: the one looked at longest ago gives way.
+    Memory mem2;
+    rack::Link l2 (mem2.data());
+    for (int i = 1; i <= rack::kMaxViewers + 1; ++i) l2.view (t + static_cast<std::uint64_t> (i), "t" + std::to_string (i));
+    CHECK_FALSE (l2.shows (t + 10, 1, Role::track));
+    for (int i = 2; i <= rack::kMaxViewers + 1; ++i) CHECK (l2.shows (t + 10, static_cast<std::uint32_t> (i), Role::track));
+
+    // A publisher: full while its track is shown, brief (and less often) while another is.
+    using Due = rack::Publisher::Due;
+    Memory mem3;
+    rack::Link l3 (mem3.data());
+    rack::Publisher pub (l3);
+    pub.start();
+    REQUIRE (pub.due (t, kick, Role::track) == Due::brief);
+    pub.publish (unit (rack::Product::link, Role::track, "Kick"), t);
+    l3.view (t + 10, "t" + std::to_string (lead));                    // a Rack shows the vocal
+    CHECK (pub.due (t + 20, kick, Role::track) == Due::none);        // the kick: still brief, at the brief rate
+    CHECK (pub.due (t + rack::Publisher::kBriefMs, kick, Role::track) == Due::brief);
+    pub.publish (unit (rack::Product::link, Role::track, "Kick"), t + rack::Publisher::kBriefMs);
+    l3.view (t + rack::Publisher::kBriefMs + 5, "t" + std::to_string (kick));   // now the kick: full at once
+    CHECK (pub.due (t + rack::Publisher::kBriefMs + 6, kick, Role::track) == Due::full);
+}
+
+TEST_CASE ("Rack requests: after a change the owner publishes at once; reset to default", "[rack][requests]")
+{
+    using Due = rack::Publisher::Due;
+    Memory mem;
+    rack::Link link (mem.data());
+    Owner vox (link);
+    REQUIRE (vox.publish (1000));
+    const auto u = link.units (1000).at (0);
+    const auto hash = suite::nameHash ("Lead Vox");
+    link.view (1000, "t" + std::to_string (hash));
+    REQUIRE (vox.pub.due (1000, hash, rack::Role::vocal) == Due::full);
+    vox.pub.publish (unit (rack::Product::voxology, rack::Role::vocal, "Lead Vox"), 1000);
+    CHECK (vox.pub.due (1010, hash, rack::Role::vocal) == Due::none);   // not yet (every kFullMs)
+    std::string why;
+    REQUIRE (link.request (u.slot, u.generation, knob ("vox.comp", "cpThr", 0.3f), 1010, why) > 0);
+    CHECK (vox.serve (1010) == 1);
+    CHECK (vox.pub.due (1011, hash, rack::Role::vocal) == Due::full);   // at once: the Rack sees the new value
+    vox.pub.publish (unit (rack::Product::voxology, rack::Role::vocal, "Lead Vox"), 1011);
+    CHECK (vox.pub.due (1012, hash, rack::Role::vocal) == Due::none);
+    CHECK (vox.serve (1013) == 0);                                       // nothing applied: no extra publish
+    CHECK (vox.pub.due (1014, hash, rack::Role::vocal) == Due::none);
+
+    // Reset: a set of its own, after closing a drag of the same knob that was still open.
+    vox.seen.clear();
+    link.request (u.slot, u.generation, knob ("vox.comp", "cpThr", 0.6f, rack::Gesture::begin), 1100, why);
+    vox.serve (1100);
+    const auto j = rack::requestJson (link, "u" + std::to_string (u.slot), u.generation, "reset", "vox.comp", "cpThr", 0.9f, "move", 1110);
+    CHECK (j.rfind ("{\"ticket\":", 0) == 0);
+    CHECK (j.find ("\"ticket\":0") == std::string::npos);
+    vox.serve (1120);
+    REQUIRE (vox.seen.size() == 3);
+    CHECK (vox.seen[0].gesture == rack::Gesture::begin);
+    CHECK (vox.seen[1].gesture == rack::Gesture::end);       // the open drag closed
+    CHECK (vox.seen[1].ticket == 0);
+    CHECK (vox.seen[2].change == rack::Change::reset);
+    CHECK (vox.seen[2].control == "cpThr");
+    CHECK (vox.seen[2].gesture == rack::Gesture::set);
+    // A reset needs a knob.
+    CHECK (rack::requestJson (link, "u" + std::to_string (u.slot), u.generation, "reset", "vox.comp", "", 0.0f, "set", 1130)
+           == "{\"ticket\":0,\"why\":\"Nothing to change.\"}");
+}
+
+TEST_CASE ("Rack link: warnings carry one-click fixes for the units in the block", "[rack]")
+{
+    using rack::Product;
+    using rack::Role;
+    using rack::State;
+    Memory mem;
+    rack::Link link (mem.data());
+    auto put = [&] (std::uint64_t id, const rack::Unit& u) {
+        const int slot = link.claim (id, 1000);
+        REQUIRE (slot >= 0);
+        REQUIRE (link.publish (slot, id, u, 1000));
+    };
+    auto space = mod ("mix.space");
+    space.layers = rack::SpaceLayer::hall | rack::SpaceLayer::delay;
+    put (1, unit (Product::voxology, Role::vocal, "Lead Vox", { mod ("vox.comp"), mod ("vox.reverb"), mod ("vox.delay") }));
+    put (2, unit (Product::link, Role::track, "Lead Vox", { mod ("mix.comp"), space }));
+    put (3, unit (Product::mixology, Role::fullmix, "", { mod ("mix.limit") }));
+    put (4, unit (Product::masterology, Role::master, ""));
+    const auto units = link.units (1000);
+    const auto lines = rack::together (units);
+
+    auto lineWith = [&] (const std::string& words) -> const rack::ProjectLine* {
+        for (const auto& l : lines)
+            if (l.text.find (words) != std::string::npos) return &l;
+        return nullptr;
+    };
+    const auto* comp = lineWith ("Two compressors");
+    REQUIRE (comp != nullptr);
+    REQUIRE (comp->fixes.size() == 2);
+    CHECK (comp->fixes[0].module == "mix.comp");
+    CHECK (comp->fixes[0].label == "Turn the Link's Compressor off");
+    CHECK_FALSE (comp->fixes[0].on);
+    CHECK (comp->fixes[1].module == "vox.comp");
+    const auto* reverb = lineWith ("Two reverbs");
+    REQUIRE (reverb != nullptr);
+    REQUIRE (reverb->fixes.size() == 2);
+    CHECK (reverb->fixes[0].module == "mix.space");
+    CHECK (reverb->fixes[0].label.find ("Hall") != std::string::npos);   // Space plays more than the reverb: the button says so
+    CHECK (reverb->fixes[0].label.find ("Delay") != std::string::npos);
+    const auto* limiter = lineWith ("Mixology's Limiter");
+    REQUIRE (limiter != nullptr);
+    REQUIRE (limiter->fixes.size() == 1);
+    CHECK (limiter->fixes[0].module == "mix.limit");
+    // Each fix names its unit as the block holds it.
+    for (const auto& u : units)
+        if (u.product == Product::link) { CHECK (comp->fixes[0].slot == u.slot); CHECK (comp->fixes[0].generation == u.generation); }
+
+    const auto j = rack::toJson ("mixology", 0, units, lines, rack::Overview {});
+    CHECK (wellFormed (j));
+    CHECK (j.find ("\"fixes\":[{\"unit\":\"u") != std::string::npos);
+    CHECK (j.find ("\"module\":\"mix.limit\",\"on\":false,\"label\":\"Turn Mixology's Limiter off\"}") != std::string::npos);
+
+    // Units that aren't in the block (no slot): the warning stays, without a button.
+    const auto loose = rack::together ({ unit (Product::voxology, Role::vocal, "Lead Vox", { mod ("vox.comp") }),
+                                         unit (Product::link, Role::track, "Lead Vox", { mod ("mix.comp") }) });
+    REQUIRE_FALSE (loose.empty());
+    for (const auto& l : loose) CHECK (l.fixes.empty());
+}
+
+TEST_CASE ("Rack link: an older beta's plug-in in the same project is noticed", "[rack]")
+{
+    // A Rack block of layout 2 (Beta 16 / 17) in this process, with a live unit in it.
+    const std::uint32_t old = 2;
+    const std::size_t bytes = 64 + 23936 * static_cast<std::size_t> (rack::kMaxSlots);
+    const auto now = suite::nowMs() + 10 * 1000 * 1000;   // well past anything cached
+#if defined(_WIN32)
+    const std::string name = "Local\\SonicologyRack.v2." + std::to_string (GetCurrentProcessId());
+    HANDLE h = CreateFileMappingA (INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, static_cast<DWORD> (bytes), name.c_str());
+    REQUIRE (h != nullptr);
+    const auto found = rack::Link::otherLayouts (now);
+    CHECK (std::find (found.begin(), found.end(), old) != found.end());
+    CloseHandle (h);
+    CHECK (rack::Link::otherLayouts (now + 2000).empty());   // gone with the plug-in that had it
+#else
+    const std::string name = "/SonicologyRack.v2." + std::to_string (getpid());
+    const int fd = shm_open (name.c_str(), O_RDWR | O_CREAT, 0600);
+    REQUIRE (fd >= 0);
+    REQUIRE (ftruncate (fd, static_cast<off_t> (bytes)) == 0);
+    auto* p = static_cast<unsigned char*> (mmap (nullptr, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
+    close (fd);
+    REQUIRE (p != MAP_FAILED);
+    std::memset (p, 0, bytes);
+    CHECK (rack::Link::otherLayouts (now).empty());          // there, but nobody in it (left from a plug-in that went)
+    auto* slot = p + 64 + 23936 * 5;
+    const std::uint32_t claimed = 1;
+    std::memcpy (slot, &claimed, sizeof claimed);
+    std::memcpy (slot + 16, &now, sizeof now);
+    const auto found = rack::Link::otherLayouts (now + 2000);
+    CHECK (found == std::vector<std::uint32_t> { old });
+    CHECK (rack::Link::otherLayouts (now + 2000 + rack::kAliveMs + 1000).empty());   // silent too long: gone
+    munmap (p, bytes);
+    shm_unlink (name.c_str());
+#endif
 }

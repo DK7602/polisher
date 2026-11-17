@@ -787,3 +787,11 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   0.26.1 89c9c01, Voxology 0.55.1 d32231c, Masterology 0.31.1 6f9ab1e), all green, both installers. Build & Test:
   Mixology 43896414539 green; Voxology 43896452035 and Masterology 43896463325 green on Windows (+ UI smoke), their
   ASan jobs ran on after. Next: the user checks the Rack again in Cubase.
+- Masterology 0.33.0 (2026-11-17, Sonicology Beta 18: the Rack audit's fixes, docs/rack/AUDIT-2026-11-17.md in
+  Mixology): shared RackLink layout 3 / RackHost.h / rack.js / rack.css from Mixology (details: Mixology's
+  RESUME-HERE). Here: a fast Rack timer only while a Rack shows the master; applyRack takes Change::reset;
+  getAutoMasterReport / getAutoAnalyze / getReference return objects (rack::host::jsonObject; app.js jsonText());
+  getRack returns base64; the window grows while the Rack is open (rackWindow native) and resized() doesn't
+  remember that size (`rackWindow.big`). Manual: the Rack section (wheel, double-click, fixes, automation, bigger
+  window); the Claude Docs copy updated. Tested here: [rack], the full suite, the UI smoke test; editors compiled
+  against JUCE. mock.js knows rackWindow.

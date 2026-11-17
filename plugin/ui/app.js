@@ -153,15 +153,17 @@ const histRedo = Juce.getNativeFunction("historyRedo");
 const histGroup = Juce.getNativeFunction("historyGroup");
 const snapStore = Juce.getNativeFunction("snapshotStore");
 const snapRecall = Juce.getNativeFunction("snapshotRecall");
-const amGetReport = Juce.getNativeFunction("getAutoMasterReport");
+// A reply sent as an object (RackHost.h's jsonObject: JUCE escapes long text slowly) back as the JSON text this page reads.
+const jsonText = (fn) => async (...args) => { const r = await fn(...args); return r == null || typeof r === "string" ? r : JSON.stringify(r); };
+const amGetReport = jsonText(Juce.getNativeFunction("getAutoMasterReport"));
 const aaSet = Juce.getNativeFunction("setAutoAnalyze");     // Auto Analyze on / off (saved with the project)
-const aaGet = Juce.getNativeFunction("getAutoAnalyze");     // its status and the edits on offer
+const aaGet = jsonText(Juce.getNativeFunction("getAutoAnalyze"));     // its status and the edits on offer
 const aaApply = Juce.getNativeFunction("applyAutoEdit");    // a module id or "all": one undo step
 const aaKeep = Juce.getNativeFunction("keepAutoEdit");      // leave it as it is (the advice doesn't come back)
 const showParameterMenu = Juce.getNativeFunction("showParameterMenu");   // the host's menu for a parameter (right-click)
 const refLoad = Juce.getNativeFunction("loadReference");
 const refClear = Juce.getNativeFunction("clearReference");
-const refGet = Juce.getNativeFunction("getReference");
+const refGet = jsonText(Juce.getNativeFunction("getReference"));
 const genreGet = Juce.getNativeFunction("getGenreCurve");
 
 function scaledToNorm(state, v) {
@@ -2460,6 +2462,7 @@ const rackThemeGet = Juce.getNativeFunction("getRackTheme");
 const rackThemeSet = Juce.getNativeFunction("setRackTheme");
 const rackRequest = Juce.getNativeFunction("rackRequest");
 const rackAnswer = Juce.getNativeFunction("rackAnswer");
+const rackWindow = Juce.getNativeFunction("rackWindow");
 $("btn-rack").addEventListener("click", async (e) => {
   e.stopPropagation();
   if (!window.SonicologyRack || window.SonicologyRack.isOpen()) return;
@@ -2468,13 +2471,14 @@ $("btn-rack").addEventListener("click", async (e) => {
     host: "masterology",
     theme: theme === "light" || theme === "dark" ? theme : undefined,
     dataFile: true,   // the plug-in serves rack-data/<track>.json (fast); getRack only if that can't be read
-    getRack: async (track) => { const j = await rackGet(track || "").catch(() => null); return j ? JSON.parse(j) : null; },
+    getRack: async (track) => { const j = await rackGet(track || "").catch(() => null); return j ? window.SonicologyRack.fromBase64Json(j) : null; },
     // stage 2: a knob turned or a module switched, for the plug-in that owns it; and what became of it
     request: async (r) => JSON.parse(await rackRequest(r.unit, r.gen, r.change, r.module, r.control || "", r.value, r.gesture || "set")),
     answer: async (unit, gen, ticket) => JSON.parse(await rackAnswer(unit, gen, ticket)),
     onTheme: (t) => { rackThemeSet(t).catch(() => {}); },
-    back: () => {},
+    back: () => { rackWindow(false).catch(() => {}); },   // the window as it was
   });
+  rackWindow(true).catch(() => {});   // a bigger window while the Rack is open
 });
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".popover")) togglePopover(null);
