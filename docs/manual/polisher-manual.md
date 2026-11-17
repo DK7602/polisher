@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.34.0 · November 2026
+Version 0.35.0 · November 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
@@ -725,11 +725,21 @@ back, at the size the window had before (Masterology keeps remembering that size
   Masterology), the chain overview, and what the picked module is for. Many red lines come with **one-click fixes**
   (for example "Turn the Link's Compressor off" or "Turn Voxology's Compressor off"): click one and the plug-in that
   owns that module switches it off; **UNDO** in the message switches it back on.
+- **Gain staging** (in the Rack Coach, for the track you picked): each plug-in's level going in and coming out (peaks,
+  live) and how much it adds. It warns when one makes the track much louder (louder sounds better by itself, so
+  compare at the same level: Voxology's MATCH does it for you) or peaks close to 0 dB. Masterology is meant to make
+  the mix louder, so only its peaks count.
 - **The bottom bar:** IN and OUT of the picked plug-in, and the mix's loudness (from Mixology, or what reaches
   Masterology). A dash means nothing has measured it yet.
 
 **The MODULES page:** every module in the suite as a card: search, filter by kind (vocal, mixing, dynamics, space,
-mastering...), what it's for, and where it plays in your project (click to jump to it on the RACK page).
+mastering...), what it's for, and where it plays in your project (click to jump to it on the RACK page). When the
+module is off on the track you picked, **TURN ON HERE** switches it on there; **UNDO** in the message switches it back
+off.
+
+**The SESSION page:** every track in your project on one screen, each with what plays on it: one pill per module,
+grouped by plug-in (dim pills are off), and the number of warnings the Rack Coach has for it. Click a pill to open
+that module on the RACK page.
 
 **Light or dark:** click the spinning cube at the top left. All three plug-ins remember your choice.
 

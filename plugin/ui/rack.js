@@ -617,6 +617,7 @@
         <div class="sr-seg">
           <button class="${S.page === "rack" ? "sr-on" : ""}" data-sr="page" data-page="rack">${icon("chain")}RACK</button>
           <button class="${S.page === "modules" ? "sr-on" : ""}" data-sr="page" data-page="modules">${icon("grid")}MODULES</button>
+          <button class="${S.page === "session" ? "sr-on" : ""}" data-sr="page" data-page="session" title="Every track and the modules that play on it, in one list">${icon("layers")}SESSION</button>
         </div>
         <div class="sr-sep"></div>
         ${tools(data, t)}
@@ -774,9 +775,77 @@
         <div class="sr-coach" data-scroll="coach">
           <div class="sr-banner">${icon("pulse")}HOW THEY WORK TOGETHER</div>
           <ul class="sr-together">${together}</ul>
+          ${gainLane(t)}
           ${overview ? `<h4>CHAIN OVERVIEW</h4><ul class="sr-overview">${overview}</ul>` : ""}
           ${about}
         </div>
+      </section>
+    </main>`;
+  }
+
+  // GAIN STAGING (the Coach): each plug-in on the track, what goes in and comes out (peaks lately), and what to watch:
+  // a plug-in that makes the sound much louder (louder sounds "better": compare at the same level) or peaks near 0 dBFS.
+  // The numbers move with the meters (updateLive); the list itself only when the track's plug-ins change.
+  function gainLane(t) {
+    const units = t.units.filter((u) => u.product !== "honeytune");
+    if (!units.length) return "";
+    return `<h4>GAIN STAGING</h4><ul class="sr-gain">${units.map((u) =>
+      `<li data-gain="${esc(u.id)}"><b>${esc(PRODUCTS[u.product].name)}</b><span data-g="io">${gainIo(u)}</span><em data-g="d">${gainDelta(u)}</em></li>`).join("")}
+      <li class="sr-gain-note" data-gain-note>${esc(gainNote(units))}</li></ul>`;
+  }
+  const known = (db) => db != null && isFinite(db) && db > -99;
+  const gainIo = (u) => (known(u.inDb) && known(u.outDb) ? `${num(u.inDb)} \u2192 ${num(u.outDb)}` : "\u2014");
+  const gainDelta = (u) => (known(u.inDb) && known(u.outDb) ? (u.outDb - u.inDb >= 0 ? "+" : MINUS) + Math.abs(u.outDb - u.inDb).toFixed(1) : "");
+  function gainNote(units) {
+    const hot = units.find((u) => known(u.outDb) && u.outDb > -1.0);
+    if (hot) return hot.product === "masterology"
+      ? `Masterology peaks at ${num(hot.outDb)} dBFS: a Ceiling of ${MINUS}1 dB (on its Maximizer) suits most masters.`
+      : `${PRODUCTS[hot.product].name} peaks at ${num(hot.outDb)} dBFS, close to clipping: turn its output down a little.`;
+    // Masterology is there to make the mix louder; a big jump anywhere else colours what you hear.
+    const loud = units.find((u) => u.product !== "masterology" && known(u.inDb) && known(u.outDb) && u.outDb - u.inDb > 6.0);
+    if (loud) return `${PRODUCTS[loud.product].name} makes it ${(loud.outDb - loud.inDb).toFixed(1)} dB louder. Louder sounds better by itself, so compare at the same level` +
+      (loud.product === "voxology" ? " (Voxology's MATCH, or its Output)." : ".");
+    return units.some((u) => known(u.inDb)) ? "Levels through the chain look healthy." : "Press play to see the levels.";
+  }
+  function updateGain(t) {
+    for (const u of t.units) {
+      const row = S.stage.querySelector(`[data-gain="${u.id}"]`);
+      if (!row) continue;
+      const io = row.querySelector('[data-g="io"]'), d = row.querySelector('[data-g="d"]');
+      const a = gainIo(u), b = gainDelta(u);
+      if (io.textContent !== a) io.textContent = a;
+      if (d.textContent !== b) d.textContent = b;
+      row.classList.toggle("sr-gain-warn", (known(u.outDb) && u.outDb > -1.0) || (known(u.inDb) && known(u.outDb) && u.outDb - u.inDb > 6.0));
+    }
+    const note = S.stage.querySelector("[data-gain-note]");
+    const text = gainNote(t.units.filter((u) => u.product !== "honeytune"));
+    if (note && note.textContent !== text) note.textContent = text;
+  }
+
+  // ---- page: SESSION (every track, the modules that play on it, its warnings) ------------------------------------------
+  function sessionPage(data) {
+    const list = tracks(data);
+    if (!list.length) return `<main class="sr-main sr-empty"><div class="sr-panel sr-wide"><h3>No Sonicology plug-ins are playing</h3><p>Press play in your DAW: plug-ins take part while the song plays.</p></div></main>`;
+    const warnsOf = (t) => (data.together || []).filter((l) => l.level === "warn" && (l.hash === t.hash || (t.role === "master" && l.hash === "master") || (t.role === "fullmix" && l.hash === "fullmix"))).length
+      + t.units.reduce((n, u) => n + (u.together || []).filter((l) => l.level === "warn").length, 0);
+    const rows = list.map((t) => {
+      const chips = t.units.map((u) => {
+        const P = PRODUCTS[u.product];
+        const mods = (u.modules || []).filter((m) => live(m));
+        return `<span class="sr-srow-unit"><b class="sr-badge sr-tone-${P.tone}">${P.badge}</b>${u.on === false ? '<em class="sr-bypassed">BYPASSED</em>' : ""}${mods.map((m) =>
+          `<button class="sr-spill sr-st-${m.state} sr-tone-${P.tone}" data-sr="goto" data-track="${esc(t.key)}" data-unit="${esc(u.id)}" data-key="${esc(m.key)}" title="${esc(cat(m.key).name)}: ${esc(m.summary || STATE_WORD[m.state])}">${esc(cat(m.key).hex)}</button>`).join("") || '<span class="sr-dim">nothing on</span>'}</span>`;
+      }).join("");
+      const w = warnsOf(t);
+      return `<div class="sr-srow">
+        <button class="sr-srow-name" data-sr="track" data-track="${esc(t.key)}" title="Open ${esc(t.name)} on the RACK page"><span>${esc(t.name)}</span><small>${esc(t.role === "fullmix" ? "Full Mix" : t.role === "master" ? "Master" : t.role)}</small></button>
+        <div class="sr-srow-chain">${chips}</div>
+        <span class="sr-srow-warn ${w ? "sr-on" : ""}" title="${w ? w + " warning" + (w > 1 ? "s" : "") + " in the Rack Coach" : "No warnings"}">${icon(w ? "warn" : "check", w ? "sr-li-warn" : "sr-li-ok")}${w || ""}</span>
+      </div>`;
+    }).join("");
+    return `<main class="sr-main sr-main-session">
+      <section class="sr-panel sr-wide sr-session">
+        <h3 class="sr-ph">${icon("layers")}SESSION OVERVIEW<small>every track and what plays on it: click a module to open it</small></h3>
+        <div class="sr-srows" data-scroll="session">${rows}</div>
       </section>
     </main>`;
   }
@@ -880,7 +949,7 @@
       <p class="sr-ci-desc">${esc(c.desc)}</p>
       <h4>IDEAL USES</h4><ul class="sr-uses">${c.uses.map((u) => `<li>${icon("check", "sr-li-ok")}<span>${esc(u)}</span></li>`).join("")}</ul>
       <h4>KEY CONTROLS</h4><div class="sr-ci-kn">${c.controls.slice(0, 5).map((n, i) => `<div><b>${esc(n.toUpperCase())}</b>${knob({ norm: 0.25 + 0.12 * i }, 46)}</div>`).join("")}</div>
-      <h4>WHERE IT PLAYS</h4>${whereHtml}
+      <h4>WHERE IT PLAYS</h4>${whereHtml}${turnOnHere(data, S.card)}
       <div class="sr-from-big sr-from-${c.plug}">from ${esc(PRODUCTS[c.plug].name)}</div>
     </section>`;
 
@@ -900,6 +969,18 @@
     </main>`;
   }
 
+  // TURN ON HERE: the module is in a plug-in on the track you picked, switched off: one click switches it on there.
+  function turnOnHere(data, key) {
+    const t = trackOf(data, S.track);
+    if (!t || !S.opts.request) return "";
+    for (const u of t.units) {
+      const m = (u.modules || []).find((x) => x.key === key);
+      if (m && m.state === "off" && m.switchable && canTurn(u))
+        return `<button class="sr-turnon" data-sr="turnon" data-unit="${esc(u.id)}" data-key="${esc(key)}">${icon("power")}TURN ON HERE<small>${esc(t.name)} \u00B7 ${esc(PRODUCTS[u.product].name)}</small></button>`;
+    }
+    return "";
+  }
+
   // ---- render, update, events -----------------------------------------------------------------------------------------
   function render() {
     const data = S.data;
@@ -915,7 +996,7 @@
     const html = {
       frame: `<div class="sr-frame"><i class="sr-c sr-c-tl"></i><i class="sr-c sr-c-tr"></i><i class="sr-c sr-c-bl"></i><i class="sr-c sr-c-br"></i></div>`,
       header: header(data),
-      page: S.page === "rack" ? rackPage(data) : modulesPage(data),
+      page: S.page === "rack" ? rackPage(data) : S.page === "session" ? sessionPage(data) : modulesPage(data),
       footer: footer(data, sel ? sel.unit : t ? t.units[0] : null),
       menu: S.menu ? trackMenu(data) : "",
     };
@@ -963,6 +1044,7 @@
       if (el && el.style.width !== w) el.style.width = w;
     };
     if (unit) { meter("in", unit.inDb ?? -100); meter("out", unit.outDb ?? -100); set("in", dbText(unit.inDb, "dB")); set("out", dbText(unit.outDb, "dB")); }
+    if (t && S.page === "rack") updateGain(t);
     const mix = data.mix || {};
     set("lufsI", dbText(mix.lufsI, "LUFS")); set("lufsS", dbText(mix.lufsS, "LUFS")); set("tp", dbText(mix.tp, "dBTP"));
     if (sel) {
@@ -1066,6 +1148,16 @@
     else if (a === "redo") { replay(false); return; }
     else if (a === "bypass") { toggleBypass(); return; }
     else if (a === "ab") { flipAB(el.dataset.ab); return; }
+    else if (a === "turnon") {
+      const unit = unitById(el.dataset.unit), key = el.dataset.key;
+      if (!unit) return;
+      el.disabled = true;
+      send(unit, { change: "state", module: key, control: "", value: 1, gesture: "set" }, () => {
+        rememberChange({ kind: "state", unit: unit.id, gen: unit.gen, module: key, before: 0, after: 1 }, `${cat(key).name} on`);
+        toast(`${cat(key).name} is on in ${PRODUCTS[unit.product].name} (${unit.track || "this track"}).`, () => replay(true));
+      });
+      return;
+    }
     else if (a === "toast-act") { const act = S.toastAct; hideToast(); if (act) act(); return; }
     else return;
     render();

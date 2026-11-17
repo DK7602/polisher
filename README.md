@@ -22,7 +22,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 A live copy is kept in Claude Docs (project 3bf99dd7-1111-4be3-884d-d787ae49506c, node 15637893-1eb5): update it
 whenever the manual changes.
 
-## Status — v0.34.0
+## Status — v0.35.0
 
 | Piece | State |
 | --- | --- |
@@ -79,6 +79,7 @@ whenever the manual changes.
 | Sonicology Rack stage 2 (v0.32.0, with Voxology 0.56.0 and Mixology 0.27.0): Masterology's knobs and modules can be changed from the Rack (rackunit::fromKnob / switchOf, plugin/RackHost.h), locked while Auto-Master listens or works | New: tested in the engine and the browser preview, not yet in a DAW |
 | Rack Beta 18 (v0.33.0, with Voxology 0.57.0 and Mixology 0.28.0): details only for the track a Rack shows, published at once after a change; reset to default (double-click), wheel nudge, one-click fixes, the automation and old-beta warnings; the window grows while the Rack is open and Masterology doesn't remember that size; report natives return objects (rack::host::jsonObject), not long JSON text | New: tested in the engine and the browser preview, not yet in a DAW |
 | Rack Beta 20 (v0.34.0, with Voxology 0.59.0 and Mixology 0.29.0): the Rack's UNDO / REDO, A / B and BYPASS; Masterology's bypass answers the Rack's BYPASS (Change::power) | New: tested in the engine and the browser preview, not yet in a DAW |
+| Rack Beta 23 (v0.35.0, with Voxology 0.61.0 and Mixology 0.31.0): the Rack's SESSION page (every track and its modules), gain staging in the Rack Coach, TURN ON HERE on the MODULES page (shared rack.js / rack.css) | New: tested in the browser preview, not yet in a DAW |
 
 ## Validation
 

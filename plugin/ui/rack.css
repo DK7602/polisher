@@ -644,3 +644,42 @@
 /* Live parts (meters, readouts, the module's graph) change a few times a second: their layout stays inside them, so an
    update never re-lays out the whole page (slow in a plug-in's web view). */
 .sr-graphwrap, .sr-io, .sr-lbox, .sr-meter { contain: layout style; }
+
+/* ---- Beta 23: GAIN STAGING (the Coach), the SESSION page, TURN ON HERE ------------------------------------------- */
+.sr-gain { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.sr-gain li { display: grid; grid-template-columns: 1fr auto 54px; gap: 8px; align-items: baseline; font-size: 15px; color: #e3eafb; }
+.sr-gain li b { font-weight: 700; color: var(--gold2); }
+.sr-gain li span { font-variant-numeric: tabular-nums; color: #cfd8ee; }
+.sr-gain li em { font-style: normal; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; color: var(--ok); }
+.sr-gain li.sr-gain-warn em, .sr-gain li.sr-gain-warn span { color: var(--warn); }
+.sr-gain li.sr-gain-note { display: block; font-size: 14px; color: #b9c4dc; line-height: 1.3; }
+.sr-main-session { grid-template-columns: 1fr; }
+.sr-session { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.sr-srows { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 16px 16px; display: flex; flex-direction: column; gap: 8px;
+  scrollbar-width: thin; scrollbar-color: rgba(242, 200, 96, .5) transparent; }
+.sr-srow { display: grid; grid-template-columns: 230px 1fr 64px; gap: 12px; align-items: center; padding: 8px 10px; border-radius: 12px;
+  background: rgba(6, 17, 31, .7); box-shadow: inset 0 0 0 1px rgba(242, 200, 96, .22); }
+.sr-srow-name { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; font-size: 17px; font-weight: 700; color: #fff; }
+.sr-srow-name small { font-size: 12.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--gold2); }
+.sr-srow-name:hover span { text-decoration: underline; }
+.sr-srow-chain { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; min-width: 0; }
+.sr-srow-unit { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.sr-spill { height: 26px; padding: 0 9px; border-radius: 13px; font-size: 12.5px; font-weight: 700; letter-spacing: .05em; color: currentColor;
+  background: rgba(0, 0, 0, .45); box-shadow: inset 0 0 0 1px currentColor; }
+.sr-spill.sr-st-rest, .sr-spill.sr-st-idle { opacity: .55; }
+.sr-spill:hover { box-shadow: inset 0 0 0 1.5px currentColor, 0 0 8px currentColor; }
+.sr-srow-warn { display: flex; align-items: center; justify-content: flex-end; gap: 4px; font-size: 16px; font-weight: 700; color: var(--warn); }
+.sr-srow-warn .sr-ic { font-size: 20px; }
+.sr-turnon { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 100%; margin-top: 10px; padding: 9px 12px; border-radius: 12px;
+  font-size: 16px; font-weight: 800; letter-spacing: .06em; color: #2a1700; background: linear-gradient(180deg, #fff1b5, #f2c860 45%, #c48a26 100%);
+  box-shadow: 0 0 14px rgba(242, 200, 96, .45); }
+.sr-turnon .sr-ic { font-size: 18px; }
+.sr-turnon small { font-size: 12.5px; font-weight: 600; letter-spacing: .02em; }
+.sr-turnon:disabled { opacity: .5; }
+.sr-light .sr-gain li { color: #2a3550; }
+.sr-light .sr-gain li span { color: #3a4560; }
+.sr-light .sr-gain li.sr-gain-note { color: #4a5570; }
+.sr-light .sr-srow { background: rgba(255, 252, 244, .9); box-shadow: inset 0 0 0 1px rgba(184, 134, 42, .45), 0 1px 3px rgba(120, 80, 20, .12); }
+.sr-light .sr-srow-name { color: #1c2640; }
+.sr-light .sr-srow-name small { color: #8a5e14; }
+.sr-light .sr-spill { background: rgba(255, 255, 255, .8); }

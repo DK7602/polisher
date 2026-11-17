@@ -798,3 +798,6 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
 - Masterology 0.34.0 (2026-11-17, Sonicology Beta 20): the Rack's BYPASS reaches Masterology's bypass (Change::power in
   applyRack). Shared RackLink / rack.js / rack.css from Mixology (the Rack's UNDO / REDO, A / B, BYPASS: Mixology's
   RESUME-HERE). Manual (and its Claude Docs copy): the Rack's top-bar tools.
+- Masterology 0.35.0 (2026-11-17, Sonicology Beta 23): shared rack.js / rack.css from Mixology (the Rack's SESSION page,
+  gain staging in the Rack Coach, TURN ON HERE: Mixology's RESUME-HERE). No Masterology code changed. Manual (and its
+  Claude Docs copy): the Rack section.
