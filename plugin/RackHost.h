@@ -54,6 +54,7 @@ namespace rack::host
 
     // ---- the view's plug-in: what rack.js reads, and its rackRequest / rackAnswer native functions -----------------
 
+   #if JUCE_WEB_BROWSER   // (a plug-in test target builds the processor without the web view)
     /** What an open Rack view shows (rack::viewJson), served as the file "rack-data/<track>.json" by the plug-in's
         resource provider (std::nullopt for any other file). <track> is rack.js's track key ("t<hash>", "fullmix",
         "master"; "_" = every track's details), in the path because JUCE on macOS hands the provider the path without the
@@ -75,6 +76,7 @@ namespace rack::host
         r.mimeType = "application/json";
         return r;
     }
+   #endif
 
     inline std::string text (const juce::var& v) { return v.toString().toStdString(); }
 
