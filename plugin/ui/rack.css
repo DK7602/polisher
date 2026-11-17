@@ -552,8 +552,9 @@
 .sr-light .sr-ci-kn b { color: #8a5a10; }
 /* the cube switches the view */
 .sr-emblem img { cursor: pointer; }
-.sr-light .sr-honey { background-image: url("rack/rack_honey_pearl.webp"); filter: none; }
-.sr-light .sr-flow { background: url("rack/rack_honey_pearl.webp") -40px -60px / 300px 260px padding-box, var(--goldline) border-box; }
+/* the Signal Chain's and the Chain Flow's glass honeycomb is the same in the light view (the user, Beta 15) */
+.sr-light .sr-flow { background: url("rack/rack_honey_glass.webp") -40px -60px / 300px 260px padding-box, var(--goldline) border-box; }
+.sr-light .sr-flow::after { box-shadow: inset 0 0 0 3px rgba(120, 72, 14, .7), inset 0 0 22px rgba(40, 20, 0, .55); }
 
 /* ==== GLOWS (as the concept): whatever is bright and highlighted glows in its own colour ============================ */
 /* gold icons and check marks: a warm halo */
