@@ -1219,3 +1219,67 @@ TEST_CASE ("Rack link: an older beta's plug-in in the same project is noticed", 
     shm_unlink (name.c_str());
 #endif
 }
+
+// ---- Beta 24: SAVE CHAIN, the tracks the views show, Mixology's faders ---------------------------------------------
+
+TEST_CASE ("Rack requests: SAVE CHAIN reaches the owner as one Change::save", "[rack][requests]")
+{
+    Memory mem;
+    rack::Link link (mem.data());
+    Owner vox (link);
+    REQUIRE (vox.publish (1000));
+    const auto u = link.units (1000).at (0);
+    const std::string id = "u" + std::to_string (u.slot);
+
+    const auto j = rack::requestJson (link, id, u.generation, "save", "anything", "", 0.3f, "begin", 1000);
+    CHECK (j.rfind ("{\"ticket\":1,\"why\":\"\"}", 0) == 0);
+    vox.serve (1010);
+    REQUIRE (vox.seen.size() == 1);
+    CHECK (vox.seen[0].change == rack::Change::save);
+    CHECK (vox.seen[0].module == "save");                 // always "save", whatever the view sent
+    CHECK (vox.seen[0].control.empty());
+    CHECK (vox.seen[0].gesture == rack::Gesture::set);    // never a drag
+    CHECK (vox.seen[0].value == 1.0f);
+    // The Owner here refuses modules it doesn't know: the refusal reaches the view as for any change.
+    CHECK (rack::answerJson (link, id, u.generation, 1) == "{\"outcome\":\"refused\",\"why\":\"This plug-in has no save.\"}");
+}
+
+TEST_CASE ("Rack link: the tracks open views show (for Mixology's faders), and the faders in a track's view", "[rack]")
+{
+    Memory mem;
+    rack::Link link (mem.data());
+    const std::uint32_t lead = suite::nameHash ("Lead Vox"), kick = suite::nameHash ("Kick");
+    const std::uint64_t t = 300000;
+    CHECK (link.shownTracks (t).empty());
+    link.view (t, "t" + std::to_string (lead));
+    link.view (t + 5, "fullmix");
+    link.view (t + 6, "t" + std::to_string (lead));     // the same track from the first view: listed once
+    link.view (t + 7, "t" + std::to_string (kick));
+    link.view (t + 8, "");                              // every track's details: no track of its own
+    auto shown = link.shownTracks (t + 10);
+    std::sort (shown.begin(), shown.end());
+    auto want = std::vector<std::uint32_t> { lead, kick };
+    std::sort (want.begin(), want.end());
+    CHECK (shown == want);
+    CHECK (link.shownTracks (t + 8 + rack::kViewerMs + 1).empty());   // views that stopped looking
+
+    // Mixology (on the master) publishes "mix.faders" with the shown tracks' faders: a view of Lead Vox keeps them,
+    // though the Full Mix's other details go.
+    auto rackMem = std::make_unique<unsigned char[]> (rack::Link::bytes() + 64);
+    auto suiteMem = std::make_unique<unsigned char[]> (suite::Link::bytes() + 64);
+    auto align = [] (unsigned char* p) { return static_cast<void*> (p + (64 - reinterpret_cast<std::uintptr_t> (p) % 64) % 64); };
+    rack::Link rk (align (rackMem.get()));
+    suite::Link sl (align (suiteMem.get()));
+    auto mix = unit (rack::Product::mixology, rack::Role::fullmix, "");
+    mix.detailed = true;
+    auto tone = mod ("mix.tone");
+    tone.values = { { "Warmth", "+0.5 dB", 0.55f, true, "warmth" } };
+    auto faders = mod ("mix.faders");
+    faders.values = { { "Fader", "-3.2 dB", 0.7f, false, "fader." + std::to_string (lead) } };
+    mix.modules = { tone, faders };
+    const int a = rk.claim (1, t);
+    REQUIRE (rk.publish (a, 1, mix, t));
+    const auto json = rack::viewJson (rk, sl, "voxology", lead, t + 5, "t" + std::to_string (lead));
+    CHECK (json.find ("\"key\":\"fader." + std::to_string (lead) + "\"") != std::string::npos);
+    CHECK (json.find ("\"Warmth\"") == std::string::npos);
+}

@@ -1376,6 +1376,7 @@ std::string PolisherAudioProcessor::rackLock() const
 
 std::string PolisherAudioProcessor::applyRack (const rack::Request& r)
 {
+    if (r.change == rack::Change::save) return "Only Voxology saves chains from the Rack.";
     if (r.change == rack::Change::power)
     {
         // The Rack's BYPASS: Masterology's own bypass (A).

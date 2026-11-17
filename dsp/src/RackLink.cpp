@@ -424,6 +424,18 @@ namespace rack
         return false;
     }
 
+    std::vector<std::uint32_t> Link::shownTracks (std::uint64_t now) const
+    {
+        std::vector<std::uint32_t> out;
+        for (const auto& v : block.viewers)
+        {
+            if (! alive (v.ms.load (kAcquire), now, kViewerMs) || v.kind.load (kRelaxed) != 1) continue;
+            const auto hash = v.hash.load (kRelaxed);
+            if (hash != 0 && std::find (out.begin(), out.end(), hash) == out.end()) out.push_back (hash);
+        }
+        return out;
+    }
+
     std::vector<Unit> Link::units (std::uint64_t now) const
     {
         std::vector<Unit> out;
@@ -606,7 +618,7 @@ namespace rack
             taken = ticket;
             q.taken.store (taken, kRelease);
             if (forGeneration != generation) continue;   // for the slot's earlier owner, or skipped
-            if (r.change != Change::value && r.change != Change::state && r.change != Change::reset && r.change != Change::power) r.change = Change::value;
+            if (static_cast<std::uint32_t> (r.change) > static_cast<std::uint32_t> (Change::save)) r.change = Change::value;
             if (static_cast<std::uint32_t> (r.gesture) > static_cast<std::uint32_t> (Gesture::end)) r.gesture = Gesture::set;
             r.ticket = ticket;
             out[n++] = std::move (r);
@@ -732,11 +744,11 @@ namespace rack
         {
             auto r = batch[static_cast<std::size_t> (i)];
             if (! lock.empty()) { link.refuse (slotIndex, id, r.ticket, lock); continue; }
-            if (r.change == Change::state || r.change == Change::power)
+            if (r.change == Change::state || r.change == Change::power || r.change == Change::save)
             {
                 r.control.clear();
                 r.gesture = Gesture::set;
-                r.value = r.value >= 0.5f ? 1.0f : 0.0f;
+                r.value = r.change == Change::save || r.value >= 0.5f ? 1.0f : 0.0f;
             }
             else if (r.change == Change::reset)
             {
@@ -1279,6 +1291,7 @@ namespace rack
                 u.spectrum.clear();
                 for (auto& m : u.modules)
                 {
+                    if (m.key == "mix.faders") continue;   // Mixology's faders of the tracks the views show: every view wants them
                     m.values.clear();
                     m.bands.clear();
                 }
@@ -1308,14 +1321,15 @@ namespace rack
                              const std::string& control, float value, const std::string& gesture, std::uint64_t now)
     {
         Request r;
-        r.change = change == "state" ? Change::state : change == "reset" ? Change::reset : change == "power" ? Change::power : Change::value;
-        r.module = r.change == Change::power ? std::string ("power") : module;
+        r.change = change == "state" ? Change::state : change == "reset" ? Change::reset : change == "power" ? Change::power
+                 : change == "save" ? Change::save : Change::value;
+        r.module = r.change == Change::power ? std::string ("power") : r.change == Change::save ? std::string ("save") : module;
         r.control = control;
         r.value = value;
         r.gesture = gesture == "begin" ? Gesture::begin : gesture == "move" ? Gesture::move : gesture == "end" ? Gesture::end : Gesture::set;
         std::string why;
         std::uint64_t ticket = 0;
-        if (r.module.empty() || (r.change != Change::state && r.change != Change::power && control.empty()))
+        if (r.module.empty() || (r.change != Change::state && r.change != Change::power && r.change != Change::save && control.empty()))
             why = "Nothing to change.";
         else
             ticket = link.request (unitSlot (unit), generation, r, now, why);

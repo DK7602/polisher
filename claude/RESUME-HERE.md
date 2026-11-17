@@ -801,3 +801,6 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
 - Masterology 0.35.0 (2026-11-17, Sonicology Beta 23): shared rack.js / rack.css from Mixology (the Rack's SESSION page,
   gain staging in the Rack Coach, TURN ON HERE: Mixology's RESUME-HERE). No Masterology code changed. Manual (and its
   Claude Docs copy): the Rack section.
+- Masterology 0.36.0 (2026-11-17, Sonicology Beta 24): shared RackLink / rack.js / rack.css from Mixology (Change::save,
+  Link::shownTracks; the track's fader in the Rack, SAVE on Voxology's row, the Link's RACK button: Mixology's
+  RESUME-HERE). applyRack refuses a save (only Voxology keeps chains). Manual (and its Claude Docs copy): the Rack section.

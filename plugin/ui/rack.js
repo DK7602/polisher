@@ -36,7 +36,7 @@
     mixology: { name: "Mixology", badge: "M", tone: "blue", order: 3 },
     masterology: { name: "Masterology", badge: "MA", tone: "red", order: 4 },
   };
-  const HOSTS = { voxology: "Voxology", mixology: "Mixology", masterology: "Masterology" };
+  const HOSTS = { voxology: "Voxology", mixology: "Mixology", masterology: "Masterology", link: "Link" };
   const SUITE_WORD = { voxology: "VOXOLOGY", honeytune: "HONEY TUNE", link: "LINKS", mixology: "MIXOLOGY", masterology: "MASTEROLOGY" };
 
   const CATS = [
@@ -107,6 +107,7 @@
     undo: '<path d="M9 7 4 12l5 5"/><path d="M4 12h11a5 5 0 0 1 0 10h-2"/>',
     redo: '<path d="m15 7 5 5-5 5"/><path d="M20 12H9a5 5 0 0 0 0 10h2"/>',
     power: '<path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/>',
+    save: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><path d="M8 20v-6h8v6"/>',
   };
   // where the art is, from the page (the plug-ins serve it flat by file name; the preview page passes its own path)
   let ART = "rack/";
@@ -682,7 +683,9 @@
       const mods = u.modules || [];
       const shown = mods.filter((m) => m.state !== "off" || S.unfold[u.id]);
       const off = mods.length - mods.filter((m) => m.state !== "off").length;
-      rows += `<div class="sr-group sr-tone-${P.tone}"><b class="sr-badge sr-tone-${P.tone}">${P.badge}</b><span>${esc(P.name.toUpperCase())}</span>${u.on === false ? '<em class="sr-bypassed">BYPASSED</em>' : ""}<small>v${esc(u.version || "")}</small></div>`;
+      const save = u.product === "voxology" && canTurn(u)
+        ? `<button class="sr-gsave" data-sr="savechain" data-unit="${esc(u.id)}" title="SAVE CHAIN: keep this vocal's whole Voxology setup in Voxology's MY CHAINS (named after the track and the time), to use on your next song">${icon("save")}SAVE</button>` : "";
+      rows += `<div class="sr-group sr-tone-${P.tone}"><b class="sr-badge sr-tone-${P.tone}">${P.badge}</b><span>${esc(P.name.toUpperCase())}</span>${u.on === false ? '<em class="sr-bypassed">BYPASSED</em>' : ""}${save}<small>v${esc(u.version || "")}</small></div>`;
       for (const m of shown) {
         const c = cat(m.key);
         const picked = sel && sel.unit.id === u.id && sel.mod.key === m.key;
@@ -789,9 +792,14 @@
   function gainLane(t) {
     const units = t.units.filter((u) => u.product !== "honeytune");
     if (!units.length) return "";
+    // The track's own fader (Mixology moves it through its DAW bridge): a knob like the others (drag, wheel, double-click
+    // for 0 dB, UNDO).
+    const f = trackFader(S.data, t);
+    const fader = f ? `<li class="sr-gain-fader" title="This track's fader in your DAW, through Mixology's bridge. Drag · mouse wheel · double-click: 0 dB">
+      <b>Track fader</b>${knob(f.v, 30, f.unit, f.mod)}<span class="sr-kval-t" data-g="fader">${esc(f.v.text)}</span></li>` : "";
     return `<h4>GAIN STAGING</h4><ul class="sr-gain">${units.map((u) =>
       `<li data-gain="${esc(u.id)}"><b>${esc(PRODUCTS[u.product].name)}</b><span data-g="io">${gainIo(u)}</span><em data-g="d">${gainDelta(u)}</em></li>`).join("")}
-      <li class="sr-gain-note" data-gain-note>${esc(gainNote(units))}</li></ul>`;
+      ${fader}<li class="sr-gain-note" data-gain-note>${esc(gainNote(units))}</li></ul>`;
   }
   const known = (db) => db != null && isFinite(db) && db > -99;
   const gainIo = (u) => (known(u.inDb) && known(u.outDb) ? `${num(u.inDb)} \u2192 ${num(u.outDb)}` : "\u2014");
@@ -1016,7 +1024,23 @@
       ? [u.id, u.track, u.role, u.product, u.on, u.version, (u.modules || []).map((m) => [m.key, m.state, m.summary, m.by, (m.values || []).map((v) => v.text),
           (m.bands || []).map((b) => [b.type, Math.round(b.hz || 0), b.name, b.on]), m.layers]), u.together]
       : [u.id, u.track, u.role, u.product, u.on, u.version, (u.modules || []).map((m) => m.key + ":" + m.state)])))
-      + JSON.stringify(data.together) + JSON.stringify(data.mix && data.mix.source);
+      + JSON.stringify(data.together) + JSON.stringify(data.mix && data.mix.source)
+      + (S.page === "rack" ? JSON.stringify((trackFader(data, t) || {}).v || null) : "");
+  }
+
+  // Mixology's faders of the tracks the Rack shows (its "mix.faders", through its DAW bridge): not a module of the Full
+  // Mix but a knob of each track (GAIN STAGING), so they leave the modules here.
+  function pullFaders(data) {
+    for (const u of data.units || []) {
+      const i = (u.modules || []).findIndex((m) => m.key === "mix.faders");
+      if (i >= 0) u.faders = u.modules.splice(i, 1)[0];
+    }
+  }
+  function trackFader(data, t) {
+    if (!data || !t || !t.hash || t.role === "fullmix" || t.role === "master") return null;
+    const mu = (data.units || []).find((u) => u.product === "mixology" && u.role === "fullmix" && u.faders);
+    const v = mu && (mu.faders.values || []).find((x) => x.key === "fader." + t.hash);
+    return v ? { unit: mu, mod: mu.faders, v } : null;
   }
 
   // A plug-in sends its modules' settings only while a Rack is open, and only the picked track's; between, the Rack
@@ -1089,6 +1113,7 @@
     if (!data) { try { data = await S.opts.getRack(S.track || ""); } catch (e) { data = null; } }
     if (!S.root) return;
     if (data) {
+      pullFaders(data);
       keepDetails(data);
       settleHeld(data);
       remember(data);
@@ -1112,9 +1137,9 @@
     const d = S.drag;
     if (!d || !d.moved || !d.el.isConnected) return;
     const u = (data.units || []).find((x) => x.id === d.unit.id);
-    const m = u && (u.modules || []).find((x) => x.key === d.module);
+    const m = u && (d.module === "mix.faders" ? u.faders : (u.modules || []).find((x) => x.key === d.module));
     const v = m && (m.values || []).find((x) => x.key === d.control);
-    const cell = d.el.closest(".sr-kcell");
+    const cell = d.el.closest(".sr-kcell, .sr-gain-fader");
     const t = cell && cell.querySelector(".sr-kval-t");
     if (v && t && t.textContent !== v.text) t.textContent = v.text;
   }
@@ -1148,6 +1173,18 @@
     else if (a === "redo") { replay(false); return; }
     else if (a === "bypass") { toggleBypass(); return; }
     else if (a === "ab") { flipAB(el.dataset.ab); return; }
+    else if (a === "savechain") {
+      const unit = unitById(el.dataset.unit);
+      if (!unit) return;
+      el.disabled = true;
+      // Voxology names it after the track and the time, as here ("Lead Vox 17 Nov 22.41").
+      const d = new Date(), two = (n) => String(n).padStart(2, "0");
+      const name = `${unit.track || "Rack chain"} ${d.getDate()} ${"Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ")[d.getMonth()]} ${two(d.getHours())}.${two(d.getMinutes())}`;
+      send(unit, { change: "save", module: "save", control: "", value: 1, gesture: "set" }, () =>
+        toast(`Saved in Voxology's MY CHAINS as "${name}": use it on your next song (Voxology: MY CHAINS).`, null, 7000));
+      setTimeout(() => { if (el.isConnected) el.disabled = false; }, 2500);
+      return;
+    }
     else if (a === "turnon") {
       const unit = unitById(el.dataset.unit), key = el.dataset.key;
       if (!unit) return;
@@ -1411,12 +1448,13 @@
 
   // ---- stage 2 step 4: UNDO / REDO, A/B, BYPASS (the Rack's own changes, applied through the same requests) -----------
   const knobName = (unit, module, control) => {
-    const u = unitById(unit.id || unit), m = u && (u.modules || []).find((x) => x.key === module);
+    const u = unitById(unit.id || unit), m = u && (module === "mix.faders" ? u.faders : (u.modules || []).find((x) => x.key === module));
     const v = m && (m.values || []).find((x) => x.key === control);
     return v ? v.name : control;
   };
   function valueDone(unit, module, control, before, after) {
-    return () => rememberChange({ kind: "value", unit: unit.id, gen: unit.gen, module, control, before, after }, `${cat(module).name} ${knobName(unit, module, control)}`);
+    const what = module === "mix.faders" ? "Track" : cat(module).name;
+    return () => rememberChange({ kind: "value", unit: unit.id, gen: unit.gen, module, control, before, after }, `${what} ${knobName(unit, module, control)}`);
   }
   function rememberChange(entry, label) {
     if (S.replaying) return;

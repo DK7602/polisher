@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.35.0 · November 2026
+Version 0.36.0 · November 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
@@ -729,6 +729,12 @@ back, at the size the window had before (Masterology keeps remembering that size
   live) and how much it adds. It warns when one makes the track much louder (louder sounds better by itself, so
   compare at the same level: Voxology's MATCH does it for you) or peaks close to 0 dB. Masterology is meant to make
   the mix louder, so only its peaks count.
+  - **Track fader**: the track's fader in your DAW, as Mixology's DAW bridge reads it (so only with Mixology on the
+    master and its bridge connected). Turn it like any knob in the Rack (drag, mouse wheel, double-click for 0 dB,
+    UNDO); Mixology moves the fader, and its History has the move. It moves when the track is among the channels the
+    DAW shows Mixology right now (Mixology's Tracks page); for another, the Rack says so.
+- **SAVE** (on Voxology's row in the Signal Chain): keeps this vocal's whole Voxology setup in Voxology's **MY
+  CHAINS**, named after the track and the time ("Lead Vox 17 Nov 22.41"), to use on your next song.
 - **The bottom bar:** IN and OUT of the picked plug-in, and the mix's loudness (from Mixology, or what reaches
   Masterology). A dash means nothing has measured it yet.
 
@@ -745,7 +751,7 @@ that module on the RACK page.
 
 **Good to know**
 - Honey Tune has no RACK button: it shows up in the Rack above Voxology on the track it tunes.
-- Mixology Link has no RACK button yet: Links show up in the Rack opened from Voxology, Mixology or Masterology.
+- Mixology Link has a RACK button too (the spinning cube, top right of its window): the Rack opens on the Link's track.
 - The Rack costs nothing while it's closed: the plug-ins send their details only while a Rack is open.
 - **Locked for a moment:** while Voxology's Auto-Edit or Masterology's Auto-Master listens or works, the Rack can't
   change that plug-in (a lock and the reason show under its knobs). It can again as soon as it has finished.

@@ -141,8 +141,9 @@ namespace rack
     // ---- stage 2: requests from a Rack view to the plug-in that owns a module ------------------------------------
 
     /** value: a knob to `value`; state: a module on / off; reset: a knob back to its default (the owner's own); power:
-        the plug-in itself on (1) / off (0), its own bypass (the Rack's BYPASS; module "power"). */
-    enum class Change : std::uint32_t { value = 0, state, reset, power };
+        the plug-in itself on (1) / off (0), its own bypass (the Rack's BYPASS; module "power"); save: keep the plug-in's
+        whole setup where it keeps its own (Voxology's My Chains: the Rack's SAVE CHAIN; module "save"). */
+    enum class Change : std::uint32_t { value = 0, state, reset, power, save };
     /** A knob drag: begin, moves, end (the owner holds the host's gesture open between them, so automation records it
         as one touch); set: a single change (a click). The owner always gets them balanced (Publisher::serve()). */
     enum class Gesture : std::uint32_t { set = 0, begin, move, end };
@@ -340,6 +341,8 @@ namespace rack
         /** A Rack view open somewhere shows this unit's track (role fullmix / master: the Full Mix / the Master; else the
             track's hash): publish its details, serve its requests quickly. */
         bool shows (std::uint64_t nowMs, std::uint32_t hash, Role) const;
+        /** The tracks (their hashes) open Rack views show now: Mixology publishes their faders for them. */
+        std::vector<std::uint32_t> shownTracks (std::uint64_t nowMs) const;
 
         // ---- the Rack view's plug-in (message thread) ----
         /** The view looked (a few times a second while it is open), showing `track`: rack.js's track key ("t<hash>",
@@ -416,6 +419,7 @@ namespace rack
         int slot() const noexcept { return slotIndex; }
         bool watched (std::uint64_t nowMs) const { return link.watched (nowMs); }
         bool shows (std::uint64_t nowMs, std::uint32_t hash, Role role) const { return link.shows (nowMs, hash, role); }
+        std::vector<std::uint32_t> shownTracks (std::uint64_t nowMs) const { return link.shownTracks (nowMs); }
 
     private:
         Due dueIf (std::uint64_t nowMs, bool full);
@@ -451,7 +455,7 @@ namespace rack
     }
 
     /** Stage 2, for the view's plug-in (its rackRequest() / rackAnswer() native functions): a click in the view as rack.js
-        sends it. unit: the JSON's "u<slot>", gen: its "gen"; change "value" | "state"; gesture "set" | "begin" | "move" |
+        sends it. unit: the JSON's "u<slot>", gen: its "gen"; change "value" | "state" | "reset" | "power" | "save"; gesture "set" | "begin" | "move" |
         "end". Returns {"ticket":N,"why":""} (ticket 0 and why when it can't go). */
     std::string requestJson (Link&, const std::string& unit, std::uint32_t generation, const std::string& change, const std::string& module,
                              const std::string& control, float value, const std::string& gesture, std::uint64_t nowMs);
