@@ -11,6 +11,9 @@
 //                         request: ({ unit, gen, change: "value" | "state", module, control, value, gesture }) =>
 //                           Promise<{ ticket, why }>, answer: (unit, gen, ticket) => Promise<{ outcome, why }>,
 //                         art: "rack/" (where the rack_*.webp files are, from the page),
+//                         dataFile: true (the plug-in also serves getRack's data as the file rack-data/<track>.json,
+//                           "_" = every track's: read first, because a native function's long text costs the DAW's
+//                           window thread dearly in JUCE; getRack is the fallback),
 //                         theme: "dark" | "light" (the plug-in's saved one), onTheme: (theme) => {} (save it) })
 // Clicking the cube switches between the dark and the light view.
 // getRack() returns what every plug-in publishes into the shared block (RackLink), as JSON:
@@ -965,7 +968,14 @@
   async function poll() {
     if (!S.root) return;
     let data = null;
-    try { data = await S.opts.getRack(S.track || ""); } catch (e) { data = null; }
+    if (S.opts.dataFile && !S.noFile) {
+      try {
+        const r = await fetch("rack-data/" + encodeURIComponent(S.track || "_") + ".json?n=" + Date.now(), { cache: "no-store" });
+        if (r.ok) data = await r.json();
+        else S.noFile = true;
+      } catch (e) { S.noFile = true; }   // this plug-in doesn't serve it: getRack from now on
+    }
+    if (!data) { try { data = await S.opts.getRack(S.track || ""); } catch (e) { data = null; } }
     if (!S.root) return;
     if (data) {
       keepDetails(data);
@@ -1173,7 +1183,7 @@
     if (S.root) close();
     S.opts = Object.assign({ host: "mixology", getRack: async () => null, back: null, art: "rack/" }, opts || {});
     ART = S.opts.art;
-    S.data = null; S.sig = ""; S.hist = {}; S.menu = false;
+    S.data = null; S.sig = ""; S.hist = {}; S.menu = false; S.noFile = false;
     if (opts && opts.page) S.page = opts.page;
     if (opts && opts.track) S.track = opts.track;
     S.root = document.createElement("div");

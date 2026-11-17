@@ -363,7 +363,10 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                                  f.getParentDirectory().createDirectory();
                                  complete (f.replaceWithText (args.size() > 0 && args[0].toString() == "light" ? "light" : "dark"));
                              })
-        .withResourceProvider ([] (const auto& url) { return getResource (url); });
+        .withResourceProvider ([] (const auto& url) {
+            if (auto rack = rack::host::viewResource (url, "masterology", 0)) return rack;   // the Rack's data
+            return getResource (url);
+        });
 }
 
 PolisherWebEditor::PolisherWebEditor (PolisherAudioProcessor& p)

@@ -13,7 +13,10 @@
 #include "suite/RackLink.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_gui_extra/juce_gui_extra.h>
 
+#include <cstring>
+#include <optional>
 #include <string>
 
 namespace rack::host
@@ -41,7 +44,29 @@ namespace rack::host
         return id.empty() ? nullptr : apvts.getParameter (juce::String::fromUTF8 (id.data(), static_cast<int> (id.size())));
     }
 
-    // ---- the view's plug-in: rack.js's rackRequest / rackAnswer native functions --------------------------------
+    // ---- the view's plug-in: what rack.js reads, and its rackRequest / rackAnswer native functions -----------------
+
+    /** What an open Rack view shows (rack::viewJson), served as the file "rack-data/<track>.json" by the plug-in's
+        resource provider (std::nullopt for any other file). <track> is rack.js's track key ("t<hash>", "fullmix",
+        "master"; "_" = every track's details), in the path because JUCE on macOS hands the provider the path without the
+        query. Not through a native function: JUCE hands a native function's result to the page escaped with
+        String::replace, whose time grows with the square of the text, and the Rack's text (tens of KB, every quote
+        escaped) took seconds of the DAW's window thread each time (Beta 16: Cubase froze and went while a Rack was
+        open). A file goes to the page as it is. */
+    inline std::optional<juce::WebBrowserComponent::Resource> viewResource (const juce::String& url, const std::string& host,
+                                                                           std::uint32_t hostHash)
+    {
+        const auto file = url.trimCharactersAtStart ("/").upToFirstOccurrenceOf ("?", false, false);
+        if (! file.startsWith ("rack-data/") || ! file.endsWith (".json")) return std::nullopt;
+        auto track = juce::URL::removeEscapeChars (file.fromFirstOccurrenceOf ("/", false, false).dropLastCharacters (5));
+        if (track == "_" || ! track.containsOnly ("abcdefghijklmnopqrstuvwxyz0123456789")) track.clear();
+        const auto json = viewJson (host, hostHash, suite::nowMs(), track.toStdString());
+        juce::WebBrowserComponent::Resource r;
+        r.data.resize (json.size());
+        std::memcpy (r.data.data(), json.data(), json.size());
+        r.mimeType = "application/json";
+        return r;
+    }
 
     inline std::string text (const juce::var& v) { return v.toString().toStdString(); }
 
