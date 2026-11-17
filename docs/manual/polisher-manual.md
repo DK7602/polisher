@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.36.0 · November 2026
+Version 0.37.0 · November 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
@@ -735,6 +735,11 @@ back, at the size the window had before (Masterology keeps remembering that size
     DAW shows Mixology right now (Mixology's Tracks page); for another, the Rack says so.
 - **SAVE** (on Voxology's row in the Signal Chain): keeps this vocal's whole Voxology setup in Voxology's **MY
   CHAINS**, named after the track and the time ("Lead Vox 17 Nov 22.41"), to use on your next song.
+- **Insert order** (in the Rack Coach): Mixology Link belongs in the last insert slot, after Voxology, so Mixology
+  hears the finished vocal. Your DAW doesn't tell the plug-ins their order, so the Rack listens: while the vocal plays,
+  it compares how the Link's input moves with Voxology's input and output. When the Link plainly hears the vocal before
+  Voxology, a red line says so. It needs several seconds of singing and a Voxology that changes the vocal (its
+  compressor or Rider working); otherwise it says nothing rather than guess.
 - **The bottom bar:** IN and OUT of the picked plug-in, and the mix's loudness (from Mixology, or what reaches
   Masterology). A dash means nothing has measured it yet.
 

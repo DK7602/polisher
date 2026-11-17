@@ -171,9 +171,9 @@
       ["Placing the vocal in a polished space", "A close room for rap, a hall for sung lines", "A wash after each line (Throw)"],
       ["Type", "Decay", "Pre-delay", "Mix", "Tone", "Duck", "Throw"]),
     "vox.output": M("voxology", "Output", "OUTPUT", ["vocal", "utility"], "out", "level", "meter",
-      "The vocal's final level into your mix.",
-      ["Matching the level to before Voxology", "Gain staging into the mixer"],
-      ["Output"]),
+      "The vocal's final level into your mix, and PEAKS: Clip rounds off, or Limit turns down, whatever reaches past the Ceiling.",
+      ["Matching the level to before Voxology", "Gain staging into the mixer", "Keeping loud words from clipping"],
+      ["Output", "Peaks", "Ceiling"]),
     "vox.beat": M("voxology", "Beat Listener", "BEAT", ["utility"], "note", "level", "notes",
       "Voxology in Beat mode on the beat: it listens for the song's key and shares it with your vocals and Honey Tune; its Unmask dips the beat where the vocal sits.",
       ["Every vocal tuned to the beat's key", "Honey Tune's Auto key"],
@@ -321,6 +321,7 @@
     held: {}, drag: null, chain: Promise.resolve(), toastTimer: 0, scale: 1,   // stage 2: knobs you turn
     wheel: null, sent: {}, snapTold: {}, toastAct: null,
     undo: [], redo: [], ab: {}, bypass: {}, replaying: false,   // stage 2 step 4: UNDO / REDO, A/B, BYPASS
+    order: {},   // Beta 25: what the levels say about the insert order, per track
   };
 
   // The light / dark view: the plug-in's saved choice, else the last one in this browser (if it keeps any)
@@ -750,6 +751,8 @@
     const lines = [];
     for (const l of data.together || []) if (!l.hash || l.hash === t.hash || (t.role === "master" && l.hash === "master") || (t.role === "fullmix" && l.hash === "fullmix")) lines.push(l);
     for (const u of t.units) for (const l of u.together || []) lines.push(l);
+    const order = orderLine(t);
+    if (order) lines.push(order);
     if ((data.otherLayouts || []).length)
       lines.push({ level: "warn", text: "A Sonicology plug-in from another beta is in this project, and the Rack can't see it. Install this beta, so all three plug-ins are the same version." });
     lines.sort((a, b) => (a.level === "warn" ? 0 : a.level === "info" ? 2 : 1) - (b.level === "warn" ? 0 : b.level === "info" ? 2 : 1));
@@ -1025,7 +1028,7 @@
           (m.bands || []).map((b) => [b.type, Math.round(b.hz || 0), b.name, b.on]), m.layers]), u.together]
       : [u.id, u.track, u.role, u.product, u.on, u.version, (u.modules || []).map((m) => m.key + ":" + m.state)])))
       + JSON.stringify(data.together) + JSON.stringify(data.mix && data.mix.source)
-      + (S.page === "rack" ? JSON.stringify((trackFader(data, t) || {}).v || null) : "");
+      + (S.page === "rack" ? JSON.stringify((trackFader(data, t) || {}).v || null) + (orderLine(t) ? "order" : "") : "");
   }
 
   // Mixology's faders of the tracks the Rack shows (its "mix.faders", through its DAW bridge): not a module of the Full
@@ -1100,6 +1103,37 @@
     }
   }
 
+  // Beta 25: the insert order on a vocal. The DAW doesn't tell the plug-ins, and Mixology Link belongs after Voxology (so
+  // Mixology hears the finished vocal). Voxology's processing changes how the level moves (its compressor and rider most):
+  // when the Link's input moves like Voxology's input and not like its output, the Link sits before it. Compared with
+  // each level's own average taken out (the Link's Trim, Voxology's gain don't count), over several seconds of playing,
+  // only when Voxology clearly changes the movement, and only after the same answer for a while (no guess on a hunch).
+  function watchOrder(data) {
+    const t = trackOf(data, S.track);
+    if (!t || t.role === "fullmix" || t.role === "master") return;
+    const o = (S.order[t.key] = S.order[t.key] || { s: [], before: 0, after: 0, warn: false });
+    const vox = t.units.find((u) => u.product === "voxology" && u.on !== false);
+    const link = t.units.find((u) => u.product === "link" && u.on !== false);
+    if (!vox || !link || vox.role === "beat" || !known(vox.inDb) || !known(vox.outDb) || !known(link.inDb) || vox.inDb < -50) return;
+    const x = [vox.inDb, vox.outDb, link.inDb], last = o.s[o.s.length - 1];
+    if (last && last[0] === x[0] && last[1] === x[1] && last[2] === x[2]) return;   // the same publish again
+    o.s.push(x);
+    if (o.s.length > 50) o.s.shift();
+    if (o.s.length < 30) return;
+    const n = o.s.length, mean = [0, 1, 2].map((i) => o.s.reduce((a, r) => a + r[i], 0) / n);
+    const apart = (i, j) => o.s.reduce((a, r) => a + Math.abs((r[i] - mean[i]) - (r[j] - mean[j])), 0) / n;
+    const shaped = apart(0, 1);                 // how much Voxology changes the movement
+    const likeIn = apart(2, 0), likeOut = apart(2, 1);
+    const verdict = shaped < 1.2 ? "" : likeIn < 0.5 * likeOut && likeIn < 0.6 * shaped ? "before" : likeOut < 0.5 * likeIn ? "after" : "";
+    o.before = verdict === "before" ? o.before + 1 : 0;
+    o.after = verdict === "after" ? o.after + 1 : 0;
+    if (o.before >= 10) o.warn = true;
+    if (o.after >= 10) o.warn = false;
+  }
+  const orderLine = (t) => t && S.order[t.key] && S.order[t.key].warn
+    ? { level: "warn", text: "Mixology Link seems to sit before Voxology on this track: what it hears moves like the raw vocal, not like Voxology's output. Move Mixology Link to the last insert slot (after Voxology), so Mixology mixes the finished vocal." }
+    : null;
+
   async function poll() {
     if (!S.root) return;
     let data = null;
@@ -1117,6 +1151,7 @@
       keepDetails(data);
       settleHeld(data);
       remember(data);
+      watchOrder(data);
       dragText(data);
       const first = !S.data;
       S.data = data;
@@ -1598,7 +1633,7 @@
     if (S.root) close();
     S.opts = Object.assign({ host: "mixology", getRack: async () => null, back: null, art: "rack/" }, opts || {});
     ART = S.opts.art;
-    S.data = null; S.sig = ""; S.hist = {}; S.menu = false; S.noFile = false;
+    S.data = null; S.sig = ""; S.hist = {}; S.order = {}; S.menu = false; S.noFile = false;
     if (opts && opts.page) S.page = opts.page;
     if (opts && opts.track) S.track = opts.track;
     S.root = document.createElement("div");
