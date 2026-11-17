@@ -1108,6 +1108,21 @@ TEST_CASE ("Rack requests: after a change the owner publishes at once; reset to 
     // A reset needs a knob.
     CHECK (rack::requestJson (link, "u" + std::to_string (u.slot), u.generation, "reset", "vox.comp", "", 0.0f, "set", 1130)
            == "{\"ticket\":0,\"why\":\"Nothing to change.\"}");
+
+    // Power (the Rack's BYPASS): the plug-in itself off / on, a set, module "power" whatever the view sent.
+    vox.seen.clear();
+    const auto off = rack::requestJson (link, "u" + std::to_string (u.slot), u.generation, "power", "", "x", 0.2f, "begin", 1200);
+    CHECK (off.find ("\"ticket\":0") == std::string::npos);
+    rack::requestJson (link, "u" + std::to_string (u.slot), u.generation, "power", "vox.comp", "", 0.9f, "set", 1201);
+    vox.serve (1210);
+    REQUIRE (vox.seen.size() == 2);
+    CHECK (vox.seen[0].change == rack::Change::power);
+    CHECK (vox.seen[0].module == "power");
+    CHECK (vox.seen[0].control.empty());
+    CHECK (vox.seen[0].value == 0.0f);
+    CHECK (vox.seen[0].gesture == rack::Gesture::set);
+    CHECK (vox.seen[1].module == "power");
+    CHECK (vox.seen[1].value == 1.0f);
 }
 
 TEST_CASE ("Rack link: warnings carry one-click fixes for the units in the block", "[rack]")

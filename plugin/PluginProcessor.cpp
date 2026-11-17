@@ -1376,6 +1376,14 @@ std::string PolisherAudioProcessor::rackLock() const
 
 std::string PolisherAudioProcessor::applyRack (const rack::Request& r)
 {
+    if (r.change == rack::Change::power)
+    {
+        // The Rack's BYPASS: Masterology's own bypass (A).
+        auto* p = rack::host::find (parameters, "bypass");
+        if (p == nullptr) return rack::host::cannot ("Masterology", r);
+        rack::host::setSwitch (*p, r.value < 0.5f);
+        return {};
+    }
     if (r.change == rack::Change::reset)
     {
         double unused = 0.0;

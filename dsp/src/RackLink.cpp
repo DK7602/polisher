@@ -606,7 +606,7 @@ namespace rack
             taken = ticket;
             q.taken.store (taken, kRelease);
             if (forGeneration != generation) continue;   // for the slot's earlier owner, or skipped
-            if (r.change != Change::value && r.change != Change::state && r.change != Change::reset) r.change = Change::value;
+            if (r.change != Change::value && r.change != Change::state && r.change != Change::reset && r.change != Change::power) r.change = Change::value;
             if (static_cast<std::uint32_t> (r.gesture) > static_cast<std::uint32_t> (Gesture::end)) r.gesture = Gesture::set;
             r.ticket = ticket;
             out[n++] = std::move (r);
@@ -732,7 +732,7 @@ namespace rack
         {
             auto r = batch[static_cast<std::size_t> (i)];
             if (! lock.empty()) { link.refuse (slotIndex, id, r.ticket, lock); continue; }
-            if (r.change == Change::state)
+            if (r.change == Change::state || r.change == Change::power)
             {
                 r.control.clear();
                 r.gesture = Gesture::set;
@@ -1308,14 +1308,14 @@ namespace rack
                              const std::string& control, float value, const std::string& gesture, std::uint64_t now)
     {
         Request r;
-        r.change = change == "state" ? Change::state : change == "reset" ? Change::reset : Change::value;
-        r.module = module;
+        r.change = change == "state" ? Change::state : change == "reset" ? Change::reset : change == "power" ? Change::power : Change::value;
+        r.module = r.change == Change::power ? std::string ("power") : module;
         r.control = control;
         r.value = value;
         r.gesture = gesture == "begin" ? Gesture::begin : gesture == "move" ? Gesture::move : gesture == "end" ? Gesture::end : Gesture::set;
         std::string why;
         std::uint64_t ticket = 0;
-        if (module.empty() || (r.change != Change::state && control.empty()))
+        if (r.module.empty() || (r.change != Change::state && r.change != Change::power && control.empty()))
             why = "Nothing to change.";
         else
             ticket = link.request (unitSlot (unit), generation, r, now, why);

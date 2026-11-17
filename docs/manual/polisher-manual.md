@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.33.0 · November 2026
+Version 0.34.0 · November 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
@@ -709,6 +709,17 @@ back, at the size the window had before (Masterology keeps remembering that size
   - **The knob jumps back by itself?** That track's automation is on Read (in Cubase, the **R** button is lit): Cubase
     plays its automation and moves the knob back. The Rack tells you. Switch Read off, or switch on Write (**W**) to
     record your move.
+- **The top bar's tools** (on the RACK page, for the track you picked):
+  - **UNDO / REDO** (the curved arrows): the Rack's own changes, one at a time (a drag, a click, a switch, a fix, a
+    whole A / B flip or BYPASS). Your DAW's undo doesn't cover plug-in knobs; this does, for what you changed in the
+    Rack (up to 60 steps, while the Rack's page is open).
+  - **A / B**: two versions of this track's settings (every knob and switch the Rack shows for it). Click **B** and it
+    starts as a copy of A; change things, then click **A** or **B** to flip: the Rack sends just the differences. Each
+    flip is one UNDO step.
+  - **BYPASS**: this track's Sonicology plug-ins off (each one's own bypass: Voxology's, Mixology Link's processing,
+    Masterology's), to hear before and after. Click it again, or leave the Rack, and they come back on. Honey Tune
+    keeps playing what it tuned (it has no bypass of its own). For a fair comparison on a vocal, switch on Voxology's
+    MATCH first (Voxology's processed sound is often louder).
 - **Rack Coach** (right): **How they work together** (green: fine, blue: good to know, red: fix it, for example two
   compressors on one vocal, Pitch and Honey Tune both tuning, two Masterologys, or Mixology's Limiter before
   Masterology), the chain overview, and what the picked module is for. Many red lines come with **one-click fixes**

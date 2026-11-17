@@ -140,8 +140,9 @@ namespace rack
 
     // ---- stage 2: requests from a Rack view to the plug-in that owns a module ------------------------------------
 
-    /** value: a knob to `value`; state: a module on / off; reset: a knob back to its default (the owner's own). */
-    enum class Change : std::uint32_t { value = 0, state, reset };
+    /** value: a knob to `value`; state: a module on / off; reset: a knob back to its default (the owner's own); power:
+        the plug-in itself on (1) / off (0), its own bypass (the Rack's BYPASS; module "power"). */
+    enum class Change : std::uint32_t { value = 0, state, reset, power };
     /** A knob drag: begin, moves, end (the owner holds the host's gesture open between them, so automation records it
         as one touch); set: a single change (a click). The owner always gets them balanced (Publisher::serve()). */
     enum class Gesture : std::uint32_t { set = 0, begin, move, end };

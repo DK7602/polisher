@@ -104,6 +104,9 @@
     bulb: '<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.3 1 2.1h5c0-.8.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>',
     loud: '<path d="M3 12h2l2-5 3 10 3-14 3 16 2-7h3"/>',
     pulse: '<path d="M2 12h4l2-5 3 10 2-5h9"/>',
+    undo: '<path d="M9 7 4 12l5 5"/><path d="M4 12h11a5 5 0 0 1 0 10h-2"/>',
+    redo: '<path d="m15 7 5 5-5 5"/><path d="M20 12H9a5 5 0 0 0 0 10h2"/>',
+    power: '<path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/>',
   };
   // where the art is, from the page (the plug-ins serve it flat by file name; the preview page passes its own path)
   let ART = "rack/";
@@ -316,6 +319,7 @@
     theme: "dark",
     held: {}, drag: null, chain: Promise.resolve(), toastTimer: 0, scale: 1,   // stage 2: knobs you turn
     wheel: null, sent: {}, snapTold: {}, toastAct: null,
+    undo: [], redo: [], ab: {}, bypass: {}, replaying: false,   // stage 2 step 4: UNDO / REDO, A/B, BYPASS
   };
 
   // The light / dark view: the plug-in's saved choice, else the last one in this browser (if it keeps any)
@@ -615,10 +619,25 @@
           <button class="${S.page === "modules" ? "sr-on" : ""}" data-sr="page" data-page="modules">${icon("grid")}MODULES</button>
         </div>
         <div class="sr-sep"></div>
+        ${tools(data, t)}
         <div class="sr-suites">${chips}${miss}</div>
         <button class="sr-back" data-sr="back">${icon("back")}BACK TO ${esc((HOSTS[S.opts.host] || "PLUG-IN").toUpperCase())}</button>
       </div>
     </header>`;
+  }
+
+  // The top bar's tools (RACK page, a track with something the Rack can change): A / B, BYPASS, UNDO / REDO.
+  function tools(data, t) {
+    if (S.page !== "rack" || !t || !S.opts.request || !t.units.some((u) => canTurn(u))) return "";
+    const ab = S.ab[t.key] || { cur: "a" };
+    const by = !!S.bypass[t.key];
+    return `<div class="sr-tools">
+      <div class="sr-seg sr-ab" title="A / B: two versions of this track's settings (what the Rack can change). Click B to start one from A, change things, then flip between them.">
+        <button class="${ab.cur === "a" ? "sr-on" : ""}" data-sr="ab" data-ab="a">A</button><button class="${ab.cur === "b" ? "sr-on" : ""}" data-sr="ab" data-ab="b">B</button></div>
+      <button class="sr-tool ${by ? "sr-on" : ""}" data-sr="bypass" title="BYPASS: this track's Sonicology plug-ins off (each one's own bypass), to hear before / after. Click again (or BACK) to bring them back. Honey Tune keeps playing what it tuned.">${icon("power")}BYPASS</button>
+      <button class="sr-tool sr-tool-ic" data-sr="undo" ${S.undo.length ? "" : "disabled"} title="Undo the Rack's last change${S.undo.length ? ": " + esc(S.undo[S.undo.length - 1].label) : ""}">${icon("undo")}</button>
+      <button class="sr-tool sr-tool-ic" data-sr="redo" ${S.redo.length ? "" : "disabled"} title="Redo${S.redo.length ? ": " + esc(S.redo[S.redo.length - 1].label) : ""}">${icon("redo")}</button>
+    </div><div class="sr-sep"></div>`;
   }
 
   function trackMenu(data) {
@@ -1043,6 +1062,10 @@
     else if (a === "clear") { S.search = ""; S.card = null; }
     else if (a === "switch") { switchModule(el.dataset.unit, el.dataset.key, el); return; }
     else if (a === "fix") { applyFix(el); return; }
+    else if (a === "undo") { replay(true); return; }
+    else if (a === "redo") { replay(false); return; }
+    else if (a === "bypass") { toggleBypass(); return; }
+    else if (a === "ab") { flipAB(el.dataset.ab); return; }
     else if (a === "toast-act") { const act = S.toastAct; hideToast(); if (act) act(); return; }
     else return;
     render();
@@ -1134,7 +1157,10 @@
     const label = el.textContent;
     el.disabled = true;
     const go = (v, then) => send(unit, { change: "state", module, control: "", value: v ? 1 : 0, gesture: "set" }, then || true);
-    go(on, () => toast("Done: " + label.replace(/^Turn /, "turned ") + ".", () => go(!on)));
+    go(on, () => {
+      rememberChange({ kind: "state", unit: unit.id, gen: unit.gen, module, before: on ? 0 : 1, after: on ? 1 : 0 }, label);
+      toast("Done: " + label.replace(/^Turn /, "turned ") + ".", () => replay(true));
+    });
   }
 
   function switchModule(unitId, key, el) {
@@ -1142,7 +1168,9 @@
     const mod = unit && (unit.modules || []).find((m) => m.key === key);
     if (!unit || !mod || !canTurn(unit)) return;
     el.classList.add("sr-pending");
-    send(unit, { change: "state", module: key, control: "", value: mod.state === "off" ? 1 : 0, gesture: "set" }, true);
+    const before = mod.state === "off" ? 0 : 1;
+    send(unit, { change: "state", module: key, control: "", value: 1 - before, gesture: "set" },
+      () => rememberChange({ kind: "state", unit: unit.id, gen: unit.gen, module: key, before, after: 1 - before }, `${cat(key).name} ${before ? "off" : "on"}`));
   }
 
   // A knob's value held where you put it until the plug-in's own value catches up (it publishes a few times a second).
@@ -1209,7 +1237,8 @@
     d.el.classList.remove("sr-dragging");
     if (d.moved) {
       S.held[d.key] = { norm: d.norm, at: Date.now() };
-      send(d.unit, { change: "value", module: d.module, control: d.control, value: d.norm, gesture: "end" }, true);
+      send(d.unit, { change: "value", module: d.module, control: d.control, value: d.norm, gesture: "end" },
+        valueDone(d.unit, d.module, d.control, d.start, d.norm));
     } else if (d.steps >= 2) {
       // a click: the next option (round to the first after the last)
       const i = Math.round(d.start * (d.steps - 1));
@@ -1218,7 +1247,7 @@
       paintKnob(d.el, n);
       const cell = d.el.closest(".sr-kcell");
       if (cell) cell.classList.add("sr-kpending");
-      send(d.unit, { change: "value", module: d.module, control: d.control, value: n, gesture: "set" }, true);
+      send(d.unit, { change: "value", module: d.module, control: d.control, value: n, gesture: "set" }, valueDone(d.unit, d.module, d.control, d.start, n));
     }
   }
 
@@ -1232,7 +1261,9 @@
     delete S.held[el.dataset.knob];
     const cell = el.closest(".sr-kcell");
     if (cell) cell.classList.add("sr-kpending");
-    send(unit, { change: "reset", module: el.dataset.module, control: el.dataset.control, value: 0, gesture: "set" }, true);
+    const before = +el.dataset.norm, module = el.dataset.module, control = el.dataset.control;
+    send(unit, { change: "reset", module, control, value: 0, gesture: "set" },
+      () => rememberChange({ kind: "value", unit: unit.id, gen: unit.gen, module, control, before, after: null }, `${knobName(unit, module, control)} to default`));
   }
 
   // The mouse wheel over a knob: a small nudge (Shift: finer), or the next / previous option. One touch for the host
@@ -1249,7 +1280,7 @@
     const key = el.dataset.knob, steps = +el.dataset.steps || 0;
     let w = S.wheel;
     if (w && w.key !== key) { endWheel(); w = null; }
-    if (!w) w = S.wheel = { key, unit, module: el.dataset.module, control: el.dataset.control, steps, norm: +el.dataset.norm, begun: false, timer: 0, lastSend: 0, sendTimer: 0, acc: 0, lastStep: 0 };
+    if (!w) w = S.wheel = { key, unit, module: el.dataset.module, control: el.dataset.control, steps, norm: +el.dataset.norm, start: +el.dataset.norm, begun: false, timer: 0, lastSend: 0, sendTimer: 0, acc: 0, lastStep: 0 };
     let n = w.norm;
     if (steps >= 2) {
       // one option per click of the wheel (a trackpad's many small ones add up first)
@@ -1283,7 +1314,126 @@
     clearTimeout(w.sendTimer);
     if (!w.begun) return;
     S.held[w.key] = { norm: w.norm, at: Date.now() };
-    send(w.unit, { change: "value", module: w.module, control: w.control, value: w.norm, gesture: "end" }, true);
+    send(w.unit, { change: "value", module: w.module, control: w.control, value: w.norm, gesture: "end" }, valueDone(w.unit, w.module, w.control, w.start, w.norm));
+  }
+
+  // ---- stage 2 step 4: UNDO / REDO, A/B, BYPASS (the Rack's own changes, applied through the same requests) -----------
+  const knobName = (unit, module, control) => {
+    const u = unitById(unit.id || unit), m = u && (u.modules || []).find((x) => x.key === module);
+    const v = m && (m.values || []).find((x) => x.key === control);
+    return v ? v.name : control;
+  };
+  function valueDone(unit, module, control, before, after) {
+    return () => rememberChange({ kind: "value", unit: unit.id, gen: unit.gen, module, control, before, after }, `${cat(module).name} ${knobName(unit, module, control)}`);
+  }
+  function rememberChange(entry, label) {
+    if (S.replaying) return;
+    entry.label = label;
+    S.undo.push(entry);
+    if (S.undo.length > 60) S.undo.shift();
+    S.redo = [];
+    S.html.header = "";
+    if (S.root && !S.down) render();
+  }
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // One change back (undo) or forward again (redo); a batch (A/B, BYPASS) as one.
+  async function replay(back) {
+    const from = back ? S.undo : S.redo, to = back ? S.redo : S.undo;
+    const e = from.pop();
+    if (!e) return;
+    to.push(e);
+    S.html.header = "";
+    const items = e.kind === "batch" ? e.items : [e];
+    const gone = await applyItems(items.map((x) => Object.assign({}, x, { target: back ? x.before : x.after })));
+    toast((back ? "Undone: " : "Redone: ") + e.label + (gone ? ` (${gone} of it not: that plug-in has closed or moved)` : "."));
+    if (S.root) render();
+  }
+
+  // Sends each item's target (a knob's 0..1, null = its default; a module's or a plug-in's 1 / 0), a few at a time so no
+  // plug-in's queue overflows. Returns how many couldn't be sent (their plug-in is gone).
+  async function applyItems(items) {
+    S.replaying = true;
+    let gone = 0, n = 0;
+    try {
+      for (const x of items) {
+        const u = unitById(x.unit);
+        if (!u || u.gen !== x.gen) { gone++; continue; }
+        if (x.kind === "value") {
+          if (x.target == null) send(u, { change: "reset", module: x.module, control: x.control, value: 0, gesture: "set" });
+          else {
+            S.held[heldKey(u, x.module, x.control)] = { norm: x.target, at: Date.now() };
+            send(u, { change: "value", module: x.module, control: x.control, value: x.target, gesture: "set" });
+          }
+        } else send(u, { change: x.kind, module: x.kind === "power" ? "power" : x.module, control: "", value: x.target, gesture: "set" });
+        if (++n % 12 === 0) { await S.chain; await pause(120); }
+      }
+      await S.chain;
+    } finally { S.replaying = false; }
+    return gone;
+  }
+
+  // A / B: two versions of this track's settings (every knob and switch the Rack shows for it). The first click on B
+  // starts it as a copy of A; after that, a click sends the differences (one undo step).
+  function snapshot(t) {
+    const list = [];
+    for (const u of t.units) {
+      if (!canTurn(u) || u.detailed === false) continue;
+      for (const m of u.modules || []) {
+        if (m.switchable) list.push({ kind: "state", unit: u.id, gen: u.gen, module: m.key, v: m.state === "off" ? 0 : 1 });
+        for (const v of m.values || []) if (v.key && v.norm != null) list.push({ kind: "value", unit: u.id, gen: u.gen, module: m.key, control: v.key, v: v.norm });
+      }
+    }
+    return list;
+  }
+  async function flipAB(to) {
+    const t = trackOf(S.data, S.track);
+    if (!t) return;
+    const ab = (S.ab[t.key] = S.ab[t.key] || { cur: "a", a: null, b: null });
+    if (ab.cur === to) return;
+    const now = snapshot(t);
+    ab[ab.cur] = now;
+    const want = ab[to];
+    ab.cur = to;
+    S.html.header = "";
+    render();
+    if (!want) { toast(`${to.toUpperCase()} starts as a copy of ${to === "b" ? "A" : "B"}: change things, then flip between A and B.`); return; }
+    const was = new Map(now.map((x) => [x.unit + "|" + x.module + "|" + (x.control || ""), x]));
+    const items = [];
+    for (const x of want) {
+      const cur = was.get(x.unit + "|" + x.module + "|" + (x.control || ""));
+      if (!cur || cur.gen !== x.gen) continue;
+      if (x.kind === "value" ? Math.abs(cur.v - x.v) > 0.002 : cur.v !== x.v)
+        items.push({ kind: x.kind, unit: x.unit, gen: x.gen, module: x.module, control: x.control, before: cur.v, after: x.v, target: x.v });
+    }
+    // switches first (a module switched on before its knobs move), then the knobs
+    items.sort((p, q) => (p.kind === "state" ? 0 : 1) - (q.kind === "state" ? 0 : 1));
+    if (!items.length) { toast(`${to.toUpperCase()}: the same as ${to === "b" ? "A" : "B"} so far.`); return; }
+    const gone = await applyItems(items);
+    rememberChange({ kind: "batch", items }, `A / B: to ${to.toUpperCase()}`);
+    toast(`${to.toUpperCase()}: ${items.length - gone} change${items.length - gone === 1 ? "" : "s"} sent.`);
+  }
+
+  // BYPASS: this track's plug-ins off (each one's own bypass) and back on. Honey Tune has none.
+  async function toggleBypass(restoreOnly) {
+    const t = S.data && trackOf(S.data, S.track);
+    if (!t) return;
+    const was = S.bypass[t.key];
+    if (was) {
+      delete S.bypass[t.key];
+      const items = was.map((x) => ({ kind: "power", unit: x.unit, gen: x.gen, before: 0, after: 1, target: 1 }));
+      await applyItems(items);
+      if (!restoreOnly) rememberChange({ kind: "batch", items }, "BYPASS off");
+    } else {
+      const units = t.units.filter((u) => u.product !== "honeytune" && canTurn(u) && u.on !== false);
+      if (!units.length) { toast("Nothing on this track to bypass from the Rack."); return; }
+      S.bypass[t.key] = units.map((u) => ({ unit: u.id, gen: u.gen }));
+      const items = units.map((u) => ({ kind: "power", unit: u.id, gen: u.gen, before: 1, after: 0, target: 0 }));
+      await applyItems(items);
+      rememberChange({ kind: "batch", items }, "BYPASS on");
+    }
+    S.html.header = "";
+    if (S.root) render();
   }
 
   function onDown() { S.down = true; }
@@ -1357,6 +1507,14 @@
 
   function close() {
     if (!S.root) return;
+    // BYPASS is for listening in the Rack: leaving brings every bypassed plug-in back.
+    for (const key of Object.keys(S.bypass)) {
+      for (const x of S.bypass[key]) {
+        const u = unitById(x.unit);
+        if (u && u.gen === x.gen) send(u, { change: "power", module: "power", control: "", value: 1, gesture: "set" });
+      }
+      delete S.bypass[key];
+    }
     clearTimeout(S.timer);
     window.removeEventListener("keydown", onKey);
     window.removeEventListener("resize", fit);

@@ -795,3 +795,6 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   remember that size (`rackWindow.big`). Manual: the Rack section (wheel, double-click, fixes, automation, bigger
   window); the Claude Docs copy updated. Tested here: [rack], the full suite, the UI smoke test; editors compiled
   against JUCE. mock.js knows rackWindow.
+- Masterology 0.34.0 (2026-11-17, Sonicology Beta 20): the Rack's BYPASS reaches Masterology's bypass (Change::power in
+  applyRack). Shared RackLink / rack.js / rack.css from Mixology (the Rack's UNDO / REDO, A / B, BYPASS: Mixology's
+  RESUME-HERE). Manual (and its Claude Docs copy): the Rack's top-bar tools.
