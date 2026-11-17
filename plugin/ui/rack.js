@@ -738,8 +738,7 @@
     return `<main class="sr-main sr-main-rack">
       <section class="sr-panel sr-left">
         <h3 class="sr-ph">${icon("layers")}SIGNAL CHAIN<small>${esc(t.name)}</small></h3>
-        <div class="sr-rows" data-scroll="rows">${rows}</div>
-        <div class="sr-honey"></div>
+        <div class="sr-honey sr-honey-chain"><div class="sr-rows" data-scroll="rows">${rows}</div></div>
       </section>
       <div class="sr-centre">
         <section class="sr-panel sr-flow"><div class="sr-flow-t">CHAIN<br>FLOW</div><div class="sr-flow-hexes" data-scroll="flow">${flow}</div></section>
