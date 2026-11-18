@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.38.0 · November 2026
+Version 0.39.0 · November 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.

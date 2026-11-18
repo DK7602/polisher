@@ -733,8 +733,8 @@
       const nk = Math.min(vals.length, 8);
       const centre = (S.W || 1280) - 684 - 56;
       const ks = Math.round(clamp(centre / Math.max(nk, 1) - 18, 54, 92));
-      const knobs = vals.slice(0, nk).map((v) => `<div class="sr-kcell"><b>${esc(v.name.toUpperCase())}</b>${knob(v, ks, sel.unit, m)}<span class="sr-kval-t">${esc(v.text)}</span></div>`).join("");
-      const more = vals.slice(nk).map((v) => `<span class="sr-chip"><b>${esc(v.name)}</b>${esc(v.text)}</span>`).join("");
+      const knobs = vals.slice(0, nk).map((v, i) => `<div class="sr-kcell" data-vi="${i}"><b>${esc(v.name.toUpperCase())}</b>${knob(v, ks, sel.unit, m)}<span class="sr-kval-t">${esc(v.text)}</span></div>`).join("");
+      const more = vals.slice(nk).map((v, i) => `<span class="sr-chip" data-vi="${nk + i}"><b>${esc(v.name)}</b><i>${esc(v.text)}</i></span>`).join("");
       const meterNow = m.meterKind === "gr" ? `<div class="sr-big"><b data-val="meter">${num(m.meter || 0)}</b><small>dB gain reduction</small></div>` : "";
       detail = `<section class="sr-panel sr-mod">
         <div class="sr-mod-head">
@@ -1225,19 +1225,25 @@
     if (focusSearch) { const i = S.stage.querySelector('[data-sr="search"]'); if (i) { i.focus(); i.setSelectionRange(caret, caret); } }
   }
 
-  // What changes the page's layout: the picked track's modules in detail (the MODULES page: every unit's), the other
-  // tracks by their modules' keys and states. Not the live values (meters, a dynamic EQ's moving cuts): updateLive.
+  // What the page shows, so it is rebuilt only when that changes: on the RACK page the picked track's modules in detail,
+  // the other tracks by their modules' keys and states; on the other pages every unit's modules by state and summary.
+  // Not the live readings (meters, a dynamic EQ's moving cuts, a knob that only shows something like Masterology's
+  // Dynamics bands): updateLive changes those in place. (Beta 27: the COACH, MODULES and SESSION pages took every
+  // plug-in's knob texts, so a playing song rebuilt their HTML several times a second.)
   function signature(data) {
     const t = trackOf(data, S.track);
     const here = new Set(t ? t.units.map((u) => u.id) : []);
-    const all = S.page !== "rack";
-    return JSON.stringify((data.units || []).map((u) => (all || here.has(u.id)
-      ? [u.id, u.track, u.role, u.product, u.on, u.version, (u.modules || []).map((m) => [m.key, m.state, m.summary, m.by, (m.values || []).map((v) => v.text),
+    if (S.page !== "rack")
+      return JSON.stringify((data.units || []).map((u) => [u.id, u.track, u.role, u.product, u.on, u.version, u.lock || "", u.gen != null,
+          (u.modules || []).map((m) => [m.key, m.state, m.summary, !!m.switchable]), (u.together || []).map((l) => l.level)]))
+        + JSON.stringify((data.together || []).map((l) => [l.level, l.hash])) + JSON.stringify(data.mix && data.mix.source)
+        + (S.page === "coach" ? coachSig(t) : "");
+    return JSON.stringify((data.units || []).map((u) => (here.has(u.id)
+      ? [u.id, u.track, u.role, u.product, u.on, u.version, (u.modules || []).map((m) => [m.key, m.state, m.summary, m.by, (m.values || []).map((v) => v.key ? v.text : ""),
           (m.bands || []).map((b) => [b.type, Math.round(b.hz || 0), b.name, b.on]), m.layers]), u.together]
       : [u.id, u.track, u.role, u.product, u.on, u.version, (u.modules || []).map((m) => m.key + ":" + m.state)])))
       + JSON.stringify(data.together) + JSON.stringify(data.mix && data.mix.source)
-      + (S.page === "rack" ? JSON.stringify((trackFader(data, t) || {}).v || null) + (orderLine(t) ? "order" : "") : "")
-      + (S.page === "coach" ? coachSig(t) : "");
+      + JSON.stringify((trackFader(data, t) || {}).v || null) + (orderLine(t) ? "order" : "");
   }
   // What changes the COACH page (its progress moves in place: updateLive).
   function coachSig(t) {
@@ -1301,6 +1307,19 @@
     if (sel) {
       const c = cat(sel.mod.key);
       if (sel.mod.meterKind === "gr") set("meter", num(sel.mod.meter || 0));
+      // knobs that only show something (no key): their reading and arc, in place
+      (sel.mod.values || []).forEach((v, i) => {
+        if (v.key) return;
+        const cell = S.stage.querySelector(`.sr-mod [data-vi="${i}"]`);
+        if (!cell) return;
+        const txt = cell.querySelector(".sr-kval-t") || cell.querySelector("i");
+        if (txt && txt.textContent !== v.text) txt.textContent = v.text;
+        const arc = cell.querySelector(".sr-kval");
+        if (arc) {
+          const html = knobArc(clamp(v.norm == null ? 0.5 : v.norm, 0, 1), v.bi);
+          if (arc.dataset.a !== html) { arc.dataset.a = html; arc.innerHTML = html; }
+        }
+      });
       const isEq = c.graph === "eq" && (sel.mod.bands || []).length;
       const wrap = S.stage.querySelector(isEq ? ".sr-graphwrap .sr-graph-eq" : ".sr-graphwrap .sr-graph-hist");
       if (wrap) {

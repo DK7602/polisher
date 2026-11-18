@@ -273,6 +273,7 @@
 .sr-more { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 8px; }
 .sr-chip { display: inline-flex; gap: 6px; padding: 2px 9px; border-radius: 8px; font-size: 14px; font-weight: 600; color: #fff; background: #0a192d; box-shadow: inset 0 0 0 1px rgba(196, 138, 38, .8); }
 .sr-chip b { color: var(--gold2); font-weight: 600; }
+.sr-chip i { font-style: normal; }
 .sr-nokn { text-align: center; padding: 22px 0 12px; font-size: 17px; font-weight: 600; color: #5a4210; }
 .sr-readonly { margin-top: 8px; text-align: center; font-size: 12.5px; font-weight: 600; letter-spacing: .04em; color: #6a4d14; }
 /* Stage 2: knobs you turn, modules you switch, and what the plug-in said */

@@ -820,3 +820,6 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   valgrind shows nothing from Masterology (its only report is JUCE's vector min/max reading the test buffer's tail).
   So intermittent and Windows only; suspects: something time- or thread-dependent, or memory MSVC leaves uninitialised.
   Re-running the job to confirm; not in the plug-ins' sound path change of Beta 26 (only RackLink / rack.js).
+- Masterology 0.39.0 (2026-11-18, Sonicology Beta 27): shared rack.js (the COACH / MODULES / SESSION pages rebuild only
+  when what they show changes; this plug-in's Dynamics readings, which move all the time, change in place). No
+  Masterology code changed. Manual (and its Claude Docs copy): version.

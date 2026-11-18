@@ -22,7 +22,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 A live copy is kept in Claude Docs (project 3bf99dd7-1111-4be3-884d-d787ae49506c, node 15637893-1eb5): update it
 whenever the manual changes.
 
-## Status — v0.38.0
+## Status — v0.39.0
 
 | Piece | State |
 | --- | --- |
@@ -83,6 +83,7 @@ whenever the manual changes.
 | Rack Beta 24 (v0.36.0, with Voxology 0.62.0 and Mixology 0.32.0): shared RackLink (Change::save: Voxology's SAVE CHAIN; Link::shownTracks: Mixology publishes the faders of the tracks open Racks show), rack.js (the track's fader in GAIN STAGING, SAVE on Voxology's row, the Link's RACK button). Masterology refuses a save (only Voxology keeps chains) | New: tested in the engine and the browser preview, not yet in a DAW |
 | Rack Beta 25 (v0.37.0, with Voxology 0.63.0 and Mixology 0.33.0): shared rack.js: the insert-order check (Mixology Link before Voxology on a vocal, judged from how the levels move) | New: tested in the browser preview, not yet in a DAW |
 | Rack Beta 26 (v0.38.0, with Voxology 0.64.0 and Mixology 0.34.0): shared RackLink (layout 4: the Coach's report and `Change::coach`) and rack.js (the COACH page for a vocal, through Voxology's Auto-Edit). No Masterology code changed: the Coach for the master comes later | New: tested in the engine and the browser preview, not yet in a DAW |
+| Rack Beta 27 (v0.39.0, with Voxology 0.65.0 and Mixology 0.35.0): shared rack.js: the COACH / MODULES / SESSION pages rebuild only when what they show changes (Masterology's Dynamics readings move all the time while the song plays: they now change in place) | New: tested in the browser preview, not yet in a DAW |
 
 ## Validation
 
