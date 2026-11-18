@@ -352,7 +352,23 @@ void AutoMasterController::launchAnalysis()
     heard.songLufs = pendingStats.integratedLufs;
     heard.songLra = pendingStats.loudnessRangeLu;
     heard.wholeSong = autoFinished && pendingStats.timelineJumps == 0 && pendingStats.heardSeconds >= kWholeSongSeconds;
-    pool.addJob ([this, clip = std::move (clip), settings, thisSession, stop = analysisCancel, forPlan, heard]
+
+    // The Coach (Beta 30): Auto-Master decides from the mix as it comes in, so after an APPLY the same mix gives the
+    // same plan. The plan is compared with the settings Masterology has now.
+    struct NowValue { float value = 0.0f; juce::NormalisableRange<float> range; bool steps = false; };
+    auto nowValues = std::make_shared<std::map<std::string, NowValue>>();
+    if (forPlan)
+        for (const auto& [id, unused] : polisher::autoanalyze::chainValues (polisher::MasterChainParams {}))
+            if (auto* p = state.getParameter (juce::String (id)))
+            {
+                NowValue v;
+                v.range = p->getNormalisableRange();
+                v.value = v.range.convertFrom0to1 (p->getValue());
+                v.steps = v.range.interval >= 1.0f && v.range.end - v.range.start <= 40.0f;   // a switch or a choice
+                (*nowValues)[id] = v;
+            }
+
+    pool.addJob ([this, clip = std::move (clip), settings, thisSession, stop = analysisCancel, forPlan, heard, nowValues]
     {
         std::unique_ptr<polisher::AutoMasterResult> result;
         std::string plan;
@@ -365,9 +381,24 @@ void AutoMasterController::launchAnalysis()
             {
                 // The Coach: the same 12 s through the plan, measured again.
                 std::unique_ptr<polisher::MixAnalysis> after;
+                std::vector<std::string> changed;
                 if (result->ok)
+                {
                     after = std::make_unique<polisher::MixAnalysis> (polisher::analyseMix (polisher::renderMaster (clip, result->chain)));
-                plan = polisher::coach::planJson (*result, after.get(), settings, heard, kPlanBytes);
+                    // The settings APPLY would change (as apply() sets them): a switch or choice that differs, a knob
+                    // more than 2 % of its range away (a fresh listen to the same song moves a knob a little).
+                    for (const auto& [id, v] : polisher::autoanalyze::chainValues (result->chain))
+                    {
+                        const auto it = nowValues->find (id);
+                        if (it == nowValues->end()) continue;
+                        const auto& cur = it->second;
+                        const float planned = juce::jlimit (cur.range.start, cur.range.end, static_cast<float> (v));
+                        if (cur.steps ? juce::roundToInt (planned) != juce::roundToInt (cur.value)
+                                      : std::abs (cur.range.convertTo0to1 (planned) - cur.range.convertTo0to1 (cur.value)) > 0.02f)
+                            changed.push_back (id);
+                    }
+                }
+                plan = polisher::coach::planJson (*result, after.get(), settings, heard, kPlanBytes, result->ok ? &changed : nullptr);
             }
         }
         catch (const polisher::AnalysisCancelled&)

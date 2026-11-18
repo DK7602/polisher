@@ -113,8 +113,32 @@ namespace polisher::coach
         return "";
     }
 
-    std::string planJson (const AutoMasterResult& r, const MixAnalysis* after, const AutoMasterSettings& s, const Heard& h, std::size_t maxBytes)
+    const char* rackKeyOfParam (const std::string& id) noexcept
     {
+        static const std::pair<const char*, const char*> kPrefixes[] = {
+            { "ul", "mas.unlimiter" }, { "eq", "mas.tonaleq" }, { "stem", "mas.stemeq" }, { "ts", "mas.steady" }, { "rt", "mas.resonance" },
+            { "bass", "mas.bass" }, { "glue", "mas.glue" }, { "dyn", "mas.dynamics" }, { "img", "mas.imager" }, { "sat", "mas.sat" },
+            { "clip", "mas.clipper" },
+        };
+        if (id == "bypass") return "";
+        for (const auto& [prefix, key] : kPrefixes)
+            if (id.rfind (prefix, 0) == 0) return key;
+        return "mas.max";   // drive, ceiling, release, adaptive, input trim: the Maximizer's page
+    }
+
+    std::string planJson (const AutoMasterResult& r, const MixAnalysis* after, const AutoMasterSettings& s, const Heard& h, std::size_t maxBytes,
+                          const std::vector<std::string>* changedIds)
+    {
+        const bool compared = changedIds != nullptr;
+        const bool upToDate = compared && changedIds->empty();
+        auto sameAsNow = [&] (const char* rackKey) {
+            if (! compared) return false;
+            for (const auto& id : *changedIds)
+                if (std::string (rackKeyOfParam (id)) == rackKey) return false;
+            return true;
+        };
+        const std::string summary = (upToDate ? std::string ("Masterology is already set the way I'd master this mix: nothing to change. ") : std::string())
+                                  + r.summary;
         const auto aim = aimName (s);
         if (! r.ok)
         {
@@ -227,7 +251,7 @@ namespace polisher::coach
         for (const auto& pass : kPasses)
         {
             const auto why = pass.why;
-            std::string o = "{\"ok\":true,\"kind\":\"master\",\"summary\":" + str (clip (r.summary, pass.summary))
+            std::string o = "{\"ok\":true,\"kind\":\"master\",\"summary\":" + str (clip (summary, pass.summary))
                           + ",\"genre\":" + str (genreName (s.genre)) + ",\"intensity\":" + str (intensityName (s.intensity))
                           + ",\"target\":" + str (handoff::targetName (static_cast<int> (s.target))) + ",\"targetLufs\":" + num (r.targetLufs)
                           + ",\"aim\":" + str (aim) + ",\"reference\":" + str (s.reference.valid ? s.reference.name : std::string());
@@ -245,7 +269,8 @@ namespace polisher::coach
             {
                 const auto& m = *rows[i].m;
                 o += (i ? "," : "") + std::string ("{\"key\":") + str (m.key) + ",\"name\":" + str (m.name) + ",\"on\":" + (rows[i].on ? "true" : "false")
-                   + ",\"caption\":" + str (m.caption) + ",\"kept\":" + (reasons.count (m.code) ? "false" : "true") + ",\"set\":[";
+                   + ",\"caption\":" + str (m.caption) + ",\"kept\":" + (reasons.count (m.code) ? "false" : "true")
+                   + (compared ? std::string (",\"same\":") + (sameAsNow (m.key) ? "true" : "false") : std::string()) + ",\"set\":[";
                 const auto it = reasons.find (m.code);
                 if (it != reasons.end())
                     for (std::size_t k = 0; k < it->second.size() && k < pass.per; ++k)
@@ -256,7 +281,8 @@ namespace polisher::coach
                     }
                 o += "]}";
             }
-            o += "],\"changes\":" + std::to_string (values.size()) + ",\"modulesOn\":" + std::to_string (modulesOn);
+            o += "],\"changes\":" + std::to_string (compared ? changedIds->size() : values.size()) + ",\"modulesOn\":" + std::to_string (modulesOn);
+            if (compared) o += std::string (",\"upToDate\":") + (upToDate ? "true" : "false");
             o += ",\"bands\":{\"hz\":[";
             for (int b = 0; b < kEqBands; ++b) o += (b ? "," : "") + num (std::sqrt (kEdges[b] * kEdges[b + 1]), 0);
             auto curve = [] (const std::array<double, kEqBands>& v) {
@@ -278,7 +304,8 @@ namespace polisher::coach
             o += "]}";
             if (o.size() <= maxBytes) return o;
         }
-        const std::string o = "{\"ok\":true,\"kind\":\"master\",\"summary\":" + str (clip (r.summary, 200)) + ",\"changes\":" + std::to_string (values.size())
+        const std::string o = "{\"ok\":true,\"kind\":\"master\",\"summary\":" + str (clip (summary, 200)) + ",\"changes\":"
+                            + std::to_string (compared ? changedIds->size() : values.size())
                             + ",\"modulesOn\":" + std::to_string (modulesOn) + ",\"chain\":[],\"issues\":[],\"results\":[],\"moves\":[],\"heard\":[],\"first\":[]}";
         return o.size() <= maxBytes ? o : std::string ("{\"ok\":true,\"kind\":\"master\",\"summary\":\"\"}");
     }

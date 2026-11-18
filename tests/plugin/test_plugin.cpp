@@ -4061,6 +4061,17 @@ TEST_CASE ("Coach (the master): ANALYZE & BUILD plans without changing anything;
     CHECK (rack.report ("ready")["state"].toString() == "ready");
     CHECK (rack.step ("apply").empty());
     CHECK (settingsOf (*p) == applied);
+    // ANALYZE AGAIN after APPLY (Beta 30): the same mix gives the same plan, and the Coach says it is already set.
+    CHECK (rack.step ("plan").empty());
+    play (*p, head, testsig::musicLike (sr, 14.0, -16.0, 3));
+    CHECK (rack.step ("finish").empty());
+    REQUIRE (waitForAutoMaster (*p));
+    const auto again = rack.report ("ready", "plan");
+    INFO (rack.unit().report);
+    CHECK (static_cast<bool> (again["plan"]["upToDate"]));
+    CHECK ((int) again["plan"]["changes"] == 0);
+    CHECK (again["plan"]["summary"].toString().contains ("nothing to change"));
+    CHECK (settingsOf (*p) == applied);
     // A change after it: the Coach's UNDO says so and leaves it (Masterology's own UNDO steps back).
     gesture (*p, "glueRatio", 3.0f);
     CHECK_FALSE (rack.step ("undo").empty());

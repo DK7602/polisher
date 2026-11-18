@@ -136,6 +136,24 @@ TEST_CASE ("Coach (the master): Auto-Master's plan, measured through the chain, 
     CHECK (validJson (fj));
     CHECK (has (fj, "\"ok\":false"));
 
+    // Compared with the settings now (Beta 30): nothing to change, or one module that isn't set as planned.
+    const std::vector<std::string> unchanged;
+    const auto same = coach::planJson (r, &after, s, h, 7600, &unchanged);
+    CHECK (validJson (same));
+    CHECK (has (same, "\"upToDate\":true"));
+    CHECK (has (same, "\"changes\":0"));
+    CHECK (has (same, "nothing to change"));
+    CHECK_FALSE (has (same, "\"same\":false"));
+    const std::vector<std::string> drive { "drive", "ceiling" };
+    const auto one = coach::planJson (r, &after, s, h, 7600, &drive);
+    CHECK (has (one, "\"upToDate\":false"));
+    CHECK (has (one, "\"changes\":2"));
+    CHECK (has (one, "\"key\":\"mas.max\",\"name\":\"Maximizer\",\"on\":true,\"caption\":\"Loudness\",\"kept\":false,\"same\":false"));
+    CHECK (std::string (coach::rackKeyOfParam ("eqGain3")) == "mas.tonaleq");
+    CHECK (std::string (coach::rackKeyOfParam ("dynThr2")) == "mas.dynamics");
+    CHECK (std::string (coach::rackKeyOfParam ("inTrim")) == "mas.max");
+    CHECK (std::string (coach::rackKeyOfParam ("bypass")).empty());
+
     CHECK (std::string (coach::moduleKey ("eq")) == "mas.tonaleq");
     CHECK (std::string (coach::moduleKey ("clip")) == "mas.clipper");
     CHECK (std::string (coach::moduleKey ("nothing")).empty());

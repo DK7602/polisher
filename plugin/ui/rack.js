@@ -1017,10 +1017,11 @@
     const issues = plan ? plan.issues || [] : [];
     const warns = issues.filter((i) => i.warn).length;
     const analysis = `<section class="sr-panel sr-cana">
-      <h3 class="sr-ph sr-ph-s">${icon("pulse")}ANALYSIS RESULTS${plan ? `<span class="sr-cbadges"><em class="sr-ok">${icon("check")}Done</em><em class="${warns ? "sr-bad" : ""}">${issues.length} stand${issues.length === 1 ? "s" : ""} out</em><em>${plan.modulesOn} modules</em></span>` : ""}</h3>
+      <h3 class="sr-ph sr-ph-s">${icon("pulse")}ANALYSIS RESULTS${plan ? `<span class="sr-cbadges"><em class="sr-ok">${icon("check")}Done</em><em class="${warns ? "sr-bad" : ""}">${issues.length} stand${issues.length === 1 ? "s" : ""} out</em>${
+        plan.upToDate === true ? `<em class="sr-ok">Already set</em>` : plan.upToDate === false ? `<em>${plan.changes} to change</em>` : `<em>${plan.modulesOn} modules</em>`}</span>` : ""}</h3>
       ${plan ? `<div class="sr-cana-body">
           <div class="sr-cana-graph">${toneGraph(plan.bands || {}, [{ values: (plan.bands || {}).before, cls: "sr-cg-take", fill: true }].concat((plan.bands || {}).target ? [{ values: plan.bands.target, cls: "sr-cg-aim" }] : []), issues)}
-            <div class="sr-cg-key"><span class="sr-cg-k-take">${mk ? "your mix" : mixk ? "your track (against its mids)" : "your take"}</span>${(plan.bands || {}).target ? `<span class="sr-cg-k-aim">the aim: ${esc(plan.aim || "")}</span>` : ""}</div></div>
+            <div class="sr-cg-key"><span class="sr-cg-k-take">${mk ? "your mix" : mixk ? "your track (against its mids)" : plan.beforeNow ? "your take, with your settings now" : "your take"}</span>${(plan.bands || {}).target ? `<span class="sr-cg-k-aim">the aim: ${esc(plan.aim || "")}</span>` : ""}</div></div>
           <div class="sr-cissues"><h4>WHAT STANDS OUT</h4><ul>${issues.length ? issues.map((i) =>
             `<li class="${i.warn ? "sr-warn" : "sr-info"}" title="${esc(i.text)}">${icon(i.warn ? "warn" : "info", i.warn ? "sr-li-warn" : "sr-li-info")}<span>${esc(i.name)}${i.from > 0 ? ` <small>${esc(hzRange(i.from, i.to))}</small>` : ""}</span></li>`).join("")
             : `<li>${icon("check", "sr-li-ok")}<span>${mixk ? "Nothing stands out: it already fits." : mk ? "Nothing stands out: your mix is already close to the aim." : "Nothing stands out: your take is already close to the aim."}</span></li>`}</ul></div>
@@ -1035,7 +1036,7 @@
       <div class="sr-flow-t">RECOMMENDED<br>CHAIN</div>
       <div class="sr-crec-row" data-scroll="crec">${chainOn.length ? chainOn.map((m, i) => {
         const k = cat(m.key);
-        return `${i ? '<i class="sr-arrow"></i>' : ""}<div class="sr-chex"><button class="sr-hex ${i === chainOn.length - 1 ? "sr-picked" : ""}" data-sr="coach-why" data-key="${esc(m.key)}" title="${esc(k.name)}">${icon(k.icon)}<span>${esc(k.hex)}</span></button><small>${esc(m.caption)}</small></div>`;
+        return `${i ? '<i class="sr-arrow"></i>' : ""}<div class="sr-chex ${m.same ? "sr-same" : ""}"><button class="sr-hex ${i === chainOn.length - 1 ? "sr-picked" : ""}" data-sr="coach-why" data-key="${esc(m.key)}" title="${esc(k.name)}${m.same ? ": already set as planned" : ""}">${icon(k.icon)}<span>${esc(k.hex)}</span></button><small>${m.same ? "Already set" : esc(m.caption)}</small></div>`;
       }).join("") : `<div class="sr-flow-empty">${plan && mixk ? "No module needed: it already fits." : `The modules ${engine} would use show here.`}</div>`}</div>
     </section>`;
 
@@ -1045,7 +1046,7 @@
     const lower = `<div class="sr-clower">
       <section class="sr-panel sr-cba"><h3 class="sr-ph sr-ph-s"><span class="sr-ab-chip">A/B</span>BEFORE vs PROPOSED</h3>
         ${plan && (plan.bands || {}).after ? `${toneGraph(plan.bands, [{ values: plan.bands.before, cls: "sr-cg-before", fill: true }, { values: plan.bands.after, cls: "sr-cg-after" }], [])}
-          <div class="sr-cg-key"><span class="sr-cg-k-before">${mk ? "your mix" : mixk ? "now" : "before (your take)"}</span><span class="sr-cg-k-after">${mk ? "the master (measured)" : mixk ? "with the plan's EQ and Tone" : "through the plan"}</span></div>`
+          <div class="sr-cg-key"><span class="sr-cg-k-before">${mk ? "your mix" : mixk ? "now" : plan.beforeNow ? "now (your settings)" : "before (your take)"}</span><span class="sr-cg-k-after">${mk ? "the master (measured)" : mixk ? "with the plan's EQ and Tone" : "through the plan"}</span></div>`
           : `<div class="sr-cempty">${mk ? "Your mix and the master, measured through the plan." : mixk ? "The track's tone now and with the plan." : "Your take before and through the plan."}</div>`}
       </section>
       <section class="sr-panel sr-cres"><h3 class="sr-ph sr-ph-s">${icon("maxbars")}RESULTS<small>${mk ? "measured on your mix" : mixk ? "the plan on your track" : "measured on your take"}</small></h3>
@@ -1073,7 +1074,7 @@
     const why = plan ? (plan.chain || []).filter((m) => m.on && (m.set || []).length).map((m) => {
       const s0 = m.set[0];
       const what = (x) => (x.from ? x.from + " " + String.fromCharCode(8594) + " " : "") + [x.control, x.value].filter(Boolean).join(" ");
-      return `<li data-why="${esc(m.key)}" class="${S.coachWhy === m.key ? "sr-picked" : ""}">${icon("check", "sr-li-ok")}<span><b>${esc(cat(m.key).name)}</b> ${MINUS} ${esc(what(s0))}${s0.why ? ": " + esc(s0.why) : ""}${
+      return `<li data-why="${esc(m.key)}" class="${S.coachWhy === m.key ? "sr-picked" : ""}">${icon("check", "sr-li-ok")}<span><b>${esc(cat(m.key).name)}</b>${m.same ? ` <em class="sr-csame">already set</em>` : ""} ${MINUS} ${esc(what(s0))}${s0.why ? ": " + esc(s0.why) : ""}${
         m.set.length > 1 ? `<small>${m.set.slice(1).map((x) => esc(what(x))).join(" · ")}</small>` : ""}</span></li>`;
     }).join("") : "";
     const right = `<section class="sr-panel sr-right">
@@ -1098,10 +1099,11 @@
     const c = coachOf(t);
     const r = c ? c.r : {};
     const ready = r.state === "ready", applied = r.state === "applied";
+    const upToDate = ready && r.plan && r.plan.ok && r.plan.upToDate === true;   // the settings now are the plan already
     const ok = c && c.unit && canTurn(c.unit) && r.state !== "none";
     const mk = !!c && c.kind === "master", where = mk ? "MASTER" : "TRACK";
     return `<footer class="sr-foot sr-cfoot">
-      <button class="sr-capply ${applied ? "sr-done" : ""}" data-sr="coach-apply" ${ok && ready ? "" : "disabled"} title="Set every module as the plan says (one UNDO step)">${icon(applied ? "check" : "layers")}${applied ? "APPLIED TO " + where : "APPLY TO " + where}</button>
+      <button class="sr-capply ${applied || upToDate ? "sr-done" : ""}" data-sr="coach-apply" ${ok && ready && !upToDate ? "" : "disabled"} title="${upToDate ? "Your settings already match the plan" : "Set every module as the plan says (one UNDO step)"}">${icon(applied || upToDate ? "check" : "layers")}${applied ? "APPLIED TO " + where : upToDate ? "NOTHING TO CHANGE" : "APPLY TO " + where}</button>
       <span class="sr-csep"></span>
       <button class="sr-cact" data-sr="coach-undo" ${ok && r.canUndo ? "" : "disabled"} title="${c && c.kind === "mix" ? "Put back the settings from before the plan (one step in Mixology's History)" : mk ? "Put back the settings from before the plan (one step in Masterology's UNDO)" : "Put back the settings from before the plan (or Voxology's last Auto-Edit)"}">${icon("undo")}UNDO</button>${c && c.kind !== "vox" ? "" : `
       <span class="sr-csep"></span>
@@ -1320,7 +1322,7 @@
     if (!c) return "nocoach";
     const r = c.r, p = r.plan || {};
     return JSON.stringify([c.kind, c.unit && c.unit.id, c.unit && c.unit.lock, r.state, r.style, r.intensity, r.canUndo, r.reference, r.hearing, r.track, r.role, r.heardEnough,
-      r.genre, r.target, r.canFinish, p.ok, p.summary, p.changes, S.coachWhy]);
+      r.genre, r.target, r.canFinish, p.ok, p.summary, p.changes, p.upToDate, S.coachWhy]);
   }
 
   // Mixology's faders of the tracks the Rack shows (its "mix.faders", through its DAW bridge): not a module of the Full

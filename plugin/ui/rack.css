@@ -791,6 +791,9 @@
 .sr-chex .sr-hex span { font-size: 9.5px; max-width: 48px; }
 .sr-chex .sr-hex .sr-ic { font-size: 19px; }
 .sr-chex small { font-size: 10px; font-weight: 700; line-height: 1.05; text-align: center; color: #ffe7a6; max-width: 62px; text-shadow: 0 1px 2px #000; }
+.sr-chex.sr-same .sr-hex { opacity: .55; }
+.sr-chex.sr-same small { color: #6ee08a; }
+.sr-csame { font-style: normal; font-size: 11px; font-weight: 700; color: #6ee08a; letter-spacing: .02em; }
 .sr-crec-row .sr-arrow { width: 9px; margin: 0 -4px 16px; }
 .sr-crec-row .sr-arrow::before { width: 7px; height: 7px; border-width: 2.5px; }
 .sr-clower { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 10px; }
@@ -850,6 +853,7 @@
 .sr-light .sr-cissues li, .sr-light .sr-cres li b, .sr-light .sr-cres li em, .sr-light .sr-cheard, .sr-light .sr-cwhy li, .sr-light .sr-cfirst li, .sr-light .sr-coach-msg { color: #2b2112; }
 .sr-light .sr-cres li.sr-better em { color: #1a8a3a; }
 .sr-light .sr-cstop { color: #6e450c; border-color: rgba(110, 69, 12, .5); }
+.sr-light .sr-chex.sr-same small, .sr-light .sr-csame { color: #1a8a3a; }
 .sr-light .sr-cheard-l li, .sr-light .sr-chex small { color: #4a3e28; }
 .sr-light .sr-cwhy li b { color: #8a5e14; }
 .sr-light .sr-cbadges em { color: #3a2a10; }

@@ -832,3 +832,8 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   plan / finish / cancel / apply / undo / discard, coachReport in Unit::report (full publishes only); RackUnit knobs
   amGenre / amIntensity / amTarget. Tests: test_master_coach.cpp; plug-in test "Coach (the master): ..." through the
   real Rack link. Manual (and its Claude Docs copy, rev 181). (Mixology's RESUME-HERE has the rest.)
+- Masterology 0.42.0 (2026-11-18, Sonicology Beta 30): the Coach after APPLY compares Auto-Master's plan with the
+  settings now (AutoMasterController: current values + ranges per chainValues id, captured on the message thread;
+  coach::planJson's changedIds: "same" per module, "changes", "upToDate"; coach::rackKeyOfParam). The plug-in test now
+  also runs ANALYZE AGAIN after APPLY and expects upToDate with 0 changes. RACK pill without the emblem (62 px, as
+  before). Manual (+ Claude Docs copy): "After APPLY", the Link's RACK. (Mixology's RESUME-HERE has the rest.)
