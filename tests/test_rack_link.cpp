@@ -1321,6 +1321,20 @@ TEST_CASE ("Rack link: a plug-in's Coach report goes through whole, or not at al
     CHECK (json.find ("\"report\":\"{\\\"state\\\":\\\"ready\\\"") != std::string::npos);
     json = rack::viewJson (rk, sl, "voxology", 0, 1005, "master");
     CHECK (json.find ("\"report\"") == std::string::npos);
+
+    // Beta 28: Mixology's Coach on one of its tracks rides on Mixology's own unit (the Full Mix): kept for the view of
+    // the track it is about ({"track":<hash>, first), dropped for any other.
+    auto mixUnit = unit (rack::Product::mixology, rack::Role::fullmix, "", { mod ("mix.comp") });
+    mixUnit.detailed = true;
+    const auto keys = suite::nameHash ("Keys");
+    mixUnit.report = "{\"track\":" + std::to_string (keys) + ",\"state\":\"ready\"}";
+    const int c = rk.claim (3, 1000);
+    REQUIRE (rk.publish (c, 3, mixUnit, 1000));
+    json = rack::viewJson (rk, sl, "mixology", 0, 1005, "t" + std::to_string (keys));
+    CHECK (wellFormed (json));
+    CHECK (json.find ("\"report\":\"{\\\"track\\\":" + std::to_string (keys)) != std::string::npos);
+    json = rack::viewJson (rk, sl, "mixology", 0, 1005, lead);
+    CHECK (json.find ("\\\"track\\\":" + std::to_string (keys)) == std::string::npos);
 }
 
 TEST_CASE ("Rack requests: the Coach's steps reach the owner with their name", "[rack][requests]")

@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.39.0 · November 2026
+Version 0.40.0 · November 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
@@ -752,9 +752,12 @@ off.
 grouped by plug-in (dim pills are off), and the number of warnings the Rack Coach has for it. Click a pill to open
 that module on the RACK page.
 
-**The COACH page (vocals):** the Coach builds a vocal's whole chain for you, shows you why, and measures the result
-before you take it. It works through Voxology's Auto-Edit (Voxology 0.64 or newer), on a vocal track with Voxology
-(not in BEAT mode).
+**The COACH page:** the Coach builds a track's whole chain for you, shows you why, and shows the result before you take
+it. It works through the plug-in that owns the track: a **vocal with Voxology** (0.64 or newer, not in BEAT mode)
+through Voxology's Auto-Edit (below), **any other track with Mixology Link** through Mixology (see "The Coach on a
+Mixology track").
+
+For a vocal:
 1. **AUTO RACK SETUP:** pick the **STYLE** and **INTENSITY** to aim for (the same choices as Voxology's Auto-Edit; a
    reference you picked in Voxology counts too). Press **ANALYZE & BUILD** and play the song: Voxology listens to about
    12 seconds of singing, works out every module, then plays your take through the plan and measures it again.
@@ -769,8 +772,17 @@ before you take it. It works through Voxology's Auto-Edit (Voxology 0.64 or newe
    applied again). **SAVE CHAIN** keeps the result in Voxology's My Chains; **TWEAK MANUALLY** opens the RACK page.
    **ADJUST FIRST** (right) says which knobs to try first if you want it a little different.
 
-Auto-Edit in Voxology's own window still works as before (it applies straight away). The Coach for Mixology's tracks
-and Masterology's master comes in a later beta.
+Auto-Edit in Voxology's own window still works as before (it applies straight away).
+
+**The Coach on a Mixology track** (a beat, drums, bass, keys, any track with Mixology Link; Mixology 0.36 or newer on
+your master channel): **ANALYZE & BUILD** runs Mixology's AUTO rules on all five pages at once (EQ, Dynamics, Space,
+Tone, Stereo), so each fix goes on the page that suits it and nothing is done twice. It works from what Analyze Mix
+heard; when Mixology hasn't heard the track play, the Coach listens to it first: play a part where it plays (about 8
+seconds of it). The page shows the track's **ROLE**, the **STYLE** and how long Mixology **HEARD** it; **what stands
+out** (mud, a dull top, harshness, boom, an uneven level, a dry or narrow track...); the Link's modules the plan uses,
+each setting with its reason ("EQ: Flat → −3.0 dB at 315 Hz: 250 - 500 Hz is 7.9 dB over its mids"); and the track's
+tone now and with the plan's EQ and Tone Balance (from those filters' own curves). **APPLY TO TRACK** sets it all as
+one step in Mixology's History; **UNDO** takes it back. The Coach for Masterology's master comes in a later beta.
 
 **Light or dark:** click the spinning cube at the top left. All three plug-ins remember your choice.
 

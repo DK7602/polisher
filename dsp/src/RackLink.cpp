@@ -1325,7 +1325,8 @@ namespace rack
                     m.values.clear();
                     m.bands.clear();
                 }
-                u.report.clear();
+                // A report about the shown track stays (Beta 28: Mixology's Coach on one of its tracks starts {"track":<hash>,).
+                if (! isHash || u.report.rfind ("{\"track\":" + std::to_string (hash) + ",", 0) != 0) u.report.clear();
             }
         }
         return toJson (host, hostHash, units, lines, overview (suiteLink, now), Link::otherLayouts (now));

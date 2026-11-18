@@ -823,3 +823,5 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
 - Masterology 0.39.0 (2026-11-18, Sonicology Beta 27): shared rack.js (the COACH / MODULES / SESSION pages rebuild only
   when what they show changes; this plug-in's Dynamics readings, which move all the time, change in place). No
   Masterology code changed. Manual (and its Claude Docs copy): version.
+- Masterology 0.40.0 (2026-11-18, Sonicology Beta 28): shared RackLink.cpp / rack.js (the COACH page on Mixology's
+  tracks). No Masterology code changed. Manual (and its Claude Docs copy). Next (Beta 29): the Coach for the master.

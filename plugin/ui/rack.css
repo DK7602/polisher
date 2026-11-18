@@ -852,3 +852,7 @@
 .sr-light .sr-cact { color: #3a2a10; background: var(--pearl) padding-box, var(--goldline) border-box; }
 .sr-light .sr-cact .sr-ic { color: #b07a12; }
 .sr-light .sr-csep { background: rgba(138, 100, 24, .3); }
+/* Beta 28: the Coach on one of Mixology's tracks: its moves in words under the tone results */
+.sr-cres li.sr-cmove { grid-template-columns: minmax(0, .75fr) minmax(0, 1.6fr); }
+.sr-cres li.sr-cmove em { white-space: normal; font-weight: 600; color: #cfe3ff; line-height: 1.2; }
+.sr-light .sr-cres li.sr-cmove em { color: #2b4a7a; }

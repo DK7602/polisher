@@ -846,15 +846,27 @@
   // For a vocal: Voxology's Auto-Edit listens and works out a plan without changing anything (Change "coach", "plan");
   // the plug-in sends it back as its report (rack::Unit::report): what it heard, what stands out against its aim, every
   // module it would set and why, and the take measured again through the plan. APPLY sets it (one UNDO in Voxology).
+  // The Coach for a track: Voxology's on a vocal it processes; else (Beta 28) Mixology's on a track with Mixology Link (the
+  // Mixology on the master builds it: its report rides on its own unit, {"track": <hash>, ...}).
   function coachOf(t) {
-    const u = t && t.units.find((x) => x.product === "voxology" && x.role !== "beat");
-    if (!u) return null;
-    if (u.report && S.coachText[u.id] !== u.report) {
-      S.coachText[u.id] = u.report;
-      try { S.coachObj[u.id] = JSON.parse(u.report); } catch (e) { S.coachObj[u.id] = null; }
-    }
-    return { unit: u, r: S.coachObj[u.id] || { state: "idle" } };
+    if (!t) return null;
+    const parse = (u) => {
+      if (u.report && S.coachText[u.id] !== u.report) {
+        S.coachText[u.id] = u.report;
+        try { S.coachObj[u.id] = JSON.parse(u.report); } catch (e) { S.coachObj[u.id] = null; }
+      }
+      return u.report ? S.coachObj[u.id] : null;
+    };
+    const u = t.units.find((x) => x.product === "voxology" && x.role !== "beat");
+    if (u) return { unit: u, r: parse(u) || { state: "idle" }, kind: "vox" };
+    if (!t.hash || t.role === "fullmix" || t.role === "master" || !t.units.some((x) => x.product === "link")) return null;
+    const mix = ((S.data && S.data.units) || []).find((x) => x.product === "mixology" && x.role === "fullmix");
+    const r = mix ? parse(mix) : null;
+    if (!mix || !r || r.track !== t.hash) return { unit: mix || null, r: { state: "none" }, kind: "mix", missing: !mix };
+    return { unit: mix, r, kind: "mix" };
   }
+  // A Coach request: Voxology's take the step; Mixology's the step and the track ("plan.<hash>").
+  const coachControl = (c, t, step) => (c.kind === "mix" ? step + "." + t.hash : step);
   const COACH_BUSY = { listening: 1, working: 1, busy: 1 };
 
   // The take's tone (dB per band vs its 500 Hz - 2 kHz average) as a graph: lines [{ values, cls, fill }], issues marked.
@@ -869,7 +881,8 @@
     const X = (f) => ((Math.log(f) - lo) / (hi - lo)) * 1000;
     const Y = (db) => ((top - db) / Math.max(top - bottom, 6)) * 1000;
     let svg = `<svg class="sr-cg" viewBox="0 0 1000 1000" preserveAspectRatio="none">`, labels = "";
-    for (let db = bottom; db <= top; db += 6) {
+    const gstep = top - bottom > 30 ? 12 : 6;   // a wide range (a whole track's roll-off): fewer labels
+    for (let db = top - Math.floor((top - bottom) / gstep) * gstep; db <= top; db += gstep) {
       svg += `<line class="sr-cg-grid" x1="0" x2="1000" y1="${Y(db).toFixed(1)}" y2="${Y(db).toFixed(1)}"/>`;
       labels += `<span class="sr-cg-y" style="top:${(Y(db) / 10).toFixed(1)}%">${db > 0 ? "+" + db : db < 0 ? MINUS + -db : 0}</span>`;
     }
@@ -913,31 +926,43 @@
       const vocals = tracks(data).filter((x) => x.units.some((u) => u.product === "voxology" && u.role !== "beat"));
       return `<main class="sr-main sr-main-coach">${left}
         <section class="sr-panel sr-coach-none"><h3 class="sr-ph">${icon("coach")}AUTO RACK COACH</h3>
-          <div class="sr-coach-msg"><p>The Coach builds a vocal's chain: it works through Voxology, on a track that has it (not in BEAT mode).
-            The Coach for Mixology's tracks and Masterology's master comes next.</p>
+          <div class="sr-coach-msg"><p>The Coach builds a track's chain: a vocal's through Voxology (not in BEAT mode), any other track's
+            through its Mixology Link (with Mixology on your master channel). The Coach for Masterology's master comes next.</p>
           ${vocals.length ? `<p>Pick a vocal:</p><div class="sr-coach-pick">${vocals.map((v) => `<button class="sr-tool" data-sr="track" data-track="${esc(v.key)}">${icon("mic")}${esc(v.name)}</button>`).join("")}</div>`
             : "<p>No vocal with Voxology is playing in this project.</p>"}</div>
         </section></main>`;
     }
+    const mixk = c.kind === "mix";
     const r = c.r, plan = r.plan && r.plan.ok ? r.plan : null;
     const failed = r.plan && !r.plan.ok ? r.plan
       : r.state === "failed" ? { tipTitle: "Auto-Edit couldn't build a plan", summary: "Something went wrong while it worked.", tip: "Play the song and press ANALYZE AGAIN." } : null;
     const busy = !!COACH_BUSY[r.state];
     const styles = r.styles || [], ints = r.intensities || [];
-    const can = canTurn(c.unit) && !busy;
+    const can = !!c.unit && canTurn(c.unit) && !busy && r.state !== "none";
     const narrow = (S.W || 1280) < 1440;
 
     // AUTO RACK SETUP
     const big = r.state === "listening" ? `${icon("pulse")}LISTENING<small data-coach-pct>${r.progress || 0} %</small>`
       : r.state === "working" ? `${icon("pulse")}BUILDING YOUR RACK${String.fromCharCode(8230)}`
-      : r.state === "busy" ? `${icon("pulse")}AUTO-EDIT IS RUNNING IN VOXOLOGY`
+      : r.state === "busy" ? `${icon("pulse")}${mixk ? "MIXOLOGY IS LISTENING" : "AUTO-EDIT IS RUNNING IN VOXOLOGY"}`
       : `${icon("star")}${plan || failed ? "ANALYZE AGAIN" : "ANALYZE &amp; BUILD"}`;
-    const hint = r.state === "listening" ? (r.hearing ? "Hearing the vocal: keep the song playing." : "Press play: Voxology listens to about 12 seconds of singing.")
+    const hint = mixk
+      ? (r.state === "none" ? (c.missing ? "The Coach for this track needs Mixology on your master channel (with its DAW bridge), version 0.36 or newer." : "Waiting for Mixology" + String.fromCharCode(8230))
+        : r.state === "listening" ? (r.hearing ? `Hearing ${t.name}: keep the song playing where it plays.` : `Press play at a part where ${t.name} plays: the Coach listens to ${r.need || 8} seconds of it.`)
+        : r.state === "busy" ? "Analyze Mix (or AUTO on a page) is listening: press ANALYZE & BUILD when it has finished."
+        : plan ? "" : r.heardEnough ? "Mixology works from what Analyze Mix heard. Nothing changes until you apply it."
+        : "Mixology hasn't heard this track play yet: the Coach listens to it first while the song plays. Nothing changes until you apply it.")
+      : r.state === "listening" ? (r.hearing ? "Hearing the vocal: keep the song playing." : "Press play: Voxology listens to about 12 seconds of singing.")
       : r.state === "working" ? "Working out every module, then playing your take through the plan to measure it."
       : plan ? "" : "Voxology listens while the song plays, then builds the plan here. Nothing changes until you apply it.";
     const setup = `<section class="sr-panel sr-csetup">
       <h3 class="sr-ph sr-ph-s">${icon("sliders")}AUTO RACK SETUP</h3>
-      <div class="sr-csetup-row">
+      <div class="sr-csetup-row">${mixk ? `
+        ${narrow ? "" : `<div class="sr-cfield"><b>SOURCE</b><span class="sr-cval">${icon("sliders")}${esc(t.name)}</span></div>`}
+        <div class="sr-cfield"><b>ROLE</b><span class="sr-cval ${r.role ? "" : "sr-dimv"}" title="Set a track's role on Mixology's Tracks page">${esc(r.role || "Not heard yet")}</span></div>
+        <div class="sr-cfield"><b>STYLE</b><span class="sr-cval" title="The mix style: choose it in Mixology (or Masterology)">${esc(r.style || "")}</span></div>
+        <div class="sr-cfield"><b>HEARD</b><span class="sr-cval ${r.heardEnough ? "" : "sr-dimv"}">${r.heardEnough ? `${icon("check")}${r.heardSeconds != null ? r.heardSeconds + " s" : "Yes"}` : "Not yet: it listens first"}</span></div>
+      </div>` : `
         ${narrow ? "" : `<div class="sr-cfield"><b>SOURCE</b><span class="sr-cval">${icon("mic")}${esc(t.name)} ${MINUS} vocal</span></div>`}
         <div class="sr-cfield"><b>STYLE</b><span class="sr-cval sr-cstep">
           <button data-sr="coach-style" data-dir="-1" ${can ? "" : "disabled"} title="The style Auto-Edit aims for">${icon("left")}</button>
@@ -946,7 +971,7 @@
         <div class="sr-cfield"><b>INTENSITY</b><span class="sr-seg sr-cseg">${ints.map((n, i) =>
           `<button class="${i === r.intensity ? "sr-on" : ""}" data-sr="coach-int" data-i="${i}" ${can ? "" : "disabled"}>${esc(n.toUpperCase())}</button>`).join("")}</span></div>
         <div class="sr-cfield"><b>REFERENCE</b><span class="sr-cval sr-dimv" title="${r.reference ? esc(r.reference) : "Choose one in Voxology (REFERENCE)"}">${r.reference ? icon("wave") + esc(r.reference) : narrow ? "None" : "None (in Voxology)"}</span></div>
-      </div>
+      </div>`}
       <div class="sr-cgo">
         <i class="sr-chev"></i>
         <button class="sr-cbig ${busy ? "sr-busy" : ""}" data-sr="coach-plan" ${can ? "" : "disabled"}>${big}</button>
@@ -962,14 +987,14 @@
     const analysis = `<section class="sr-panel sr-cana">
       <h3 class="sr-ph sr-ph-s">${icon("pulse")}ANALYSIS RESULTS${plan ? `<span class="sr-cbadges"><em class="sr-ok">${icon("check")}Done</em><em class="${warns ? "sr-bad" : ""}">${issues.length} stand${issues.length === 1 ? "s" : ""} out</em><em>${plan.modulesOn} modules</em></span>` : ""}</h3>
       ${plan ? `<div class="sr-cana-body">
-          <div class="sr-cana-graph">${toneGraph(plan.bands || {}, [{ values: (plan.bands || {}).before, cls: "sr-cg-take", fill: true }, { values: (plan.bands || {}).target, cls: "sr-cg-aim" }], issues)}
-            <div class="sr-cg-key"><span class="sr-cg-k-take">your take</span><span class="sr-cg-k-aim">the aim: ${esc(plan.aim || "")}</span></div></div>
+          <div class="sr-cana-graph">${toneGraph(plan.bands || {}, [{ values: (plan.bands || {}).before, cls: "sr-cg-take", fill: true }].concat((plan.bands || {}).target ? [{ values: plan.bands.target, cls: "sr-cg-aim" }] : []), issues)}
+            <div class="sr-cg-key"><span class="sr-cg-k-take">${mixk ? "your track (against its mids)" : "your take"}</span>${(plan.bands || {}).target ? `<span class="sr-cg-k-aim">the aim: ${esc(plan.aim || "")}</span>` : ""}</div></div>
           <div class="sr-cissues"><h4>WHAT STANDS OUT</h4><ul>${issues.length ? issues.map((i) =>
             `<li class="${i.warn ? "sr-warn" : "sr-info"}" title="${esc(i.text)}">${icon(i.warn ? "warn" : "info", i.warn ? "sr-li-warn" : "sr-li-info")}<span>${esc(i.name)}${i.from > 0 ? ` <small>${esc(hzRange(i.from, i.to))}</small>` : ""}</span></li>`).join("")
-            : `<li>${icon("check", "sr-li-ok")}<span>Nothing stands out: your take is already close to the aim.</span></li>`}</ul></div>
+            : `<li>${icon("check", "sr-li-ok")}<span>${mixk ? "Nothing stands out: it already fits." : "Nothing stands out: your take is already close to the aim."}</span></li>`}</ul></div>
         </div>`
         : failed ? `<div class="sr-cempty sr-cfail"><b>${esc(failed.tipTitle || "Auto-Edit couldn't build a plan")}</b><p>${esc(failed.summary || "")}</p><p>${esc(failed.tip || "")}</p></div>`
-        : `<div class="sr-cempty">${busy ? "Listening and building: the results land here." : "Press ANALYZE &amp; BUILD and play the song: what stands out in your take shows here, measured against what Auto-Edit aims for."}</div>`}
+        : `<div class="sr-cempty">${busy ? "Listening and building: the results land here." : mixk ? "Press ANALYZE &amp; BUILD: what stands out in this track shows here, with what Mixology would do (the same rules as its AUTO buttons, every page at once)." : "Press ANALYZE &amp; BUILD and play the song: what stands out in your take shows here, measured against what Auto-Edit aims for."}</div>`}
     </section>`;
 
     // RECOMMENDED SIGNAL CHAIN
@@ -979,7 +1004,7 @@
       <div class="sr-crec-row" data-scroll="crec">${chainOn.length ? chainOn.map((m, i) => {
         const k = cat(m.key);
         return `${i ? '<i class="sr-arrow"></i>' : ""}<div class="sr-chex"><button class="sr-hex ${i === chainOn.length - 1 ? "sr-picked" : ""}" data-sr="coach-why" data-key="${esc(m.key)}" title="${esc(k.name)}">${icon(k.icon)}<span>${esc(k.hex)}</span></button><small>${esc(m.caption)}</small></div>`;
-      }).join("") : `<div class="sr-flow-empty">The modules Auto-Edit would use show here.</div>`}</div>
+      }).join("") : `<div class="sr-flow-empty">${plan && mixk ? "No module needed: it already fits." : `The modules ${mixk ? "Mixology" : "Auto-Edit"} would use show here.`}</div>`}</div>
     </section>`;
 
     // BEFORE vs PROPOSED, RESULTS (measured)
@@ -988,34 +1013,37 @@
     const lower = `<div class="sr-clower">
       <section class="sr-panel sr-cba"><h3 class="sr-ph sr-ph-s"><span class="sr-ab-chip">A/B</span>BEFORE vs PROPOSED</h3>
         ${plan && (plan.bands || {}).after ? `${toneGraph(plan.bands, [{ values: plan.bands.before, cls: "sr-cg-before", fill: true }, { values: plan.bands.after, cls: "sr-cg-after" }], [])}
-          <div class="sr-cg-key"><span class="sr-cg-k-before">before (your take)</span><span class="sr-cg-k-after">through the plan</span></div>`
-          : `<div class="sr-cempty">Your take before and through the plan.</div>`}
+          <div class="sr-cg-key"><span class="sr-cg-k-before">${mixk ? "now" : "before (your take)"}</span><span class="sr-cg-k-after">${mixk ? "with the plan's EQ and Tone" : "through the plan"}</span></div>`
+          : `<div class="sr-cempty">${mixk ? "The track's tone now and with the plan." : "Your take before and through the plan."}</div>`}
       </section>
-      <section class="sr-panel sr-cres"><h3 class="sr-ph sr-ph-s">${icon("maxbars")}RESULTS<small>measured on your take</small></h3>
+      <section class="sr-panel sr-cres"><h3 class="sr-ph sr-ph-s">${icon("maxbars")}RESULTS<small>${mixk ? "the plan on your track" : "measured on your take"}</small></h3>
         ${results.length ? `<ul>${results.map((x) => {
           const wb = (Math.abs(x.before) / scale) * 100, wa = (Math.abs(x.after) / scale) * 100;
           const unit = x.unit === "dB apart" ? " dB apart" : " dB";
           return `<li class="${x.better ? "sr-better" : ""}" title="${esc(x.name)}: ${dbSigned(x.before)} ${String.fromCharCode(8594)} ${dbSigned(x.after)}${unit} (${esc(x.unit)})">
             <b>${esc(x.name)}</b><span class="sr-cbar"><i class="sr-cbar-b" style="width:${wb.toFixed(0)}%"></i><i class="sr-cbar-a" style="width:${wa.toFixed(0)}%"></i></span>
             <em>${x.unit === "dB apart" ? x.before.toFixed(1) : dbSigned(x.before)} ${String.fromCharCode(8594)} ${x.unit === "dB apart" ? x.after.toFixed(1) : dbSigned(x.after)}</em></li>`;
-        }).join("")}</ul>` : `<div class="sr-cempty">Before ${String.fromCharCode(8594)} after, measured: no guesses.</div>`}
+        }).join("")}${(plan && plan.moves || []).map((mv) => `<li class="sr-cmove"><b>${esc(mv.module)}</b><em>${esc(mv.from || "")} ${String.fromCharCode(8594)} ${esc(mv.to || "")}</em></li>`).join("")}</ul>`
+          : plan && (plan.moves || []).length ? `<ul>${plan.moves.map((mv) => `<li class="sr-cmove"><b>${esc(mv.module)}</b><em>${esc(mv.from || "")} ${String.fromCharCode(8594)} ${esc(mv.to || "")}</em></li>`).join("")}</ul>`
+          : `<div class="sr-cempty">Before ${String.fromCharCode(8594)} after, ${mixk ? "from the plan's own curves" : "measured"}: no guesses.</div>`}
       </section>
     </div>`;
 
     // right: WHAT I HEARD, WHY I BUILT THIS RACK, ADJUST FIRST
     const why = plan ? (plan.chain || []).filter((m) => m.on && (m.set || []).length).map((m) => {
       const s0 = m.set[0];
-      return `<li data-why="${esc(m.key)}" class="${S.coachWhy === m.key ? "sr-picked" : ""}">${icon("check", "sr-li-ok")}<span><b>${esc(cat(m.key).name)}</b> ${MINUS} ${esc(s0.control)} ${esc(s0.value)}${s0.why ? ": " + esc(s0.why) : ""}${
-        m.set.length > 1 ? `<small>${m.set.slice(1).map((x) => esc(x.control + " " + x.value)).join(" · ")}</small>` : ""}</span></li>`;
+      const what = (x) => (x.from ? x.from + " " + String.fromCharCode(8594) + " " : "") + [x.control, x.value].filter(Boolean).join(" ");
+      return `<li data-why="${esc(m.key)}" class="${S.coachWhy === m.key ? "sr-picked" : ""}">${icon("check", "sr-li-ok")}<span><b>${esc(cat(m.key).name)}</b> ${MINUS} ${esc(what(s0))}${s0.why ? ": " + esc(s0.why) : ""}${
+        m.set.length > 1 ? `<small>${m.set.slice(1).map((x) => esc(what(x))).join(" · ")}</small>` : ""}</span></li>`;
     }).join("") : "";
     const right = `<section class="sr-panel sr-right">
       <h3 class="sr-ph">${icon("coach")}RACK COACH</h3>
       <div class="sr-coach" data-scroll="ccoach">
         <div class="sr-banner">${icon("pulse")}WHAT I HEARD</div>
         ${plan ? `<p class="sr-cheard">${esc(plan.summary || "")}</p><ul class="sr-cheard-l">${(plan.heard || []).map((h) => `<li>${esc(h)}</li>`).join("")}</ul>`
-          : `<p class="sr-cheard sr-dimv">${busy ? "Listening to your vocal" + String.fromCharCode(8230) : "Nothing yet: press ANALYZE &amp; BUILD."}</p>`}
+          : `<p class="sr-cheard sr-dimv">${busy ? (mixk ? `Listening to ${esc(t.name)}` : "Listening to your vocal") + String.fromCharCode(8230) : "Nothing yet: press ANALYZE &amp; BUILD."}</p>`}
         ${why ? `<h4 class="sr-cban">${icon("layers")}WHY I BUILT THIS RACK</h4><ul class="sr-cwhy">${why}</ul>` : ""}
-        ${plan && (plan.first || []).length ? `<h4 class="sr-cban">${icon("bulb")}ADJUST FIRST</h4><ol class="sr-cfirst">${plan.first.map((f) => `<li>${esc(f)}</li>`).join("")}</ol>` : ""}
+        ${plan && (plan.first || []).length ? `<h4 class="sr-cban">${icon("bulb")}${mixk ? "GOOD TO KNOW" : "ADJUST FIRST"}</h4><ol class="sr-cfirst">${plan.first.map((f) => `<li>${esc(f)}</li>`).join("")}</ol>` : ""}
       </div>
     </section>`;
 
@@ -1030,13 +1058,13 @@
     const c = coachOf(t);
     const r = c ? c.r : {};
     const ready = r.state === "ready", applied = r.state === "applied";
-    const ok = c && canTurn(c.unit);
+    const ok = c && c.unit && canTurn(c.unit) && r.state !== "none";
     return `<footer class="sr-foot sr-cfoot">
       <button class="sr-capply ${applied ? "sr-done" : ""}" data-sr="coach-apply" ${ok && ready ? "" : "disabled"} title="Set every module as the plan says (one UNDO step)">${icon(applied ? "check" : "layers")}${applied ? "APPLIED TO TRACK" : "APPLY TO TRACK"}</button>
       <span class="sr-csep"></span>
-      <button class="sr-cact" data-sr="coach-undo" ${ok && r.canUndo ? "" : "disabled"} title="Put back the settings from before the plan (or Voxology's last Auto-Edit)">${icon("undo")}UNDO</button>
+      <button class="sr-cact" data-sr="coach-undo" ${ok && r.canUndo ? "" : "disabled"} title="${c && c.kind === "mix" ? "Put back the settings from before the plan (one step in Mixology's History)" : "Put back the settings from before the plan (or Voxology's last Auto-Edit)"}">${icon("undo")}UNDO</button>${c && c.kind === "mix" ? "" : `
       <span class="sr-csep"></span>
-      <button class="sr-cact" data-sr="savechain" data-unit="${c ? esc(c.unit.id) : ""}" ${ok ? "" : "disabled"} title="Keep this setup in Voxology's MY CHAINS">${icon("save")}SAVE CHAIN</button>
+      <button class="sr-cact" data-sr="savechain" data-unit="${c ? esc(c.unit.id) : ""}" ${ok ? "" : "disabled"} title="Keep this setup in Voxology's MY CHAINS">${icon("save")}SAVE CHAIN</button>`}
       <span class="sr-csep"></span>
       <button class="sr-cact" data-sr="page" data-page="rack" title="Open the RACK page to change any knob">${icon("sliders")}TWEAK MANUALLY</button>
     </footer>`;
@@ -1250,7 +1278,8 @@
     const c = coachOf(t);
     if (!c) return "nocoach";
     const r = c.r, p = r.plan || {};
-    return JSON.stringify([c.unit.id, c.unit.lock, r.state, r.style, r.intensity, r.canUndo, r.reference, r.hearing, p.ok, p.summary, p.changes, S.coachWhy]);
+    return JSON.stringify([c.kind, c.unit && c.unit.id, c.unit && c.unit.lock, r.state, r.style, r.intensity, r.canUndo, r.reference, r.hearing, r.track, r.role, r.heardEnough,
+      p.ok, p.summary, p.changes, S.coachWhy]);
   }
 
   // Mixology's faders of the tracks the Rack shows (its "mix.faders", through its DAW bridge): not a module of the Full
@@ -1455,10 +1484,14 @@
       const t = trackOf(S.data, S.track), c = coachOf(t);
       if (!c) return;
       const step = a.slice(6);
+      if (!c.unit) return;
       el.disabled = true;
-      send(c.unit, { change: "coach", module: "coach", control: step, value: 1, gesture: "set" }, () => {
-        if (step === "plan") toast("Voxology is listening: play the song (about 12 seconds of singing). Nothing changes until you apply.", null, 6000);
-        else if (step === "apply") toast(`Applied: Voxology set the plan on ${t.name}. UNDO puts the settings from before back.`, null, 6000);
+      const mixk = c.kind === "mix";
+      send(c.unit, { change: "coach", module: "coach", control: coachControl(c, t, step), value: 1, gesture: "set" }, () => {
+        if (step === "plan") toast(mixk ? (c.r.heardEnough ? `Mixology is building the plan for ${t.name}. Nothing changes until you apply.` : `Play a part where ${t.name} plays: the Coach listens to it first. Nothing changes until you apply.`)
+          : "Voxology is listening: play the song (about 12 seconds of singing). Nothing changes until you apply.", null, 6000);
+        else if (step === "apply") toast(mixk ? `Applied: Mixology set the plan on ${t.name} (one step in its History). UNDO puts the settings from before back.`
+          : `Applied: Voxology set the plan on ${t.name}. UNDO puts the settings from before back.`, null, 6000);
         else toast("Undone: the settings from before are back.");
       });
       return;
