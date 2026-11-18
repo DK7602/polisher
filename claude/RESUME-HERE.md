@@ -837,3 +837,5 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   coach::planJson's changedIds: "same" per module, "changes", "upToDate"; coach::rackKeyOfParam). The plug-in test now
   also runs ANALYZE AGAIN after APPLY and expects upToDate with 0 changes. RACK pill without the emblem (62 px, as
   before). Manual (+ Claude Docs copy): "After APPLY", the Link's RACK. (Mixology's RESUME-HERE has the rest.)
+- Masterology 0.43.0 (2026-11-18, Sonicology Beta 31): shared rack.js / rack.css (WHAT TO FIX FIRST on the SESSION
+  page). No Masterology code changed. Manual (+ Claude Docs copy). (Mixology's RESUME-HERE has the rest.)

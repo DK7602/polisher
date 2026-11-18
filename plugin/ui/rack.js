@@ -1113,11 +1113,91 @@
     </footer>`;
   }
 
+  // ---- WHAT TO FIX FIRST (Beta 31: the SESSION page's right panel) ---------------------------------------------------
+  // One list for the whole project, worst first: Mixology's setup check (things no mixing move fixes), what the plug-ins
+  // do together that works against you (two reverbs on a vocal...), Mixology's Mix Assistant points (from Analyze Mix:
+  // the mix's own problems, with their tracks), a Link in the wrong insert slot; then the "have a look" points. Mixology
+  // sends its part as its report while a Rack shows the Full Mix (the SESSION page asks for it).
+  function mixFixReport(data) {
+    const mix = ((data && data.units) || []).find((u) => u.product === "mixology" && u.role === "fullmix");
+    if (!mix) return { mix: null, r: null };
+    if (mix.report && S.coachText[mix.id] !== mix.report) {
+      S.coachText[mix.id] = mix.report;
+      try { S.coachObj[mix.id] = JSON.parse(mix.report); } catch (e) { S.coachObj[mix.id] = null; }
+    }
+    const r = mix.report ? S.coachObj[mix.id] : null;
+    if (r && r.kind === "fix") S.fixLast = r;     // (kept while the Rack shows another track for a moment)
+    return { mix, r: r && r.kind === "fix" ? r : S.fixLast || null };
+  }
+  function fixItems(data) {
+    const list = tracks(data);
+    const byName = (name) => list.find((t) => t.name.toLowerCase() === String(name || "").toLowerCase() && t.role !== "fullmix" && t.role !== "master");
+    const byLine = (l) => list.find((t) => (l.hash === "master" && t.role === "master") || (l.hash === "fullmix" && t.role === "fullmix") || (l.hash && t.hash === l.hash));
+    const out = [];
+    const { mix, r } = mixFixReport(data);
+    const rank = { setup: 0, together: 1, mix: 2, order: 3 };
+    for (const x of (r && r.items) || [])
+      out.push({ id: x.id, level: x.done ? "ok" : x.kind === "warn" ? "warn" : x.kind === "calm" ? "ok" : "info", from: x.from === "setup" ? "setup" : "mix", title: x.title,
+        sub: x.done ? "Done since Mixology listened: play the song to check it." : x.need, tip: x.text, done: !!x.done, tool: x.tool,
+        tracks: (x.tracks || []).map(byName).filter(Boolean) });
+    for (const l of data.together || [])
+      if (l.level === "warn") { const t = byLine(l); out.push({ level: "warn", from: "together", title: l.text, tracks: t ? [t] : [], fixes: l }); }
+    for (const t of list) {
+      for (const u of t.units) for (const l of u.together || []) if (l.level === "warn") out.push({ level: "warn", from: "together", title: l.text, tracks: [t] });
+      const o = orderLine(t);
+      if (o) out.push({ level: "warn", from: "order", title: "Mixology Link sits before Voxology on " + t.name, sub: "Move Mixology Link to the last insert slot, so Mixology mixes the finished vocal.", tracks: [t] });
+    }
+    if ((data.otherLayouts || []).length)
+      out.push({ level: "warn", from: "setup", title: "A Sonicology plug-in from another beta is in this project", sub: "Install this beta, so all three plug-ins are the same version: the Rack can't see the other one.", tracks: [] });
+    // What Mixology can add when it can't speak yet
+    if (!mix) out.push({ level: "info", from: "hint", title: "Put Mixology on your master channel", sub: "Its Mix Assistant listens to the whole mix and says what to fix first (Analyze Mix).", tracks: [] });
+    else if (r && !r.analyzed) out.push({ level: "info", from: "hint", title: r.busy ? "Analyze Mix is listening" : "Analyze Mix hasn't listened yet",
+      sub: r.busy ? "Keep the song playing: Mixology's advice for the whole mix lands here." : "Press ANALYZE MIX in Mixology (Overview) and play the busiest part of the song: its advice for the whole mix lands here.", tracks: [] });
+    const lv = { warn: 0, info: 1, ok: 2 };
+    const sorted = out.map((x, i) => ({ x, i })).sort((a, b) => (lv[a.x.level] - lv[b.x.level]) || (a.x.done - b.x.done) || ((rank[a.x.from] ?? 4) - (rank[b.x.from] ?? 4)) || a.i - b.i).map((o) => o.x);
+    // Said once: Mixology's setup check and the Rack both notice a vocal without a Link, or two tracks with one name.
+    const topic = (x) => (x.id === "setup-vocal-link" || /no Mixology Link/i.test(x.title) ? "nolink"
+      : x.id === "setup-shared-name" || /tracks are named/i.test(x.title) ? "samename" : "t:" + x.title);
+    const said = [];
+    return sorted.filter((x) => {
+      const k = topic(x);
+      const dup = said.some((y) => y.k === k && (!y.tracks.length || !x.tracks.length || x.tracks.every((t) => y.tracks.includes(t.key))));
+      said.push({ k, tracks: x.tracks.map((t) => t.key) });
+      return !dup;
+    });
+  }
+  const TOOL_NAME = { balance: "Balance", pocket: "Vocal Pocket", clean: "Clean Up", polish: "Polish" };
+  function fixPanel(data) {
+    const items = fixItems(data);
+    const { r } = mixFixReport(data);
+    const warn = items.filter((x) => x.level === "warn").length;
+    const from = r && r.analyzed ? `${r.fromProject ? "Mixology's advice from the last session" : `From Analyze Mix (${Math.round(r.seconds || 0)} s heard${r.style ? ", " + r.style : ""})`} and the Rack` : "From the Rack";
+    const li = items.map((x, n) => {
+      const chips = x.tracks.map((t) => `<button class="sr-fx-track" data-sr="track" data-track="${esc(t.key)}" title="Open ${esc(t.name)} on the RACK page">${esc(t.name)}</button>`
+        + (coachOf(t) ? `<button class="sr-fx-coach" data-sr="fix-coach" data-track="${esc(t.key)}" title="Open the Coach on ${esc(t.name)}">${icon("coach")}COACH</button>` : "")).join("");
+      const tool = x.tool && TOOL_NAME[x.tool] && !x.done ? `<em class="sr-fx-tool">In Mixology: ${esc(TOOL_NAME[x.tool])}</em>` : "";
+      return `<li class="sr-fx sr-fx-${x.level}${x.done ? " sr-fx-done" : ""}" ${x.tip ? `title="${esc(x.tip)}"` : ""}>
+        <span class="sr-fx-n">${x.done ? icon("check") : n + 1}</span>
+        <div class="sr-fx-body"><b>${lineIcon(x.level)}${esc(x.title)}</b>${x.sub ? `<p>${esc(x.sub)}</p>` : ""}
+          ${chips || tool || (x.fixes && fixButtons(x.fixes)) ? `<div class="sr-fx-acts">${chips}${tool}${x.fixes ? fixButtons(x.fixes) : ""}</div>` : ""}</div>
+      </li>`;
+    }).join("");
+    return `<section class="sr-panel sr-right sr-fixfirst">
+      <h3 class="sr-ph">${icon("coach")}WHAT TO FIX FIRST<small>${warn ? `${warn} worth fixing` : items.length ? "nothing urgent" : ""}</small></h3>
+      <div class="sr-coach" data-scroll="fixfirst">
+        <div class="sr-banner">${icon("pulse")}WORST FIRST</div>
+        <p class="sr-fx-from">${esc(from)}</p>
+        ${items.length ? `<ol class="sr-fixlist">${li}</ol>` : `<p class="sr-fx-none">${icon("check", "sr-li-ok")}Nothing to fix: the plug-ins work well together${r && r.analyzed ? " and Mixology's Mix Assistant has no points" : ""}.</p>`}
+        ${r && r.more ? `<p class="sr-fx-more">${r.more} more in Mixology's Mix Assistant (Overview).</p>` : ""}
+      </div>
+    </section>`;
+  }
+
   function sessionPage(data) {
     const list = tracks(data);
     if (!list.length) return `<main class="sr-main sr-empty"><div class="sr-panel sr-wide"><h3>No Sonicology plug-ins are playing</h3><p>Press play in your DAW: plug-ins take part while the song plays.</p></div></main>`;
-    const warnsOf = (t) => (data.together || []).filter((l) => l.level === "warn" && (l.hash === t.hash || (t.role === "master" && l.hash === "master") || (t.role === "fullmix" && l.hash === "fullmix"))).length
-      + t.units.reduce((n, u) => n + (u.together || []).filter((l) => l.level === "warn").length, 0);
+    const fixes = fixItems(data);
+    const warnsOf = (t) => fixes.filter((x) => x.level === "warn" && x.tracks.some((y) => y.key === t.key)).length;
     const rows = list.map((t) => {
       const chips = t.units.map((u) => {
         const P = PRODUCTS[u.product];
@@ -1129,14 +1209,15 @@
       return `<div class="sr-srow">
         <button class="sr-srow-name" data-sr="track" data-track="${esc(t.key)}" title="Open ${esc(t.name)} on the RACK page"><span>${esc(t.name)}</span><small>${esc(t.role === "fullmix" ? "Full Mix" : t.role === "master" ? "Master" : t.role)}</small></button>
         <div class="sr-srow-chain">${chips}</div>
-        <span class="sr-srow-warn ${w ? "sr-on" : ""}" title="${w ? w + " warning" + (w > 1 ? "s" : "") + " in the Rack Coach" : "No warnings"}">${icon(w ? "warn" : "check", w ? "sr-li-warn" : "sr-li-ok")}${w || ""}</span>
+        <span class="sr-srow-warn ${w ? "sr-on" : ""}" title="${w ? w + " thing" + (w > 1 ? "s" : "") + " worth fixing (WHAT TO FIX FIRST)" : "Nothing worth fixing"}">${icon(w ? "warn" : "check", w ? "sr-li-warn" : "sr-li-ok")}${w || ""}</span>
       </div>`;
     }).join("");
-    return `<main class="sr-main sr-main-session">
+    return `<main class="sr-main sr-main-session ${(S.W || 1280) < 1440 ? "sr-narrow" : ""}">
       <section class="sr-panel sr-wide sr-session">
         <h3 class="sr-ph">${icon("layers")}SESSION OVERVIEW<small>every track and what plays on it: click a module to open it</small></h3>
         <div class="sr-srows" data-scroll="session">${rows}</div>
       </section>
+      ${fixPanel(data)}
     </main>`;
   }
 
@@ -1308,7 +1389,8 @@
       return JSON.stringify((data.units || []).map((u) => [u.id, u.track, u.role, u.product, u.on, u.version, u.lock || "", u.gen != null,
           (u.modules || []).map((m) => [m.key, m.state, m.summary, !!m.switchable]), (u.together || []).map((l) => l.level)]))
         + JSON.stringify((data.together || []).map((l) => [l.level, l.hash])) + JSON.stringify(data.mix && data.mix.source)
-        + (S.page === "coach" ? coachSig(t) : "");
+        + (S.page === "coach" ? coachSig(t) : "")
+        + (S.page === "session" ? (mixFixReport(data).mix || {}).report + tracks(data).map((x) => (orderLine(x) ? 1 : 0)).join("") + JSON.stringify(data.otherLayouts || []) : "");
     return JSON.stringify((data.units || []).map((u) => (here.has(u.id)
       ? [u.id, u.track, u.role, u.product, u.on, u.version, (u.modules || []).map((m) => [m.key, m.state, m.summary, m.by, (m.values || []).map((v) => v.key ? v.text : ""),
           (m.bands || []).map((b) => [b.type, Math.round(b.hz || 0), b.name, b.on]), m.layers]), u.together]
@@ -1451,17 +1533,20 @@
     ? { level: "warn", text: "Mixology Link seems to sit before Voxology on this track: what it hears moves like the raw vocal, not like Voxology's output. Move Mixology Link to the last insert slot (after Voxology), so Mixology mixes the finished vocal." }
     : null;
 
+  // The track the view asks the plug-ins about in detail: the picked one, or the Full Mix on the SESSION page.
+  const wantTrack = () => (S.page === "session" ? "fullmix" : S.track);
+
   async function poll() {
     if (!S.root) return;
     let data = null;
     if (S.opts.dataFile && !S.noFile) {
       try {
-        const r = await fetch("rack-data/" + encodeURIComponent(S.track || "_") + ".json?n=" + Date.now(), { cache: "no-store" });
+        const r = await fetch("rack-data/" + encodeURIComponent(wantTrack() || "_") + ".json?n=" + Date.now(), { cache: "no-store" });
         if (r.ok) data = await r.json();
         else S.noFile = true;
       } catch (e) { S.noFile = true; }   // this plug-in doesn't serve it: getRack from now on
     }
-    if (!data) { try { data = await S.opts.getRack(S.track || ""); } catch (e) { data = null; } }
+    if (!data) { try { data = await S.opts.getRack(wantTrack() || ""); } catch (e) { data = null; } }
     if (!S.root) return;
     if (data) {
       pullFaders(data);
@@ -1513,6 +1598,7 @@
     else if (a === "track-next" && idx >= 0 && idx < list.length - 1) { S.track = list[idx + 1].key; S.sel = null; }
     else if (a === "track-menu") { S.menu = !S.menu; }
     else if (a === "track") { S.track = el.dataset.track; S.sel = null; S.page = "rack"; }
+    else if (a === "fix-coach") { S.track = el.dataset.track; S.sel = null; S.page = "coach"; }
     else if (a === "mod") { S.sel = { unit: el.dataset.unit, key: el.dataset.key }; }
     else if (a === "unfold") { S.unfold[el.dataset.unit] = !S.unfold[el.dataset.unit]; }
     else if (a === "filter") { S.filter = el.dataset.filter; S.card = null; }

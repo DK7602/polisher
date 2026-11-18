@@ -22,7 +22,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 A live copy is kept in Claude Docs (project 3bf99dd7-1111-4be3-884d-d787ae49506c, node 15637893-1eb5): update it
 whenever the manual changes.
 
-## Status — v0.42.0
+## Status — v0.43.0
 
 | Piece | State |
 | --- | --- |
@@ -87,6 +87,7 @@ whenever the manual changes.
 | Rack Beta 28 (v0.40.0, with Voxology 0.66.0 and Mixology 0.36.0): shared RackLink.cpp / rack.js: the COACH page on Mixology's tracks (Mixology builds the plan). No Masterology code changed | New: tested in the engine and the browser preview, not yet in a DAW |
 | Rack Beta 29 (v0.41.0, with Voxology 0.67.0 and Mixology 0.37.0): the Coach on the master. `polisher::coach::planJson` (MasterCoach.h / .cpp: what Auto-Master heard, what stands out against the genre's or the reference's tone, every module it turns on with its reasons, the mix's tone and the master's, results measured by rendering the same 12 s through the plan). AutoMasterController plan mode (startPlan / applyPlan / discardPlan: listens and decides like Auto-Master, keeps the plan; APPLY = one UNDO step); the analysis rests while the song plays (ScopedPace, as Voxology's). PluginProcessor: Change::coach steps plan / finish / cancel / apply / undo / discard, coachReport in Unit::report; the Rack's GENRE / INTENSITY / TARGET (amGenre, amIntensity, amTarget) | New: tested in the engine and the browser preview, not yet in a DAW |
 | Beta 30 (v0.42.0, with Voxology 0.68.0 and Mixology 0.38.0): the Coach after APPLY compares Auto-Master's plan with the settings now (coach::planJson's changedIds: "same" per module, "changes", "upToDate"; a switch or choice that differs, a knob more than 2 % of its range away), so ANALYZE AGAIN says NOTHING TO CHANGE instead of offering the same plan (plug-in test). RACK pill without the emblem | New: tested in the engine and the browser preview, not yet in a DAW |
+| Rack Beta 31 (v0.43.0, with Voxology 0.69.0 and Mixology 0.39.0): shared rack.js / rack.css: WHAT TO FIX FIRST on the SESSION page (Mixology's Mix Assistant points, the setup check and the Rack's warnings, worst first). No Masterology code changed | New: tested in the browser preview, not yet in a DAW |
 
 ## Validation
 
