@@ -1379,3 +1379,56 @@ TEST_CASE ("Rack requests: the Coach's steps reach the owner with their name", "
     CHECK (vox.seen[0].control == "plan");
     CHECK (vox.seen[1].control == "apply");
 }
+
+TEST_CASE ("Rack requests: moving a module (Beta 33): movable / moved reach the view, Change::order reaches the owner", "[rack][requests]")
+{
+    Memory mem;
+    rack::Link link (mem.data());
+    // The flags go through the shared memory with switchable (its bits), and into the view's JSON.
+    {
+        rack::Publisher pub (link);
+        pub.start();
+        REQUIRE (pub.due (1000) != rack::Publisher::Due::none);
+        auto eq = mod ("vox.eq"), comp = mod ("vox.comp"), pitch = mod ("vox.pitch");
+        eq.switchable = comp.switchable = pitch.switchable = true;
+        eq.movable = comp.movable = true;
+        comp.moved = true;
+        pitch.moved = true;   // (not movable: never "moved")
+        auto u = unit (rack::Product::voxology, rack::Role::vocal, "Lead Vox", { pitch, comp, eq });
+        pub.publish (u, 1000);
+        const auto units = link.units (1000);
+        REQUIRE (units.size() == 1);
+        const auto& m = units[0].modules;
+        REQUIRE (m.size() == 3);
+        CHECK ((m[0].key == "vox.pitch" && m[0].switchable && ! m[0].movable && ! m[0].moved));
+        CHECK ((m[1].key == "vox.comp" && m[1].switchable && m[1].movable && m[1].moved));
+        CHECK ((m[2].key == "vox.eq" && m[2].switchable && m[2].movable && ! m[2].moved));
+        const auto j = rack::toJson ("voxology", 0, units, {}, rack::Overview {});
+        CHECK (wellFormed (j));
+        CHECK (j.find ("\"switchable\":true,\"movable\":true,\"moved\":true") != std::string::npos);
+        CHECK (j.find ("\"switchable\":true,\"movable\":true,\"meterKind") != std::string::npos);
+    }
+
+    Memory mem2;
+    rack::Link link2 (mem2.data());
+    Owner vox (link2);
+    REQUIRE (vox.publish (1000));
+    const auto u = link2.units (1000).at (0);
+    const std::string id = "u" + std::to_string (u.slot);
+    CHECK (rack::requestJson (link2, id, u.generation, "order", "anything", "vox.comp", 1.4f, "begin", 1000).rfind ("{\"ticket\":1,", 0) == 0);
+    CHECK (rack::requestJson (link2, id, u.generation, "order", "", "reset", 0.0f, "set", 1000).rfind ("{\"ticket\":2,", 0) == 0);
+    CHECK (rack::requestJson (link2, id, u.generation, "order", "", "vox.comp", std::numeric_limits<float>::quiet_NaN(), "set", 1000).rfind ("{\"ticket\":3,", 0) == 0);
+    CHECK (rack::requestJson (link2, id, u.generation, "order", "", "", 0.0f, "set", 1000) == "{\"ticket\":0,\"why\":\"Nothing to change.\"}");
+    vox.serve (1010);
+    REQUIRE (vox.seen.size() == 3);
+    for (const auto& r : vox.seen)
+    {
+        CHECK (r.change == rack::Change::order);
+        CHECK (r.module == "order");                   // always "order", whatever the view sent
+        CHECK (r.gesture == rack::Gesture::set);       // never a drag
+    }
+    CHECK (vox.seen[0].control == "vox.comp");
+    CHECK (vox.seen[0].value == 1.0f);                 // a whole place
+    CHECK (vox.seen[1].control == "reset");
+    CHECK (vox.seen[2].value == 0.0f);                 // not a number: the first place
+}

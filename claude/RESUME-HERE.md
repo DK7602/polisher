@@ -847,3 +847,6 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   back, a save during preview, keep = one UNDO step, ANALYZE AGAIN -> upToDate, a changed clip knob isn't up to date,
   top-bar UNDO -> ready, a preset load -> idle. Manual (+ Claude Docs copy): PREVIEW. (Mixology's RESUME-HERE has the
   rest.)
+- Masterology 0.45.0 (2026-11-18, Sonicology Beta 33): shared RackLink / rack.js (a chain you can reorder, in Voxology and
+  Mixology). Masterology keeps its order: applyRack refuses Change::order with the reason. Manual (+ Claude Docs copy):
+  move a module. (Mixology's RESUME-HERE has the rest.)

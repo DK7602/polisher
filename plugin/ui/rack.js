@@ -108,6 +108,7 @@
     redo: '<path d="m15 7 5 5-5 5"/><path d="M20 12H9a5 5 0 0 0 0 10h2"/>',
     power: '<path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/>',
     save: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><path d="M8 20v-6h8v6"/>',
+    grip: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" stroke-width="3"/>',
   };
   // where the art is, from the page (the plug-ins serve it flat by file name; the preview page passes its own path)
   let ART = "rack/";
@@ -683,15 +684,20 @@
       const off = mods.length - mods.filter((m) => m.state !== "off").length;
       const save = u.product === "voxology" && canTurn(u)
         ? `<button class="sr-gsave" data-sr="savechain" data-unit="${esc(u.id)}" title="SAVE CHAIN: keep this vocal's whole Voxology setup in Voxology's MY CHAINS (named after the track and the time), to use on your next song">${icon("save")}SAVE</button>` : "";
+      // Beta 33: modules the plug-in lets you move (drag the row); RESET ORDER when one is out of the plug-in's own order
+      const movable = canTurn(u) && mods.some((m) => m.movable);
+      const reset = movable && mods.some((m) => m.moved)
+        ? `<button class="sr-fold sr-oreset" data-sr="order-reset" data-unit="${esc(u.id)}" title="${esc(P.name)}'s own order again">${icon("undo")}RESET ORDER</button>` : "";
       rows += `<div class="sr-group sr-tone-${P.tone}"><b class="sr-badge sr-tone-${P.tone}">${P.badge}</b><span>${esc(P.name.toUpperCase())}</span>${u.on === false ? '<em class="sr-bypassed">BYPASSED</em>' : ""}${save}<small>v${esc(u.version || "")}</small></div>`;
       for (const m of shown) {
         const c = cat(m.key);
         const picked = sel && sel.unit.id === u.id && sel.mod.key === m.key;
-        rows += `<button class="sr-row ${picked ? "sr-picked" : ""} sr-st-${m.state}" data-sr="mod" data-unit="${esc(u.id)}" data-key="${esc(m.key)}">
-          ${icon(c.icon)}<span class="sr-rname">${esc(c.name)}</span>${pill(m.state)}</button>`;
+        const mv = movable && m.movable;
+        rows += `<button class="sr-row ${picked ? "sr-picked" : ""} sr-st-${m.state} ${mv ? "sr-movable" : ""} ${m.moved ? "sr-moved" : ""}" data-sr="mod" data-unit="${esc(u.id)}" data-key="${esc(m.key)}"${mv ? ` data-move="1" title="Drag up or down to move ${esc(c.name)} in ${esc(P.name)}'s chain"` : ""}>
+          ${icon(c.icon)}<span class="sr-rname">${esc(c.name)}</span>${mv ? icon("grip", "sr-grip") : ""}${pill(m.state)}</button>`;
       }
       if (!mods.length) rows += `<div class="sr-row sr-row-note">Nothing to show yet</div>`;
-      if (off > 0) rows += `<button class="sr-fold" data-sr="unfold" data-unit="${esc(u.id)}">${S.unfold[u.id] ? "hide the " + off + " off" : "+ " + off + " off"}</button>`;
+      if (off > 0 || reset) rows += `<div class="sr-folds">${off > 0 ? `<button class="sr-fold" data-sr="unfold" data-unit="${esc(u.id)}">${S.unfold[u.id] ? "hide the " + off + " off" : "+ " + off + " off"}</button>` : ""}${reset}</div>`;
     }
     return rows;
   }
@@ -1627,6 +1633,7 @@
   }
 
   function onClick(e) {
+    if (S.rowDragged) { S.rowDragged = false; return; }   // (the click that ends a row drag)
     const el = e.target.closest("[data-sr]");
     if (!el) { if (S.menu) { S.menu = false; render(); } return; }
     const a = el.dataset.sr;
@@ -1652,6 +1659,7 @@
     else if (a === "clear") { S.search = ""; S.card = null; }
     else if (a === "switch") { switchModule(el.dataset.unit, el.dataset.key, el); return; }
     else if (a === "fix") { applyFix(el); return; }
+    else if (a === "order-reset") { resetOrder(el.dataset.unit); return; }
     else if (a === "undo") { replay(true); return; }
     else if (a === "redo") { replay(false); return; }
     else if (a === "bypass") { toggleBypass(); return; }
@@ -1848,6 +1856,72 @@
     S.html.page = "";   // drawn in place: the next render rewrites the page whatever it holds
   }
 
+  // ---- Beta 33: moving a module (drag its row in SIGNAL CHAIN) -------------------------------------------------------
+  // Only the modules a plug-in marks movable, only among that plug-in's own movable modules (the plug-in keeps the
+  // rest where they must be: tuning first, the limiter last). A short move is still a click (it picks the module).
+  const movableKeys = (u) => (u.modules || []).filter((m) => m.movable).map((m) => m.key);
+  function onRowDown(e) {
+    const el = e.target.closest && e.target.closest('[data-move="1"]');
+    if (!el || e.button > 0 || S.drag) return;
+    const unit = unitById(el.dataset.unit);
+    if (!unit || !canTurn(unit)) return;
+    S.rowDrag = { el, unit, key: el.dataset.key, y: e.clientY, started: false, at: -1, line: null };
+  }
+  function onRowMove(e) {
+    const d = S.rowDrag;
+    if (!d) return;
+    const dy = (e.clientY - d.y) / (S.scale || 1);
+    if (!d.started && Math.abs(dy) < 6) return;
+    if (!d.started) {
+      d.started = true;
+      d.el.classList.add("sr-rowdrag");
+      try { d.el.setPointerCapture(e.pointerId); } catch (err) { /* fine */ }
+    }
+    d.el.style.transform = `translateY(${dy.toFixed(1)}px)`;
+    // the drop place: before the first movable row (of this plug-in) whose middle is below the pointer
+    const rows = [...S.stage.querySelectorAll(`.sr-row[data-move="1"][data-unit="${CSS.escape(d.unit.id)}"]`)].filter((r) => r !== d.el);
+    let before = null;
+    for (const r of rows) {
+      const b = r.getBoundingClientRect();
+      if (e.clientY < b.top + b.height / 2) { before = r; break; }
+    }
+    const keys = movableKeys(d.unit).filter((k) => k !== d.key);
+    d.at = before ? keys.indexOf(before.dataset.key) : rows.length ? keys.indexOf(rows[rows.length - 1].dataset.key) + 1 : 0;
+    for (const r of rows) r.classList.remove("sr-drop-before", "sr-drop-after");
+    if (before) before.classList.add("sr-drop-before");
+    else if (rows.length) rows[rows.length - 1].classList.add("sr-drop-after");
+  }
+  function onRowUp() {
+    const d = S.rowDrag;
+    if (!d) return;
+    S.rowDrag = null;
+    if (!d.started) return;   // a click: it picks the module as usual
+    S.rowDragged = true;
+    setTimeout(() => { S.rowDragged = false; }, 400);   // (no click follows when the pointer ended elsewhere)
+    d.el.classList.remove("sr-rowdrag");
+    d.el.style.transform = "";
+    S.stage.querySelectorAll(".sr-drop-before, .sr-drop-after").forEach((r) => r.classList.remove("sr-drop-before", "sr-drop-after"));
+    const from = movableKeys(d.unit).indexOf(d.key);
+    if (d.at < 0 || from < 0 || d.at === from) { S.html.page = ""; S.pending = true; return; }
+    const name = cat(d.key).name;
+    send(d.unit, { change: "order", module: "order", control: d.key, value: d.at, gesture: "set" }, () => {
+      rememberChange({ kind: "order", unit: d.unit.id, gen: d.unit.gen, module: d.key, before: from, after: d.at }, `${name} moved`);
+      toast(`${name} moved: ${PRODUCTS[d.unit.product].name} plays it there now. RESET ORDER puts back its own order.`);
+    });
+    S.html.page = "";   // drawn again (the plug-in's new order arrives with its next report)
+    S.pending = true;
+  }
+  function resetOrder(unitId) {
+    const u = unitById(unitId);
+    if (!u || !canTurn(u)) return;
+    const before = movableKeys(u);
+    send(u, { change: "order", module: "order", control: "reset", value: 0, gesture: "set" }, () => {
+      rememberChange({ kind: "batch", items: before.map((k, i) => ({ kind: "order", unit: u.id, gen: u.gen, module: k, before: i, after: null })) },
+        `${PRODUCTS[u.product].name}'s order`);
+      toast(`${PRODUCTS[u.product].name} plays its modules in its own order again.`);
+    });
+  }
+
   function onKnobDown(e) {
     const el = e.target.closest && e.target.closest("[data-knob]");
     if (!el || e.button > 0) return;
@@ -2019,6 +2093,8 @@
             S.held[heldKey(u, x.module, x.control)] = { norm: x.target, at: Date.now() };
             send(u, { change: "value", module: x.module, control: x.control, value: x.target, gesture: "set" });
           }
+        } else if (x.kind === "order") {
+          send(u, { change: "order", module: "order", control: x.target == null ? "reset" : x.module, value: x.target == null ? 0 : x.target, gesture: "set" });
         } else send(u, { change: x.kind, module: x.kind === "power" ? "power" : x.module, control: "", value: x.target, gesture: "set" });
         if (++n % 12 === 0) { await S.chain; await pause(120); }
       }
@@ -2144,10 +2220,14 @@
     document.body.appendChild(S.root);
     S.root.addEventListener("click", onClick);
     S.root.addEventListener("pointerdown", onKnobDown);
+    S.root.addEventListener("pointerdown", onRowDown);
     S.root.addEventListener("pointerdown", onDown);
     S.root.addEventListener("dblclick", onDblClick);
     S.root.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("pointermove", onKnobMove, true);
+    window.addEventListener("pointermove", onRowMove, true);
+    window.addEventListener("pointerup", onRowUp, true);
+    window.addEventListener("pointercancel", onRowUp, true);
     window.addEventListener("pointerup", onKnobUp, true);
     window.addEventListener("pointercancel", onKnobUp, true);
     window.addEventListener("pointerup", onUp, true);
@@ -2175,12 +2255,15 @@
     window.removeEventListener("pointerup", onUp, true);
     window.removeEventListener("pointercancel", onUp, true);
     window.removeEventListener("pointermove", onKnobMove, true);
+    window.removeEventListener("pointermove", onRowMove, true);
+    window.removeEventListener("pointerup", onRowUp, true);
+    window.removeEventListener("pointercancel", onRowUp, true);
     window.removeEventListener("pointerup", onKnobUp, true);
     window.removeEventListener("pointercancel", onKnobUp, true);
     if (S.drag) onKnobUp();
     if (S.wheel) endWheel();
     hideToast();
-    S.down = false; S.pending = false; S.held = {}; S.sent = {};
+    S.down = false; S.pending = false; S.held = {}; S.sent = {}; S.rowDrag = null; S.rowDragged = false;
     S.root.remove();
     S.root = null; S.stage = null; S.data = null;
   }

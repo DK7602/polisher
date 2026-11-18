@@ -1429,6 +1429,8 @@ std::string PolisherAudioProcessor::applyRack (const rack::Request& r)
         return "The Coach can't do \"" + r.control + "\".";
     }
     if (r.change == rack::Change::save) return "Only Voxology saves chains from the Rack.";
+    if (r.change == rack::Change::order)   // Beta 33
+        return "Masterology keeps its mastering order: Auto-Master's loudness and the limiter at the end depend on it.";
     if (r.change == rack::Change::power)
     {
         // The Rack's BYPASS: Masterology's own bypass (A).

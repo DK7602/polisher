@@ -109,6 +109,8 @@ namespace rack
         std::vector<Band> bands;        // up to kMaxBands (EQs)
         std::uint32_t layers = 0;       // SpaceLayer bits (Mixology's Space)
         bool switchable = false;        // the Rack can turn it on / off (it has its own on switch)
+        bool movable = false;           // Beta 33: the Rack can move it (Change::order) among the unit's movable modules
+        bool moved = false;             // Beta 33: it isn't where the plug-in's own order has it (the Rack offers RESET ORDER)
     };
 
     struct Line
@@ -150,7 +152,9 @@ namespace rack
         whole setup where it keeps its own (Voxology's My Chains: the Rack's SAVE CHAIN; module "save"); coach: the
         Coach's step in the owner's own automatic setup, named by `control` ("plan": listen and work out a plan without
         changing anything, "apply": apply it, "undo": take it back; module "coach"). */
-    enum class Change : std::uint32_t { value = 0, state, reset, power, save, coach };
+    /** Beta 33, order: move one module of the unit (control: its key; value: its new place among the unit's movable
+        modules, 0 first), or control "reset": the plug-in's own order again. Module is "order". */
+    enum class Change : std::uint32_t { value = 0, state, reset, power, save, coach, order };
     /** A knob drag: begin, moves, end (the owner holds the host's gesture open between them, so automation records it
         as one touch); set: a single change (a click). The owner always gets them balanced (Publisher::serve()). */
     enum class Gesture : std::uint32_t { set = 0, begin, move, end };
@@ -247,7 +251,7 @@ namespace rack
         Text<kKeyBytes> key;
         Text<kSummaryBytes> summary;
         Text<kByBytes> by;
-        std::atomic<std::uint32_t> state, meterKind, layers, valueCount, bandCount, switchable;
+        std::atomic<std::uint32_t> state, meterKind, layers, valueCount, bandCount, switchable;   // switchable: bit 0, movable 1, moved 2
         std::atomic<float> meter;
         std::array<ValueSlot, kMaxValues> values;
         std::array<BandSlot, kMaxBands> bands;

@@ -365,7 +365,7 @@ namespace rack
             to.meterKind.store (static_cast<std::uint32_t> (from.meterKind), kRelaxed);
             to.meter.store (finite (from.meter), kRelaxed);
             to.layers.store (from.layers, kRelaxed);
-            to.switchable.store (from.switchable ? 1u : 0u, kRelaxed);
+            to.switchable.store ((from.switchable ? 1u : 0u) | (from.movable ? 2u : 0u) | (from.moved ? 4u : 0u), kRelaxed);
             const auto values = std::min<std::size_t> (from.values.size(), kMaxValues);
             for (std::size_t v = 0; v < values; ++v)
             {
@@ -502,7 +502,10 @@ namespace rack
                     mod.meterKind = static_cast<MeterKind> (from.meterKind.load (kRelaxed));
                     mod.meter = from.meter.load (kRelaxed);
                     mod.layers = from.layers.load (kRelaxed);
-                    mod.switchable = from.switchable.load (kRelaxed) != 0;
+                    const auto flags = from.switchable.load (kRelaxed);
+                    mod.switchable = (flags & 1u) != 0;
+                    mod.movable = (flags & 2u) != 0;
+                    mod.moved = mod.movable && (flags & 4u) != 0;
                     const auto values = std::min<std::uint32_t> (from.valueCount.load (kRelaxed), kMaxValues);
                     for (std::uint32_t v = 0; v < values; ++v)
                         mod.values.push_back ({ loadText (from.values[v].name), loadText (from.values[v].text),
@@ -644,7 +647,7 @@ namespace rack
             taken = ticket;
             q.taken.store (taken, kRelease);
             if (forGeneration != generation) continue;   // for the slot's earlier owner, or skipped
-            if (static_cast<std::uint32_t> (r.change) > static_cast<std::uint32_t> (Change::coach)) r.change = Change::value;
+            if (static_cast<std::uint32_t> (r.change) > static_cast<std::uint32_t> (Change::order)) r.change = Change::value;
             if (static_cast<std::uint32_t> (r.gesture) > static_cast<std::uint32_t> (Gesture::end)) r.gesture = Gesture::set;
             r.ticket = ticket;
             out[n++] = std::move (r);
@@ -780,6 +783,11 @@ namespace rack
             {
                 r.gesture = Gesture::set;   // (control names the step: plan, apply, undo)
                 r.value = 1.0f;
+            }
+            else if (r.change == Change::order)
+            {
+                r.gesture = Gesture::set;   // (control: the module's key or "reset"; value: its new place)
+                r.value = std::isfinite (r.value) ? std::clamp (std::round (r.value), 0.0f, static_cast<float> (kMaxModules - 1)) : 0.0f;
             }
             else if (r.change == Change::reset)
             {
@@ -1167,6 +1175,8 @@ namespace rack
                 key (o, "summary", g); str (o, mod.summary);
                 key (o, "by", g); str (o, mod.by);
                 key (o, "switchable", g); o += mod.switchable ? "true" : "false";
+                if (mod.movable) { key (o, "movable", g); o += "true"; }
+                if (mod.moved) { key (o, "moved", g); o += "true"; }
                 key (o, "meterKind", g); str (o, mod.meterKind == MeterKind::gr ? "gr" : mod.meterKind == MeterKind::level ? "level" : "");
                 key (o, "meter", g); num (o, mod.meter, 1);
                 key (o, "values", g);
@@ -1356,9 +1366,9 @@ namespace rack
     {
         Request r;
         r.change = change == "state" ? Change::state : change == "reset" ? Change::reset : change == "power" ? Change::power
-                 : change == "save" ? Change::save : change == "coach" ? Change::coach : Change::value;
+                 : change == "save" ? Change::save : change == "coach" ? Change::coach : change == "order" ? Change::order : Change::value;
         r.module = r.change == Change::power ? std::string ("power") : r.change == Change::save ? std::string ("save")
-                 : r.change == Change::coach ? std::string ("coach") : module;
+                 : r.change == Change::coach ? std::string ("coach") : r.change == Change::order ? std::string ("order") : module;
         r.control = control;
         r.value = value;
         r.gesture = gesture == "begin" ? Gesture::begin : gesture == "move" ? Gesture::move : gesture == "end" ? Gesture::end : Gesture::set;

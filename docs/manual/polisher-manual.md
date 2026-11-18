@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.44.0 · November 2026
+Version 0.45.0 · November 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
@@ -709,6 +709,16 @@ back, at the size the window had before (Masterology keeps remembering that size
   - **The knob jumps back by itself?** That track's automation is on Read (in Cubase, the **R** button is lit): Cubase
     plays its automation and moves the knob back. The Rack tells you. Switch Read off, or switch on Write (**W**) to
     record your move.
+  - **Move a module** (new in Beta 33): drag its row in the Signal Chain up or down (the rows you can move have six
+    dots on the right). Voxology lets you move Tone EQ, Dynamic EQ, De-Esser, Rider, Compressor and Saturation;
+    Mixology Link (and Mixology on the Full Mix) EQ, Compressor, Multiband, Transients, Tone Balance, Loudness,
+    Harmonics, Analog, Clipper and Width. The rest stay where they must be (Voxology's tuning and cleanup first, the
+    space and the Output last; Mixology's Gate first, Final Touch, Space and the Limiter last), and Masterology keeps
+    its mastering order. The sound dips for a split second while the module changes place. **RESET ORDER** (under the
+    rows) puts back the plug-in's own order; **UNDO** takes a move back. The order is saved with your project (and in
+    Voxology's MY CHAINS). Common moves: the EQ after the compressor (it shapes the squeezed sound), the De-Esser after
+    the compressor (it catches the "s" sounds the compressor brought up), Saturation before the compressor (warmer, the
+    compressor evens it out). The plug-ins' own windows keep their usual layout.
 - **The top bar's tools** (on the RACK page, for the track you picked):
   - **UNDO / REDO** (the curved arrows): the Rack's own changes, one at a time (a drag, a click, a switch, a fix, a
     whole A / B flip or BYPASS). Your DAW's undo doesn't cover plug-in knobs; this does, for what you changed in the
