@@ -17,6 +17,7 @@ add_library(polisher_dsp STATIC
     src/Monitoring.cpp
     src/SongListener.cpp
     src/AutoAnalyze.cpp
+    src/MasterCoach.cpp
     src/SuiteLink.cpp
     src/RackLink.cpp
     src/RackUnit.cpp)

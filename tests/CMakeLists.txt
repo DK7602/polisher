@@ -34,7 +34,8 @@ add_executable(polisher_tests
     test_handoff.cpp
     test_autoanalyze.cpp
     test_nonfinite.cpp
-    test_gainglide.cpp)
+    test_gainglide.cpp
+    test_master_coach.cpp)
 
 target_link_libraries(polisher_tests PRIVATE polisher_dsp Catch2::Catch2WithMain)
 # test_handoff.cpp reads plugin/ui/mixstyles.js (the suite's styles) to keep Masterology's copy of it equal.

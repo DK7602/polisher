@@ -42,8 +42,29 @@ private:
     const std::atomic<bool>* previous;
 };
 
-/** Throws AnalysisCancelled when this thread's cancel flag (ScopedCancelFlag) is set. */
+/** Throws AnalysisCancelled when this thread's cancel flag (ScopedCancelFlag) is set. While a ScopedPace is alive
+    on this thread, it also rests there (see ScopedPace). */
 void throwIfCancelled();
+
+/** While alive, a long analysis on this thread (Auto-Master, the Sonicology Coach's plan) rests restMs after every
+    workMs of work, at its cancel checks, so it never keeps a CPU core and the memory busy for seconds on end while the
+    DAW plays (Beta 29; Voxology's analysis does the same since Beta 27: the user heard the song cut out while one
+    worked flat out). Results are the same; only the timing changes. Nothing changes for a thread without one. */
+class ScopedPace
+{
+public:
+    ScopedPace (double workMs, double restMs) noexcept;
+    ~ScopedPace();
+    ScopedPace (const ScopedPace&) = delete;
+    ScopedPace& operator= (const ScopedPace&) = delete;
+    /** On this thread since it began: the time spent resting and the longest stretch between two checks (ms). */
+    static double restedMs() noexcept;
+    static double longestStretchMs() noexcept;
+
+private:
+    bool wasOn;
+    double wasWork, wasRest;
+};
 
 /** Multichannel audio held in memory for offline analysis (one vector per channel). */
 struct AudioClip

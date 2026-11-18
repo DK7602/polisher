@@ -1376,6 +1376,41 @@ std::string PolisherAudioProcessor::rackLock() const
 
 std::string PolisherAudioProcessor::applyRack (const rack::Request& r)
 {
+    if (r.change == rack::Change::coach)
+    {
+        // Beta 29: the Rack's Coach on the master (ANALYZE & BUILD, BUILD NOW, APPLY TO MASTER, UNDO, STOP).
+        const auto plan = autoMaster.getPlanState();
+        const bool coachBusy = plan == AutoMasterController::planListening || plan == AutoMasterController::planWorking;
+        if (r.control == "plan")
+        {
+            if (autoMaster.getState() != AutoMasterController::idle)
+                return coachBusy ? "The Coach is already listening to the song." : "Auto-Master is running in Masterology: try again when it has finished.";
+            return autoMaster.startPlan() ? std::string() : std::string ("Masterology isn't ready yet: press play once, then try again.");
+        }
+        if (r.control == "finish")
+        {
+            if (! coachBusy) return "The Coach isn't listening.";
+            return autoMaster.finish() ? std::string() : std::string ("Let the Coach hear at least 12 seconds of the song first.");
+        }
+        if (r.control == "cancel") { if (coachBusy) autoMaster.discardPlan(); return {}; }
+        if (r.control == "apply")
+        {
+            if (! autoMaster.applyPlan()) return "There's no plan to apply yet: press ANALYZE & BUILD and play the song.";
+            coachUndoLabel = history.undoLabel();
+            return {};
+        }
+        if (r.control == "undo")
+        {
+            if (plan != AutoMasterController::planApplied || coachUndoLabel.isEmpty() || history.undoLabel() != coachUndoLabel)
+                return "Something changed since the plan was applied: use Masterology's UNDO (top bar) to step back.";
+            history.undo();
+            coachUndoLabel.clear();
+            autoMaster.planUndone();
+            return {};
+        }
+        if (r.control == "discard") { autoMaster.discardPlan(); return {}; }
+        return "The Coach can't do \"" + r.control + "\".";
+    }
     if (r.change == rack::Change::save) return "Only Voxology saves chains from the Rack.";
     if (r.change == rack::Change::power)
     {
@@ -1485,7 +1520,52 @@ void PolisherAudioProcessor::publishRack()
     const double rate = getSampleRate();
     u.latencyMs = rate > 0.0 ? static_cast<float> (getLatencySamples() * 1000.0 / rate) : 0.0f;
     u.modules = polisher::rackunit::modules (st, due == rack::Publisher::Due::full);
+    if (due == rack::Publisher::Due::full) u.report = coachReport();
     rackPub.publish (std::move (u), now);
+}
+
+std::string PolisherAudioProcessor::coachReport()
+{
+    // The Rack's COACH page on the master: where the Coach stands, Auto-Master's choices, and the plan itself.
+    auto choice = [this] (const char* id) { auto* p = parameters.getRawParameterValue (id); return p != nullptr ? juce::roundToInt (p->load()) : 0; };
+    const auto plan = autoMaster.getPlanState();
+    const auto st = autoMaster.getState();
+    const char* state = plan == AutoMasterController::planListening ? "listening"
+                      : plan == AutoMasterController::planWorking ? "working"
+                      : plan == AutoMasterController::planReady ? "ready"
+                      : plan == AutoMasterController::planApplied ? "applied"
+                      : plan == AutoMasterController::planFailed ? "failed"
+                      : st != AutoMasterController::idle ? "busy"   // Auto-Master from Masterology's own window
+                      : "idle";
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("kind", "master");
+    o->setProperty ("state", juce::String (state));
+    o->setProperty ("progress", juce::roundToInt (autoMaster.getProgress() * 100.0f));
+    o->setProperty ("heardSeconds", std::floor (plan == AutoMasterController::planListening ? autoMaster.getHeardSeconds() : 0.0));
+    o->setProperty ("canFinish", plan == AutoMasterController::planListening && autoMaster.canFinish());
+    o->setProperty ("hearing", autoMaster.isHearingAudio());
+    juce::Array<juce::var> genres, intensities, targets;
+    for (int g = 0; g < polisher::kNumGenres; ++g) genres.add (juce::String (polisher::genreName (static_cast<polisher::Genre> (g))));
+    for (const char* n : { "Gentle", "Balanced", "Punchy" }) intensities.add (juce::String (n));
+    for (int t = 0; t < 3; ++t) targets.add (juce::String (polisher::handoff::targetName (t)));
+    o->setProperty ("genre", juce::jlimit (0, polisher::kNumGenres - 1, choice ("amGenre")));
+    o->setProperty ("genres", genres);
+    o->setProperty ("intensity", juce::jlimit (0, 2, choice ("amIntensity")));
+    o->setProperty ("intensities", intensities);
+    o->setProperty ("target", juce::jlimit (0, 2, choice ("amTarget")));
+    o->setProperty ("targets", targets);
+    {
+        const auto ref = reference.getProfile();
+        o->setProperty ("reference", ref.valid ? juce::String::fromUTF8 (ref.name.c_str()) : juce::String());
+    }
+    o->setProperty ("canUndo", plan == AutoMasterController::planApplied && coachUndoLabel.isNotEmpty() && history.undoLabel() == coachUndoLabel);
+    auto text = juce::JSON::toString (juce::var (o), true).trimEnd();
+    const auto& json = autoMaster.getPlanJson();
+    if (json.isNotEmpty() && text.endsWithChar ('}')
+        && (plan == AutoMasterController::planReady || plan == AutoMasterController::planApplied || plan == AutoMasterController::planFailed))
+        text = text.dropLastCharacters (1) + ",\"plan\":" + json + "}";
+    auto utf8 = text.toStdString();
+    return utf8.size() < rack::kReportBytes ? utf8 : std::string ("{\"kind\":\"master\",\"state\":\"failed\",\"plan\":{\"ok\":false,\"summary\":\"The plan is too long for the Rack: see Masterology's own report.\"}}");
 }
 
 void PolisherAudioProcessor::getStateInformation (juce::MemoryBlock& destData)

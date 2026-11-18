@@ -361,7 +361,8 @@ namespace rack
         std::vector<Unit> units (std::uint64_t nowMs) const;
 
         /** Puts a request in the queue of the unit in `slot` (as units() gave it: slot and generation). Its ticket, or 0
-            with `why` (shown in the Rack) when it can't go: the unit is gone, locked (its lock), or its queue is full.
+            with `why` (shown in the Rack) when it can't go: the unit is gone, locked (its lock; the Coach's steps still go),
+            or its queue is full.
             Any thread, any number of views at once; texts cut, the value kept to 0..1. */
         std::uint64_t request (int slot, std::uint32_t generation, const Request&, std::uint64_t nowMs, std::string& why);
         /** What became of a ticket: pending until the owner took it; refused (with why) or applied; gone when the unit
@@ -417,7 +418,8 @@ namespace rack
         using Apply = std::function<std::string (const Request&)>;
         /** The owner's side of the queue, from the same timer as due() (as often as you like; 30 a second keeps a drag
             smooth). Takes the requests sent since the last call and applies them, in order, through `apply`:
-              - `lock` not "" (Auto Mix is running ...): every request refused with it; open drags are closed first.
+              - `lock` not "" (Auto Mix is running ...): every request refused with it, but the Coach's steps (BUILD
+                NOW, STOP: the plug-in decides); open drags are closed first.
               - Gestures balanced: a move without a begin begins, a begin while open moves, a set while open ends, an
                 end without a begin sets. A drag that stopped kGestureMs ago is closed (Gesture::end, ticket 0).
               - A move followed by another change of the same control in the same batch is skipped (counts as applied).

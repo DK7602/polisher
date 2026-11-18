@@ -768,6 +768,25 @@ TEST_CASE ("Rack requests: a locked unit (Auto Mix running, padlock) takes none"
     CHECK (vox.seen[0].gesture == rack::Gesture::end);
     CHECK (vox.seen[0].ticket == 0);
     CHECK (vox.seen[0].value == Catch::Approx (0.4f));   // where it was, not the refused move
+
+    // Beta 29: the Coach's steps go through a lock (BUILD NOW, STOP while it listens): the owner decides.
+    vox.pub.due (1000 + 3 * rack::Publisher::kBriefMs);
+    vox.pub.publish ([&] { auto x = unit (rack::Product::voxology, rack::Role::vocal, "Lead Vox"); x.lock = "Auto-Edit is running."; return x; }(),
+                     1000 + 3 * rack::Publisher::kBriefMs);
+    rack::Request finish;
+    finish.change = rack::Change::coach;
+    finish.module = "coach";
+    finish.control = "finish";
+    finish.value = 1.0f;
+    const auto ft = link.request (u.slot, u.generation, finish, 3400, why);
+    CHECK (ft > 0);
+    CHECK (why.empty());
+    CHECK (link.request (u.slot, u.generation, knob ("vox.comp", "thresh", 0.6f), 3400, why) == 0);   // a knob: still refused
+    vox.seen.clear();
+    vox.serve (3410, "Auto-Edit is running.");   // (this made-up owner has no coach: it says so)
+    REQUIRE (vox.seen.size() == 1);
+    CHECK (vox.seen[0].change == rack::Change::coach);
+    CHECK (vox.seen[0].control == "finish");
 }
 
 TEST_CASE ("Rack requests: knob drags reach the host as one balanced gesture", "[rack][requests]")

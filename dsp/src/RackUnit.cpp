@@ -75,6 +75,8 @@ namespace polisher::rackunit
             { "clipLevel", -9, 3, 1, 0, 0 }, { "clipSoftness", 0, 100, 1, 0, 0 }, { "clipOversampling", 0, 3, 1, 0, 4 },
             { "drive", 0, 24, 1, 0, 0 }, { "inTrim", kMinTrimDb, 0, 1, 0, 0 }, { "ceiling", -3, 0, 1, 0, 0 }, { "release", 10, 1000, 0.4, 0, 0 },
             { "maxBassFirst", 0, 100, 1, 0, 0 },
+            // Beta 29: the Coach's choices on the COACH page (Auto-Master's genre, intensity and target)
+            { "amGenre", 0, 5, 1, 0, 6 }, { "amIntensity", 0, 2, 1, 0, 3 }, { "amTarget", 0, 2, 1, 0, 3 },
         };
 
         const Knob* knobSpec (const std::string& key)

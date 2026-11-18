@@ -1,4 +1,5 @@
 #include "AutoMasterController.h"
+#include "polisher/MasterCoach.h"
 #include "ModuleParams.h"
 #include "polisher/MixHandoff.h"
 
@@ -119,6 +120,10 @@ bool AutoMasterController::start (Mode m)
     stopWatching();   // Auto Analyze gives the listener back (and a check still running stops)
     if (checkCancel != nullptr)
         checkCancel->store (true);
+    planMode = false;   // a new Auto-Master: any Coach plan is gone
+    planState = planNone;
+    planResult.reset();
+    planJson.clear();
     takeListener (idle);
     if (! listener.isPrepared() || listener.getSampleRate() != rate)
         listener.prepare (rate, kWindowSeconds, kMaxListenSeconds);   // allocates: the audio thread is out of it
@@ -144,8 +149,37 @@ bool AutoMasterController::finish()
     return true;
 }
 
+bool AutoMasterController::startPlan()
+{
+    if (! start (fullMaster))
+        return false;
+    planMode = true;
+    planState = planListening;
+    return true;
+}
+
+bool AutoMasterController::applyPlan()
+{
+    if (planState != planReady || planResult == nullptr || ! planResult->ok || getState() != idle)
+        return false;
+    pendingStats = planStats;   // (apply() writes the listen into the report)
+    apply (*planResult, planSettings);
+    planState = planApplied;
+    return true;
+}
+
+void AutoMasterController::discardPlan()
+{
+    if (planMode && getState() != idle) cancel();
+    planMode = false;
+    planState = planNone;
+    planResult.reset();
+    planJson.clear();
+}
+
 void AutoMasterController::cancel()
 {
+    if (planMode) { planMode = false; planState = planNone; }
     if (getState() == listening)
     {
         stateFlag.store (idle);
@@ -236,7 +270,22 @@ void AutoMasterController::tick()
         }
         if (resultSession == session && getState() == analysing)
         {
-            if (result != nullptr)
+            if (planMode)
+            {
+                // The Coach: keep the plan, change nothing (APPLY sets it).
+                std::string json;
+                {
+                    const juce::ScopedLock sl (resultLock);
+                    json = std::move (pendingPlanJson);
+                }
+                planSettings = pendingSettings;
+                planStats = pendingStats;
+                planState = result != nullptr && result->ok ? planReady : planFailed;
+                planResult = std::move (result);
+                planJson = juce::String::fromUTF8 (json.data(), static_cast<int> (json.size()));
+                planMode = false;
+            }
+            else if (result != nullptr)
                 apply (*result, pendingSettings);
             stateFlag.store (idle);
             updateTimer();
@@ -296,13 +345,30 @@ void AutoMasterController::launchAnalysis()
 
     const int thisSession = session;
     analysisCancel = std::make_shared<std::atomic<bool>> (false);
-    pool.addJob ([this, clip = std::move (clip), settings, thisSession, stop = analysisCancel]
+    const bool forPlan = planMode;
+    if (forPlan) planState = planWorking;
+    polisher::coach::Heard heard;
+    heard.seconds = pendingStats.heardSeconds;
+    heard.songLufs = pendingStats.integratedLufs;
+    heard.songLra = pendingStats.loudnessRangeLu;
+    heard.wholeSong = autoFinished && pendingStats.timelineJumps == 0 && pendingStats.heardSeconds >= kWholeSongSeconds;
+    pool.addJob ([this, clip = std::move (clip), settings, thisSession, stop = analysisCancel, forPlan, heard]
     {
         std::unique_ptr<polisher::AutoMasterResult> result;
+        std::string plan;
         try
         {
             const polisher::ScopedCancelFlag cancellable (stop.get());
+            const polisher::ScopedPace gentle (kPaceWorkMs, kPaceRestMs);   // the song keeps playing: never hog a core
             result = std::make_unique<polisher::AutoMasterResult> (polisher::autoMaster (clip, settings));
+            if (forPlan)
+            {
+                // The Coach: the same 12 s through the plan, measured again.
+                std::unique_ptr<polisher::MixAnalysis> after;
+                if (result->ok)
+                    after = std::make_unique<polisher::MixAnalysis> (polisher::analyseMix (polisher::renderMaster (clip, result->chain)));
+                plan = polisher::coach::planJson (*result, after.get(), settings, heard, kPlanBytes);
+            }
         }
         catch (const polisher::AnalysisCancelled&)
         {
@@ -316,6 +382,7 @@ void AutoMasterController::launchAnalysis()
         {
             const juce::ScopedLock sl (resultLock);
             pendingResult = std::move (result);
+            pendingPlanJson = std::move (plan);
             pendingSession = thisSession;
         }
         resultReady.store (true);

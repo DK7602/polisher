@@ -268,6 +268,8 @@ private:
     // Rack view is open anywhere, a faster timer serves them (the main one runs four times a second).
     std::string applyRack (const rack::Request&);
     std::string rackLock() const;
+    std::string coachReport();             // Beta 29: the Rack's Coach on the master (Unit::report)
+    juce::String coachUndoLabel;           // the undo step APPLY made (UNDO takes back only that one)
     struct RackTimer final : juce::Timer
     {
         std::function<void()> tick;

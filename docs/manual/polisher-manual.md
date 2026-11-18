@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.40.0 · November 2026
+Version 0.41.0 · November 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
@@ -755,7 +755,7 @@ that module on the RACK page.
 **The COACH page:** the Coach builds a track's whole chain for you, shows you why, and shows the result before you take
 it. It works through the plug-in that owns the track: a **vocal with Voxology** (0.64 or newer, not in BEAT mode)
 through Voxology's Auto-Edit (below), **any other track with Mixology Link** through Mixology (see "The Coach on a
-Mixology track").
+Mixology track"), and **the master** through Masterology's Auto-Master (see "The Coach on the master").
 
 For a vocal:
 1. **AUTO RACK SETUP:** pick the **STYLE** and **INTENSITY** to aim for (the same choices as Voxology's Auto-Edit; a
@@ -782,7 +782,19 @@ seconds of it). The page shows the track's **ROLE**, the **STYLE** and how long 
 out** (mud, a dull top, harshness, boom, an uneven level, a dry or narrow track...); the Link's modules the plan uses,
 each setting with its reason ("EQ: Flat → −3.0 dB at 315 Hz: 250 - 500 Hz is 7.9 dB over its mids"); and the track's
 tone now and with the plan's EQ and Tone Balance (from those filters' own curves). **APPLY TO TRACK** sets it all as
-one step in Mixology's History; **UNDO** takes it back. The Coach for Masterology's master comes in a later beta.
+one step in Mixology's History; **UNDO** takes it back.
+
+**The Coach on the master** (pick **Master** in the Rack; Masterology 0.41 or newer on your master channel): the Coach
+works out the whole master through Masterology's **Auto-Master**, without changing anything. Pick the **GENRE**,
+**INTENSITY** and **TARGET** (how loud: Streaming, Loud release or Club; the same choices as Auto-Master; a reference
+loaded in Masterology's Match ref counts too), press **ANALYZE & BUILD** and play the song. Masterology listens to the
+whole song if you let it (best), or press **BUILD NOW** once it has heard 12 seconds; **STOP** stops listening. It
+then plays the loudest part of your mix through the plan and measures it again. The page shows **what stands out**
+against your genre's masters (too much low end, not enough low mids, too much air, quieter than the target, peaks at
+0 dB...), the modules the plan turns on with each setting's reason ("Maximizer: Drive +23.9 dB: lands this part at
+−9.0 LUFS, your Loud target"), your mix's tone and the master's, and the **RESULTS** measured on your mix (loudness,
+true peak, punch, stereo bass, each tone band against the aim). **APPLY TO MASTER** sets it all as one step in
+Masterology's UNDO; **UNDO** takes it back. Auto-Master in Masterology's own window still works as before.
 
 **Light or dark:** click the spinning cube at the top left. All three plug-ins remember your choice.
 

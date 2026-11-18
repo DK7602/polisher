@@ -3949,6 +3949,141 @@ TEST_CASE ("Plug-in: the suite link only while the host runs Masterology (anothe
     CHECK (songA->songStyleNow().key == "trap.drill");
 }
 
+namespace
+{
+/** The Sonicology Rack's side of this Masterology, as a Rack view sees it through the shared block. */
+struct RackView
+{
+    PolisherAudioProcessor& p;
+    rack::Link& rk = rack::Link::process();
+
+    rack::Unit unit()
+    {
+        for (auto& u : rk.units (suite::nowMs()))
+            if (u.product == rack::Product::masterology) return u;
+        return {};
+    }
+    /** Ticks as the plug-in's timer does, with a Rack view open, until the Coach's report is in the state asked. */
+    juce::var report (const juce::String& state, const char* key = nullptr)
+    {
+        juce::var last;
+        for (int i = 0; i < 300; ++i)
+        {
+            rk.view (suite::nowMs());
+            p.tick();
+            const auto u = unit();
+            if (! u.report.empty())
+            {
+                last = juce::JSON::parse (juce::String::fromUTF8 (u.report.c_str()));
+                if (last["kind"].toString() == "master" && last["state"].toString() == state && (key == nullptr || static_cast<bool> (last[key])))
+                    return last;
+            }
+            juce::Thread::sleep (20);
+        }
+        return last;
+    }
+    /** A Coach step sent from the Rack: "" when Masterology did it, else why not. */
+    std::string step (const std::string& control)
+    {
+        rk.view (suite::nowMs());
+        p.tick();
+        const auto u = unit();
+        rack::Request r;
+        r.change = rack::Change::coach;
+        r.module = "coach";
+        r.control = control;
+        r.value = 1.0f;
+        std::string why;
+        const auto ticket = rk.request (u.slot, u.generation, r, suite::nowMs(), why);
+        if (ticket == 0) return why.empty() ? "not sent" : why;
+        for (int i = 0; i < 200; ++i)
+        {
+            p.tick();
+            const auto a = rk.answer (u.slot, u.generation, ticket);
+            if (a.outcome == rack::Outcome::applied) return {};
+            if (a.outcome == rack::Outcome::refused) return a.why.empty() ? "refused" : a.why;
+            juce::Thread::sleep (10);
+        }
+        return "no answer";
+    }
+};
+} // namespace
+
+TEST_CASE ("Coach (the master): ANALYZE & BUILD plans without changing anything; BUILD NOW, APPLY as one UNDO step, UNDO, STOP", "[plugin][automaster][rack]")
+{
+    const double sr = 48000.0;
+    auto p = makeProcessor (sr, 512, false);
+    FakePlayHead head;
+    p->setPlayHead (&head);
+    RackView rack { *p };
+    p->tick();   // (the timer: it joins the Rack)
+    REQUIRE (rack.unit().product == rack::Product::masterology);
+    auto before = settingsOf (*p);
+    const auto idle = rack.report ("idle");
+    CHECK (idle["state"].toString() == "idle");
+    CHECK (idle["genres"].size() == polisher::kNumGenres);
+    CHECK (idle["targets"].size() == 3);
+
+    // ANALYZE & BUILD: it listens (the unit is locked: knobs refused), BUILD NOW only after 12 s.
+    CHECK (rack.step ("plan").empty());
+    CHECK (p->autoMaster.getPlanState() == AutoMasterController::planListening);
+    CHECK (rack.report ("listening")["state"].toString() == "listening");
+    CHECK_FALSE (rack.unit().lock.empty());
+    CHECK_FALSE (rack.step ("finish").empty());                    // not enough heard yet
+    play (*p, head, testsig::musicLike (sr, 14.0, -16.0, 3));
+    CHECK (static_cast<bool> (rack.report ("listening", "canFinish")["canFinish"]));
+    CHECK (rack.step ("finish").empty());                         // BUILD NOW: through the lock
+    REQUIRE (waitForAutoMaster (*p));
+    REQUIRE (p->autoMaster.getPlanState() == AutoMasterController::planReady);
+
+    // The plan: in the report, and nothing changed.
+    const auto ready = rack.report ("ready", "plan");
+    INFO (rack.unit().report);
+    CHECK (ready["state"].toString() == "ready");
+    const auto plan = ready["plan"];
+    REQUIRE (static_cast<bool> (plan["ok"]));
+    CHECK (plan["kind"].toString() == "master");
+    CHECK (plan["chain"].size() > 3);
+    CHECK (plan["results"].size() >= 3);
+    CHECK (plan["bands"]["after"].size() == plan["bands"]["hz"].size());
+    CHECK (rack.unit().report.size() < rack::kReportBytes);
+    CHECK (settingsOf (*p) == before);
+    CHECK (p->autoMaster.getReportJson().isEmpty());              // Auto-Master's own report isn't touched either
+
+    // APPLY TO MASTER: one UNDO step, the plan's settings in place; UNDO puts the settings back and the plan can go on again.
+    CHECK (rack.step ("apply").empty());
+    const auto applied = settingsOf (*p);
+    CHECK (applied != before);
+    CHECK (p->history.undoLabel().startsWith ("Auto-Master ("));
+    CHECK (static_cast<bool> (rack.report ("applied", "canUndo")["canUndo"]));
+    CHECK (rack.step ("undo").empty());
+    CHECK (settingsOf (*p) == before);
+    CHECK (rack.report ("ready")["state"].toString() == "ready");
+    CHECK (rack.step ("apply").empty());
+    CHECK (settingsOf (*p) == applied);
+    // A change after it: the Coach's UNDO says so and leaves it (Masterology's own UNDO steps back).
+    gesture (*p, "glueRatio", 3.0f);
+    CHECK_FALSE (rack.step ("undo").empty());
+
+    // STOP while it listens: nothing changes, the plan is gone.
+    before = settingsOf (*p);
+    CHECK (rack.step ("plan").empty());
+    play (*p, head, testsig::musicLike (sr, 3.0, -16.0, 4));
+    CHECK (rack.step ("cancel").empty());
+    CHECK (p->autoMaster.getState() == AutoMasterController::idle);
+    CHECK (p->autoMaster.getPlanState() == AutoMasterController::planNone);
+    CHECK (rack.report ("idle")["state"].toString() == "idle");
+    CHECK (settingsOf (*p) == before);
+
+    // Auto-Master started in Masterology's own window: the Coach says it's busy and doesn't take it over.
+    REQUIRE (p->autoMaster.start());
+    CHECK (rack.report ("busy")["state"].toString() == "busy");
+    CHECK_FALSE (rack.step ("plan").empty());
+    CHECK (rack.step ("cancel").empty());                         // (not the Coach's: left alone)
+    CHECK (p->autoMaster.getState() == AutoMasterController::listening);
+    p->autoMaster.cancel();
+}
+
 // JUCE (its message manager, for the parameter tree's timers) lives exactly as long as the test run:
 // a function-local static would be torn down after JUCE's own shutdown objects and crash on exit.
 int main (int argc, char* argv[])

@@ -104,6 +104,22 @@ public:
     /** Stops listening, or stops an analysis that is running (nothing is changed either way). */
     void cancel();
 
+    /** The Sonicology Rack's Coach on the master (Beta 29, ANALYZE & BUILD): Auto-Master listens and decides as start()
+        does, then runs the loudest 12 s through the plan and measures it again (polisher::coach::planJson), and KEEPS
+        the plan without changing anything; applyPlan() sets it as a normal Auto-Master (one undo step). The plan
+        stays (after an undo it can be applied again) until the next Auto-Master or discardPlan(). Message thread. */
+    enum PlanState { planNone = 0, planListening, planWorking, planReady, planApplied, planFailed };
+    bool startPlan();
+    bool applyPlan();
+    void discardPlan();
+    /** The plan's undo step was taken back: it can be applied again. */
+    void planUndone()                          { if (planState == planApplied && planResult != nullptr) planState = planReady; }
+    PlanState getPlanState() const noexcept    { return planState; }
+    const juce::String& getPlanJson() const noexcept { return planJson; }
+    static constexpr std::size_t kPlanBytes = 7300;   // (the Rack's report holds 8 KB, with the state around it)
+    /** Analysis while the song plays rests on purpose (polisher::ScopedPace): 8 ms after every 20 ms of work. */
+    static constexpr double kPaceWorkMs = 20.0, kPaceRestMs = 8.0;
+
     /** What the timer does 15 times a second while listening or analysing (tests call it directly). */
     void tick();
 
@@ -219,6 +235,14 @@ private:
     int session = 0;                              // message thread
     int toneLearnFailures = 0;                    // message thread
     polisher::SongStats pendingStats;             // the listen behind the analysis running now
+    // The Coach's plan (message thread; pendingPlanJson with pendingResult under resultLock)
+    bool planMode = false;
+    PlanState planState = planNone;
+    std::unique_ptr<polisher::AutoMasterResult> planResult;
+    polisher::AutoMasterSettings planSettings;
+    polisher::SongStats planStats;
+    juce::String planJson;
+    std::string pendingPlanJson;
     std::shared_ptr<std::atomic<bool>> analysisCancel;   // the running analysis's stop flag (message thread)
 
     juce::CriticalSection resultLock;

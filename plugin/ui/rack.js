@@ -847,7 +847,8 @@
   // the plug-in sends it back as its report (rack::Unit::report): what it heard, what stands out against its aim, every
   // module it would set and why, and the take measured again through the plan. APPLY sets it (one UNDO in Voxology).
   // The Coach for a track: Voxology's on a vocal it processes; else (Beta 28) Mixology's on a track with Mixology Link (the
-  // Mixology on the master builds it: its report rides on its own unit, {"track": <hash>, ...}).
+  // Mixology on the master builds it: its report rides on its own unit, {"track": <hash>, ...}). On the master (Beta 29):
+  // Masterology's Auto-Master, the same way (BUILD NOW once it has heard 12 s; the whole song is best).
   function coachOf(t) {
     if (!t) return null;
     const parse = (u) => {
@@ -859,6 +860,10 @@
     };
     const u = t.units.find((x) => x.product === "voxology" && x.role !== "beat");
     if (u) return { unit: u, r: parse(u) || { state: "idle" }, kind: "vox" };
+    if (t.role === "master") {
+      const m = t.units.find((x) => x.product === "masterology");
+      return m ? { unit: m, r: parse(m) || { state: "idle" }, kind: "master" } : null;
+    }
     if (!t.hash || t.role === "fullmix" || t.role === "master" || !t.units.some((x) => x.product === "link")) return null;
     const mix = ((S.data && S.data.units) || []).find((x) => x.product === "mixology" && x.role === "fullmix");
     const r = mix ? parse(mix) : null;
@@ -867,6 +872,11 @@
   }
   // A Coach request: Voxology's take the step; Mixology's the step and the track ("plan.<hash>").
   const coachControl = (c, t, step) => (c.kind === "mix" ? step + "." + t.hash : step);
+  // STOP while it listens: Mixology drops the Coach's listen; Voxology and Masterology stop the Coach's own listen only.
+  const coachStopStep = (c) => (c.kind === "mix" ? "discard" : "cancel");
+  // A Coach step goes even while the plug-in is locked (its own listen locks it): the plug-in decides.
+  const canStep = (c) => !!(S.opts && S.opts.request && c && c.unit && c.unit.gen != null) && c.r.state !== "none";
+  const secsText = (v) => { const n = Math.max(0, Math.floor(+v || 0)); return n >= 60 ? `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}` : n + " s"; };
   const COACH_BUSY = { listening: 1, working: 1, busy: 1 };
 
   // The take's tone (dB per band vs its 500 Hz - 2 kHz average) as a graph: lines [{ values, cls, fill }], issues marked.
@@ -927,26 +937,35 @@
       return `<main class="sr-main sr-main-coach">${left}
         <section class="sr-panel sr-coach-none"><h3 class="sr-ph">${icon("coach")}AUTO RACK COACH</h3>
           <div class="sr-coach-msg"><p>The Coach builds a track's chain: a vocal's through Voxology (not in BEAT mode), any other track's
-            through its Mixology Link (with Mixology on your master channel). The Coach for Masterology's master comes next.</p>
+            through its Mixology Link (with Mixology on your master channel), the master's through Masterology.</p>
           ${vocals.length ? `<p>Pick a vocal:</p><div class="sr-coach-pick">${vocals.map((v) => `<button class="sr-tool" data-sr="track" data-track="${esc(v.key)}">${icon("mic")}${esc(v.name)}</button>`).join("")}</div>`
             : "<p>No vocal with Voxology is playing in this project.</p>"}</div>
         </section></main>`;
     }
-    const mixk = c.kind === "mix";
+    const mixk = c.kind === "mix", mk = c.kind === "master";
     const r = c.r, plan = r.plan && r.plan.ok ? r.plan : null;
+    const engine = mk ? "Auto-Master" : mixk ? "Mixology" : "Auto-Edit";
     const failed = r.plan && !r.plan.ok ? r.plan
-      : r.state === "failed" ? { tipTitle: "Auto-Edit couldn't build a plan", summary: "Something went wrong while it worked.", tip: "Play the song and press ANALYZE AGAIN." } : null;
+      : r.state === "failed" ? { tipTitle: `${engine} couldn't build a plan`, summary: "Something went wrong while it worked.", tip: "Play the song and press ANALYZE AGAIN." } : null;
     const busy = !!COACH_BUSY[r.state];
     const styles = r.styles || [], ints = r.intensities || [];
     const can = !!c.unit && canTurn(c.unit) && !busy && r.state !== "none";
+    const finish = mk && r.state === "listening" && !!r.canFinish;   // BUILD NOW: it has heard enough
     const narrow = (S.W || 1280) < 1440;
 
     // AUTO RACK SETUP
-    const big = r.state === "listening" ? `${icon("pulse")}LISTENING<small data-coach-pct>${r.progress || 0} %</small>`
-      : r.state === "working" ? `${icon("pulse")}BUILDING YOUR RACK${String.fromCharCode(8230)}`
-      : r.state === "busy" ? `${icon("pulse")}${mixk ? "MIXOLOGY IS LISTENING" : "AUTO-EDIT IS RUNNING IN VOXOLOGY"}`
+    const big = finish ? `${icon("star")}BUILD NOW<small data-coach-heard>${secsText(r.heardSeconds)} heard</small>`
+      : r.state === "listening" ? `${icon("pulse")}LISTENING<small data-coach-pct>${r.progress || 0} %</small>`
+      : r.state === "working" ? `${icon("pulse")}${mk ? "BUILDING YOUR MASTER" : "BUILDING YOUR RACK"}${String.fromCharCode(8230)}`
+      : r.state === "busy" ? `${icon("pulse")}${mk ? "AUTO-MASTER IS RUNNING IN MASTEROLOGY" : mixk ? "MIXOLOGY IS LISTENING" : "AUTO-EDIT IS RUNNING IN VOXOLOGY"}`
       : `${icon("star")}${plan || failed ? "ANALYZE AGAIN" : "ANALYZE &amp; BUILD"}`;
-    const hint = mixk
+    const hint = mk
+      ? (r.state === "listening" ? (finish ? "It has heard enough: press BUILD NOW, or let the song play to the end (the whole song is best: the Coach builds then)." 
+          : r.hearing ? "Hearing your mix: BUILD NOW comes after 12 seconds; the whole song is best." : "Press play: Masterology listens to the song (at least 12 seconds; the whole song is best).")
+        : r.state === "working" ? "Working out every module, then playing the loudest part of your mix through the plan to measure it."
+        : r.state === "busy" ? "Auto-Master is running in Masterology's own window: press ANALYZE & BUILD when it has finished."
+        : plan ? "" : "Masterology listens while the song plays, then builds the plan here. Nothing changes until you apply it.")
+      : mixk
       ? (r.state === "none" ? (c.missing ? "The Coach for this track needs Mixology on your master channel (with its DAW bridge), version 0.36 or newer." : "Waiting for Mixology" + String.fromCharCode(8230))
         : r.state === "listening" ? (r.hearing ? `Hearing ${t.name}: keep the song playing where it plays.` : `Press play at a part where ${t.name} plays: the Coach listens to ${r.need || 8} seconds of it.`)
         : r.state === "busy" ? "Analyze Mix (or AUTO on a page) is listening: press ANALYZE & BUILD when it has finished."
@@ -957,7 +976,19 @@
       : plan ? "" : "Voxology listens while the song plays, then builds the plan here. Nothing changes until you apply it.";
     const setup = `<section class="sr-panel sr-csetup">
       <h3 class="sr-ph sr-ph-s">${icon("sliders")}AUTO RACK SETUP</h3>
-      <div class="sr-csetup-row">${mixk ? `
+      <div class="sr-csetup-row">${mk ? `
+        <div class="sr-cfield"><b>GENRE</b><span class="sr-cval sr-cstep">
+          <button data-sr="coach-genre" data-dir="-1" ${can ? "" : "disabled"} title="The genre Auto-Master aims for">${icon("left")}</button>
+          <i title="${esc((r.genres || [])[r.genre] || "")}">${esc((r.genres || [])[r.genre] || "")}</i>
+          <button data-sr="coach-genre" data-dir="1" ${can ? "" : "disabled"} title="The genre Auto-Master aims for">${icon("right")}</button></span></div>
+        <div class="sr-cfield"><b>INTENSITY</b><span class="sr-seg sr-cseg">${ints.map((n, i) =>
+          `<button class="${i === r.intensity ? "sr-on" : ""}" data-sr="coach-int" data-i="${i}" ${can ? "" : "disabled"}>${esc(n.toUpperCase())}</button>`).join("")}</span></div>
+        <div class="sr-cfield"><b>TARGET</b><span class="sr-cval sr-cstep">
+          <button data-sr="coach-target" data-dir="-1" ${can ? "" : "disabled"} title="How loud the master ends up">${icon("left")}</button>
+          <i title="${esc((r.targets || [])[r.target] || "")}">${esc((r.targets || [])[r.target] || "")}</i>
+          <button data-sr="coach-target" data-dir="1" ${can ? "" : "disabled"} title="How loud the master ends up">${icon("right")}</button></span></div>
+        ${narrow ? "" : `<div class="sr-cfield"><b>REFERENCE</b><span class="sr-cval sr-dimv" title="${r.reference ? esc(r.reference) : "Load one in Masterology (Match ref)"}">${r.reference ? icon("wave") + esc(r.reference) : "None (in Masterology)"}</span></div>`}
+      </div>` : mixk ? `
         ${narrow ? "" : `<div class="sr-cfield"><b>SOURCE</b><span class="sr-cval">${icon("sliders")}${esc(t.name)}</span></div>`}
         <div class="sr-cfield"><b>ROLE</b><span class="sr-cval ${r.role ? "" : "sr-dimv"}" title="Set a track's role on Mixology's Tracks page">${esc(r.role || "Not heard yet")}</span></div>
         <div class="sr-cfield"><b>STYLE</b><span class="sr-cval" title="The mix style: choose it in Mixology (or Masterology)">${esc(r.style || "")}</span></div>
@@ -974,11 +1005,12 @@
       </div>`}
       <div class="sr-cgo">
         <i class="sr-chev"></i>
-        <button class="sr-cbig ${busy ? "sr-busy" : ""}" data-sr="coach-plan" ${can ? "" : "disabled"}>${big}</button>
+        ${finish ? `<button class="sr-cbig" data-sr="coach-finish" ${canStep(c) ? "" : "disabled"} title="Build the plan from what it has heard">${big}</button>`
+          : `<button class="sr-cbig ${busy ? "sr-busy" : ""}" data-sr="coach-plan" ${can ? "" : "disabled"}>${big}</button>`}
         <i class="sr-chev sr-chev-r"></i>
       </div>
       ${r.state === "listening" ? `<div class="sr-cprog"><i data-coach-bar style="width:${clamp(r.progress || 0, 0, 100)}%"></i></div>` : ""}
-      ${hint ? `<p class="sr-chint">${esc(hint)}</p>` : ""}
+      ${hint || r.state === "listening" ? `<p class="sr-chint">${esc(hint)}${r.state === "listening" ? ` <button class="sr-cstop" data-sr="coach-stop" ${canStep(c) ? "" : "disabled"} title="Stop listening: nothing changes">STOP</button>` : ""}</p>` : ""}
     </section>`;
 
     // ANALYSIS RESULTS: the take against the aim, what stands out
@@ -988,36 +1020,44 @@
       <h3 class="sr-ph sr-ph-s">${icon("pulse")}ANALYSIS RESULTS${plan ? `<span class="sr-cbadges"><em class="sr-ok">${icon("check")}Done</em><em class="${warns ? "sr-bad" : ""}">${issues.length} stand${issues.length === 1 ? "s" : ""} out</em><em>${plan.modulesOn} modules</em></span>` : ""}</h3>
       ${plan ? `<div class="sr-cana-body">
           <div class="sr-cana-graph">${toneGraph(plan.bands || {}, [{ values: (plan.bands || {}).before, cls: "sr-cg-take", fill: true }].concat((plan.bands || {}).target ? [{ values: plan.bands.target, cls: "sr-cg-aim" }] : []), issues)}
-            <div class="sr-cg-key"><span class="sr-cg-k-take">${mixk ? "your track (against its mids)" : "your take"}</span>${(plan.bands || {}).target ? `<span class="sr-cg-k-aim">the aim: ${esc(plan.aim || "")}</span>` : ""}</div></div>
+            <div class="sr-cg-key"><span class="sr-cg-k-take">${mk ? "your mix" : mixk ? "your track (against its mids)" : "your take"}</span>${(plan.bands || {}).target ? `<span class="sr-cg-k-aim">the aim: ${esc(plan.aim || "")}</span>` : ""}</div></div>
           <div class="sr-cissues"><h4>WHAT STANDS OUT</h4><ul>${issues.length ? issues.map((i) =>
             `<li class="${i.warn ? "sr-warn" : "sr-info"}" title="${esc(i.text)}">${icon(i.warn ? "warn" : "info", i.warn ? "sr-li-warn" : "sr-li-info")}<span>${esc(i.name)}${i.from > 0 ? ` <small>${esc(hzRange(i.from, i.to))}</small>` : ""}</span></li>`).join("")
-            : `<li>${icon("check", "sr-li-ok")}<span>${mixk ? "Nothing stands out: it already fits." : "Nothing stands out: your take is already close to the aim."}</span></li>`}</ul></div>
+            : `<li>${icon("check", "sr-li-ok")}<span>${mixk ? "Nothing stands out: it already fits." : mk ? "Nothing stands out: your mix is already close to the aim." : "Nothing stands out: your take is already close to the aim."}</span></li>`}</ul></div>
         </div>`
-        : failed ? `<div class="sr-cempty sr-cfail"><b>${esc(failed.tipTitle || "Auto-Edit couldn't build a plan")}</b><p>${esc(failed.summary || "")}</p><p>${esc(failed.tip || "")}</p></div>`
-        : `<div class="sr-cempty">${busy ? "Listening and building: the results land here." : mixk ? "Press ANALYZE &amp; BUILD: what stands out in this track shows here, with what Mixology would do (the same rules as its AUTO buttons, every page at once)." : "Press ANALYZE &amp; BUILD and play the song: what stands out in your take shows here, measured against what Auto-Edit aims for."}</div>`}
+        : failed ? `<div class="sr-cempty sr-cfail"><b>${esc(failed.tipTitle || engine + " couldn't build a plan")}</b><p>${esc(failed.summary || "")}</p><p>${esc(failed.tip || "")}</p></div>`
+        : `<div class="sr-cempty">${busy ? "Listening and building: the results land here." : mk ? "Press ANALYZE &amp; BUILD and play the song: what stands out in your mix shows here, measured against your genre's masters (or your reference)." : mixk ? "Press ANALYZE &amp; BUILD: what stands out in this track shows here, with what Mixology would do (the same rules as its AUTO buttons, every page at once)." : "Press ANALYZE &amp; BUILD and play the song: what stands out in your take shows here, measured against what Auto-Edit aims for."}</div>`}
     </section>`;
 
     // RECOMMENDED SIGNAL CHAIN
     const chainOn = plan ? (plan.chain || []).filter((m) => m.on) : [];
-    const recommended = `<section class="sr-panel sr-flow sr-crec" title="${plan ? `Recommended for ${esc(t.name)}: ${esc(plan.style)}, ${esc(plan.intensity)}` : ""}">
+    const recommended = `<section class="sr-panel sr-flow sr-crec" title="${plan ? `Recommended for ${esc(t.name)}: ${esc(mk ? plan.genre : plan.style)}, ${esc(plan.intensity)}${mk ? ", " + esc(plan.target) : ""}` : ""}">
       <div class="sr-flow-t">RECOMMENDED<br>CHAIN</div>
       <div class="sr-crec-row" data-scroll="crec">${chainOn.length ? chainOn.map((m, i) => {
         const k = cat(m.key);
         return `${i ? '<i class="sr-arrow"></i>' : ""}<div class="sr-chex"><button class="sr-hex ${i === chainOn.length - 1 ? "sr-picked" : ""}" data-sr="coach-why" data-key="${esc(m.key)}" title="${esc(k.name)}">${icon(k.icon)}<span>${esc(k.hex)}</span></button><small>${esc(m.caption)}</small></div>`;
-      }).join("") : `<div class="sr-flow-empty">${plan && mixk ? "No module needed: it already fits." : `The modules ${mixk ? "Mixology" : "Auto-Edit"} would use show here.`}</div>`}</div>
+      }).join("") : `<div class="sr-flow-empty">${plan && mixk ? "No module needed: it already fits." : `The modules ${engine} would use show here.`}</div>`}</div>
     </section>`;
 
     // BEFORE vs PROPOSED, RESULTS (measured)
     const results = plan ? plan.results || [] : [];
-    const scale = Math.max(3, ...results.map((x) => Math.max(Math.abs(x.before), Math.abs(x.after))));
+    const scale = Math.max(3, ...results.filter((x) => !mk || x.unit === "dB").map((x) => Math.max(Math.abs(x.before), Math.abs(x.after))));
     const lower = `<div class="sr-clower">
       <section class="sr-panel sr-cba"><h3 class="sr-ph sr-ph-s"><span class="sr-ab-chip">A/B</span>BEFORE vs PROPOSED</h3>
         ${plan && (plan.bands || {}).after ? `${toneGraph(plan.bands, [{ values: plan.bands.before, cls: "sr-cg-before", fill: true }, { values: plan.bands.after, cls: "sr-cg-after" }], [])}
-          <div class="sr-cg-key"><span class="sr-cg-k-before">${mixk ? "now" : "before (your take)"}</span><span class="sr-cg-k-after">${mixk ? "with the plan's EQ and Tone" : "through the plan"}</span></div>`
-          : `<div class="sr-cempty">${mixk ? "The track's tone now and with the plan." : "Your take before and through the plan."}</div>`}
+          <div class="sr-cg-key"><span class="sr-cg-k-before">${mk ? "your mix" : mixk ? "now" : "before (your take)"}</span><span class="sr-cg-k-after">${mk ? "the master (measured)" : mixk ? "with the plan's EQ and Tone" : "through the plan"}</span></div>`
+          : `<div class="sr-cempty">${mk ? "Your mix and the master, measured through the plan." : mixk ? "The track's tone now and with the plan." : "Your take before and through the plan."}</div>`}
       </section>
-      <section class="sr-panel sr-cres"><h3 class="sr-ph sr-ph-s">${icon("maxbars")}RESULTS<small>${mixk ? "the plan on your track" : "measured on your take"}</small></h3>
-        ${results.length ? `<ul>${results.map((x) => {
+      <section class="sr-panel sr-cres"><h3 class="sr-ph sr-ph-s">${icon("maxbars")}RESULTS<small>${mk ? "measured on your mix" : mixk ? "the plan on your track" : "measured on your take"}</small></h3>
+        ${results.length && mk ? `<ul>${results.map((x) => {
+          // the master's rows have units of their own: each bar on its own scale (louder is longer)
+          const w = (v) => (x.unit === "LUFS" || x.unit === "dBTP" ? clamp((v + 40) / 40, 0, 1) : x.unit === "%" ? clamp(v / 100, 0, 1) : Math.abs(v) / scale) * 100;
+          const f = (v) => (x.unit === "%" ? String(Math.round(v)) : /aim/.test(x.name) ? dbSigned(v) : (v < 0 ? MINUS : "") + Math.abs(v).toFixed(1));
+          return `<li class="${x.better ? "sr-better" : ""}" title="${esc(x.name)}: ${f(x.before)} ${String.fromCharCode(8594)} ${f(x.after)} ${esc(x.unit)}">
+            <b>${esc(x.name)}</b><span class="sr-cbar"><i class="sr-cbar-b" style="width:${w(x.before).toFixed(0)}%"></i><i class="sr-cbar-a" style="width:${w(x.after).toFixed(0)}%"></i></span>
+            <em>${f(x.before)} ${String.fromCharCode(8594)} ${f(x.after)}<small> ${esc(x.unit)}</small></em></li>`;
+        }).join("")}</ul>`
+        : results.length ? `<ul>${results.map((x) => {
           const wb = (Math.abs(x.before) / scale) * 100, wa = (Math.abs(x.after) / scale) * 100;
           const unit = x.unit === "dB apart" ? " dB apart" : " dB";
           return `<li class="${x.better ? "sr-better" : ""}" title="${esc(x.name)}: ${dbSigned(x.before)} ${String.fromCharCode(8594)} ${dbSigned(x.after)}${unit} (${esc(x.unit)})">
@@ -1041,9 +1081,9 @@
       <div class="sr-coach" data-scroll="ccoach">
         <div class="sr-banner">${icon("pulse")}WHAT I HEARD</div>
         ${plan ? `<p class="sr-cheard">${esc(plan.summary || "")}</p><ul class="sr-cheard-l">${(plan.heard || []).map((h) => `<li>${esc(h)}</li>`).join("")}</ul>`
-          : `<p class="sr-cheard sr-dimv">${busy ? (mixk ? `Listening to ${esc(t.name)}` : "Listening to your vocal") + String.fromCharCode(8230) : "Nothing yet: press ANALYZE &amp; BUILD."}</p>`}
+          : `<p class="sr-cheard sr-dimv">${busy ? (mk ? "Listening to your mix" : mixk ? `Listening to ${esc(t.name)}` : "Listening to your vocal") + String.fromCharCode(8230) : "Nothing yet: press ANALYZE &amp; BUILD."}</p>`}
         ${why ? `<h4 class="sr-cban">${icon("layers")}WHY I BUILT THIS RACK</h4><ul class="sr-cwhy">${why}</ul>` : ""}
-        ${plan && (plan.first || []).length ? `<h4 class="sr-cban">${icon("bulb")}${mixk ? "GOOD TO KNOW" : "ADJUST FIRST"}</h4><ol class="sr-cfirst">${plan.first.map((f) => `<li>${esc(f)}</li>`).join("")}</ol>` : ""}
+        ${plan && (plan.first || []).length ? `<h4 class="sr-cban">${icon("bulb")}${mixk || mk ? "GOOD TO KNOW" : "ADJUST FIRST"}</h4><ol class="sr-cfirst">${plan.first.map((f) => `<li>${esc(f)}</li>`).join("")}</ol>` : ""}
       </div>
     </section>`;
 
@@ -1059,10 +1099,11 @@
     const r = c ? c.r : {};
     const ready = r.state === "ready", applied = r.state === "applied";
     const ok = c && c.unit && canTurn(c.unit) && r.state !== "none";
+    const mk = !!c && c.kind === "master", where = mk ? "MASTER" : "TRACK";
     return `<footer class="sr-foot sr-cfoot">
-      <button class="sr-capply ${applied ? "sr-done" : ""}" data-sr="coach-apply" ${ok && ready ? "" : "disabled"} title="Set every module as the plan says (one UNDO step)">${icon(applied ? "check" : "layers")}${applied ? "APPLIED TO TRACK" : "APPLY TO TRACK"}</button>
+      <button class="sr-capply ${applied ? "sr-done" : ""}" data-sr="coach-apply" ${ok && ready ? "" : "disabled"} title="Set every module as the plan says (one UNDO step)">${icon(applied ? "check" : "layers")}${applied ? "APPLIED TO " + where : "APPLY TO " + where}</button>
       <span class="sr-csep"></span>
-      <button class="sr-cact" data-sr="coach-undo" ${ok && r.canUndo ? "" : "disabled"} title="${c && c.kind === "mix" ? "Put back the settings from before the plan (one step in Mixology's History)" : "Put back the settings from before the plan (or Voxology's last Auto-Edit)"}">${icon("undo")}UNDO</button>${c && c.kind === "mix" ? "" : `
+      <button class="sr-cact" data-sr="coach-undo" ${ok && r.canUndo ? "" : "disabled"} title="${c && c.kind === "mix" ? "Put back the settings from before the plan (one step in Mixology's History)" : mk ? "Put back the settings from before the plan (one step in Masterology's UNDO)" : "Put back the settings from before the plan (or Voxology's last Auto-Edit)"}">${icon("undo")}UNDO</button>${c && c.kind !== "vox" ? "" : `
       <span class="sr-csep"></span>
       <button class="sr-cact" data-sr="savechain" data-unit="${c ? esc(c.unit.id) : ""}" ${ok ? "" : "disabled"} title="Keep this setup in Voxology's MY CHAINS">${icon("save")}SAVE CHAIN</button>`}
       <span class="sr-csep"></span>
@@ -1279,7 +1320,7 @@
     if (!c) return "nocoach";
     const r = c.r, p = r.plan || {};
     return JSON.stringify([c.kind, c.unit && c.unit.id, c.unit && c.unit.lock, r.state, r.style, r.intensity, r.canUndo, r.reference, r.hearing, r.track, r.role, r.heardEnough,
-      p.ok, p.summary, p.changes, S.coachWhy]);
+      r.genre, r.target, r.canFinish, p.ok, p.summary, p.changes, S.coachWhy]);
   }
 
   // Mixology's faders of the tracks the Rack shows (its "mix.faders", through its DAW bridge): not a module of the Full
@@ -1319,6 +1360,8 @@
       const bar = S.stage.querySelector("[data-coach-bar]"), txt = S.stage.querySelector("[data-coach-pct]");
       if (bar && bar.style.width !== pct + "%") bar.style.width = pct + "%";
       if (txt && txt.textContent !== pct + " %") txt.textContent = pct + " %";
+      const heard = S.stage.querySelector("[data-coach-heard]"), ht = c ? secsText(c.r.heardSeconds) + " heard" : "";
+      if (heard && heard.textContent !== ht) heard.textContent = ht;
       return;
     }
     const sel = S.page === "rack" ? findSel(t) : null;
@@ -1480,29 +1523,37 @@
     else if (a === "redo") { replay(false); return; }
     else if (a === "bypass") { toggleBypass(); return; }
     else if (a === "ab") { flipAB(el.dataset.ab); return; }
-    else if (a === "coach-plan" || a === "coach-apply" || a === "coach-undo") {
+    else if (a === "coach-plan" || a === "coach-apply" || a === "coach-undo" || a === "coach-finish" || a === "coach-stop") {
       const t = trackOf(S.data, S.track), c = coachOf(t);
       if (!c) return;
-      const step = a.slice(6);
+      const step = a === "coach-stop" ? coachStopStep(c) : a.slice(6);
       if (!c.unit) return;
       el.disabled = true;
-      const mixk = c.kind === "mix";
+      const mixk = c.kind === "mix", mk = c.kind === "master";
       send(c.unit, { change: "coach", module: "coach", control: coachControl(c, t, step), value: 1, gesture: "set" }, () => {
-        if (step === "plan") toast(mixk ? (c.r.heardEnough ? `Mixology is building the plan for ${t.name}. Nothing changes until you apply.` : `Play a part where ${t.name} plays: the Coach listens to it first. Nothing changes until you apply.`)
+        if (step === "plan") toast(mk ? "Masterology is listening: play the song (the whole song is best; BUILD NOW after 12 seconds). Nothing changes until you apply."
+          : mixk ? (c.r.heardEnough ? `Mixology is building the plan for ${t.name}. Nothing changes until you apply.` : `Play a part where ${t.name} plays: the Coach listens to it first. Nothing changes until you apply.`)
           : "Voxology is listening: play the song (about 12 seconds of singing). Nothing changes until you apply.", null, 6000);
-        else if (step === "apply") toast(mixk ? `Applied: Mixology set the plan on ${t.name} (one step in its History). UNDO puts the settings from before back.`
+        else if (step === "finish") toast("Building the master from what it heard. Nothing changes until you apply.", null, 5000);
+        else if (step === "cancel" || step === "discard") toast("Stopped: nothing changed.");
+        else if (step === "apply") toast(mk ? "Applied: Masterology set the plan on your master (one step in its UNDO). UNDO puts the settings from before back."
+          : mixk ? `Applied: Mixology set the plan on ${t.name} (one step in its History). UNDO puts the settings from before back.`
           : `Applied: Voxology set the plan on ${t.name}. UNDO puts the settings from before back.`, null, 6000);
         else toast("Undone: the settings from before are back.");
       });
       return;
     }
-    else if (a === "coach-style" || a === "coach-int") {
+    else if (a === "coach-style" || a === "coach-int" || a === "coach-genre" || a === "coach-target") {
       const t = trackOf(S.data, S.track), c = coachOf(t);
       if (!c) return;
-      const n = a === "coach-style" ? (c.r.styles || []).length : (c.r.intensities || []).length;
+      const mk = c.kind === "master";
+      const list = a === "coach-style" ? c.r.styles : a === "coach-genre" ? c.r.genres : a === "coach-target" ? c.r.targets : c.r.intensities;
+      const now = a === "coach-style" ? c.r.style : a === "coach-genre" ? c.r.genre : a === "coach-target" ? c.r.target : c.r.intensity;
+      const n = (list || []).length;
       if (n < 2) return;
-      const i = a === "coach-style" ? ((c.r.style || 0) + (+el.dataset.dir || 1) + n) % n : clamp(+el.dataset.i || 0, 0, n - 1);
-      send(c.unit, { change: "value", module: "coach", control: a === "coach-style" ? "aeStyle" : "aeIntensity", value: i / (n - 1), gesture: "set" }, true);
+      const i = a === "coach-int" ? clamp(+el.dataset.i || 0, 0, n - 1) : ((now || 0) + (+el.dataset.dir || 1) + n) % n;
+      const control = { "coach-style": "aeStyle", "coach-genre": "amGenre", "coach-target": "amTarget", "coach-int": mk ? "amIntensity" : "aeIntensity" }[a];
+      send(c.unit, { change: "value", module: "coach", control, value: i / (n - 1), gesture: "set" }, true);
       return;
     }
     else if (a === "coach-why") { S.coachWhy = S.coachWhy === el.dataset.key ? null : el.dataset.key; }

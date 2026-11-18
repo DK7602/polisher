@@ -3,8 +3,10 @@
 #include "polisher/LoudnessMeter.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <memory>
+#include <thread>
 
 namespace polisher {
 
@@ -23,10 +25,53 @@ ScopedCancelFlag::~ScopedCancelFlag()
     cancelFlag = previous;
 }
 
+namespace {
+    using PaceClock = std::chrono::steady_clock;
+    struct Pace
+    {
+        bool on = false;
+        double workMs = 0.0, restMs = 0.0, rested = 0.0, longest = 0.0;
+        PaceClock::time_point since {}, last {};
+    };
+    thread_local Pace pace;
+    double msOf (PaceClock::duration d) { return std::chrono::duration<double, std::milli> (d).count(); }
+}
+
+ScopedPace::ScopedPace (double workMs, double restMs) noexcept
+    : wasOn (pace.on), wasWork (pace.workMs), wasRest (pace.restMs)
+{
+    pace.on = workMs > 0.0 && restMs > 0.0;
+    pace.workMs = workMs;
+    pace.restMs = restMs;
+    pace.rested = pace.longest = 0.0;
+    pace.since = pace.last = PaceClock::now();
+}
+
+ScopedPace::~ScopedPace()
+{
+    pace.on = wasOn;
+    pace.workMs = wasWork;
+    pace.restMs = wasRest;
+}
+
+double ScopedPace::restedMs() noexcept { return pace.rested; }
+double ScopedPace::longestStretchMs() noexcept { return pace.longest; }
+
 void throwIfCancelled()
 {
     if (cancelFlag != nullptr && cancelFlag->load (std::memory_order_relaxed))
         throw AnalysisCancelled();
+    if (! pace.on)
+        return;
+    const auto now = PaceClock::now();
+    pace.longest = std::max (pace.longest, msOf (now - pace.last));
+    pace.last = now;
+    if (msOf (now - pace.since) < pace.workMs)
+        return;
+    std::this_thread::sleep_for (std::chrono::duration<double, std::milli> (pace.restMs));
+    const auto after = PaceClock::now();
+    pace.rested += msOf (after - now);
+    pace.since = pace.last = after;
 }
 
 LoudnessStats measure (const AudioClip& clip)

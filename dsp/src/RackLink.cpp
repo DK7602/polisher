@@ -557,7 +557,9 @@ namespace rack
         std::string lock;
         if (! readConsistent (s.seq, [&] { version = s.version.load (kRelaxed); lock = loadText (s.lock); })) { why = kBusyWhy; return 0; }
         if (version == 0) { why = kGoneWhy; return 0; }
-        if (! lock.empty()) { why = lock; return 0; }
+        // Busy (Auto-Edit / Auto-Master working): no knob turns, but the Coach's steps go through (BUILD NOW, STOP while
+        // it listens): the owner decides (Beta 29).
+        if (! lock.empty() && r.change != Change::coach) { why = lock; return 0; }
 
         // A ticket: only while the owner has room for it (it hasn't taken the request kMaxRequests before it).
         auto& q = s.queue;
@@ -767,7 +769,7 @@ namespace rack
         for (int i = 0; i < n; ++i)
         {
             auto r = batch[static_cast<std::size_t> (i)];
-            if (! lock.empty()) { link.refuse (slotIndex, id, r.ticket, lock); continue; }
+            if (! lock.empty() && r.change != Change::coach) { link.refuse (slotIndex, id, r.ticket, lock); continue; }
             if (r.change == Change::state || r.change == Change::power || r.change == Change::save)
             {
                 r.control.clear();

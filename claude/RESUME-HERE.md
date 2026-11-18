@@ -825,3 +825,10 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   Masterology code changed. Manual (and its Claude Docs copy): version.
 - Masterology 0.40.0 (2026-11-18, Sonicology Beta 28): shared RackLink.cpp / rack.js (the COACH page on Mixology's
   tracks). No Masterology code changed. Manual (and its Claude Docs copy). Next (Beta 29): the Coach for the master.
+- Masterology 0.41.0 (2026-11-18, Sonicology Beta 29): the Rack's Coach on the master. polisher::coach::planJson
+  (dsp MasterCoach.h / .cpp), polisher::ScopedPace (LoudnessTargeting: the analysis rests 8 ms per 20 ms of work while
+  the song plays; same decisions, tested), AutoMasterController plan mode (startPlan / applyPlan / discardPlan /
+  planUndone; the job renders the loudest 12 s through the plan and measures it), PluginProcessor: Change::coach steps
+  plan / finish / cancel / apply / undo / discard, coachReport in Unit::report (full publishes only); RackUnit knobs
+  amGenre / amIntensity / amTarget. Tests: test_master_coach.cpp; plug-in test "Coach (the master): ..." through the
+  real Rack link. Manual (and its Claude Docs copy, rev 181). (Mixology's RESUME-HERE has the rest.)
