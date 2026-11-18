@@ -813,3 +813,10 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
 - Masterology 0.38.0 (2026-11-18, Sonicology Beta 26): shared RackLink (layout 4: `Unit::report`, `Change::coach`) and
   rack.js (the COACH page for a vocal, through Voxology: Mixology's RESUME-HERE). No Masterology code changed (it never
   sends or answers coach requests yet; the Coach for the master comes later). Manual (and its Claude Docs copy).
+- 2026-11-18 CI (run 44228939356, 7118eb9): Windows failed ONE plug-in test, "the host's reset clears the look-ahead
+  audio": right after reset() a silent block came out with 0.247 on the RIGHT channel only (left 0). Masterology's
+  audio code is unchanged since Beta 20 (d078f7c); the plug-in tests only build on Windows again since c06202d, whose
+  run passed it. Built polisher_plugin_tests on Linux (POLISHER_BUILD_PLUGIN=ON, apt X11 dev headers): 60 / 60 pass;
+  valgrind shows nothing from Masterology (its only report is JUCE's vector min/max reading the test buffer's tail).
+  So intermittent and Windows only; suspects: something time- or thread-dependent, or memory MSVC leaves uninitialised.
+  Re-running the job to confirm; not in the plug-ins' sound path change of Beta 26 (only RackLink / rack.js).
