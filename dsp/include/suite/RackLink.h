@@ -39,7 +39,7 @@
 
 namespace rack
 {
-    constexpr std::uint32_t kLayout = 3;    // 2: + requests (stage 2), the lock; 3: + the tracks the views show
+    constexpr std::uint32_t kLayout = 4;    // 2: + requests (stage 2), the lock; 3: + the tracks the views show; 4: + the Coach's report
     constexpr int kMaxSlots = 256;          // every Mixology Link, Voxology, Honey Tune, Mixology and Masterology
     constexpr int kMaxModules = 16;         // a Link has 15 (the Assist EQ and its processing modules)
     constexpr int kMaxValues = 8;           // the knobs the view draws
@@ -58,6 +58,7 @@ namespace rack
 
     constexpr std::size_t kTrackBytes = 128, kKeyBytes = 24, kSummaryBytes = 96, kByBytes = 40, kValueNameBytes = 24,
                           kValueTextBytes = 24, kBandNameBytes = 16, kLineBytes = 160, kControlBytes = 24, kWhyBytes = 128;
+    constexpr std::size_t kReportBytes = 8192;   // a plug-in's Coach report (JSON text, the owner's own)
 
     // ---- what a plug-in publishes ---------------------------------------------------------------------------------
 
@@ -132,6 +133,10 @@ namespace rack
         std::vector<Line> lines;        // up to kMaxLines
         std::vector<float> spectrum;    // kSpectrumBins dB values (what it hears, tilted as its own display), or empty
         std::string lock;               // why the Rack can't change it now ("Auto Mix is running"), "" = it can
+        /** Stage 3, the Coach: what this plug-in's own automatic setup heard and would do on this track (a JSON object
+            as text, the owner's format: rack.js reads it), "" = nothing to say. Up to kReportBytes; a longer one is
+            dropped whole (half a JSON text is no use). Sent with the details only (the track a Rack shows). */
+        std::string report;
         // Filled in by the reader:
         int slot = -1;
         std::uint32_t generation = 0;   // the slot's owner: requests name it, so a slot taken over never gets another's
@@ -142,8 +147,10 @@ namespace rack
 
     /** value: a knob to `value`; state: a module on / off; reset: a knob back to its default (the owner's own); power:
         the plug-in itself on (1) / off (0), its own bypass (the Rack's BYPASS; module "power"); save: keep the plug-in's
-        whole setup where it keeps its own (Voxology's My Chains: the Rack's SAVE CHAIN; module "save"). */
-    enum class Change : std::uint32_t { value = 0, state, reset, power, save };
+        whole setup where it keeps its own (Voxology's My Chains: the Rack's SAVE CHAIN; module "save"); coach: the
+        Coach's step in the owner's own automatic setup, named by `control` ("plan": listen and work out a plan without
+        changing anything, "apply": apply it, "undo": take it back; module "coach"). */
+    enum class Change : std::uint32_t { value = 0, state, reset, power, save, coach };
     /** A knob drag: begin, moves, end (the owner holds the host's gesture open between them, so automation records it
         as one touch); set: a single change (a click). The owner always gets them balanced (Publisher::serve()). */
     enum class Gesture : std::uint32_t { set = 0, begin, move, end };
@@ -290,6 +297,8 @@ namespace rack
         std::atomic<float> inDb, outDb, latencyMs;
         Text<kTrackBytes> track;
         Text<kWhyBytes> lock;
+        std::atomic<std::uint32_t> reportBytes;    // the Coach's report: its length (0 = none) ...
+        Text<kReportBytes> report;                 // ... (only those bytes are written and read)
         std::array<LineSlot, kMaxLines> lines;
         std::array<std::atomic<float>, kSpectrumBins> spectrum;
         std::array<ModuleSlot, kMaxModules> modules;
@@ -455,7 +464,7 @@ namespace rack
     }
 
     /** Stage 2, for the view's plug-in (its rackRequest() / rackAnswer() native functions): a click in the view as rack.js
-        sends it. unit: the JSON's "u<slot>", gen: its "gen"; change "value" | "state" | "reset" | "power" | "save"; gesture "set" | "begin" | "move" |
+        sends it. unit: the JSON's "u<slot>", gen: its "gen"; change "value" | "state" | "reset" | "power" | "save" | "coach"; gesture "set" | "begin" | "move" |
         "end". Returns {"ticket":N,"why":""} (ticket 0 and why when it can't go). */
     std::string requestJson (Link&, const std::string& unit, std::uint32_t generation, const std::string& change, const std::string& module,
                              const std::string& control, float value, const std::string& gesture, std::uint64_t nowMs);

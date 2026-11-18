@@ -1283,3 +1283,66 @@ TEST_CASE ("Rack link: the tracks open views show (for Mixology's faders), and t
     CHECK (json.find ("\"key\":\"fader." + std::to_string (lead) + "\"") != std::string::npos);
     CHECK (json.find ("\"Warmth\"") == std::string::npos);
 }
+
+// ---- Beta 26: the Coach (a plug-in's report, Change::coach) -------------------------------------------------------
+
+TEST_CASE ("Rack link: a plug-in's Coach report goes through whole, or not at all", "[rack]")
+{
+    Memory mem;
+    rack::Link link (mem.data());
+    const int a = link.claim (1, 1000);
+    REQUIRE (a >= 0);
+    auto u = unit (rack::Product::voxology, rack::Role::vocal, "Lead Vox", { mod ("vox.comp") });
+    u.report = "{\"state\":\"ready\",\"heard\":[\"Mud \\\"200 - 400 Hz\\\"\\n+4.1 dB\"],\"n\":" + std::string (3000, '7') + "}";
+    REQUIRE (link.publish (a, 1, u, 1000));
+    auto got = link.units (1000).at (0);
+    CHECK (got.report == u.report);
+
+    u.report = std::string (rack::kReportBytes + 10, 'x');   // too long: dropped whole
+    REQUIRE (link.publish (a, 1, u, 1010));
+    CHECK (link.units (1010).at (0).report.empty());
+    u.report = "{\"state\":\"idle\"}";                        // shorter after longer: no leftovers
+    REQUIRE (link.publish (a, 1, u, 1020));
+    CHECK (link.units (1020).at (0).report == "{\"state\":\"idle\"}");
+
+    // In a view: only for the track it shows, as a JSON string (rack.js parses it).
+    auto rackMem = std::make_unique<unsigned char[]> (rack::Link::bytes() + 64);
+    auto suiteMem = std::make_unique<unsigned char[]> (suite::Link::bytes() + 64);
+    auto align = [] (unsigned char* p) { return static_cast<void*> (p + (64 - reinterpret_cast<std::uintptr_t> (p) % 64) % 64); };
+    rack::Link rk (align (rackMem.get()));
+    suite::Link sl (align (suiteMem.get()));
+    const int b = rk.claim (2, 1000);
+    u.report = "{\"state\":\"ready\",\"line\":\"a \\\"quote\\\"\"}";
+    u.detailed = true;
+    REQUIRE (rk.publish (b, 2, u, 1000));
+    const auto lead = "t" + std::to_string (suite::nameHash ("Lead Vox"));
+    auto json = rack::viewJson (rk, sl, "voxology", 0, 1005, lead);
+    CHECK (wellFormed (json));
+    CHECK (json.find ("\"report\":\"{\\\"state\\\":\\\"ready\\\"") != std::string::npos);
+    json = rack::viewJson (rk, sl, "voxology", 0, 1005, "master");
+    CHECK (json.find ("\"report\"") == std::string::npos);
+}
+
+TEST_CASE ("Rack requests: the Coach's steps reach the owner with their name", "[rack][requests]")
+{
+    Memory mem;
+    rack::Link link (mem.data());
+    Owner vox (link);
+    REQUIRE (vox.publish (1000));
+    const auto u = link.units (1000).at (0);
+    const std::string id = "u" + std::to_string (u.slot);
+
+    CHECK (rack::requestJson (link, id, u.generation, "coach", "whatever", "plan", 0.0f, "begin", 1000).rfind ("{\"ticket\":1,", 0) == 0);
+    CHECK (rack::requestJson (link, id, u.generation, "coach", "", "apply", 0.0f, "set", 1000).rfind ("{\"ticket\":2,", 0) == 0);
+    CHECK (rack::requestJson (link, id, u.generation, "coach", "coach", "", 0.0f, "set", 1000) == "{\"ticket\":0,\"why\":\"Nothing to change.\"}");
+    vox.serve (1010);
+    REQUIRE (vox.seen.size() == 2);
+    for (const auto& r : vox.seen)
+    {
+        CHECK (r.change == rack::Change::coach);
+        CHECK (r.module == "coach");
+        CHECK (r.gesture == rack::Gesture::set);
+    }
+    CHECK (vox.seen[0].control == "plan");
+    CHECK (vox.seen[1].control == "apply");
+}

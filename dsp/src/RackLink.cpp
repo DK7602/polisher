@@ -189,7 +189,7 @@ namespace rack
         // block left from a plug-in that has gone (macOS / Linux keep it until the next restart) isn't taken for one
         // that is here. Add this layout's when bumping kLayout: v3 slots at 128, 23936 bytes each.
         struct EarlierLayout { std::uint32_t layout; std::size_t slotsAt, slotBytes; };
-        constexpr EarlierLayout kEarlier[] = { { 1, 64, 16640 }, { 2, 64, 23936 } };
+        constexpr EarlierLayout kEarlier[] = { { 1, 64, 16640 }, { 2, 64, 23936 }, { 3, 128, 23936 } };
 
         bool layoutAlive (std::uint32_t layout, std::uint64_t now)
         {
@@ -325,6 +325,19 @@ namespace rack
         s.latencyMs.store (std::max (0.0f, finite (u.latencyMs)), kRelaxed);
         storeText (s.track, u.track);
         storeText (s.lock, u.lock);
+        {
+            // The Coach's report: only its own bytes (it is long, and mostly absent). Too long: none (not half a JSON).
+            const std::size_t n = u.report.size() < kReportBytes ? u.report.size() : 0;
+            for (std::size_t w = 0; w < (n + 7) / 8; ++w)
+            {
+                char bytes[8] = {};
+                for (std::size_t b = 0; b < 8 && w * 8 + b < n; ++b) bytes[b] = u.report[w * 8 + b];
+                std::uint64_t word = 0;
+                std::memcpy (&word, bytes, 8);
+                s.report.words[w].store (word, kRelaxed);
+            }
+            s.reportBytes.store (static_cast<std::uint32_t> (n), kRelaxed);
+        }
 
         const auto lines = std::min<std::size_t> (u.lines.size(), kMaxLines);
         for (std::size_t i = 0; i < lines; ++i)
@@ -458,6 +471,17 @@ namespace rack
                 u.latencyMs = s.latencyMs.load (kRelaxed);
                 u.track = loadText (s.track);
                 u.lock = loadText (s.lock);
+                {
+                    const std::size_t n = std::min<std::size_t> (s.reportBytes.load (kRelaxed), kReportBytes - 1);
+                    u.report.resize (n);
+                    for (std::size_t w = 0; w < (n + 7) / 8; ++w)
+                    {
+                        const std::uint64_t word = s.report.words[w].load (kRelaxed);
+                        char bytes[8];
+                        std::memcpy (bytes, &word, 8);
+                        for (std::size_t b = 0; b < 8 && w * 8 + b < n; ++b) u.report[w * 8 + b] = bytes[b];
+                    }
+                }
                 const auto lines = std::min<std::uint32_t> (s.lineCount.load (kRelaxed), kMaxLines);
                 for (std::uint32_t l = 0; l < lines; ++l)
                     u.lines.push_back ({ static_cast<Level> (s.lines[l].level.load (kRelaxed)), loadText (s.lines[l].text) });
@@ -618,7 +642,7 @@ namespace rack
             taken = ticket;
             q.taken.store (taken, kRelease);
             if (forGeneration != generation) continue;   // for the slot's earlier owner, or skipped
-            if (static_cast<std::uint32_t> (r.change) > static_cast<std::uint32_t> (Change::save)) r.change = Change::value;
+            if (static_cast<std::uint32_t> (r.change) > static_cast<std::uint32_t> (Change::coach)) r.change = Change::value;
             if (static_cast<std::uint32_t> (r.gesture) > static_cast<std::uint32_t> (Gesture::end)) r.gesture = Gesture::set;
             r.ticket = ticket;
             out[n++] = std::move (r);
@@ -749,6 +773,11 @@ namespace rack
                 r.control.clear();
                 r.gesture = Gesture::set;
                 r.value = r.change == Change::save || r.value >= 0.5f ? 1.0f : 0.0f;
+            }
+            else if (r.change == Change::coach)
+            {
+                r.gesture = Gesture::set;   // (control names the step: plan, apply, undo)
+                r.value = 1.0f;
             }
             else if (r.change == Change::reset)
             {
@@ -1096,6 +1125,7 @@ namespace rack
             key (o, "id", f); str (o, "u" + std::to_string (u.slot >= 0 ? u.slot : static_cast<int> (i)));
             key (o, "gen", f); o += std::to_string (u.generation);
             key (o, "lock", f); str (o, u.lock);
+            if (! u.report.empty()) { key (o, "report", f); str (o, u.report); }   // the Coach's (JSON as text: rack.js parses it)
             key (o, "product", f); str (o, productKey (u.product));
             key (o, "version", f); str (o, versionText (u.version));
             key (o, "track", f); str (o, u.track);
@@ -1295,6 +1325,7 @@ namespace rack
                     m.values.clear();
                     m.bands.clear();
                 }
+                u.report.clear();
             }
         }
         return toJson (host, hostHash, units, lines, overview (suiteLink, now), Link::otherLayouts (now));
@@ -1322,8 +1353,9 @@ namespace rack
     {
         Request r;
         r.change = change == "state" ? Change::state : change == "reset" ? Change::reset : change == "power" ? Change::power
-                 : change == "save" ? Change::save : Change::value;
-        r.module = r.change == Change::power ? std::string ("power") : r.change == Change::save ? std::string ("save") : module;
+                 : change == "save" ? Change::save : change == "coach" ? Change::coach : Change::value;
+        r.module = r.change == Change::power ? std::string ("power") : r.change == Change::save ? std::string ("save")
+                 : r.change == Change::coach ? std::string ("coach") : module;
         r.control = control;
         r.value = value;
         r.gesture = gesture == "begin" ? Gesture::begin : gesture == "move" ? Gesture::move : gesture == "end" ? Gesture::end : Gesture::set;

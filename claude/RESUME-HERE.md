@@ -810,3 +810,6 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   named juce::WebBrowserComponent, and that target builds the processor with POLISHER_HEADLESS and JUCE_WEB_BROWSER=0.
   RackHost.h now has viewResource only `#if JUCE_WEB_BROWSER` (c06202d; same file in all three repos); the build passes
   again. The plug-ins and the installers were never affected (they build with the web view). Beta 25 installer green.
+- Masterology 0.38.0 (2026-11-18, Sonicology Beta 26): shared RackLink (layout 4: `Unit::report`, `Change::coach`) and
+  rack.js (the COACH page for a vocal, through Voxology: Mixology's RESUME-HERE). No Masterology code changed (it never
+  sends or answers coach requests yet; the Coach for the master comes later). Manual (and its Claude Docs copy).
