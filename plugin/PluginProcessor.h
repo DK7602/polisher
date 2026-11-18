@@ -269,7 +269,9 @@ private:
     std::string applyRack (const rack::Request&);
     std::string rackLock() const;
     std::string coachReport();             // Beta 29: the Rack's Coach on the master (Unit::report)
-    juce::String coachUndoLabel;           // the undo step APPLY made (UNDO takes back only that one)
+    polisher::MasterChainParams currentChain() const;   // Beta 32: the chain as the controls set it now (PREVIEW's level match)
+    std::uint64_t previewSeenMs = 0;       // the Coach's PREVIEW: when a Rack last showed the master
+    std::uint64_t coachUndoStep = 0;       // the undo step APPLY made (SettingsHistory::undoSerial: UNDO takes back only that one)
     struct RackTimer final : juce::Timer
     {
         std::function<void()> tick;

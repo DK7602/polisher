@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <string>
 #include <cstdio>
 #include <map>
 #include <vector>
@@ -18,11 +19,20 @@ namespace polisher::coach
 
         std::string num (double v, int decimals = 1)
         {
-            char b[48];
-            std::snprintf (b, sizeof (b), "%.*f", decimals, v);
-            std::string s = b;
-            if (s == "-0" || s == "-0.0") s = s.substr (1);
-            return s;
+            // Locale-free (a host that sets a comma-decimal LC_NUMERIC would make printf write "4,1": invalid JSON).
+            if (! std::isfinite (v)) v = 0.0;
+            static constexpr long long kScale[] = { 1, 10, 100, 1000 };
+            decimals = std::clamp (decimals, 0, 3);
+            const double scaled = std::round (std::abs (v) * static_cast<double> (kScale[decimals]));
+            if (scaled > 9.0e15) return "0";   // (nothing near this size is ever shown)
+            const auto n = static_cast<long long> (scaled);
+            std::string s = std::to_string (n / kScale[decimals]);
+            if (decimals > 0)
+            {
+                const auto frac = std::to_string (n % kScale[decimals]);
+                s += "." + std::string (static_cast<std::size_t> (decimals) - frac.size(), '0') + frac;
+            }
+            return v < 0.0 && n != 0 ? "-" + s : s;
         }
         /** For people: a real minus sign (and + when asked). */
         std::string text (double v, int decimals = 1, bool plus = false)

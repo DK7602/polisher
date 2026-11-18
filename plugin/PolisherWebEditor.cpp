@@ -171,7 +171,7 @@ juce::WebBrowserComponent::Options PolisherWebEditor::makeEditorOptions()
                              })
         .withNativeFunction ("finishAutoMaster", [this] (const juce::Array<juce::var>&, auto complete)
                              {
-                                 complete (audioProcessor.autoMaster.finish());
+                                 complete (audioProcessor.autoMaster.finishFromWindow());
                              })
         .withNativeFunction ("cancelAutoMaster", [this] (const juce::Array<juce::var>&, auto complete)
                              {

@@ -895,3 +895,16 @@
 .sr-cres li.sr-cmove { grid-template-columns: minmax(0, .75fr) minmax(0, 1.6fr); }
 .sr-cres li.sr-cmove em { white-space: normal; font-weight: 600; color: #cfe3ff; line-height: 1.2; }
 .sr-light .sr-cres li.sr-cmove em { color: #2b4a7a; }
+/* Beta 32: PREVIEW on the COACH page's bottom bar: KEEP PLAN, PLAN / YOURS, BACK TO YOURS, how the two are matched */
+.sr-cprev { gap: 18px; }
+.sr-cflip button { height: 40px; padding: 0 20px; }
+.sr-cflip button .sr-ic { font-size: 19px; }
+.sr-cmatch { max-width: 250px; font-size: 13.5px; line-height: 1.25; font-weight: 600; color: #f2d488; }
+.sr-cpv .sr-ic { color: #ffd77a; }
+.sr-light .sr-cmatch { color: #7a520c; }
+/* (a narrow Rack: the five buttons on one line) */
+.sr-cfoot-n { gap: 12px; }
+.sr-cfoot-n .sr-capply { padding: 0 26px; font-size: 19px; white-space: nowrap; }
+.sr-cfoot-n .sr-cact { padding: 0 16px; font-size: 15.5px; white-space: nowrap; }
+.sr-cfoot-n .sr-cflip button { padding: 0 14px; font-size: 16px; }
+.sr-cfoot-n .sr-cmatch { max-width: 190px; font-size: 12.5px; }

@@ -865,17 +865,25 @@
       return m ? { unit: m, r: parse(m) || { state: "idle" }, kind: "master" } : null;
     }
     if (!t.hash || t.role === "fullmix" || t.role === "master" || !t.units.some((x) => x.product === "link")) return null;
-    const mix = ((S.data && S.data.units) || []).find((x) => x.product === "mixology" && x.role === "fullmix");
+    const mix = mixOwner(S.data);
     const r = mix ? parse(mix) : null;
     if (!mix || !r || r.track !== t.hash) return { unit: mix || null, r: { state: "none" }, kind: "mix", missing: !mix };
     return { unit: mix, r, kind: "mix" };
+  }
+  // The Mixology that owns the mix (Beta 32: with two Mixologys in a project, the one on the master: it moves the faders
+  // and sends the Coach's and WHAT TO FIX FIRST's reports).
+  function mixOwner(data) {
+    const all = ((data && data.units) || []).filter((u) => u.product === "mixology" && u.role === "fullmix");
+    return all.find((u) => u.faders) || all.find((u) => u.report) || all[0] || null;
   }
   // A Coach request: Voxology's take the step; Mixology's the step and the track ("plan.<hash>").
   const coachControl = (c, t, step) => (c.kind === "mix" ? step + "." + t.hash : step);
   // STOP while it listens: Mixology drops the Coach's listen; Voxology and Masterology stop the Coach's own listen only.
   const coachStopStep = (c) => (c.kind === "mix" ? "discard" : "cancel");
   // A Coach step goes even while the plug-in is locked (its own listen locks it): the plug-in decides.
-  const canStep = (c) => !!(S.opts && S.opts.request && c && c.unit && c.unit.gen != null) && c.r.state !== "none";
+  const canStep = (c) => !!(S.opts && S.opts.request && c && c.unit && c.unit.gen != null) && (c.r.state !== "none" || coachAsks(c));
+  // Mixology reports the Coach on one track at a time (another Rack may show another): any track can still ask it.
+  const coachAsks = (c) => !!c && c.kind === "mix" && !c.missing && !!c.unit;
   const secsText = (v) => { const n = Math.max(0, Math.floor(+v || 0)); return n >= 60 ? `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}` : n + " s"; };
   const COACH_BUSY = { listening: 1, working: 1, busy: 1 };
 
@@ -949,7 +957,7 @@
       : r.state === "failed" ? { tipTitle: `${engine} couldn't build a plan`, summary: "Something went wrong while it worked.", tip: "Play the song and press ANALYZE AGAIN." } : null;
     const busy = !!COACH_BUSY[r.state];
     const styles = r.styles || [], ints = r.intensities || [];
-    const can = !!c.unit && canTurn(c.unit) && !busy && r.state !== "none";
+    const can = !!c.unit && canTurn(c.unit) && !busy && (r.state !== "none" || coachAsks(c));
     const finish = mk && r.state === "listening" && !!r.canFinish;   // BUILD NOW: it has heard enough
     const narrow = (S.W || 1280) < 1440;
 
@@ -959,14 +967,16 @@
       : r.state === "working" ? `${icon("pulse")}${mk ? "BUILDING YOUR MASTER" : "BUILDING YOUR RACK"}${String.fromCharCode(8230)}`
       : r.state === "busy" ? `${icon("pulse")}${mk ? "AUTO-MASTER IS RUNNING IN MASTEROLOGY" : mixk ? "MIXOLOGY IS LISTENING" : "AUTO-EDIT IS RUNNING IN VOXOLOGY"}`
       : `${icon("star")}${plan || failed ? "ANALYZE AGAIN" : "ANALYZE &amp; BUILD"}`;
-    const hint = mk
+    const pv = r.preview === "plan" || r.preview === "yours";
+    const hint = pv ? `PREVIEW: you hear ${r.preview === "plan" ? "the plan" : "your settings"}. Flip PLAN / YOURS while the song plays; KEEP PLAN applies it, BACK TO YOURS puts yours back.`
+      : mk
       ? (r.state === "listening" ? (finish ? "It has heard enough: press BUILD NOW, or let the song play to the end (the whole song is best: the Coach builds then)." 
           : r.hearing ? "Hearing your mix: BUILD NOW comes after 12 seconds; the whole song is best." : "Press play: Masterology listens to the song (at least 12 seconds; the whole song is best).")
         : r.state === "working" ? "Working out every module, then playing the loudest part of your mix through the plan to measure it."
         : r.state === "busy" ? "Auto-Master is running in Masterology's own window: press ANALYZE & BUILD when it has finished."
         : plan ? "" : "Masterology listens while the song plays, then builds the plan here. Nothing changes until you apply it.")
       : mixk
-      ? (r.state === "none" ? (c.missing ? "The Coach for this track needs Mixology on your master channel (with its DAW bridge), version 0.36 or newer." : "Waiting for Mixology" + String.fromCharCode(8230))
+      ? (r.state === "none" ? (c.missing ? "The Coach for this track needs Mixology on your master channel (with its DAW bridge), version 0.36 or newer." : "Press ANALYZE & BUILD: Mixology works out a plan for this track. Nothing changes until you apply it.")
         : r.state === "listening" ? (r.hearing ? `Hearing ${t.name}: keep the song playing where it plays.` : `Press play at a part where ${t.name} plays: the Coach listens to ${r.need || 8} seconds of it.`)
         : r.state === "busy" ? "Analyze Mix (or AUTO on a page) is listening: press ANALYZE & BUILD when it has finished."
         : plan ? "" : r.heardEnough ? "Mixology works from what Analyze Mix heard. Nothing changes until you apply it."
@@ -1102,8 +1112,24 @@
     const upToDate = ready && r.plan && r.plan.ok && r.plan.upToDate === true;   // the settings now are the plan already
     const ok = c && c.unit && canTurn(c.unit) && r.state !== "none";
     const mk = !!c && c.kind === "master", where = mk ? "MASTER" : "TRACK";
-    return `<footer class="sr-foot sr-cfoot">
+    // Beta 32, PREVIEW: hear the plan before it is applied, flip with yours at the same loudness, keep it or go back.
+    if (ok && (r.preview === "plan" || r.preview === "yours")) {
+      const onPlan = r.preview === "plan";
+      return `<footer class="sr-foot sr-cfoot sr-cprev ${(S.W || 1280) < 1440 ? "sr-cfoot-n" : ""}">
+      <button class="sr-capply" data-sr="coach-keep" title="Apply the plan (one UNDO step)">${icon("check")}KEEP PLAN</button>
+      <span class="sr-csep"></span>
+      <span class="sr-seg sr-cflip" title="Flip while the song plays: the louder one is turned down to match">
+        <button class="${onPlan ? "sr-on" : ""}" data-sr="coach-flip" data-to="plan">${icon("star")}PLAN</button>
+        <button class="${onPlan ? "" : "sr-on"}" data-sr="coach-flip" data-to="yours">${icon("sliders")}YOURS</button></span>
+      <span class="sr-csep"></span>
+      <button class="sr-cact" data-sr="coach-back" title="Stop the preview: your settings play again, nothing changes">${icon("undo")}BACK TO YOURS</button>
+      <span class="sr-cmatch">${esc(matchText(r, c.kind))}</span>
+    </footer>`;
+    }
+    const canPreview = ok && ready && !upToDate && r.plan && r.plan.ok && r.plan.changes !== 0;
+    return `<footer class="sr-foot sr-cfoot ${(S.W || 1280) < 1440 ? "sr-cfoot-n" : ""}">
       <button class="sr-capply ${applied || upToDate ? "sr-done" : ""}" data-sr="coach-apply" ${ok && ready && !upToDate ? "" : "disabled"} title="${upToDate ? "Your settings already match the plan" : "Set every module as the plan says (one UNDO step)"}">${icon(applied || upToDate ? "check" : "layers")}${applied ? "APPLIED TO " + where : upToDate ? "NOTHING TO CHANGE" : "APPLY TO " + where}</button>
+      ${canPreview ? `<button class="sr-cact sr-cpv" data-sr="coach-preview" title="Hear the plan before you apply it: flip with yours at the same loudness">${icon("speaker")}PREVIEW</button>` : ""}
       <span class="sr-csep"></span>
       <button class="sr-cact" data-sr="coach-undo" ${ok && r.canUndo ? "" : "disabled"} title="${c && c.kind === "mix" ? "Put back the settings from before the plan (one step in Mixology's History)" : mk ? "Put back the settings from before the plan (one step in Masterology's UNDO)" : "Put back the settings from before the plan (or Voxology's last Auto-Edit)"}">${icon("undo")}UNDO</button>${c && c.kind !== "vox" ? "" : `
       <span class="sr-csep"></span>
@@ -1113,13 +1139,23 @@
     </footer>`;
   }
 
+  // How PREVIEW matches the two: the louder one plays turned down (the plug-in reports the plan minus yours).
+  function matchText(r, kind) {
+    const gap = +r.planGapDb;
+    const est = kind === "mix" ? " (estimated)" : "";
+    if (!Number.isFinite(gap)) return "Measuring the loudness" + String.fromCharCode(8230);
+    if (Math.abs(gap) < 0.3) return "Same loudness already: no level change";
+    const db = Math.abs(gap).toFixed(1) + " dB";
+    return gap > 0 ? `Same loudness: the plan plays ${db} down${est}` : `Same loudness: yours plays ${db} down${est}`;
+  }
+
   // ---- WHAT TO FIX FIRST (Beta 31: the SESSION page's right panel) ---------------------------------------------------
   // One list for the whole project, worst first: Mixology's setup check (things no mixing move fixes), what the plug-ins
   // do together that works against you (two reverbs on a vocal...), Mixology's Mix Assistant points (from Analyze Mix:
   // the mix's own problems, with their tracks), a Link in the wrong insert slot; then the "have a look" points. Mixology
   // sends its part as its report while a Rack shows the Full Mix (the SESSION page asks for it).
   function mixFixReport(data) {
-    const mix = ((data && data.units) || []).find((u) => u.product === "mixology" && u.role === "fullmix");
+    const mix = mixOwner(data);
     if (!mix) return { mix: null, r: null };
     if (mix.report && S.coachText[mix.id] !== mix.report) {
       S.coachText[mix.id] = mix.report;
@@ -1404,7 +1440,7 @@
     if (!c) return "nocoach";
     const r = c.r, p = r.plan || {};
     return JSON.stringify([c.kind, c.unit && c.unit.id, c.unit && c.unit.lock, r.state, r.style, r.intensity, r.canUndo, r.reference, r.hearing, r.track, r.role, r.heardEnough,
-      r.genre, r.target, r.canFinish, p.ok, p.summary, p.changes, p.upToDate, S.coachWhy]);
+      r.genre, r.target, r.canFinish, p.ok, p.summary, p.changes, p.upToDate, S.coachWhy, r.rev, r.preview, r.planGapDb, coachAsks(c)]);
   }
 
   // Mixology's faders of the tracks the Rack shows (its "mix.faders", through its DAW bridge): not a module of the Full
@@ -1568,6 +1604,15 @@
     S.timer = setTimeout(poll, S.drag || S.wheel ? 80 : 150);   // quicker while a knob turns, so its value follows
   }
 
+  // Every part built again from scratch (a button disabled in place by a click is drawn as it should be).
+  function redraw() {
+    if (!S.root || !S.data) return;
+    S.html = {};
+    S.sig = "";
+    if (S.down) S.pending = true;
+    else render();
+  }
+
   // While you drag, the page isn't rebuilt (the knob is under your mouse): the plug-in's own text for the value
   // ("−18.0 dB") goes into it in place.
   function dragText(data) {
@@ -1611,11 +1656,13 @@
     else if (a === "redo") { replay(false); return; }
     else if (a === "bypass") { toggleBypass(); return; }
     else if (a === "ab") { flipAB(el.dataset.ab); return; }
-    else if (a === "coach-plan" || a === "coach-apply" || a === "coach-undo" || a === "coach-finish" || a === "coach-stop") {
+    else if (a === "coach-plan" || a === "coach-apply" || a === "coach-undo" || a === "coach-finish" || a === "coach-stop"
+             || a === "coach-preview" || a === "coach-flip" || a === "coach-keep" || a === "coach-back") {
       const t = trackOf(S.data, S.track), c = coachOf(t);
       if (!c) return;
       const step = a === "coach-stop" ? coachStopStep(c) : a.slice(6);
       if (!c.unit) return;
+      if (step === "flip" && el.dataset.to === c.r.preview) return;   // (already playing)
       el.disabled = true;
       const mixk = c.kind === "mix", mk = c.kind === "master";
       send(c.unit, { change: "coach", module: "coach", control: coachControl(c, t, step), value: 1, gesture: "set" }, () => {
@@ -1624,7 +1671,10 @@
           : "Voxology is listening: play the song (about 12 seconds of singing). Nothing changes until you apply.", null, 6000);
         else if (step === "finish") toast("Building the master from what it heard. Nothing changes until you apply.", null, 5000);
         else if (step === "cancel" || step === "discard") toast("Stopped: nothing changed.");
-        else if (step === "apply") toast(mk ? "Applied: Masterology set the plan on your master (one step in its UNDO). UNDO puts the settings from before back."
+        else if (step === "preview") toast("PREVIEW: you hear the plan (nothing is kept yet). Flip PLAN / YOURS while the song plays.", null, 6000);
+        else if (step === "flip") return;
+        else if (step === "back") toast("Back to yours: nothing changed.");
+        else if (step === "apply" || step === "keep") toast(mk ? "Applied: Masterology set the plan on your master (one step in its UNDO). UNDO puts the settings from before back."
           : mixk ? `Applied: Mixology set the plan on ${t.name} (one step in its History). UNDO puts the settings from before back.`
           : `Applied: Voxology set the plan on ${t.name}. UNDO puts the settings from before back.`, null, 6000);
         else toast("Undone: the settings from before are back.");
@@ -1684,6 +1734,7 @@
       if (!res || !res.ticket) {
         toast((res && res.why) || "That didn't go through.");
         if (r.change === "value") delete S.held[heldKey(unit, r.module, r.control)];
+        if (r.change === "coach") redraw();
         return;
       }
       if (check) watchAnswer(unit, res.ticket, r, 0, typeof check === "function" ? check : null);
@@ -1706,6 +1757,7 @@
         if (r.change === "value") watchSnapBack(unit, r);
         if (done) done();
       }
+      if (r.change === "coach") redraw();   // (Beta 32: the button it disabled comes back even when nothing else changed)
     }, tries ? 300 : 450);
   }
 

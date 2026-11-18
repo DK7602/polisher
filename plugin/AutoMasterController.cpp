@@ -120,6 +120,7 @@ bool AutoMasterController::start (Mode m)
     stopWatching();   // Auto Analyze gives the listener back (and a check still running stops)
     if (checkCancel != nullptr)
         checkCancel->store (true);
+    endPreview();       // a PREVIEW playing: your settings back first
     planMode = false;   // a new Auto-Master: any Coach plan is gone
     planState = planNone;
     planResult.reset();
@@ -149,6 +150,14 @@ bool AutoMasterController::finish()
     return true;
 }
 
+bool AutoMasterController::finishFromWindow()
+{
+    if (! canFinish())
+        return false;
+    if (planMode) { planMode = false; planState = planNone; }   // the window's FINISH: a normal Auto-Master
+    return finish();
+}
+
 bool AutoMasterController::startPlan()
 {
     if (! start (fullMaster))
@@ -162,6 +171,7 @@ bool AutoMasterController::applyPlan()
 {
     if (planState != planReady || planResult == nullptr || ! planResult->ok || getState() != idle)
         return false;
+    endPreview();   // APPLY during PREVIEW: from your settings, so UNDO goes back to them
     pendingStats = planStats;   // (apply() writes the listen into the report)
     apply (*planResult, planSettings);
     planState = planApplied;
@@ -170,6 +180,7 @@ bool AutoMasterController::applyPlan()
 
 void AutoMasterController::discardPlan()
 {
+    endPreview();
     if (planMode && getState() != idle) cancel();
     planMode = false;
     planState = planNone;
@@ -194,6 +205,86 @@ void AutoMasterController::cancel()
         stateFlag.store (idle);
         updateTimer();
     }
+}
+
+// ---- PREVIEW (Beta 32) ------------------------------------------------------------------------------------------------
+
+namespace
+{
+    /** A chain whose values name every control Auto-Master can set (the Soft Clipper's only come with it on). */
+    polisher::MasterChainParams everyControl()
+    {
+        polisher::MasterChainParams c;
+        c.clipper.enabled = true;
+        return c;
+    }
+}
+
+bool AutoMasterController::startPreview()
+{
+    if (previewing.load()) return true;
+    if (planState != planReady || planResult == nullptr || ! planResult->ok || getState() != idle)
+        return false;
+    previewYours.clear();
+    for (const auto& [id, unused] : polisher::autoanalyze::chainValues (everyControl()))
+        if (auto* p = state.getParameter (juce::String (id)))
+            previewYours.emplace_back (juce::String (id), p->convertFrom0to1 (p->getValue()));
+    previewYoursTone = toneTarget.get();
+    previewing.store (true);
+    setPreviewPlan();
+    return true;
+}
+
+bool AutoMasterController::flipPreview()
+{
+    if (! previewing.load()) return false;
+    if (previewOnPlan) setPreviewYours();
+    else setPreviewPlan();
+    return true;
+}
+
+bool AutoMasterController::keepPreview()
+{
+    if (! previewing.load()) return false;
+    return applyPlan();   // (it puts yours back first: one undo step from them)
+}
+
+void AutoMasterController::endPreview()
+{
+    if (! previewing.load()) return;
+    setPreviewYours();
+    previewing.store (false);
+    previewGain.store (0.0f);
+    previewYours.clear();
+}
+
+void AutoMasterController::setQuietly (const juce::String& id, float value)
+{
+    if (auto* p = state.getParameter (id))
+    {
+        const float v = p->convertTo0to1 (value);
+        if (std::abs (p->getValue() - v) > 1.0e-6f) p->setValueNotifyingHost (v);
+    }
+}
+
+void AutoMasterController::setPreviewPlan()
+{
+    for (const auto& [id, v] : polisher::autoanalyze::chainValues (planResult->chain))
+        setQuietly (juce::String (id), static_cast<float> (v));
+    toneTarget.set (planSettings.songTone);   // as apply() sets it
+    previewOnPlan = true;
+    const double gap = std::isfinite (planGapDb) ? std::clamp (planGapDb, -24.0, 24.0) : 0.0;
+    previewGain.store (static_cast<float> (-std::max (0.0, gap)));   // the louder one comes down, never up
+}
+
+void AutoMasterController::setPreviewYours()
+{
+    for (const auto& [id, v] : previewYours)
+        setQuietly (id, v);
+    toneTarget.set (previewYoursTone);
+    previewOnPlan = false;
+    const double gap = std::isfinite (planGapDb) ? std::clamp (planGapDb, -24.0, 24.0) : 0.0;
+    previewGain.store (static_cast<float> (-std::max (0.0, -gap)));
 }
 
 double AutoMasterController::getHeardSeconds() const noexcept
@@ -283,6 +374,10 @@ void AutoMasterController::tick()
                 planState = result != nullptr && result->ok ? planReady : planFailed;
                 planResult = std::move (result);
                 planJson = juce::String::fromUTF8 (json.data(), static_cast<int> (json.size()));
+                {
+                    const juce::ScopedLock sl (resultLock);
+                    planGapDb = pendingPlanGapDb;
+                }
                 planMode = false;
             }
             else if (result != nullptr)
@@ -358,7 +453,7 @@ void AutoMasterController::launchAnalysis()
     struct NowValue { float value = 0.0f; juce::NormalisableRange<float> range; bool steps = false; };
     auto nowValues = std::make_shared<std::map<std::string, NowValue>>();
     if (forPlan)
-        for (const auto& [id, unused] : polisher::autoanalyze::chainValues (polisher::MasterChainParams {}))
+        for (const auto& [id, unused] : polisher::autoanalyze::chainValues (everyControl()))
             if (auto* p = state.getParameter (juce::String (id)))
             {
                 NowValue v;
@@ -368,8 +463,12 @@ void AutoMasterController::launchAnalysis()
                 (*nowValues)[id] = v;
             }
 
-    pool.addJob ([this, clip = std::move (clip), settings, thisSession, stop = analysisCancel, forPlan, heard, nowValues]
+    // PREVIEW's level match: your settings now, rendered on the same 12 s as the plan.
+    const auto nowChain = forPlan && currentChain ? currentChain() : polisher::MasterChainParams {};
+    const bool nowBypassed = forPlan && state.getRawParameterValue ("bypass") != nullptr && state.getRawParameterValue ("bypass")->load() > 0.5f;
+    pool.addJob ([this, clip = std::move (clip), settings, thisSession, stop = analysisCancel, forPlan, heard, nowValues, nowChain, nowBypassed]
     {
+        double gap = std::numeric_limits<double>::quiet_NaN();
         std::unique_ptr<polisher::AutoMasterResult> result;
         std::string plan;
         try
@@ -399,6 +498,12 @@ void AutoMasterController::launchAnalysis()
                     }
                 }
                 plan = polisher::coach::planJson (*result, after.get(), settings, heard, kPlanBytes, result->ok ? &changed : nullptr);
+                if (after != nullptr && currentChain)
+                {
+                    const double yours = (nowBypassed ? polisher::measure (clip) : polisher::measure (polisher::renderMaster (clip, nowChain))).integratedLufs;
+                    if (yours > -70.0 && after->loudness.integratedLufs > -70.0)
+                        gap = after->loudness.integratedLufs - yours;
+                }
             }
         }
         catch (const polisher::AnalysisCancelled&)
@@ -414,6 +519,7 @@ void AutoMasterController::launchAnalysis()
             const juce::ScopedLock sl (resultLock);
             pendingResult = std::move (result);
             pendingPlanJson = std::move (plan);
+            pendingPlanGapDb = gap;
             pendingSession = thisSession;
         }
         resultReady.store (true);
@@ -656,12 +762,16 @@ void AutoMasterController::stopForLoadedState()
 {
     if (getState() != idle)
         cancel();
+    discardPlan();   // the Coach's plan (ready or applied) was for the settings before the load
     if (checkCancel != nullptr)
         checkCancel->store (true);   // an Auto Analyze check about the settings before
 }
 
 void AutoMasterController::onStateRestored (const juce::String& savedReport)
 {
+    previewing.store (false);   // another state loaded: a PREVIEW is over (nothing to put back: the state is new)
+    previewGain.store (0.0f);
+    if (juce::MessageManager::existsAndIsCurrentThread()) previewYours.clear();   // (else the next PREVIEW starts afresh)
     // A preset, the host's A/B compare or its undo: an Auto-Master run going on now stops, so its result doesn't
     // overwrite the state just loaded. Off the message thread the next tick() stops it (before it can apply anything).
     ++stateLoads;

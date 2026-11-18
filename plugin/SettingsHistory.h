@@ -158,6 +158,16 @@ public:
     /** What Undo / Redo would do ("Drive +2.0 dB"), or "" when there is nothing. */
     juce::String undoLabel() { return canUndo() ? steps[static_cast<size_t> (pos - 1)].label : juce::String(); }
     juce::String redoLabel() { return canRedo() ? steps[static_cast<size_t> (pos)].label : juce::String(); }
+    /** Each step's own number (labels repeat: two Auto-Masters with one genre read the same): the last step done, 0 =
+        none; and whether a step is still done (not undone, not dropped). */
+    std::uint64_t undoSerial() { return canUndo() ? steps[static_cast<size_t> (pos - 1)].serial : 0; }
+    bool isDone (std::uint64_t serial)
+    {
+        syncPending();
+        for (int i = 0; i < pos; ++i)
+            if (steps[static_cast<size_t> (i)].serial == serial) return serial != 0;
+        return false;
+    }
     int size()                { syncPending(); return static_cast<int> (steps.size()); }
 
     /** Puts back what the last step changed. Returns its label ("" = nothing to undo). */
@@ -196,6 +206,7 @@ private:
     struct Step
     {
         juce::String label;
+        std::uint64_t serial = 0;
         std::vector<Change> changes;
         juce::String extraBefore, extraAfter;
         bool hasExtra = false, fromGesture = false;
@@ -236,6 +247,7 @@ private:
     void push (Step s)
     {
         s.time = juce::Time::getMillisecondCounterHiRes();
+        s.serial = ++lastSerial;
         steps.erase (steps.begin() + pos, steps.end());
         steps.push_back (std::move (s));
         if (steps.size() > static_cast<size_t> (kMaxSteps))
@@ -371,6 +383,7 @@ private:
     std::vector<juce::RangedAudioParameter*> params;          // by parameter index
     std::vector<Step> steps;
     int pos = 0;                                               // steps[0 .. pos) are done; the rest can be redone
+    std::uint64_t lastSerial = 0;                              // the last step's number (Step::serial)
     std::vector<int> openGestures;
     std::vector<std::pair<int, float>> gestureBefore;          // value of each control when its gesture began
     bool applying = false, canMerge = false;

@@ -4050,6 +4050,45 @@ TEST_CASE ("Coach (the master): ANALYZE & BUILD plans without changing anything;
     CHECK (settingsOf (*p) == before);
     CHECK (p->autoMaster.getReportJson().isEmpty());              // Auto-Master's own report isn't touched either
 
+    // PREVIEW (Beta 32): the plan plays, nothing is recorded, flips go both ways, BACK puts yours back.
+    const int steps = p->history.size();
+    CHECK (rack.step ("preview").empty());
+    const auto planned = settingsOf (*p);
+    CHECK (planned != before);
+    CHECK (p->history.size() == steps);                            // not an undo step
+    const auto pv = rack.report ("ready", "preview");
+    CHECK (pv["preview"].toString() == "plan");
+    REQUIRE (std::isfinite ((double) pv["planGapDb"]));
+    CHECK ((double) pv["planGapDb"] > 3.0);                         // a master is louder than the mix it came from
+    CHECK ((double) pv["previewGainDb"] < -3.0);                    // ... so the plan comes down to yours
+    CHECK (p->autoMaster.previewGainDb() == Catch::Approx (-(double) pv["planGapDb"]).margin (0.06));
+    {
+        // A save while the plan plays keeps your settings: nothing changes until APPLY.
+        juce::MemoryBlock saved;
+        p->getStateInformation (saved);
+        auto q = makeProcessor (sr, 512, false);
+        q->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        CHECK (settingsOf (*q) == before);
+    }
+    CHECK (rack.step ("flip").empty());
+    CHECK (settingsOf (*p) == before);
+    CHECK (rack.report ("ready", "preview")["preview"].toString() == "yours");
+    CHECK (p->autoMaster.previewGainDb() == 0.0f);                 // yours is the quieter one: as it is
+    CHECK (rack.step ("flip").empty());
+    CHECK (settingsOf (*p) == planned);
+    CHECK (rack.step ("back").empty());
+    CHECK (settingsOf (*p) == before);
+    CHECK_FALSE (p->autoMaster.isPreviewing());
+    CHECK (p->history.size() == steps);
+    // KEEP from PREVIEW is APPLY: one undo step from yours.
+    CHECK (rack.step ("preview").empty());
+    CHECK (rack.step ("keep").empty());
+    CHECK_FALSE (p->autoMaster.isPreviewing());
+    CHECK (p->history.size() == steps + 1);
+    CHECK (settingsOf (*p) == planned);
+    CHECK (rack.step ("undo").empty());
+    CHECK (settingsOf (*p) == before);
+
     // APPLY TO MASTER: one UNDO step, the plan's settings in place; UNDO puts the settings back and the plan can go on again.
     CHECK (rack.step ("apply").empty());
     const auto applied = settingsOf (*p);
@@ -4072,6 +4111,35 @@ TEST_CASE ("Coach (the master): ANALYZE & BUILD plans without changing anything;
     CHECK ((int) again["plan"]["changes"] == 0);
     CHECK (again["plan"]["summary"].toString().contains ("nothing to change"));
     CHECK (settingsOf (*p) == applied);
+    // (Review fixes) A Soft Clipper knob turned since counts as a change (it was missed: the clipper's knobs only come
+    // with the clipper on).
+    if (plainOf (*p, "clipOn") > 0.5f)
+    {
+        gesture (*p, "clipLevel", plainOf (*p, "clipLevel") - 3.0f);
+        CHECK (rack.step ("plan").empty());
+        play (*p, head, testsig::musicLike (sr, 14.0, -16.0, 3));
+        CHECK (rack.step ("finish").empty());
+        REQUIRE (waitForAutoMaster (*p));
+        const auto clipped = rack.report ("ready", "plan");
+        CHECK_FALSE (static_cast<bool> (clipped["plan"]["upToDate"]));
+        CHECK ((int) clipped["plan"]["changes"] >= 1);
+        CHECK (p->history.undo().isNotEmpty());   // Clip Level back
+    }
+    // The top bar's UNDO takes the Coach's step back: the plan can go on again, and the Coach's UNDO has nothing left.
+    CHECK (rack.step ("apply").empty());
+    CHECK (static_cast<bool> (rack.report ("applied", "canUndo")["canUndo"]));
+    CHECK (p->history.undo().startsWith ("Auto-Master ("));
+    const auto undoneElsewhere = rack.report ("ready");
+    CHECK (undoneElsewhere["state"].toString() == "ready");
+    CHECK_FALSE (static_cast<bool> (undoneElsewhere["canUndo"]));
+    CHECK_FALSE (rack.step ("undo").empty());   // (not the earlier Auto-Master with the same label)
+    // A preset or project load: the plan was for the settings before, so it goes.
+    {
+        juce::MemoryBlock saved;
+        p->getStateInformation (saved);
+        p->setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        CHECK (rack.report ("idle")["state"].toString() == "idle");
+    }
     // A change after it: the Coach's UNDO says so and leaves it (Masterology's own UNDO steps back).
     gesture (*p, "glueRatio", 3.0f);
     CHECK_FALSE (rack.step ("undo").empty());

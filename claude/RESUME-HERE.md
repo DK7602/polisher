@@ -839,3 +839,11 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   before). Manual (+ Claude Docs copy): "After APPLY", the Link's RACK. (Mixology's RESUME-HERE has the rest.)
 - Masterology 0.43.0 (2026-11-18, Sonicology Beta 31): shared rack.js / rack.css (WHAT TO FIX FIRST on the SESSION
   page). No Masterology code changed. Manual (+ Claude Docs copy). (Mixology's RESUME-HERE has the rest.)
+- Masterology 0.44.0 (2026-11-18, Sonicology Beta 32): the Coach's PREVIEW and a review of Betas 26 - 31 (details in
+  README's Beta 32 row). AutoMasterController preview API + setQuietly (no gestures: SettingsHistory records gestures),
+  currentChain hook (PluginProcessor::currentChain() builds the chain from the parameters, as the audio thread does),
+  pendingPlanGapDb; matchGain: side B = the preview gain, MATCH off while it plays; coachUndoStep = a SettingsHistory
+  serial (Step::serial, undoSerial(), isDone()); finishFromWindow(). Plug-in test "Coach (the master)": preview, flip,
+  back, a save during preview, keep = one UNDO step, ANALYZE AGAIN -> upToDate, a changed clip knob isn't up to date,
+  top-bar UNDO -> ready, a preset load -> idle. Manual (+ Claude Docs copy): PREVIEW. (Mixology's RESUME-HERE has the
+  rest.)

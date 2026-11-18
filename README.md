@@ -22,7 +22,7 @@ User manual: [docs/manual/polisher-manual.md](docs/manual/polisher-manual.md) (a
 A live copy is kept in Claude Docs (project 3bf99dd7-1111-4be3-884d-d787ae49506c, node 15637893-1eb5): update it
 whenever the manual changes.
 
-## Status — v0.43.0
+## Status — v0.44.0
 
 | Piece | State |
 | --- | --- |
@@ -88,6 +88,7 @@ whenever the manual changes.
 | Rack Beta 29 (v0.41.0, with Voxology 0.67.0 and Mixology 0.37.0): the Coach on the master. `polisher::coach::planJson` (MasterCoach.h / .cpp: what Auto-Master heard, what stands out against the genre's or the reference's tone, every module it turns on with its reasons, the mix's tone and the master's, results measured by rendering the same 12 s through the plan). AutoMasterController plan mode (startPlan / applyPlan / discardPlan: listens and decides like Auto-Master, keeps the plan; APPLY = one UNDO step); the analysis rests while the song plays (ScopedPace, as Voxology's). PluginProcessor: Change::coach steps plan / finish / cancel / apply / undo / discard, coachReport in Unit::report; the Rack's GENRE / INTENSITY / TARGET (amGenre, amIntensity, amTarget) | New: tested in the engine and the browser preview, not yet in a DAW |
 | Beta 30 (v0.42.0, with Voxology 0.68.0 and Mixology 0.38.0): the Coach after APPLY compares Auto-Master's plan with the settings now (coach::planJson's changedIds: "same" per module, "changes", "upToDate"; a switch or choice that differs, a knob more than 2 % of its range away), so ANALYZE AGAIN says NOTHING TO CHANGE instead of offering the same plan (plug-in test). RACK pill without the emblem | New: tested in the engine and the browser preview, not yet in a DAW |
 | Rack Beta 31 (v0.43.0, with Voxology 0.69.0 and Mixology 0.39.0): shared rack.js / rack.css: WHAT TO FIX FIRST on the SESSION page (Mixology's Mix Assistant points, the setup check and the Rack's warnings, worst first). No Masterology code changed | New: tested in the browser preview, not yet in a DAW |
+| Beta 32 (v0.44.0, with Voxology 0.70.0 and Mixology 0.40.0): the Coach's PREVIEW and a review of Betas 26 - 31. AutoMasterController: startPreview / flipPreview / keepPreview / endPreview (the plan set quietly, without gestures, so SettingsHistory doesn't record it; yours kept and put back, the tone target too); the plan job renders the clip through the chain as it is now (currentChain()) and stores planGapDb = the plan's loudness minus yours. While a preview plays, side B of the A/B gets the preview gain (the louder side down) and MATCH is off; a save writes yours; it ends after 4 s without a Rack on the master. KEEP = one UNDO step. Review fixes: the Coach's UNDO step is a SettingsHistory serial (only the Coach's own step is undone; the top bar's UNDO of it puts the plan back to ready), everyControl() (the clipper's knobs too) for the comparison, a loaded preset or state stops the Coach, BUILD NOW from the window, locale-free num(). Plug-in test: preview, flip, back, a save during preview, keep as one UNDO step | New: tested in the engine, the plug-in test and the browser preview, not yet in a DAW |
 
 ## Validation
 

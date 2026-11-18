@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -110,12 +111,34 @@ public:
         stays (after an undo it can be applied again) until the next Auto-Master or discardPlan(). Message thread. */
     enum PlanState { planNone = 0, planListening, planWorking, planReady, planApplied, planFailed };
     bool startPlan();
+    /** FINISH in Masterology's own window: Auto-Master as always (a Coach's listen becomes a normal run that applies). */
+    bool finishFromWindow();
     bool applyPlan();
     void discardPlan();
     /** The plan's undo step was taken back: it can be applied again. */
     void planUndone()                          { if (planState == planApplied && planResult != nullptr) planState = planReady; }
     PlanState getPlanState() const noexcept    { return planState; }
     const juce::String& getPlanJson() const noexcept { return planJson; }
+
+    /** Beta 32, PREVIEW: hear the Coach's plan before APPLY. startPreview() puts the plan's settings in (no undo step:
+        set without gestures, so Masterology's UNDO doesn't record them) and keeps yours; flipPreview() swaps between the
+        plan and yours; keepPreview() is APPLY (one undo step, from yours); endPreview() puts yours back. While one of
+        them plays, the louder one is turned down to the other (previewGainDb: both measured on the plan's 12 s, yours
+        rendered through the settings you had then), so you compare the sound, not the loudness. Message thread
+        (previewGainDb / isPreviewing: any thread). */
+    bool startPreview();
+    bool flipPreview();
+    bool keepPreview();
+    void endPreview();
+    bool isPreviewing() const noexcept         { return previewing.load (std::memory_order_relaxed); }
+    bool previewHearsPlan() const noexcept     { return previewOnPlan; }
+    float previewGainDb() const noexcept       { return previewGain.load (std::memory_order_relaxed); }
+    /** The plan minus your settings, loudness on the plan's 12 s (dB, + = the plan is louder); NaN: not measured. */
+    double planLoudnessGapDb() const noexcept  { return planGapDb; }
+    /** Your settings while a preview plays the plan (parameter id -> plain value): the project saves these. */
+    const std::vector<std::pair<juce::String, float>>& previewYoursPlain() const noexcept { return previewYours; }
+    /** The chain as Masterology's controls set it now (the processor's; for PREVIEW's level match). Message thread. */
+    std::function<polisher::MasterChainParams()> currentChain;
     static constexpr std::size_t kPlanBytes = 7300;   // (the Rack's report holds 8 KB, with the state around it)
     /** Analysis while the song plays rests on purpose (polisher::ScopedPace): 8 ms after every 20 ms of work. */
     static constexpr double kPaceWorkMs = 20.0, kPaceRestMs = 8.0;
@@ -243,6 +266,16 @@ private:
     polisher::SongStats planStats;
     juce::String planJson;
     std::string pendingPlanJson;
+    double planGapDb = std::numeric_limits<double>::quiet_NaN(), pendingPlanGapDb = std::numeric_limits<double>::quiet_NaN();
+    // PREVIEW (message thread; previewing / previewGain also read by the audio thread)
+    std::atomic<bool> previewing { false };
+    std::atomic<float> previewGain { 0.0f };
+    bool previewOnPlan = false;
+    std::vector<std::pair<juce::String, float>> previewYours;   // plain values, the ids Auto-Master sets
+    polisher::ToneTarget previewYoursTone;
+    void setQuietly (const juce::String& id, float value);   // no gesture: Masterology's UNDO doesn't record it
+    void setPreviewPlan();
+    void setPreviewYours();
     std::shared_ptr<std::atomic<bool>> analysisCancel;   // the running analysis's stop flag (message thread)
 
     juce::CriticalSection resultLock;

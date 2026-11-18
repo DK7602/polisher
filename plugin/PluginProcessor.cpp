@@ -98,6 +98,7 @@ PolisherAudioProcessor::PolisherAudioProcessor()
                            [this] (const juce::String& extra) { restoreExtraState (extra); });
     autoMaster.onApplyBegin = [this] (const juce::String& label) { history.beginGroup (label); };
     autoMaster.songStyleKey = [this] { return songStyleNow().key; };   // Auto-Master masters to the song's style
+    autoMaster.currentChain = [this] { return currentChain(); };          // the Coach's PREVIEW: yours, rendered
     // Auto-Master usually moves the level by several dB: MATCH learns it afresh (matched within about half
     // a second of B, exactly from ~3 s) instead of sliding there from the old level over ~20 s.
     autoMaster.onApplyEnd = [this]
@@ -1032,9 +1033,13 @@ void PolisherAudioProcessor::processAnyPrecision (juce::AudioBuffer<Sample>& buf
     // limiter delays (~6 ms): MATCH switches sides then, and glides there over 20 ms as Drive does.
     // (Switching at the click played B's driven audio at A's gain for those ms on B -> A, a snap of up to
     // +8 dB, and left a hole on A -> B.)
-    const bool matching = levelMatchParam->load() > 0.5f && ! offline;
-    const auto matchGain = [this, matching] (bool sideA)
+    // The Coach's PREVIEW (Beta 32) takes MATCH's place while it plays: the plan and your settings at the same loudness,
+    // matched on the plan's own 12 s (exact for that part, at once on every flip).
+    const bool previewing = autoMaster.isPreviewing() && ! offline;
+    const bool matching = levelMatchParam->load() > 0.5f && ! offline && ! previewing;
+    const auto matchGain = [this, matching, previewing] (bool sideA)
     {
+        if (previewing) return sideA ? 1.0 : juce::Decibels::decibelsToGain (static_cast<double> (autoMaster.previewGainDb()));
         return matching ? juce::Decibels::decibelsToGain (sideA ? levelMatch.gainForADb() : levelMatch.gainForBDb()) : 1.0;
     };
     int matchFrom = 0;
@@ -1396,19 +1401,31 @@ std::string PolisherAudioProcessor::applyRack (const rack::Request& r)
         if (r.control == "apply")
         {
             if (! autoMaster.applyPlan()) return "There's no plan to apply yet: press ANALYZE & BUILD and play the song.";
-            coachUndoLabel = history.undoLabel();
+            coachUndoStep = history.undoSerial();
             return {};
         }
         if (r.control == "undo")
         {
-            if (plan != AutoMasterController::planApplied || coachUndoLabel.isEmpty() || history.undoLabel() != coachUndoLabel)
+            if (plan != AutoMasterController::planApplied || coachUndoStep == 0 || history.undoSerial() != coachUndoStep)
                 return "Something changed since the plan was applied: use Masterology's UNDO (top bar) to step back.";
-            history.undo();
-            coachUndoLabel.clear();
+            if (history.undo().isEmpty()) return "Masterology can't undo right now: try again in a moment.";
+            coachUndoStep = 0;
             autoMaster.planUndone();
             return {};
         }
         if (r.control == "discard") { autoMaster.discardPlan(); return {}; }
+        // Beta 32, PREVIEW: hear the plan before APPLY, flip with yours (same loudness), keep it or go back.
+        if (r.control == "preview")
+            return autoMaster.startPreview() ? std::string() : std::string ("There's no plan to hear yet: press ANALYZE & BUILD and play the song.");
+        if (r.control == "flip")
+            return autoMaster.flipPreview() ? std::string() : std::string ("PREVIEW isn't on: press PREVIEW first.");
+        if (r.control == "keep")
+        {
+            if (! autoMaster.keepPreview()) return "PREVIEW isn't on: press PREVIEW first.";
+            coachUndoStep = history.undoSerial();
+            return {};
+        }
+        if (r.control == "back") { autoMaster.endPreview(); return {}; }
         return "The Coach can't do \"" + r.control + "\".";
     }
     if (r.change == rack::Change::save) return "Only Voxology saves chains from the Rack.";
@@ -1448,6 +1465,13 @@ void PolisherAudioProcessor::publishRack()
     const auto now = suite::nowMs();
     // Stage 2: knobs turned and modules switched in a Rack view (in any Sonicology plug-in), on this Masterology.
     rackPub.serve (now, rackLock(), [this] (const rack::Request& r) { return applyRack (r); });
+    // PREVIEW without a Rack showing the master for a while (closed, or another track picked): your settings back.
+    if (autoMaster.isPreviewing())
+    {
+        if (rackPub.shows (now, 0, rack::Role::master)) previewSeenMs = now;
+        else if (now - std::min (now, previewSeenMs) > 4000) autoMaster.endPreview();
+    }
+    else previewSeenMs = now;
     const auto due = rackPub.due (now, 0, rack::Role::master);
     if (due == rack::Publisher::Due::none) return;
     auto value = [this] (const char* id) { auto* p = parameters.getRawParameterValue (id); return p != nullptr ? p->load() : 0.0f; };
@@ -1524,10 +1548,55 @@ void PolisherAudioProcessor::publishRack()
     rackPub.publish (std::move (u), now);
 }
 
+polisher::MasterChainParams PolisherAudioProcessor::currentChain() const
+{
+    // As the audio thread builds each module (updateLimiterParams, ModuleParams), for an offline render. Glue isn't part
+    // of a MasterChainParams (Auto-Master plans without it).
+    polisher::MasterChainParams c;
+    c.trimDb = trimParam->load();
+    c.unlimiter = moduleParams.unlimiter (false);
+    c.eq.enabled = eqOnParam->load() > 0.5f;
+    for (size_t b = 0; b < static_cast<size_t> (polisher::kEqBands); ++b)
+    {
+        c.eq.gainDb[b] = eqGainParams[b]->load();
+        c.eq.freqHz[b] = eqFreqParams[b]->load();
+        c.eq.channels[b] = static_cast<polisher::EqChannels> (juce::jlimit (0, 2, juce::roundToInt (eqModeParams[b]->load())));
+    }
+    c.stem = moduleParams.stem (false);
+    c.steady = moduleParams.steady (false);
+    c.resonance = moduleParams.resonance (false);
+    c.bass.enabled = bassOnParam->load() > 0.5f;
+    c.bass.monoHz = bassMonoParam->load();
+    c.bass.tame = bassTameParam->load() / 100.0;
+    c.bass.punch = bassPunchParam->load() / 100.0;
+    c.dynamics = moduleParams.dynamics (false);
+    c.imager = moduleParams.imager (false);
+    c.saturation = moduleParams.saturation (false);
+    c.driveDb = driveParam->load();
+    c.limiter.ceilingDbtp = ceilingParam->load();
+    c.limiter.releaseMs = releaseParam->load();
+    c.limiter.adaptiveRelease = adaptiveParam->load() > 0.5f;
+    c.limiter.bassFirst = juce::jlimit (0.0, 1.0, static_cast<double> (bassFirstParam->load()) / 100.0);
+    static constexpr int kOversampling[] = { 1, 2, 4, 8 };
+    const double clipLevel = clipLevelParam->load();
+    c.clipper.enabled = clipOnParam->load() > 0.5f;
+    c.clipper.thresholdDb = c.limiter.ceilingDbtp + clipLevel;
+    c.clipper.makeupDb = juce::jmax (0.0, -clipLevel);
+    c.clipper.softness = clipSoftnessParam->load() / 100.0;
+    c.clipper.oversampling = kOversampling[juce::jlimit (0, 3, juce::roundToInt (clipOversamplingParam->load()))];
+    return c;
+}
+
 std::string PolisherAudioProcessor::coachReport()
 {
     // The Rack's COACH page on the master: where the Coach stands, Auto-Master's choices, and the plan itself.
     auto choice = [this] (const char* id) { auto* p = parameters.getRawParameterValue (id); return p != nullptr ? juce::roundToInt (p->load()) : 0; };
+    // The plan's step undone or dropped elsewhere (the top bar's UNDO, a load): it can go on again.
+    if (autoMaster.getPlanState() == AutoMasterController::planApplied && ! history.isDone (coachUndoStep))
+    {
+        autoMaster.planUndone();
+        coachUndoStep = 0;
+    }
     const auto plan = autoMaster.getPlanState();
     const auto st = autoMaster.getState();
     const char* state = plan == AutoMasterController::planListening ? "listening"
@@ -1558,7 +1627,14 @@ std::string PolisherAudioProcessor::coachReport()
         const auto ref = reference.getProfile();
         o->setProperty ("reference", ref.valid ? juce::String::fromUTF8 (ref.name.c_str()) : juce::String());
     }
-    o->setProperty ("canUndo", plan == AutoMasterController::planApplied && coachUndoLabel.isNotEmpty() && history.undoLabel() == coachUndoLabel);
+    o->setProperty ("canUndo", plan == AutoMasterController::planApplied && coachUndoStep != 0 && history.undoSerial() == coachUndoStep);
+    if (autoMaster.isPreviewing())
+    {
+        o->setProperty ("preview", autoMaster.previewHearsPlan() ? "plan" : "yours");
+        o->setProperty ("previewGainDb", std::round (autoMaster.previewGainDb() * 10.0f) / 10.0f);
+    }
+    if (const double gap = autoMaster.planLoudnessGapDb(); std::isfinite (gap))
+        o->setProperty ("planGapDb", std::round (gap * 10.0) / 10.0);   // the plan minus yours, loudness (+ = louder)
     auto text = juce::JSON::toString (juce::var (o), true).trimEnd();
     const auto& json = autoMaster.getPlanJson();
     if (json.isNotEmpty() && text.endsWithChar ('}')
@@ -1572,6 +1648,11 @@ void PolisherAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     if (auto xml = parameters.copyState().createXml())
     {
+        // The Coach's PREVIEW plays the plan for now: the project keeps your settings (nothing changes until APPLY).
+        if (autoMaster.isPreviewing() && juce::MessageManager::existsAndIsCurrentThread())
+            for (const auto& [id, value] : autoMaster.previewYoursPlain())
+                if (auto* e = xml->getChildByAttribute ("id", id))
+                    e->setAttribute ("value", value);
         xml->setAttribute ("amReport", autoMaster.getReportForSaving());
         if (autoMaster.getAutoAnalyze())
             xml->setAttribute ("autoAnalyze", 1);   // absent: off (also every state saved before it existed)
