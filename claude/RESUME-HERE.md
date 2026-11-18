@@ -806,3 +806,7 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
   RESUME-HERE). applyRack refuses a save (only Voxology keeps chains). Manual (and its Claude Docs copy): the Rack section.
 - Masterology 0.37.0 (2026-11-17, Sonicology Beta 25): shared rack.js from Mixology (the insert-order check: Mixology's
   RESUME-HERE). No Masterology code changed. Manual (and its Claude Docs copy): the Rack section.
+- 2026-11-18 CI: the Windows job had failed to build polisher_plugin_tests since Beta 17 (c9c9a4a): the shared RackHost.h
+  named juce::WebBrowserComponent, and that target builds the processor with POLISHER_HEADLESS and JUCE_WEB_BROWSER=0.
+  RackHost.h now has viewResource only `#if JUCE_WEB_BROWSER` (c06202d; same file in all three repos); the build passes
+  again. The plug-ins and the installers were never affected (they build with the web view). Beta 25 installer green.
