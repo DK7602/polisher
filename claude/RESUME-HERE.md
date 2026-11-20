@@ -850,3 +850,6 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
 - Masterology 0.45.0 (2026-11-18, Sonicology Beta 33): shared RackLink / rack.js (a chain you can reorder, in Voxology and
   Mixology). Masterology keeps its order: applyRack refuses Change::order with the reason. Manual (+ Claude Docs copy):
   move a module. (Mixology's RESUME-HERE has the rest.)
+- Masterology 0.45.1 (2026-11-20, Sonicology Beta 34): shared RackLink / rack.js fixes from the user's Beta 33 test;
+  the Coach after APPLY compares with closeEnough (musical tolerances) instead of 2 % of a knob's range. Manual (+ Claude
+  Docs copy). (Mixology's RESUME-HERE has the rest.)

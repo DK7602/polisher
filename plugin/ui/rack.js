@@ -605,7 +605,10 @@
       `<span class="sr-suite sr-tone-${PRODUCTS[p].tone}" title="${esc(PRODUCTS[p].name)}"><i></i>${esc(SUITE_WORD[p])}${counts[p] > 1 ? ` <b>${counts[p]}</b>` : ""}</span>`).join("");
     const missing = ["voxology", "mixology", "masterology"].filter((p) => !counts[p] && !(p === "mixology" && counts.link));
     const miss = missing.length ? `<span class="sr-suite sr-suite-missing">NOT IN THIS PROJECT: ${missing.map((p) => PRODUCTS[p].name.toUpperCase()).join(", ")}</span>` : "";
-    return `<header class="sr-head">
+    // (a narrow Rack, Beta 33 fix: the bar ran out of room and BACK TO ... was cut off at the right)
+    const narrow = (S.W || 1280) < 1440;
+    const backTo = "BACK TO " + (HOSTS[S.opts.host] || "PLUG-IN").toUpperCase();
+    return `<header class="sr-head ${narrow ? "sr-head-n" : ""}">
       <i class="sr-liquid sr-liquid-l"></i><i class="sr-liquid sr-liquid-r"></i>
       <div class="sr-emblem"><img src="${ART}rack_emblem.webp" alt="Light / dark view" title="Click: ${S.theme === "light" ? "dark" : "light"} view" draggable="false" data-sr="theme"></div>
       <div class="sr-title">
@@ -627,7 +630,7 @@
         <div class="sr-sep"></div>
         ${tools(data, t)}
         <div class="sr-suites">${chips}${miss}</div>
-        <button class="sr-back" data-sr="back">${icon("back")}BACK TO ${esc((HOSTS[S.opts.host] || "PLUG-IN").toUpperCase())}</button>
+        <button class="sr-back" data-sr="back" title="${esc(backTo)}">${icon("back")}${esc(narrow ? "BACK" : backTo)}</button>
       </div>
     </header>`;
   }

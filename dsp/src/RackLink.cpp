@@ -586,7 +586,8 @@ namespace rack
         e.generation.store (generation, kRelaxed);
         e.change.store (static_cast<std::uint32_t> (r.change), kRelaxed);
         e.gesture.store (static_cast<std::uint32_t> (r.gesture), kRelaxed);
-        e.value.store (requestValue (r.value), kRelaxed);
+        // (a knob goes 0..1; a module's new place (Change::order) is a whole number of places: kept as it is)
+        e.value.store (r.change == Change::order ? std::clamp (finite (r.value), 0.0f, static_cast<float> (kMaxModules - 1)) : requestValue (r.value), kRelaxed);
         storeText (e.module, r.module);
         storeText (e.control, r.control);
         e.stamp.store (written, kRelease);
@@ -630,7 +631,8 @@ namespace rack
                 forGeneration = e.generation.load (kRelaxed);
                 r.change = static_cast<Change> (e.change.load (kRelaxed));
                 r.gesture = static_cast<Gesture> (e.gesture.load (kRelaxed));
-                r.value = requestValue (e.value.load (kRelaxed));
+                r.value = r.change == Change::order ? std::clamp (finite (e.value.load (kRelaxed)), 0.0f, static_cast<float> (kMaxModules - 1))
+                                                    : requestValue (e.value.load (kRelaxed));
                 r.module = loadText (e.module);
                 r.control = loadText (e.control);
                 std::atomic_thread_fence (kAcquire);
@@ -949,25 +951,25 @@ namespace rack
                     const auto* vComp = findModule (vox, "vox.comp");
                     const auto* lComp = findModule (link, "mix.comp");
                     if (isOn (vComp) && isOn (lComp))
-                        add (T, hash, Level::warn, "Two compressors on this vocal: Voxology's and the Link's. Mixology adds none where Voxology compresses; switch one off unless you want both.",
-                             { off (link, "mix.comp", "Turn the Link's Compressor off"), off (vox, "vox.comp", "Turn Voxology's Compressor off") });
+                        add (T, hash, Level::warn, "Two compressors on this vocal: Voxology's and Mixology's (in this track's Mixology Link). Mixology adds none where Voxology compresses; switch one off unless you want both.",
+                             { off (link, "mix.comp", "Turn Mixology's Compressor off"), off (vox, "vox.comp", "Turn Voxology's Compressor off") });
                     else if (isOn (vComp))
-                        add (T, hash, Level::ok, "Voxology compresses this vocal, so Mixology's Link adds no second compressor.");
+                        add (T, hash, Level::ok, "Voxology compresses this vocal, so Mixology adds no second compressor.");
 
                     const auto* space = findModule (link, "mix.space");
                     const std::uint32_t layers = isOn (space) ? space->layers : 0u;
                     const bool vRev = isOn (findModule (vox, "vox.reverb")), vDly = isOn (findModule (vox, "vox.delay"));
                     // Space switches all its effects at once: the button says so when it plays more than the one in question.
                     const auto spaceOff = [&] (std::uint32_t these) {
-                        return off (link, "mix.space", (layers & ~these) != 0 ? "Turn the Link's Space off (" + layerNames (layers) + ")"
-                                                                              : std::string ("Turn the Link's Space off"));
+                        return off (link, "mix.space", (layers & ~these) != 0 ? "Turn Mixology's Space off (" + layerNames (layers) + ")"
+                                                                              : std::string ("Turn Mixology's Space off"));
                     };
                     if (vRev && (layers & kReverbLayers) != 0)
-                        add (T, hash, Level::warn, "Two reverbs on this vocal: Voxology's Reverb and the Link's Space (" + layerNames (layers & kReverbLayers)
+                        add (T, hash, Level::warn, "Two reverbs on this vocal: Voxology's Reverb and Mixology's Space (" + layerNames (layers & kReverbLayers)
                              + "). Stacked spaces can wash it out: turn one down or off.",
                              { spaceOff (kReverbLayers), off (vox, "vox.reverb", "Turn Voxology's Reverb off") });
                     if (vDly && (layers & SpaceLayer::delay) != 0)
-                        add (T, hash, Level::warn, "Two delays on this vocal: Voxology's Delay and the Link's Space. Their echoes can clash: keep one.",
+                        add (T, hash, Level::warn, "Two delays on this vocal: Voxology's Delay and Mixology's Space. Their echoes can clash: keep one.",
                              { spaceOff (SpaceLayer::delay), off (vox, "vox.delay", "Turn Voxology's Delay off") });
                     if ((vRev || vDly) && layers == 0)
                         add (T, hash, Level::ok, std::string ("Voxology adds the ") + (vRev && vDly ? "reverb and delay" : vRev ? "reverb" : "delay")

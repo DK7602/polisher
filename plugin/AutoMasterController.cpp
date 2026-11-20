@@ -6,6 +6,20 @@
 #include <map>
 #include <thread>
 
+// Beta 33 fix: is a planned value musically the same as the knob now? A fresh listen hears another stretch of the song,
+// so the plan wobbles a little between runs: within 1.5 dB, 15 % in frequency, 25 % in time, 8 points of a %, it is
+// already set (it was 2 % of the knob's range: half a dB on an EQ, so ANALYZE AGAIN after APPLY kept offering changes).
+static bool closeEnough (const juce::String& unit, const juce::NormalisableRange<float>& range, float now, float planned)
+{
+    const float d = std::abs (planned - now);
+    if (unit == "dB") return d <= 1.5f;
+    if (unit == "dBTP") return d <= 0.25f;
+    if (unit == "Hz" || unit == "kHz") return d <= 0.15f * std::max (std::abs (now), 1.0e-3f);
+    if (unit == "ms" || unit == "s") return d <= 0.25f * std::max (std::abs (now), 1.0e-3f);
+    if (unit == "%") return d <= 0.08f * (range.end - range.start);
+    return std::abs (range.convertTo0to1 (planned) - range.convertTo0to1 (now)) <= 0.05f;
+}
+
 namespace
 {
     juce::var reasonsToVar (const std::vector<polisher::AutoMasterReason>& reasons)
@@ -450,7 +464,7 @@ void AutoMasterController::launchAnalysis()
 
     // The Coach (Beta 30): Auto-Master decides from the mix as it comes in, so after an APPLY the same mix gives the
     // same plan. The plan is compared with the settings Masterology has now.
-    struct NowValue { float value = 0.0f; juce::NormalisableRange<float> range; bool steps = false; };
+    struct NowValue { float value = 0.0f; juce::NormalisableRange<float> range; bool steps = false; juce::String unit; };
     auto nowValues = std::make_shared<std::map<std::string, NowValue>>();
     if (forPlan)
         for (const auto& [id, unused] : polisher::autoanalyze::chainValues (everyControl()))
@@ -460,6 +474,7 @@ void AutoMasterController::launchAnalysis()
                 v.range = p->getNormalisableRange();
                 v.value = v.range.convertFrom0to1 (p->getValue());
                 v.steps = v.range.interval >= 1.0f && v.range.end - v.range.start <= 40.0f;   // a switch or a choice
+                v.unit = p->getLabel();
                 (*nowValues)[id] = v;
             }
 
@@ -485,7 +500,7 @@ void AutoMasterController::launchAnalysis()
                 {
                     after = std::make_unique<polisher::MixAnalysis> (polisher::analyseMix (polisher::renderMaster (clip, result->chain)));
                     // The settings APPLY would change (as apply() sets them): a switch or choice that differs, a knob
-                    // more than 2 % of its range away (a fresh listen to the same song moves a knob a little).
+                    // musically away from where it is (closeEnough: a fresh listen moves a knob a little).
                     for (const auto& [id, v] : polisher::autoanalyze::chainValues (result->chain))
                     {
                         const auto it = nowValues->find (id);
@@ -493,7 +508,7 @@ void AutoMasterController::launchAnalysis()
                         const auto& cur = it->second;
                         const float planned = juce::jlimit (cur.range.start, cur.range.end, static_cast<float> (v));
                         if (cur.steps ? juce::roundToInt (planned) != juce::roundToInt (cur.value)
-                                      : std::abs (cur.range.convertTo0to1 (planned) - cur.range.convertTo0to1 (cur.value)) > 0.02f)
+                                      : ! closeEnough (cur.unit, cur.range, cur.value, planned))
                             changed.push_back (id);
                     }
                 }

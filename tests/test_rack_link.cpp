@@ -1174,7 +1174,7 @@ TEST_CASE ("Rack link: warnings carry one-click fixes for the units in the block
     REQUIRE (comp != nullptr);
     REQUIRE (comp->fixes.size() == 2);
     CHECK (comp->fixes[0].module == "mix.comp");
-    CHECK (comp->fixes[0].label == "Turn the Link's Compressor off");
+    CHECK (comp->fixes[0].label == "Turn Mixology's Compressor off");
     CHECK_FALSE (comp->fixes[0].on);
     CHECK (comp->fixes[1].module == "vox.comp");
     const auto* reverb = lineWith ("Two reverbs");
@@ -1415,7 +1415,7 @@ TEST_CASE ("Rack requests: moving a module (Beta 33): movable / moved reach the 
     REQUIRE (vox.publish (1000));
     const auto u = link2.units (1000).at (0);
     const std::string id = "u" + std::to_string (u.slot);
-    CHECK (rack::requestJson (link2, id, u.generation, "order", "anything", "vox.comp", 1.4f, "begin", 1000).rfind ("{\"ticket\":1,", 0) == 0);
+    CHECK (rack::requestJson (link2, id, u.generation, "order", "anything", "vox.comp", 4.4f, "begin", 1000).rfind ("{\"ticket\":1,", 0) == 0);
     CHECK (rack::requestJson (link2, id, u.generation, "order", "", "reset", 0.0f, "set", 1000).rfind ("{\"ticket\":2,", 0) == 0);
     CHECK (rack::requestJson (link2, id, u.generation, "order", "", "vox.comp", std::numeric_limits<float>::quiet_NaN(), "set", 1000).rfind ("{\"ticket\":3,", 0) == 0);
     CHECK (rack::requestJson (link2, id, u.generation, "order", "", "", 0.0f, "set", 1000) == "{\"ticket\":0,\"why\":\"Nothing to change.\"}");
@@ -1428,7 +1428,11 @@ TEST_CASE ("Rack requests: moving a module (Beta 33): movable / moved reach the 
         CHECK (r.gesture == rack::Gesture::set);       // never a drag
     }
     CHECK (vox.seen[0].control == "vox.comp");
-    CHECK (vox.seen[0].value == 1.0f);                 // a whole place
+    CHECK (vox.seen[0].value == 4.0f);                 // a whole place (not a knob's 0..1: Beta 33's first build clamped it to 1)
     CHECK (vox.seen[1].control == "reset");
     CHECK (vox.seen[2].value == 0.0f);                 // not a number: the first place
+    CHECK (rack::requestJson (link2, id, u.generation, "order", "", "vox.eq", 99.0f, "set", 1000).rfind ("{\"ticket\":4,", 0) == 0);
+    vox.serve (1020);
+    REQUIRE (vox.seen.size() == 4);
+    CHECK (vox.seen[3].value == static_cast<float> (rack::kMaxModules - 1));   // past the end: the last place
 }

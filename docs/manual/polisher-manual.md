@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.45.0 · November 2026
+Version 0.45.1 · November 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
@@ -733,7 +733,7 @@ back, at the size the window had before (Masterology keeps remembering that size
 - **Rack Coach** (right): **How they work together** (green: fine, blue: good to know, red: fix it, for example two
   compressors on one vocal, Pitch and Honey Tune both tuning, two Masterologys, or Mixology's Limiter before
   Masterology), the chain overview, and what the picked module is for. Many red lines come with **one-click fixes**
-  (for example "Turn the Link's Compressor off" or "Turn Voxology's Compressor off"): click one and the plug-in that
+  (for example "Turn Mixology's Compressor off" or "Turn Voxology's Compressor off"): click one and the plug-in that
   owns that module switches it off; **UNDO** in the message switches it back on.
 - **Gain staging** (in the Rack Coach, for the track you picked): each plug-in's level going in and coming out (peaks,
   live) and how much it adds. It warns when one makes the track much louder (louder sounds better by itself, so
