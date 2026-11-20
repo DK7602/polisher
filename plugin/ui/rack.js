@@ -109,6 +109,7 @@
     power: '<path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/>',
     save: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4"/><path d="M8 20v-6h8v6"/>',
     grip: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" stroke-width="3"/>',
+    close: '<path d="M6 6l12 12M18 6 6 18"/>',
   };
   // where the art is, from the page (the plug-ins serve it flat by file name; the preview page passes its own path)
   let ART = "rack/";
@@ -945,7 +946,7 @@
     const t = trackOf(data, S.track);
     if (!t) return rackPage(data);
     const c = coachOf(t);
-    const left = `<section class="sr-panel sr-left">
+    const left = guideOn() ? guidePanel(data, true) : `<section class="sr-panel sr-left">
         <h3 class="sr-ph">${icon("layers")}SIGNAL CHAIN<small>${esc(t.name)}</small></h3>
         <div class="sr-honey sr-honey-chain"><div class="sr-rows" data-scroll="rows">${chainRows(t, null)}</div></div>
       </section>`;
@@ -1148,6 +1149,202 @@
     </footer>`;
   }
 
+
+  // ---- Beta 35: GUIDED MIX ------------------------------------------------------------------------------------------
+  // For a first mix: one step at a time through the whole song. Check the setup, let Mixology hear the mix, see what to
+  // fix first, the Coach on each track (vocals first; PREVIEW, then KEEP or BACK), the master, done. It only starts when
+  // you press GUIDED MIX (SESSION page); while it runs its steps take the left column (SESSION: beside WHAT TO FIX FIRST;
+  // COACH: in place of the signal chain). Your progress is kept for this project while the Rack stays in this plug-in.
+  const GUIDE_KEY = "sonicologyRackGuide";
+  const guideProject = (data) => tracks(data).map((t) => t.key).sort().join("|");
+  function guideSave() {
+    try { if (S.guide) localStorage.setItem(GUIDE_KEY, JSON.stringify(S.guide)); else localStorage.removeItem(GUIDE_KEY); } catch (e) { /* none */ }
+  }
+  function guideSaved(data) {
+    try {
+      const g = JSON.parse(localStorage.getItem(GUIDE_KEY) || "null");
+      return g && g.project === guideProject(data) ? g : null;
+    } catch (e) { return null; }
+  }
+  // The tracks the Coach works on, in a mixing order: the lead vocal, the other vocals, bass, drums, the beat, the rest.
+  function guideTracks(data) {
+    const rank = (t) => {
+      const n = (t.name || "").toLowerCase();
+      const vocal = t.units.some((u) => u.product === "voxology" && u.role !== "beat") || /vox|vocal|voice|adlib|ad-lib|harmon|backing|double/.test(n);
+      if (vocal) return /lead|main/.test(n) ? 0 : 1;
+      if (/bass|808|sub/.test(n)) return 2;
+      if (/kick/.test(n)) return 3;
+      if (/snare|clap|rim/.test(n)) return 3.1;
+      if (/hat|perc|drum|tom|cymbal|shaker/.test(n)) return 3.2;
+      if (/beat|instrumental|loop/.test(n)) return 4;
+      return 5;
+    };
+    return tracks(data).filter((t) => t.role !== "fullmix" && t.role !== "master" && coachOf(t))
+      .map((t, i) => ({ t, i, r: rank(t) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.t);
+  }
+  function guideSteps(data) {
+    const steps = [
+      { id: "setup", title: "Check the setup" },
+      { id: "listen", title: "Let Mixology hear the mix" },
+      { id: "first", title: "What to fix first" },
+    ];
+    for (const t of guideTracks(data)) steps.push({ id: "track:" + t.key, title: "Coach: " + t.name, track: t });
+    const master = tracks(data).find((t) => t.role === "master");
+    steps.push({ id: "master", title: "The master", track: master || null });
+    steps.push({ id: "done", title: "Finished" });
+    return steps;
+  }
+  const guideOn = () => !!(S.guide && S.guide.on);
+  function guideStart(data, again) {
+    const saved = again ? null : guideSaved(data);
+    S.guide = saved ? Object.assign(saved, { on: true }) : { on: true, project: guideProject(data), at: "setup", done: {} };
+    guideSave();
+    guideGo(S.guide.at, data);
+  }
+  function guideGo(id, data) {
+    const g = S.guide;
+    if (!g) return;
+    const steps = guideSteps(data || S.data);
+    const st = steps.find((x) => x.id === id) || steps[0];
+    g.at = st.id;
+    if (st.track) { S.track = st.track.key; S.sel = null; S.page = "coach"; }
+    else if (st.id === "master") S.page = "session";   // (no Master track in this project: the step says so)
+    else S.page = "session";
+    guideSave();
+  }
+  function guideMove(dir, data) {
+    const steps = guideSteps(data || S.data);
+    const i = Math.max(0, steps.findIndex((x) => x.id === S.guide.at));
+    const j = clamp(i + dir, 0, steps.length - 1);
+    guideGo(steps[j].id, data);
+  }
+  // What a track's (or the master's) Coach says now: "kept", "same" (already set), "busy", "ready", "preview", "idle".
+  function guideCoachState(t) {
+    const c = t && coachOf(t);
+    if (!c || !c.r) return "idle";
+    const r = c.r, p = r.plan || {};
+    if (r.preview === "plan" || r.preview === "yours") return "preview";
+    if (r.state === "applied") return "kept";
+    if (r.state === "ready" && p.ok && p.upToDate === true) return "same";
+    if (r.state === "ready" && p.ok) return "ready";
+    if (COACH_BUSY[r.state]) return "busy";
+    return "idle";
+  }
+  // While the guide shows a track, what its Coach did is noted (KEEP / APPLY: kept; NOTHING TO CHANGE: already set).
+  function guideObserve(data) {
+    const g = S.guide;
+    if (!guideOn() || !data) return;
+    const st = guideSteps(data).find((x) => x.id === g.at);
+    if (!st || !st.track || S.track !== st.track.key) return;
+    const now = guideCoachState(st.track);
+    if ((now === "kept" || now === "same") && g.done[st.id] !== now) { g.done[st.id] = now; guideSave(); }
+  }
+  function guideStatus(st, data) {
+    const g = S.guide, d = g.done[st.id];
+    if (st.id === "setup") {
+      const n = fixItems(data).filter((x) => x.level === "warn" && x.from !== "mix").length;
+      return n ? { cls: "warn", text: n + " to fix" } : { cls: "ok", text: "looks right" };
+    }
+    if (st.id === "listen") {
+      const { mix, r } = mixFixReport(data);
+      if (!mix) return { cls: "warn", text: "needs Mixology" };
+      if (r && r.busy) return { cls: "busy", text: "listening" };
+      return r && r.analyzed ? { cls: "ok", text: "heard " + secsText(r.seconds) } : { cls: "todo", text: "not yet" };
+    }
+    if (st.id === "first") {
+      const n = fixItems(data).filter((x) => x.level === "warn" && x.from === "mix").length;
+      const { r } = mixFixReport(data);
+      return { cls: g.done.first ? "ok" : "todo", text: r && r.analyzed ? (n ? n + " points" : "nothing big") : "" };
+    }
+    if (st.id === "done") return { cls: "todo", text: "" };
+    if (st.id === "master" && !st.track) return { cls: "warn", text: "no Masterology" };
+    if (d === "kept") return { cls: "ok", text: "kept" };
+    if (d === "same") return { cls: "ok", text: "already set" };
+    if (d === "skipped") return { cls: "skip", text: "skipped" };
+    return { cls: "todo", text: "" };
+  }
+  // The current step: what to do, its buttons.
+  function guideNow(st, data, narrow) {
+    const g = S.guide;
+    const steps = guideSteps(data);
+    const i = steps.findIndex((x) => x.id === st.id);
+    const next = steps[i + 1];
+    const nextLabel = !next ? "" : next.track && st.track && !narrow ? "NEXT TRACK" : "NEXT";
+    let say = "", acts = "";
+    if (st.id === "setup") {
+      const n = fixItems(data).filter((x) => x.level === "warn" && x.from !== "mix").length;
+      say = n ? `Fix the red points in WHAT TO FIX FIRST${narrow ? "" : " (on the right)"}: click a one-click fix, or do what it says in your DAW. These are things no mixing move fixes (a plug-in missing or in the wrong place, two reverbs on one vocal...).`
+        : "Every Sonicology plug-in is where it should be. Next, Mixology listens to your whole mix.";
+    } else if (st.id === "listen") {
+      const { mix, r } = mixFixReport(data);
+      if (!mix) say = "Put Mixology on your master channel (the Stereo Out, before Masterology): the guide needs it to hear the whole mix. You can skip this step, but the Coach works best after Mixology has listened.";
+      else if (r && r.busy) {
+        const enough = r.enough || 20, heard = Math.min(r.hearing || 0, 60);
+        say = r.playing === false ? "Press play: Mixology listens while the song plays (the busiest part, a chorus, is best)." : `Listening to your mix: keep the song playing. ${heard >= enough ? "It has heard enough: FINISH, or let it hear up to a minute." : `It needs about ${enough} seconds.`}`;
+        acts = `<div class="sr-cprog sr-gprog"><i data-guide-bar style="width:${clamp((heard / enough) * 100, 0, 100).toFixed(0)}%"></i></div>`
+          + (heard >= enough ? `<button class="sr-gbtn sr-gbtn-go" data-sr="guide-finish">${icon("check")}FINISH</button>` : "")
+          + `<button class="sr-gbtn" data-sr="guide-cancel">STOP</button>`;
+      } else if (r && r.analyzed) {
+        say = `Mixology heard ${secsText(r.seconds)} of your mix${r.style ? " (" + r.style + ")" : ""}. Changed a lot since? Listen again; else NEXT.`;
+        acts = `<button class="sr-gbtn" data-sr="guide-analyze">${icon("pulse")}LISTEN AGAIN</button>`;
+      } else {
+        say = "Press ANALYZE MIX, then play the busiest part of your song (a chorus) for about 20 seconds. Mixology hears every track at once and finds what to fix first. Nothing changes yet.";
+        acts = `<button class="sr-gbtn sr-gbtn-go" data-sr="guide-analyze">${icon("pulse")}ANALYZE MIX</button>`;
+      }
+    } else if (st.id === "first") {
+      const n = fixItems(data).filter((x) => x.level === "warn" && x.from === "mix").length;
+      say = n ? `WHAT TO FIX FIRST${narrow ? "" : " (on the right)"} lists your mix's biggest problems, worst first. You don't need to fix them by hand: the next steps run the Coach on each track, and it fixes most of them.`
+        : "Nothing big stands out in your mix. The next steps still let the Coach shape each track.";
+    } else if (st.id === "master") {
+      say = !st.track ? "No Masterology on your master channel: put Masterology last on the Stereo Out (after Mixology), or skip this step."
+        : guideCoachText(st.track, true);
+    } else if (st.id === "done") {
+      const kept = Object.values(g.done).filter((x) => x === "kept").length;
+      const same = Object.values(g.done).filter((x) => x === "same").length;
+      const skipped = Object.values(g.done).filter((x) => x === "skipped").length;
+      say = `Your first mix is through. The Coach set ${kept} track${kept === 1 ? "" : "s"}${same ? `, ${same} already fit` : ""}${skipped ? `, you skipped ${skipped}` : ""}. Play the whole song: something off? Open that track's COACH and press UNDO. Then save your project.`;
+      acts = `<button class="sr-gbtn" data-sr="guide-restart">${icon("undo")}START OVER</button><button class="sr-gbtn sr-gbtn-go" data-sr="guide-exit">${icon("check")}CLOSE THE GUIDE</button>`;
+    } else {
+      say = guideCoachText(st.track, false);
+    }
+    const nav = st.id === "done" ? "" : `<div class="sr-gnav">
+        <button class="sr-gbtn" data-sr="guide-back" ${i <= 0 ? "disabled" : ""} title="The step before">${icon("left")}</button>
+        ${st.track || st.id === "master" ? `<button class="sr-gbtn" data-sr="guide-skip" title="Leave this one as it is">SKIP</button>` : ""}
+        <button class="sr-gbtn sr-gbtn-next" data-sr="guide-next">${nextLabel}${icon("right")}</button>
+      </div>`;
+    return `<div class="sr-gnow"><p>${esc(say)}</p>${acts ? `<div class="sr-gacts">${acts}</div>` : ""}${nav}</div>`;
+  }
+  function guideCoachText(t, master) {
+    const where = master ? "the master" : t.name;
+    switch (guideCoachState(t)) {
+      case "busy": return master ? "Masterology is listening: keep the song playing. BUILD NOW comes after 12 seconds (the whole song is best)." : `Listening to ${where}: keep the song playing where it plays.`;
+      case "ready": return "The plan is ready. Press PREVIEW (bottom bar) and flip PLAN / YOURS while the song plays: both play at the same loudness. Sounds better? KEEP PLAN. Not? BACK TO YOURS.";
+      case "preview": return "Flip PLAN / YOURS while it plays. KEEP PLAN if it sounds better, BACK TO YOURS if not. Then NEXT.";
+      case "kept": return `Done: the plan is on ${where} (UNDO on the Coach page takes it back). NEXT.`;
+      case "same": return `${master ? "Your master" : where} already fits the plan: nothing to change. NEXT.`;
+      default: return master ? "Pick the GENRE and how loud (TARGET), press ANALYZE & BUILD and play the song. Masterology plans the whole master; nothing changes until you keep it."
+        : `Press ANALYZE & BUILD and play a part where ${where} plays. The Coach plans the whole track; nothing changes until you keep it.`;
+    }
+  }
+  function guidePanel(data, narrow) {
+    const g = S.guide;
+    const steps = guideSteps(data);
+    const at = steps.find((x) => x.id === g.at) || steps[0];
+    const i = steps.indexOf(at);
+    const list = steps.map((st, n) => {
+      const s2 = guideStatus(st, data);
+      const now = st === at;
+      const ok = s2.cls === "ok";
+      return `<li class="sr-gstep ${now ? "sr-gstep-now" : ""} sr-gs-${s2.cls}">
+        <button data-sr="guide-go" data-step="${esc(st.id)}" title="${esc(st.title)}"><span class="sr-gn">${ok ? icon("check") : n + 1}</span><b>${esc(st.title)}</b>${s2.text ? `<small>${esc(s2.text)}</small>` : ""}</button>
+        ${now ? guideNow(st, data, narrow) : ""}</li>`;
+    }).join("");
+    return `<section class="sr-panel ${narrow ? "sr-left" : "sr-wide sr-session"} sr-guide">
+      <h3 class="sr-ph">${icon("star")}GUIDED MIX<small>${narrow ? `${i + 1} / ${steps.length}` : `step ${i + 1} of ${steps.length}`}</small><button class="sr-gx" data-sr="guide-exit" title="Close the guide (your progress is kept: GUIDED MIX goes on from here)">${icon("close")}</button></h3>
+      <div class="sr-gbody" data-scroll="guide"><ol class="sr-gsteps">${list}</ol></div>
+    </section>`;
+  }
+
   // How PREVIEW matches the two: the louder one plays turned down (the plug-in reports the plan minus yours).
   function matchText(r, kind) {
     const gap = +r.planGapDb;
@@ -1257,11 +1454,13 @@
         <span class="sr-srow-warn ${w ? "sr-on" : ""}" title="${w ? w + " thing" + (w > 1 ? "s" : "") + " worth fixing (WHAT TO FIX FIRST)" : "Nothing worth fixing"}">${icon(w ? "warn" : "check", w ? "sr-li-warn" : "sr-li-ok")}${w || ""}</span>
       </div>`;
     }).join("");
+    const saved = !guideOn() && guideSaved(data);
+    const start = S.opts && S.opts.request ? `<button class="sr-gstart" data-sr="guide-start" title="A first mix, one step at a time: the setup, Mixology listening, the Coach on every track, the master">${icon("star")}${saved ? "GO ON WITH GUIDED MIX" : "GUIDED MIX"}</button>` : "";
     return `<main class="sr-main sr-main-session ${(S.W || 1280) < 1440 ? "sr-narrow" : ""}">
-      <section class="sr-panel sr-wide sr-session">
-        <h3 class="sr-ph">${icon("layers")}SESSION OVERVIEW<small>every track and what plays on it: click a module to open it</small></h3>
+      ${guideOn() ? guidePanel(data, false) : `<section class="sr-panel sr-wide sr-session">
+        <h3 class="sr-ph">${icon("layers")}SESSION OVERVIEW<small>every track and what plays on it: click a module to open it</small>${start}</h3>
         <div class="sr-srows" data-scroll="session">${rows}</div>
-      </section>
+      </section>`}
       ${fixPanel(data)}
     </main>`;
   }
@@ -1434,7 +1633,7 @@
       return JSON.stringify((data.units || []).map((u) => [u.id, u.track, u.role, u.product, u.on, u.version, u.lock || "", u.gen != null,
           (u.modules || []).map((m) => [m.key, m.state, m.summary, !!m.switchable]), (u.together || []).map((l) => l.level)]))
         + JSON.stringify((data.together || []).map((l) => [l.level, l.hash])) + JSON.stringify(data.mix && data.mix.source)
-        + (S.page === "coach" ? coachSig(t) : "")
+        + (S.page === "coach" ? coachSig(t) : "") + (guideOn() ? guideSig(data) : "")
         + (S.page === "session" ? (mixFixReport(data).mix || {}).report + tracks(data).map((x) => (orderLine(x) ? 1 : 0)).join("") + JSON.stringify(data.otherLayouts || []) : "");
     return JSON.stringify((data.units || []).map((u) => (here.has(u.id)
       ? [u.id, u.track, u.role, u.product, u.on, u.version, (u.modules || []).map((m) => [m.key, m.state, m.summary, m.by, (m.values || []).map((v) => v.key ? v.text : ""),
@@ -1442,6 +1641,12 @@
       : [u.id, u.track, u.role, u.product, u.on, u.version, (u.modules || []).map((m) => m.key + ":" + m.state)])))
       + JSON.stringify(data.together) + JSON.stringify(data.mix && data.mix.source)
       + JSON.stringify((trackFader(data, t) || {}).v || null) + (orderLine(t) ? "order" : "");
+  }
+  // What changes the GUIDED MIX panel (its listening bar moves in place: updateLive).
+  function guideSig(data) {
+    const g = S.guide, { r } = mixFixReport(data);
+    return JSON.stringify([g.at, g.done, guideSteps(data).map((x) => x.id), r && [r.analyzed, r.busy, r.seconds, (r.hearing || 0) >= (r.enough || 20), r.playing],
+      guideSteps(data).filter((x) => x.track).map((x) => guideCoachState(x.track))]);
   }
   // What changes the COACH page (its progress moves in place: updateLive).
   function coachSig(t) {
@@ -1483,6 +1688,12 @@
   function updateLive(data) {
     // meters, loudness and the module's history graph, without rebuilding the page
     const t = trackOf(data, S.track);
+    if (guideOn()) {
+      const { r } = mixFixReport(data);
+      const bar = S.stage.querySelector("[data-guide-bar]");
+      const w = r && r.busy ? clamp(((r.hearing || 0) / (r.enough || 20)) * 100, 0, 100).toFixed(0) + "%" : "0%";
+      if (bar && bar.style.width !== w) bar.style.width = w;
+    }
     if (S.page === "coach") {
       const c = coachOf(t);
       const pct = c ? clamp(c.r.progress || 0, 0, 100) : 0;
@@ -1600,6 +1811,7 @@
       remember(data);
       watchOrder(data);
       dragText(data);
+      guideObserve(data);
       const first = !S.data;
       S.data = data;
       if (first || !trackOf(data, S.track)) S.track = S.track && trackOf(data, S.track) ? S.track : hostTrackKey(data);
@@ -1663,6 +1875,28 @@
     else if (a === "switch") { switchModule(el.dataset.unit, el.dataset.key, el); return; }
     else if (a === "fix") { applyFix(el); return; }
     else if (a === "order-reset") { resetOrder(el.dataset.unit); return; }
+    else if (a === "guide-start") { guideStart(S.data, false); }
+    else if (a === "guide-restart") { guideStart(S.data, true); }
+    else if (a === "guide-exit") {
+      // closed half-way: GUIDED MIX goes on from here next time; closed at the end: it starts fresh
+      if (S.guide.at === "done") { S.guide = null; guideSave(); } else { S.guide.on = false; guideSave(); S.guide = null; }
+      S.page = "session";
+    }
+    else if (a === "guide-go") { guideGo(el.dataset.step); }
+    else if (a === "guide-next") { if (S.guide.at === "first") S.guide.done.first = "seen"; guideMove(1); }
+    else if (a === "guide-back") { guideMove(-1); }
+    else if (a === "guide-skip") { S.guide.done[S.guide.at] = "skipped"; guideMove(1); }
+    else if (a === "guide-analyze" || a === "guide-finish" || a === "guide-cancel") {
+      const mix = mixOwner(S.data);
+      if (!mix) { toast("Put Mixology on your master channel first."); return; }
+      const step = a === "guide-analyze" ? "mixanalyze" : a === "guide-finish" ? "mixfinish" : "mixcancel";
+      el.disabled = true;
+      send(mix, { change: "coach", module: "coach", control: step + ".0", value: 1, gesture: "set" }, () => {
+        if (step === "mixanalyze") toast("Mixology is listening: play the busiest part of your song (a chorus).", null, 6000);
+        else if (step === "mixfinish") toast("Mixology has heard your mix: WHAT TO FIX FIRST shows what stands out.");
+      });
+      return;
+    }
     else if (a === "undo") { replay(true); return; }
     else if (a === "redo") { replay(false); return; }
     else if (a === "bypass") { toggleBypass(); return; }

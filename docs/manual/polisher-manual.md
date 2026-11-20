@@ -1,6 +1,6 @@
 # Masterology User Manual
 
-Version 0.45.1 · November 2026
+Version 0.46.0 · November 2026
 
 Masterology is part of **Sonicology**: Voxology (vocals), Mixology (the mix) and Masterology (mastering), made to work
 together. In your DAW's plug-in list they are all under Sonicology.
@@ -770,6 +770,15 @@ on your master channel), and a Link in the wrong insert slot. Each point names i
 the RACK page, **COACH** to let the Coach build that track, or a one-click fix where there is one. "In Mixology:
 Balance" (or Clean Up, Polish, Vocal Pocket) names the smart tool that fixes it. Points a tool already fixed since
 Mixology listened come last, ticked. Until Analyze Mix has listened the list says so, with the Rack's own points.
+
+**GUIDED MIX** (new in Beta 35; the button at the top of the SESSION page): your first mix, one step at a time. The
+steps take the left column while it runs (on the COACH page, in place of the signal chain): **check the setup** (fix
+the red points in WHAT TO FIX FIRST), **let Mixology hear the mix** (ANALYZE MIX from the guide: play the busiest part
+of the song; FINISH once it has heard enough), **what to fix first** (read the list), then **the Coach on each track**
+(vocals first, then bass, drums, the beat and the rest: ANALYZE & BUILD, PREVIEW, then KEEP PLAN or BACK TO YOURS),
+**the master**, and **finished** (what you kept and skipped). NEXT and the arrow go forward and back, SKIP leaves a
+track as it is, and you can click any step. Close it with the X and **GO ON WITH GUIDED MIX** picks up where you were
+(while the Rack stays in the same plug-in). Pro? Just don't press it: nothing changes unless you start it.
 
 **The COACH page:** the Coach builds a track's whole chain for you, shows you why, and shows the result before you take
 it. It works through the plug-in that owns the track: a **vocal with Voxology** (0.64 or newer, not in BEAT mode)

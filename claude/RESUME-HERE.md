@@ -853,3 +853,6 @@ A separate UI thread was started (2026-10-03) for UI work on the same branch: pu
 - Masterology 0.45.1 (2026-11-20, Sonicology Beta 34): shared RackLink / rack.js fixes from the user's Beta 33 test;
   the Coach after APPLY compares with closeEnough (musical tolerances) instead of 2 % of a knob's range. Manual (+ Claude
   Docs copy). (Mixology's RESUME-HERE has the rest.)
+- Masterology 0.46.0 (2026-11-20, Sonicology Beta 35): shared rack.js / rack.css: GUIDED MIX (its last Coach step is the
+  master, through Masterology). No Masterology code changed. Manual (+ Claude Docs copy). (Mixology's RESUME-HERE has
+  the rest.)
